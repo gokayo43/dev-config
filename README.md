@@ -57,7 +57,15 @@ relative to the config file — so the base is referenced through `node_modules`
 
 Configs merge first-to-last, so anything the local file declares wins over the
 base. The base sets `correctness: error`, `suspicious: warn`, `perf: warn`,
-`no-console: warn`, and the two `react-hooks` rules.
+`no-console: warn`, and the hooks rules — which oxlint ships under the `react`
+plugin as `react/rules-of-hooks` and `react/exhaustive-deps`; there is no
+`react-hooks` plugin, so a config naming one silently lints nothing.
+
+`plugins` is additive: the extending config's list is unioned with oxlint's
+defaults rather than replacing them, so the base names every plugin it wants
+including the default `oxc`. The one rule the base switches off is
+`oxc/no-map-spread`, whose advice is to mutate in place — wrong for the
+copy-on-write style these codebases are written in.
 
 ## knip
 
