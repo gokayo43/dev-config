@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependency policy shared by gokayo43's Bun projects.",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "schedule": ["* 0-6 * * 1"],
+  "timezone": "Europe/Amsterdam",
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "rangeStrategy": "pin",
+  "dependencyDashboard": true,
+  "prConcurrentLimit": 3,
+  "platformAutomerge": true,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["* 0-6 * * 1"]
+  },
+  "packageRules": [
+    {
+      "description": "Non-major updates land as one automerged PR per week.",
+      "matchUpdateTypes": ["patch", "minor", "pin", "digest"],
+      "groupName": "non-major dependencies",
+      "automerge": true
+    },
+    {
+      "description": "Majors are read before they are merged.",
+      "matchUpdateTypes": ["major"],
+      "automerge": false
+    }
+  ]
+}
