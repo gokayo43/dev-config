@@ -28,7 +28,7 @@ to override a shared setting, the override carries a comment naming the reason.
 | `oxlint.base.json` | `oxlint` | `extends` by `node_modules` path |
 | `knip.base.ts` | `knip` | imported by `knip.ts` |
 | `lighthouserc.json` | `lhci` | `configPath` into `node_modules` |
-| `default.json` | Renovate | fetched from GitHub, never from `node_modules` |
+| `default.json` | Renovate | `extends` by GitHub preset name |
 
 ## TypeScript
 
@@ -258,8 +258,7 @@ and digest updates into one automerging PR, opens majors as plain PRs to read,
 keeps lockfile maintenance on, and pins GitHub Action digests.
 
 The file is named `default.json` because that is the name Renovate resolves for a
-bare `github>owner/repo`. Renovate reads it from GitHub, so it is not shipped in
-the package's `files`.
+bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.
 
 ## CI
 
