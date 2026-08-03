@@ -3,7 +3,8 @@
 One source of truth for the tooling policy shared by my Bun projects: TypeScript
 strictness, the oxlint rule set including its type-aware rules, the architecture
 boundaries wiring, the formatter width, the workspace-agnostic knip settings, the
-Renovate policy, the coverage floor, and the CI workflows every repo runs.
+Renovate policy, the coverage floor, the secret-scanning gate, and the CI
+workflows every repo runs.
 
 Repos install it straight from GitHub — no registry, no build step, the files are
 consumed exactly as they are committed:
@@ -260,6 +261,49 @@ keeps lockfile maintenance on, and pins GitHub Action digests.
 The file is named `default.json` because that is the name Renovate resolves for a
 bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.
 
+## Secret scanning
+
+`gitleaks` guards both ends: a pre-commit hook so a key never reaches a commit,
+and a CI step so nothing slips through a push that skipped the hooks.
+
+It is a Go binary, not an npm package, so it installs outside the lockfile:
+
+```sh
+GITLEAKS_VERSION=8.30.1
+curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+  | tar -xz -C ~/.local/bin gitleaks
+```
+
+The hook goes in `lefthook.yml`:
+
+```yaml
+pre-commit:
+  commands:
+    secrets:
+      run: gitleaks git --staged --redact --no-banner .
+```
+
+`--staged` scans the index rather than the working tree, which is the whole
+point: every one of these repos keeps a real `.env` gitignored in its working
+tree, so a working-tree scan would fail every commit over secrets that were never
+going anywhere. The command deliberately carries no `glob` — a leaked key is as
+likely in a `.yml`, a fixture or a `.env` as in a `.ts`. `--redact` keeps the
+secret out of the hook output and the CI log; a leak printed by CI is already
+readable by anyone who can see the run.
+
+The default rule set is what runs — there is no `gitleaks.toml` here. Scanned
+across these repos it reports zero false positives on tracked files, so a shared
+allowlist would be configuration guarding a problem that does not exist. A real
+false positive is pinned by its fingerprint in a repo-local `.gitleaksignore`,
+which keeps the exception next to the file that earned it instead of loosening a
+rule for every repo at once.
+
+Two properties of the default rules cost a probe to discover. Keys from providers
+with no dedicated rule are caught by the entropy-based `generic-api-key` rule
+rather than a named one — that is what matches `RESEND_API_KEY=re_…`. And the AWS
+documentation key `AKIAIOSFODNN7EXAMPLE` is allowlisted upstream, so testing the
+hook with it reports nothing and looks exactly like a broken hook.
+
 ## CI
 
 Copy this into `.github/workflows/ci.yml`. It is the same gate as the local
@@ -286,6 +330,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Secret scan
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git . --redact --no-banner
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
@@ -315,6 +372,24 @@ The matching scripts:
 
 Actions are pinned to digests, so the tag in the trailing comment is a label and
 the SHA is the contract; Renovate moves both together.
+
+The secret scan downloads the released binary instead of using
+`gitleaks/gitleaks-action`, which since v2 is not open source: it ships under a
+Gitleaks LLC EULA that requires a license key for repositories owned by an
+organization and enforces that requirement in the action itself. The pipeline
+would keep working right up to the day one of these repos moved under an org.
+The CLI it wraps is MIT, so running it directly sheds the licence question
+entirely and puts the scanning version in the diff rather than inside a
+third-party action's bundled `dist/`. `GITLEAKS_SHA256` is the same contract the
+digest pins are — the version string beside it is the label. Renovate does not
+read `run:` blocks, so unlike every other pin in this repo these two move by
+hand; they are checked against the release's published checksums file.
+
+`fetch-depth: 0` is what makes the scan worth running. `gitleaks git` reads
+history, and the default shallow checkout hands it exactly one commit — a secret
+committed and then deleted further along the same branch would go unreported,
+even though pushing it had already burned the key. A full-history scan costs
+about a second on repos this size.
 
 `setup-bun` is given no version input on purpose: with none it reads the repo's
 `packageManager` field from `package.json`, so CI and the dev machine never
