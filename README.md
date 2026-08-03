@@ -126,6 +126,11 @@ jobs:
 `packageManager` field from `package.json`, so CI and the dev machine never
 drift.
 
+A repo whose types depend on generated code that is not committed — a TanStack
+route tree, a codegen client — adds `bun run build` before the gate, since a
+clean checkout has none of it and `tsc` would report the generated symbols as
+missing.
+
 ## Version policy
 
 Dependencies are pinned exactly — no ranges, no carets — and a version is only
