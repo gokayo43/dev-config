@@ -1,0 +1,31 @@
+{
+  "name": "@gokayo43/dev-config",
+  "version": "0.1.0",
+  "description": "Shared TypeScript, oxlint and knip configuration for Bun projects.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gokayo43/dev-config.git"
+  },
+  "files": [
+    "tsconfig.base.json",
+    "oxlint.base.json",
+    "knip.base.ts"
+  ],
+  "exports": {
+    "./tsconfig.base.json": "./tsconfig.base.json",
+    "./oxlint.base.json": "./oxlint.base.json",
+    "./knip.base.ts": "./knip.base.ts"
+  },
+  "peerDependencies": {
+    "knip": ">=6",
+    "oxlint": ">=1",
+    "typescript": ">=7"
+  },
+  "peerDependenciesMeta": {
+    "knip": { "optional": true },
+    "oxlint": { "optional": true },
+    "typescript": { "optional": true }
+  }
+}
