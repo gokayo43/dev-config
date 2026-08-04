@@ -261,6 +261,56 @@ keeps lockfile maintenance on, and pins GitHub Action digests.
 The file is named `default.json` because that is the name Renovate resolves for a
 bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.
 
+### The gitleaks custom manager
+
+Every other pin in these repos sits somewhere a manager already looks. The
+gitleaks version and archive checksum sit in a `run:` block, so the preset adds
+a `customManagers` entry that reads them out of any workflow file or README:
+
+```json
+{
+  "customType": "regex",
+  "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/", "/(^|/)README\\.md$/"],
+  "matchStrings": [
+    "GITLEAKS_VERSION: (?<currentValue>v\\S+)\\s+GITLEAKS_SHA256: (?<currentDigest>[0-9a-f]{64})",
+    "GITLEAKS_VERSION=(?<currentValue>v\\S+)"
+  ],
+  "depNameTemplate": "gitleaks/gitleaks",
+  "datasourceTemplate": "github-release-attachments"
+}
+```
+
+The datasource is what makes this safe. `github-releases` would move the version
+and leave the checksum, and a version bumped past a stale `sha256sum -c` fails
+every CI run until someone hashes the archive by hand.
+`github-release-attachments` instead searches the current release for the file
+the current checksum belongs to — matching the line in `gitleaks_*_checksums.txt`
+— then reads the same file's line out of the new release's checksums file. The
+version and the checksum are one dependency with one `replaceString` spanning
+both lines, so they cannot land apart.
+
+Finding the release means `currentValue` has to be a tag: a bare `8.30.1` is a
+404 on `releases/tags/`, which drops the update. So the pin is written `v8.30.1`
+and the URL strips the prefix for the asset name. The second `matchString` picks
+up the unhashed `GITLEAKS_VERSION=` line in the local install instructions, which
+is the same dependency and rides along in the same PR.
+
+### Validating the preset
+
+This repo's own CI parses every JSON file it ships and validates the preset on
+every push. There is no standalone `renovate-config-validator` package on npm;
+the binary ships inside `renovate`:
+
+```sh
+npx --package renovate renovate-config-validator --strict --no-global default.json
+```
+
+`--no-global` is load-bearing. Handed a filename the validator assumes
+self-hosted global configuration, and in that mode a global-only option like
+`binarySource` validates clean — in a shared preset every repo extending it
+would drop the option on the floor. `--strict` makes warnings and a pending
+config migration exit non-zero rather than print.
+
 ## Secret scanning
 
 `gitleaks` guards both ends: a pre-commit hook so a key never reaches a commit,
@@ -269,8 +319,8 @@ and a CI step so nothing slips through a push that skipped the hooks.
 It is a Go binary, not an npm package, so it installs outside the lockfile:
 
 ```sh
-GITLEAKS_VERSION=8.30.1
-curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+GITLEAKS_VERSION=v8.30.1
+curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" \
   | tar -xz -C ~/.local/bin gitleaks
 ```
 
@@ -335,11 +385,11 @@ jobs:
 
       - name: Secret scan
         env:
-          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_VERSION: v8.30.1
           GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
         run: |
           curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+            "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
           "$RUNNER_TEMP/gitleaks" git . --redact --no-banner
@@ -381,9 +431,10 @@ would keep working right up to the day one of these repos moved under an org.
 The CLI it wraps is MIT, so running it directly sheds the licence question
 entirely and puts the scanning version in the diff rather than inside a
 third-party action's bundled `dist/`. `GITLEAKS_SHA256` is the same contract the
-digest pins are — the version string beside it is the label. Renovate does not
-read `run:` blocks, so unlike every other pin in this repo these two move by
-hand; they are checked against the release's published checksums file.
+digest pins are — the version string beside it is the label. No built-in manager
+reads a `run:` block; the preset's gitleaks custom manager does, and moves the
+version and the checksum in one PR. It finds the release by tag, which is why the
+pin is written `v8.30.1` and the asset name in the URL strips the prefix again.
 
 `fetch-depth: 0` is what makes the scan worth running. `gitleaks git` reads
 history, and the default shallow checkout hands it exactly one commit — a secret
