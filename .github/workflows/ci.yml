@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Parse every JSON config
+        run: |
+          node -e '
+            const { readFileSync } = require("node:fs");
+            for (const file of process.argv.slice(1)) {
+              try {
+                JSON.parse(readFileSync(file, "utf8"));
+              } catch (error) {
+                console.log(`::error file=${file}::${error.message}`);
+                process.exitCode = 1;
+              }
+            }
+          ' $(git ls-files "*.json")
+
+      - name: Validate the Renovate preset
+        # Deliberately unpinned: the preset has to hold against the Renovate that runs it today.
+        run: npx --yes --package renovate renovate-config-validator --strict --no-global default.json
+
+      - name: Check the Lighthouse budget
+        run: |
+          node -e '
+            const assert = require("node:assert/strict");
+            const { readFileSync } = require("node:fs");
+            const { ci } = JSON.parse(readFileSync("lighthouserc.json", "utf8"));
+            assert.ok(ci.collect.staticDistDir, "collect.staticDistDir must name a built site");
+            for (const category of ["performance", "accessibility", "best-practices", "seo"]) {
+              assert.deepEqual(ci.assert.assertions[`categories:${category}`], ["error", { minScore: 1 }]);
+            }
+          '
