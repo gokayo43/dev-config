@@ -30,18 +30,12 @@ describe("reading uses out of a document", () => {
         `    - uses: actions/cache@${COMMIT}`,
       ].join("\n"),
     );
-    expect(
-      referencesIn("w.yml", document)
-        .map(({ value }) => value)
-        .toSorted(),
-    ).toEqual(
-      [
-        `actions/cache@${COMMIT}`,
-        `actions/checkout@${COMMIT}`,
-        `oven-sh/setup-bun@${COMMIT}`,
-        `owner/repo/.github/workflows/check.yml@${COMMIT}`,
-      ].toSorted(),
-    );
+    expect(referencesIn(document).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      `actions/cache@${COMMIT}`,
+      `actions/checkout@${COMMIT}`,
+      `oven-sh/setup-bun@${COMMIT}`,
+      `owner/repo/.github/workflows/check.yml@${COMMIT}`,
+    ]);
   });
 });
 
@@ -101,5 +95,29 @@ describe("the files read", () => {
     const messages = (await pinGate(root, ["setup/renamed-*.yml"])).map(({ message }) => message);
     expect(messages[0]).toEqual(containing("matched no file"));
     expect(messages).toHaveLength(3);
+  });
+
+  // One unparseable workflow used to reject the batch, taking every finding the
+  // other files had already produced with it and naming no file at all.
+  test("a workflow that will not parse is named, and the rest are still read", async () => {
+    const root = await materialise({
+      ...CLEAN,
+      ".github/workflows/broken.yml": "jobs:\n  a:\n   - oops\n  b: [",
+    });
+    const problems = (await pinGate(root, [])).map(({ file }) => file ?? "");
+    expect(problems).toContain(".github/workflows/broken.yml");
+    expect(problems).toContain(".github/workflows/lighthouse.yaml");
+  });
+
+  test("node_modules is never walked, whatever the repo ignores", async () => {
+    const root = await materialise({
+      ...CLEAN,
+      ".gitignore": "dist\n",
+      "node_modules/some-action/.github/workflows/ci.yml":
+        "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v5\n",
+    });
+    expect((await pinGate(root, [])).map(({ file }) => file ?? "")).not.toContain(
+      "node_modules/some-action/.github/workflows/ci.yml",
+    );
   });
 });

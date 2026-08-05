@@ -30,17 +30,24 @@ parse a schema dump. A wall-clock column stores the digits someone typed and
 forgets which clock produced them, so one row means two different instants
 either side of a DST boundary or a server move, and nothing fails until it does.
 
-`timestamp-allowlist` takes `table.column` entries for the columns where a
-wall-clock reading is the point — an opening time that is 09:00 wherever the
-shop is. Entries are separated by commas or newlines rather than spaces,
-because a quoted identifier can itself contain one:
+`timestamp-allowlist` takes `schema.table.column` entries for the columns where
+a wall-clock reading is the point — an opening time that is 09:00 wherever the
+shop is. The schema is part of the key because two of them can hold the same
+table, and an allowlist that could not tell `app.events.occurred_at` from
+`public.events.occurred_at` would exempt both. Entries are separated by commas
+or newlines rather than spaces, because a quoted identifier can itself contain
+one:
 
 ```yaml
 with:
   timestamp-allowlist: |
-    opening_hours.opens_at
-    audit log.at
+    public.opening_hours.opens_at
+    public.audit log.at
 ```
+
+Once it has booted, `capacity: true` ramps it and publishes what that measured.
+That is a step of this gate rather than a gate of its own, and it has a page:
+[capacity.md](capacity.md).
 
 Booting is the half that migrations succeeding does not prove. Health answers
 200 only after the process has started against that schema and a query has

@@ -277,6 +277,42 @@ describe("repo contract", () => {
   });
 });
 
+describe("a manifest that will not parse", () => {
+  // Absent and unreadable are different states, and only one of them is fixed
+  // by writing a package.json.
+  test("an unreadable root says so, rather than claiming the file is missing", async () => {
+    const problems = await contract({ ...CLEAN, "package.json": "{ oops" });
+    expect(problems).toEqual([containing("is not valid JSON")]);
+    expect(problems[0]).not.toContain("has no package.json");
+  });
+
+  test("an absent root still says it is absent", async () => {
+    expect(await contract(without(CLEAN, "package.json"))).toEqual([
+      containing("the repo has no package.json"),
+    ]);
+  });
+
+  // One bad workspace manifest used to reject the batch and take every finding
+  // the good ones had already produced with it.
+  test("an unreadable workspace manifest is named, and the rest are still read", async () => {
+    const root = await materialise(
+      {
+        ...CLEAN,
+        "apps/api/package.json": "{ oops",
+        "apps/web/package.json": JSON.stringify({ dependencies: { oxfmt: "^0.61.0" } }),
+      },
+      [".env.example"],
+    );
+    const problems = (await repoContract(root, DEFAULTS)).map(
+      ({ file, message }) => `${file ?? ""}: ${message}`,
+    );
+    expect(problems).toEqual([
+      containing("apps/api/package.json: is not valid JSON"),
+      containing("apps/web/package.json: dependencies.oxfmt is declared as '^0.61.0'"),
+    ]);
+  });
+});
+
 describe("contract exemptions", () => {
   test("docs-spine waives the glossary, the ADRs and CLAUDE.md", async () => {
     const stripped = without(

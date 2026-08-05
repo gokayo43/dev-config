@@ -18,8 +18,9 @@ runs:
           echo "::error::checkout with fetch-depth: 0 — gitleaks reads history, and a shallow clone has none"
           exit 1
         fi
-        curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
-          "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
-        echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
-        tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+        # shellcheck source=/dev/null
+        . "$GITHUB_ACTION_PATH/../_lib/pinned-tool.sh"
+        pinned_tool \
+          "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" \
+          "$GITLEAKS_SHA256" gitleaks
         "$RUNNER_TEMP/gitleaks" git . --redact --no-banner

@@ -38,9 +38,9 @@ export async function stackGate(root: string, denylistPath: string | URL): Promi
 
   return [
     ...found.problems,
-    ...found.read.flatMap(({ file, contents }) =>
+    ...found.read.flatMap(({ file, value }) =>
       DEPENDENCY_FIELDS.flatMap((field) =>
-        Object.keys(record(contents[field])).flatMap((name) =>
+        Object.keys(record(value[field])).flatMap((name) =>
           live
             .filter((entry) => denies(entry, name))
             .map((entry) => ({

@@ -112,16 +112,47 @@ export async function repoFiles(root: string, pathspecs: readonly string[]): Pro
   return listed.filter((_, index) => present[index] === true);
 }
 
-export interface Manifest {
+interface Parsed<T> {
   readonly file: string;
-  readonly contents: Record<string, unknown>;
+  readonly value: T;
 }
 
-export interface Manifests {
-  readonly read: Manifest[];
+export interface Batch<T> {
+  readonly read: Parsed<T>[];
   /** One per file that would not parse, naming it. */
   readonly problems: Problem[];
 }
+
+/**
+ * Parses every file, one at a time and rescued per file. A batch that threw
+ * would take every finding the other files had already produced with it, and
+ * report a parse error naming no file at all — which is the least useful
+ * diagnostic a gate can emit.
+ */
+export async function parseEach<T>(
+  root: string,
+  files: readonly string[],
+  parse: (text: string) => T,
+  language: string,
+): Promise<Batch<T>> {
+  const results = await Promise.all(
+    files.map(async (file) => {
+      try {
+        return { file, value: parse(await Bun.file(`${root}/${file}`).text()) };
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        return { file, problem: { file, message: `is not valid ${language}: ${detail}` } };
+      }
+    }),
+  );
+  return {
+    read: results.filter((result): result is Parsed<T> => "value" in result),
+    problems: results.flatMap((result) => ("problem" in result ? [result.problem] : [])),
+  };
+}
+
+export type Manifest = Parsed<Record<string, unknown>>;
+export type Manifests = Batch<Record<string, unknown>>;
 
 // Every package.json in the repo, root and workspaces alike. A git pathspec
 // matches a wildcard across "/", so the second pathspec below reaches any depth
@@ -129,27 +160,12 @@ export interface Manifests {
 // does not match, and neither pathspec can return anything but a package.json.
 export async function manifests(root: string): Promise<Manifests> {
   const files = await repoFiles(root, ["package.json", "*/package.json"]);
-  // Rescued per file: one unparseable manifest anywhere — a scratch file, a
-  // half-written edit — would otherwise reject the batch, discard every finding
-  // the other gates had already made, and report a SyntaxError naming nothing.
-  const results = await Promise.all(
-    files.map(async (file) => {
-      try {
-        return {
-          file,
-          contents: (await Bun.file(`${root}/${file}`).json()) as Record<string, unknown>,
-        };
-      } catch (error) {
-        return { file, error: error instanceof Error ? error.message : String(error) };
-      }
-    }),
+  return await parseEach(
+    root,
+    files,
+    (text) => JSON.parse(text) as Record<string, unknown>,
+    "JSON",
   );
-  return {
-    read: results.filter((result): result is Manifest => "contents" in result),
-    problems: results
-      .filter((result): result is { file: string; error: string } => "error" in result)
-      .map(({ file, error }) => ({ file, message: `is not valid JSON: ${error}` })),
-  };
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {

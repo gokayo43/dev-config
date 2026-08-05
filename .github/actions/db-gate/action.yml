@@ -1,9 +1,10 @@
 name: Database gate
 description: >-
-  Replays the migrations onto the empty Postgres the caller declared, twice, and
-  boots the app against the result. Reads DATABASE_URL from the environment —
-  the caller declares the service, so it owns the URL — and REDIS_URL when the
-  app needs one.
+  Replays the migrations onto the empty Postgres the caller declared, twice,
+  boots the app against the result, and optionally ramps it. Every step reads
+  DATABASE_URL from the environment — the caller declares the service, so it
+  owns the URL, and one value means no two steps can disagree about which
+  database was migrated — plus REDIS_URL when the app needs one.
 
 inputs:
   working-directory:
@@ -15,12 +16,6 @@ inputs:
   health-url:
     description: The URL to poll until it answers 200.
     required: true
-  database-url:
-    description: >-
-      The database to read column types from. The calling job declares the
-      service, so it owns the URL; the migrate and boot steps read the same
-      value from DATABASE_URL in the environment.
-    required: true
   capacity:
     description: Run a k6 ramp against the booted app and publish what it measured.
     default: "false"
@@ -30,11 +25,16 @@ inputs:
   capacity-path:
     description: A hot path to ramp alongside the health route, e.g. /api/things.
     default: ""
+  capacity-report:
+    description: >-
+      The artifact name for the k6 summary. A matrix that ramps more than one
+      leg gives each its own, since an artifact name may only be claimed once.
+    default: capacity-report
   timestamp-allowlist:
     description: >-
-      table.column entries whose value really is a wall-clock reading rather
-      than an instant, comma- or newline-separated — an identifier may itself
-      contain a space.
+      schema.table.column entries whose value really is a wall-clock reading
+      rather than an instant, comma- or newline-separated — an identifier may
+      itself contain a space.
     default: ""
 
 runs:
@@ -66,7 +66,6 @@ runs:
     - name: Every instant carries its zone
       shell: bash
       env:
-        INPUT_DATABASE_URL: ${{ inputs.database-url }}
         INPUT_TIMESTAMP_ALLOWLIST: ${{ inputs.timestamp-allowlist }}
       run: |
         set -euo pipefail
@@ -122,11 +121,11 @@ runs:
         CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
       run: |
         set -euo pipefail
-        curl -sSfL -o "$RUNNER_TEMP/k6.tar.gz" \
-          "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz"
-        echo "${K6_SHA256}  $RUNNER_TEMP/k6.tar.gz" | sha256sum -c -
-        tar -xzf "$RUNNER_TEMP/k6.tar.gz" -C "$RUNNER_TEMP" --strip-components=1 \
-          "k6-${K6_VERSION}-linux-amd64/k6"
+        # shellcheck source=/dev/null
+        . "$GITHUB_ACTION_PATH/../_lib/pinned-tool.sh"
+        pinned_tool \
+          "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
+          "$K6_SHA256" "k6-${K6_VERSION}-linux-amd64/k6"
         script="${CAPACITY_SCRIPT:-$GITHUB_ACTION_PATH/capacity.js}"
         "$RUNNER_TEMP/k6" run --quiet \
           --summary-trend-stats='avg,min,med,p(95),p(99),max' \
@@ -134,9 +133,12 @@ runs:
         INPUT_SUMMARY_FILE="$RUNNER_TEMP/capacity.json" INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
           bun "$GITHUB_ACTION_PATH/capacity.main.ts"
 
+    # always(): a ramp that failed on the way to a number is exactly when the
+    # partial summary is worth having.
     - name: Publish the capacity report
-      if: ${{ inputs.capacity == 'true' }}
+      if: ${{ always() && inputs.capacity == 'true' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: capacity-report
+        name: ${{ inputs.capacity-report }}
         path: ${{ runner.temp }}/capacity.json
+        if-no-files-found: ignore

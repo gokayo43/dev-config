@@ -106,9 +106,9 @@ function extendsList(value: unknown): string[] {
 function checkPins(all: readonly Manifest[]): Problem[] {
   // peerDependencies are the one place a range is the point: they declare what
   // a consumer may bring, not what this repo installs.
-  return all.flatMap(({ file, contents }) =>
+  return all.flatMap(({ file, value }) =>
     (["dependencies", "devDependencies", "optionalDependencies"] as const).flatMap((field) =>
-      Object.entries(record(contents[field]))
+      Object.entries(record(value[field]))
         .filter(([, spec]) => typeof spec !== "string" || !isExact(spec))
         .map(([name, spec]) => ({
           file,
@@ -408,13 +408,18 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   const all = await manifests(root);
   const rootManifest = all.read.find(({ file }) => file === "package.json");
   if (rootManifest === undefined) {
-    return [{ file: "package.json", message: "the repo has no package.json" }];
+    // Absent and unreadable are different states, and only one of them is
+    // fixed by writing a package.json. When the file is there and will not
+    // parse, the problems already say so and naming the file is the point.
+    return all.problems.length > 0
+      ? all.problems
+      : [{ file: "package.json", message: "the repo has no package.json" }];
   }
 
   const none = Promise.resolve<Problem[]>([]);
   const checks = await Promise.all([
     checkLockfiles(root),
-    checkLineage(root, rootManifest.contents, exempt("config-lineage")),
+    checkLineage(root, rootManifest.value, exempt("config-lineage")),
     checkBunfig(root),
     checkLefthook(root),
     exempt("secrets") ? none : checkSecrets(root),
@@ -423,7 +428,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   ]);
 
   return [
-    ...checkRoot(rootManifest.contents, contract),
+    ...checkRoot(rootManifest.value, contract),
     ...all.problems,
     ...checkPins(all.read),
     ...checks.flat(),

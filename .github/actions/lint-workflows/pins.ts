@@ -1,16 +1,15 @@
-import { type Problem, record } from "../_lib/gate.ts";
+import { type Problem, parseEach, record, repoFiles } from "../_lib/gate.ts";
 
 /** GitHub accepts both spellings for every one of these, so both are read. */
-const WORKFLOWS = ".github/workflows/*.{yml,yaml}";
-const ACTIONS = ".github/actions/**/action.{yml,yaml}";
+const OWN = [
+  ".github/workflows/*.yml",
+  ".github/workflows/*.yaml",
+  ".github/actions/*/action.yml",
+  ".github/actions/*/action.yaml",
+];
 
 const COMMIT = /@[0-9a-f]{40}$/;
 const DIGEST = /@sha256:[0-9a-f]{64}$/;
-
-export interface Reference {
-  readonly file: string;
-  readonly value: string;
-}
 
 /**
  * Every `uses:` in a parsed workflow or action, wherever it sits — a step's, a
@@ -19,18 +18,23 @@ export interface Reference {
  * a quoted value and a key nested somewhere the pattern did not anticipate are
  * all the same node to a parser and three separate holes in a regex.
  */
-export function referencesIn(file: string, document: unknown): Reference[] {
-  if (Array.isArray(document)) return document.flatMap((entry) => referencesIn(file, entry));
+export function referencesIn(document: unknown): string[] {
+  if (Array.isArray(document)) return document.flatMap(referencesIn);
   if (typeof document !== "object" || document === null) return [];
 
   const node = record(document);
   const uses = node["uses"];
   return [
-    ...(typeof uses === "string" ? [{ file, value: uses }] : []),
+    ...(typeof uses === "string" ? [uses] : []),
     ...Object.entries(node)
       .filter(([key]) => key !== "uses")
-      .flatMap(([, value]) => referencesIn(file, value)),
+      .flatMap(([, value]) => referencesIn(value)),
   ];
+}
+
+export interface Reference {
+  readonly file: string;
+  readonly value: string;
 }
 
 export function unpinned(references: readonly Reference[]): Problem[] {
@@ -49,41 +53,27 @@ export function unpinned(references: readonly Reference[]): Problem[] {
     }));
 }
 
-/**
- * The files to read. An extra path that matches nothing is a problem in its own
- * right: it is how a renamed file quietly stops being checked.
- */
-async function pinnedFiles(
-  root: string,
-  extraPaths: readonly string[],
-): Promise<{ files: string[]; problems: Problem[] }> {
-  // `dot: true` is load-bearing: without it Bun.Glob skips every path under a
-  // dot-directory, and the gate would scan nothing at all under .github while
-  // reporting clean.
-  const own = [WORKFLOWS, ACTIONS].flatMap((pattern) => [
-    ...new Bun.Glob(pattern).scanSync({ cwd: root, onlyFiles: true, dot: true }),
-  ]);
-
-  const extra: string[] = [];
-  const problems: Problem[] = [];
-  for (const path of extraPaths) {
-    const matched = [...new Bun.Glob(path).scanSync({ cwd: root, onlyFiles: true, dot: true })];
-    if (matched.length === 0) {
-      problems.push({ file: path, message: `extra-paths matched no file — check the path` });
-      continue;
-    }
-    extra.push(...matched);
-  }
-
-  return { files: [...new Set([...own, ...extra])].sort(), problems };
-}
-
 export async function pinGate(root: string, extraPaths: readonly string[]): Promise<Problem[]> {
-  const { files, problems } = await pinnedFiles(root, extraPaths);
-  const references = await Promise.all(
-    files.map(async (file) =>
-      referencesIn(file, Bun.YAML.parse(await Bun.file(`${root}/${file}`).text())),
-    ),
+  const own = await repoFiles(root, OWN);
+  // An extra path that matches nothing is a problem in its own right: it is how
+  // a renamed file quietly stops being checked.
+  const extra = await Promise.all(extraPaths.map(async (path) => await repoFiles(root, [path])));
+  const missing = extraPaths.flatMap((path, index) =>
+    (extra[index] ?? []).length === 0
+      ? [{ file: path, message: "extra-paths matched no file — check the path" }]
+      : [],
   );
-  return [...problems, ...unpinned(references.flat())];
+
+  const files = [...new Set([...own, ...extra.flat()])].toSorted((a, b) => a.localeCompare(b));
+  const documents = await parseEach(root, files, (text) => Bun.YAML.parse(text), "YAML");
+
+  return [
+    ...missing,
+    ...documents.problems,
+    ...unpinned(
+      documents.read.flatMap(({ file, value }) =>
+        referencesIn(value).map((used) => ({ file, value: used })),
+      ),
+    ),
+  ];
 }

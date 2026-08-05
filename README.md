@@ -37,14 +37,13 @@ to override a shared setting, the override carries a comment naming the reason.
 Each gate has a reference page of its own. This file holds the map and the
 settings every repo shares; what a single gate asserts, and why, lives beside it:
 
-| Gate                  | Page                                                                   |
-| --------------------- | ---------------------------------------------------------------------- |
-| `repo-contract`       | [docs/gates/repo-contract.md](docs/gates/repo-contract.md)             |
-| `stack-gate`          | [docs/gates/stack-gate.md](docs/gates/stack-gate.md)                   |
-| `suppression-hygiene` | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md) |
-| `compose-lint`        | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)               |
-| `db-gate`             | [docs/gates/db-gate.md](docs/gates/db-gate.md)                         |
-| the capacity ramp     | [docs/gates/capacity.md](docs/gates/capacity.md)                       |
+| Gate                  | Page                                                                                                              |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `repo-contract`       | [docs/gates/repo-contract.md](docs/gates/repo-contract.md)                                                        |
+| `stack-gate`          | [docs/gates/stack-gate.md](docs/gates/stack-gate.md)                                                              |
+| `suppression-hygiene` | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md)                                            |
+| `compose-lint`        | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)                                                          |
+| `db-gate`             | [docs/gates/db-gate.md](docs/gates/db-gate.md), and [capacity.md](docs/gates/capacity.md) for the ramp it can run |
 
 ## TypeScript
 
@@ -553,7 +552,7 @@ jobs:
 | `contract-exemptions` | `""`                               | Repo-contract facts this repo is structurally unable to satisfy, space-separated. A marketing site names `docs-spine`.                                                     |
 | `start-command`       | `bun run start`                    | How the boot gate starts the app.                                                                                                                                          |
 | `health-url`          | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200.                                                                                                                             |
-| `timestamp-allowlist` | `""`                               | `table.column` entries whose value really is a wall-clock reading rather than an instant.                                                                                  |
+| `timestamp-allowlist` | `""`                               | `schema.table.column` entries whose value really is a wall-clock reading rather than an instant.                                                                           |
 | `capacity`            | `false`                            | Ramps the booted app with k6 and publishes the measurement.                                                                                                                |
 | `capacity-path`       | `""`                               | A hot path to ramp alongside the health route.                                                                                                                             |
 | `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                 |

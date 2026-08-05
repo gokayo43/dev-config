@@ -111,6 +111,9 @@ jobs:
             }
           ' "${actions[@]}"
           shellcheck --shell=bash "$RUNNER_TEMP"/composite-*.sh
+          # The one shell library the composites source, which the loop above
+          # cannot see because it is not inlined in any run: block.
+          shellcheck --shell=bash .github/actions/_lib/*.sh
 
       - name: Validate the Renovate preset
         # Deliberately unpinned: the preset has to hold against the Renovate that runs it today.

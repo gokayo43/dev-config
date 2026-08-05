@@ -49,8 +49,12 @@ on:
         description: A hot path to ramp alongside the health route, e.g. /api/things.
         type: string
         default: ""
+      capacity-report:
+        description: The artifact name for the k6 summary, for a matrix that ramps more than one leg.
+        type: string
+        default: capacity-report
       timestamp-allowlist:
-        description: table.column entries whose value is a wall-clock reading rather than an instant, comma- or newline-separated.
+        description: schema.table.column entries whose value is a wall-clock reading rather than an instant, comma- or newline-separated.
         type: string
         default: ""
 
@@ -72,6 +76,14 @@ jobs:
           # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
+      # The ramp runs against the app the database job boots, so asking for one
+      # without the other is a request that would otherwise be ignored in
+      # silence — and a capacity gate nobody notices is off is the worst kind.
+      - if: ${{ inputs.capacity && !inputs.database }}
+        run: |
+          echo "::error::capacity: true needs database: true — the ramp runs against the app the database job boots"
+          exit 1
+
       - uses: gokayo43/dev-config/.github/actions/secret-scan@494b25690e976886c101e3f065dffd7f25f6f5a7 # v0.12.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -87,7 +99,7 @@ jobs:
       - uses: gokayo43/dev-config/.github/actions/stack-gate@494b25690e976886c101e3f065dffd7f25f6f5a7 # v0.12.0
 
       # The caller's own workflows were schema-checked and pin-checked by
-      # nothing until this ran here. Needs Bun, which the step above set up.
+      # nothing until this ran here. Needs the Bun that setup-bun installed.
       - uses: gokayo43/dev-config/.github/actions/lint-workflows@494b25690e976886c101e3f065dffd7f25f6f5a7 # v0.12.0
 
       - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@494b25690e976886c101e3f065dffd7f25f6f5a7 # v0.12.0
@@ -157,10 +169,10 @@ jobs:
 
       - uses: gokayo43/dev-config/.github/actions/db-gate@494b25690e976886c101e3f065dffd7f25f6f5a7 # v0.12.0
         with:
-          database-url: ${{ env.DATABASE_URL }}
           start-command: ${{ inputs.start-command }}
           health-url: ${{ inputs.health-url }}
           timestamp-allowlist: ${{ inputs.timestamp-allowlist }}
           capacity: ${{ inputs.capacity }}
           capacity-script: ${{ inputs.capacity-script }}
           capacity-path: ${{ inputs.capacity-path }}
+          capacity-report: ${{ inputs.capacity-report }}

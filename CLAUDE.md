@@ -19,8 +19,12 @@ a change to a rule usually lands here too.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
 - `.github/workflows/check.yml` — the gate every repo calls.
 - `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
-  module the suite drives, and a `*.main.ts` that GitHub runs; `_lib/gate.ts`
-  and `_lib/gh.ts` are what they share.
+  module the suite drives, and a `*.main.ts` that GitHub runs. `_lib/gate.ts` is
+  what they share, and `_lib/pinned-tool.sh` is the one shell helper — the
+  verified fetch every pinned binary goes through.
+- `db-gate/capacity.js` is the exception: it runs inside k6, not under this
+  repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
+  config cannot carry the reason, so it is here.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
   clean one. A gate without one is a claim.
 - `docs/gates/*.md` — a reference page per gate. README holds the map.

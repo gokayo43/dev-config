@@ -42,6 +42,9 @@ the contract.
 commit that ships the composite actions, one on the commit whose workflows pin
 them. A consumer pins the second.
 
-**Queue vocabulary** — the labels an issue may carry. Six of them are states,
-exactly one per open issue; `commitment` is an orthogonal marker meaning the
-body names the event that makes the issue due.
+**Queue vocabulary** — the two labels an issue may carry. An open issue with no
+label is a proposal, and GitHub's close reasons say whether a closed one was
+completed or declined; `roadmap` marks an agreed direction with no date, and
+`commitment` means the body names the event that makes the issue due. Nothing
+in CI reads any of it — it is a convention, kept because agents rather than
+people are the ones re-reading the queue.
