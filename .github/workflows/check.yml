@@ -38,7 +38,7 @@ on:
         type: string
         default: http://localhost:3000/api/health
       timestamp-allowlist:
-        description: table.column entries whose value really is a wall-clock reading rather than an instant.
+        description: table.column entries whose value is a wall-clock reading rather than an instant, comma- or newline-separated.
         type: string
         default: ""
 

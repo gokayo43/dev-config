@@ -17,8 +17,9 @@ inputs:
     required: true
   timestamp-allowlist:
     description: >-
-      table.column entries, space-separated, whose value really is a wall-clock
-      reading rather than an instant.
+      table.column entries whose value really is a wall-clock reading rather
+      than an instant, comma- or newline-separated — an identifier may itself
+      contain a space.
     default: ""
 
 runs:

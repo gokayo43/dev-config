@@ -26,6 +26,17 @@ export function timestamptzGate(
     }));
 }
 
+/**
+ * Comma- or newline-separated, not space-separated: a quoted identifier may
+ * contain a space, and `audit log.at` is one entry rather than two.
+ */
+export function allowlistFrom(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+}
+
 export const WALL_CLOCK_QUERY = `
   select table_name, column_name
   from information_schema.columns

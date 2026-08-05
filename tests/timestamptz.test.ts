@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
-import { timestamptzGate, type WallClockColumn } from "../.github/actions/db-gate/timestamptz.ts";
+import {
+  allowlistFrom,
+  timestamptzGate,
+  type WallClockColumn,
+} from "../.github/actions/db-gate/timestamptz.ts";
 
 import { containing } from "./matchers.ts";
 
@@ -30,6 +34,18 @@ describe("timestamptz gate", () => {
   test("an allowlisted column is the deliberate wall-clock case", () => {
     const deliberate = COLUMNS.map(({ table_name, column_name }) => `${table_name}.${column_name}`);
     expect(timestamptzGate(COLUMNS, deliberate)).toEqual([]);
+  });
+
+  // A table name can carry a space — pg_dump quotes it, information_schema
+  // reports it verbatim — so a space-separated input could not name one.
+  test("an entry naming a quoted identifier survives the parse", () => {
+    expect(allowlistFrom("audit log.at, user.opens_at")).toEqual(["audit log.at", "user.opens_at"]);
+    expect(allowlistFrom("audit log.at\nuser.opens_at\n")).toEqual([
+      "audit log.at",
+      "user.opens_at",
+    ]);
+    expect(allowlistFrom("")).toEqual([]);
+    expect(timestamptzGate(COLUMNS, allowlistFrom("audit log.at"))).toHaveLength(2);
   });
 
   test("the allowlist is per column, not per table or per name", () => {

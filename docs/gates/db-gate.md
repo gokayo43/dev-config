@@ -24,14 +24,23 @@ is cheap and proves the journal is honest; with anything that re-executes SQL,
 it proves the SQL is re-runnable.
 
 The database is then asked directly, through `information_schema.columns`,
-whether any column is `timestamp without time zone` — an ORM's `timestamp` is a
-hint and the database is the fact, and it will answer without anything having to
-parse a schema dump. A wall-clock
-column stores the digits someone typed and forgets which clock produced them, so
-one row means two different instants either side of a DST boundary or a server
-move, and nothing fails until it does. `timestamp-allowlist` takes
-`table.column` entries for the columns where a wall-clock reading is the point —
-an opening time that is 09:00 wherever the shop is.
+whether any column is `timestamp without time zone`. An ORM's `timestamp` is a
+hint and the catalogue is the fact, and asking it means nothing here has to
+parse a schema dump. A wall-clock column stores the digits someone typed and
+forgets which clock produced them, so one row means two different instants
+either side of a DST boundary or a server move, and nothing fails until it does.
+
+`timestamp-allowlist` takes `table.column` entries for the columns where a
+wall-clock reading is the point — an opening time that is 09:00 wherever the
+shop is. Entries are separated by commas or newlines rather than spaces,
+because a quoted identifier can itself contain one:
+
+```yaml
+with:
+  timestamp-allowlist: |
+    opening_hours.opens_at
+    audit log.at
+```
 
 Booting is the half that migrations succeeding does not prove. Health answers
 200 only after the process has started against that schema and a query has

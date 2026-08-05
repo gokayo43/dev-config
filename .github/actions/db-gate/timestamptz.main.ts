@@ -1,7 +1,12 @@
 import { SQL } from "bun";
 
-import { inputs, list, report } from "../_lib/gate.ts";
-import { timestamptzGate, WALL_CLOCK_QUERY, type WallClockColumn } from "./timestamptz.ts";
+import { inputs, report } from "../_lib/gate.ts";
+import {
+  allowlistFrom,
+  timestamptzGate,
+  WALL_CLOCK_QUERY,
+  type WallClockColumn,
+} from "./timestamptz.ts";
 
 const read = inputs("timestamp-allowlist", "database-url");
 
@@ -12,4 +17,4 @@ const sql = new SQL(read["database-url"]);
 const columns = (await sql.unsafe(WALL_CLOCK_QUERY)) as WallClockColumn[];
 await sql.close();
 
-report(timestamptzGate(columns, list(read["timestamp-allowlist"])));
+report(timestamptzGate(columns, allowlistFrom(read["timestamp-allowlist"])));
