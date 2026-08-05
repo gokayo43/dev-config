@@ -18,15 +18,40 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # gitleaks reads history, and a shallow clone has none.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/secret-scan
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      # This repo runs its own gates on itself, from the working tree. A gate
+      # its author's repo cannot pass is a gate nobody should be asked to.
+      #
+      # Three facts here are structural rather than unfinished: the configs
+      # inherit from this repo's own bases by relative path because a package
+      # cannot extend itself by name, CI is this file rather than a call into
+      # check.yml because a commit cannot pin its own SHA, and there is no
+      # environment to shape — nothing here reads a secret at runtime.
+      - uses: ./.github/actions/repo-contract
+        with:
+          exemptions: config-lineage ci-call secrets
+
+      - uses: ./.github/actions/stack-gate
+
+      # The hygiene suite writes directives as fixture text, so the scanner
+      # finds them in the one file whose job is to contain them.
+      - uses: ./.github/actions/suppression-hygiene
+        with:
+          fixtures: tests/suppression-hygiene.test.ts
 
       - run: bun install --frozen-lockfile
 
       # The gates this repo ships are TypeScript, and their suite is what proves
       # each one refuses a violating tree and passes a clean one. Every other
       # repo's gate is only as honest as these two lanes.
-      - run: bun run typecheck
+      - run: bun run check
       - run: bun test
 
       - name: Parse every JSON config

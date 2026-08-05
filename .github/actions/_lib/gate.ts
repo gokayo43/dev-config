@@ -1,3 +1,5 @@
+// oxlint-disable no-console -- stdout is the protocol: GitHub reads ::error and ::notice lines off it
+//
 // Shared by every gate script under .github/actions. GitHub checks the whole
 // repository out to run an action, so a script may import across action
 // directories; only the directory named in `uses:` is the action itself.
@@ -22,6 +24,46 @@ export function report(problems: readonly Problem[]): void {
     );
   }
   if (problems.length > 0) process.exitCode = 1;
+}
+
+/** Says something the log should carry but no build should fail over. */
+export function notice(message: string): void {
+  console.log(`::notice::${message}`);
+}
+
+/**
+ * The inputs the calling action.yml promises to set. A missing one is a wiring
+ * bug in the action, and a gate that defaults it silently grades every repo
+ * against a contract nobody chose.
+ */
+export function inputs<const Names extends readonly string[]>(
+  ...names: Names
+): Record<Names[number], string> {
+  const read = {} as Record<Names[number], string>;
+  for (const name of names) {
+    const variable = `INPUT_${name.toUpperCase().replaceAll("-", "_")}`;
+    const value = Bun.env[variable];
+    if (value === undefined) throw new Error(`${variable} is not set — the action must pass it`);
+    read[name as Names[number]] = value;
+  }
+  return read;
+}
+
+/** Where a manifest may declare a package. */
+export const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+] as const;
+
+export function record(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+/** A space-separated action input, as a list. */
+export function list(value: string): string[] {
+  return value.split(/\s+/).filter((entry) => entry !== "");
 }
 
 async function git(cwd: string, args: readonly string[]): Promise<number> {
@@ -49,6 +91,25 @@ export async function repoFiles(root: string, pathspecs: readonly string[]): Pro
   const listed = stdout.split("\0").filter((path) => path !== "");
   const present = await Promise.all(listed.map((path) => Bun.file(`${root}/${path}`).exists()));
   return listed.filter((_, index) => present[index] === true);
+}
+
+export interface Manifest {
+  readonly file: string;
+  readonly contents: Record<string, unknown>;
+}
+
+// Every package.json in the repo, root and workspaces alike. A git pathspec
+// matches a wildcard across "/", so the second pathspec below reaches any depth
+// while still requiring the whole final path segment: "apps/my-package.json"
+// does not match, and neither pathspec can return anything but a package.json.
+export async function manifests(root: string): Promise<Manifest[]> {
+  const files = await repoFiles(root, ["package.json", "*/package.json"]);
+  return await Promise.all(
+    files.map(async (file) => ({
+      file,
+      contents: (await Bun.file(`${root}/${file}`).json()) as Record<string, unknown>,
+    })),
+  );
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {

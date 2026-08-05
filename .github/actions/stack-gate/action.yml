@@ -14,7 +14,8 @@ runs:
   using: composite
   steps:
     - shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/stack-gate.ts"

@@ -28,4 +28,5 @@ runs:
         set -euo pipefail
         gh label list --limit 200 --json name > "$RUNNER_TEMP/labels.json"
         gh issue list --state open --limit 500 --json number,labels,body > "$RUNNER_TEMP/issues.json"
-        bun "$GITHUB_ACTION_PATH/queue-audit.ts" "$RUNNER_TEMP/labels.json" "$RUNNER_TEMP/issues.json"
+        INPUT_LABELS_FILE="$RUNNER_TEMP/labels.json" INPUT_ISSUES_FILE="$RUNNER_TEMP/issues.json" \
+          bun "$GITHUB_ACTION_PATH/queue-audit.ts"

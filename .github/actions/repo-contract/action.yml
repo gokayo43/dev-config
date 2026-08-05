@@ -13,18 +13,21 @@ inputs:
   database:
     description: The repo owns migrations, so it has to expose a db:migrate script.
     default: "false"
-  static-site:
-    description: A marketing site with no domain to glossary and no decisions to record.
-    default: "false"
+  exemptions:
+    description: >-
+      Facts this repo is structurally unable to satisfy, space-separated:
+      config-lineage, ci-call, docs-spine, secrets. Anything else fails, so a
+      typo cannot quietly waive a check.
+    default: ""
 
 runs:
   using: composite
   steps:
     - shell: bash
-      working-directory: ${{ inputs.working-directory }}
       env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_DATABASE: ${{ inputs.database }}
-        INPUT_STATIC_SITE: ${{ inputs.static-site }}
+        INPUT_EXEMPTIONS: ${{ inputs.exemptions }}
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/repo-contract.ts"

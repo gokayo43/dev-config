@@ -1,0 +1,18 @@
+name: Queue promotion
+
+# This repo runs its own queue-integrity workflows by relative path: the pin
+# every other repo uses is a SHA, and a repo cannot pin to a commit it is in the
+# middle of making.
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/queue-guard.yml

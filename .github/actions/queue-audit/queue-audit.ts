@@ -1,4 +1,4 @@
-import { type Problem, report } from "../_lib/gate.ts";
+import { inputs, list, type Problem, report } from "../_lib/gate.ts";
 
 interface Label {
   readonly name: string;
@@ -61,20 +61,22 @@ export function queueAudit(
   return problems;
 }
 
-function list(value: string | undefined): string[] {
-  return (value ?? "").split(/\s+/).filter((entry) => entry !== "");
-}
-
 if (import.meta.main) {
-  const [labelsFile, issuesFile] = Bun.argv.slice(2);
+  const read = inputs(
+    "vocabulary",
+    "state-labels",
+    "commitment-label",
+    "labels-file",
+    "issues-file",
+  );
   report(
     queueAudit(
-      (await Bun.file(labelsFile ?? "").json()) as Label[],
-      (await Bun.file(issuesFile ?? "").json()) as Issue[],
+      (await Bun.file(read["labels-file"]).json()) as Label[],
+      (await Bun.file(read["issues-file"]).json()) as Issue[],
       {
-        vocabulary: list(Bun.env["INPUT_VOCABULARY"]),
-        stateLabels: list(Bun.env["INPUT_STATE_LABELS"]),
-        commitmentLabel: Bun.env["INPUT_COMMITMENT_LABEL"] ?? "",
+        vocabulary: list(read["vocabulary"]),
+        stateLabels: list(read["state-labels"]),
+        commitmentLabel: read["commitment-label"],
       },
     ),
   );

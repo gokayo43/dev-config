@@ -1,9 +1,10 @@
 name: Queue guard
 description: >-
-  Fails when anyone but the repo owner promotes an issue to ready-for-agent or
-  ready-for-human. Agents file proposals freely and never approve their own, and
-  the labelled event names the actor, so the rule is enforceable rather than
-  merely written down.
+  Takes back a promotion to ready-for-agent or ready-for-human made by anyone
+  but the repo owner: the label comes off, the issue says why, and the run
+  fails. Agents file proposals freely and never approve their own, and the
+  labelled event names the actor — so the rule is enforced rather than
+  reported. Needs GH_TOKEN and GH_REPO in the environment.
 
 inputs:
   label:
@@ -15,6 +16,9 @@ inputs:
   owner:
     description: Who is allowed to.
     required: true
+  issue:
+    description: The issue it was added to.
+    required: true
 
 runs:
   using: composite
@@ -24,6 +28,10 @@ runs:
         INPUT_LABEL: ${{ inputs.label }}
         INPUT_ACTOR: ${{ inputs.actor }}
         INPUT_OWNER: ${{ inputs.owner }}
+        ISSUE: ${{ inputs.issue }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/queue-guard.ts"
+        if bun "$GITHUB_ACTION_PATH/queue-guard.ts"; then exit 0; fi
+        gh issue edit "$ISSUE" --remove-label "$INPUT_LABEL"
+        gh issue comment "$ISSUE" --body "Removed \`$INPUT_LABEL\`: only @$INPUT_OWNER promotes a proposal, and @$INPUT_ACTOR is not @$INPUT_OWNER. Agents file \`needs-triage\` and never approve their own work — leave this for triage."
+        exit 1

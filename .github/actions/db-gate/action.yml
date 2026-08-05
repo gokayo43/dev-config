@@ -45,15 +45,27 @@ runs:
         diff -u "$RUNNER_TEMP/schema-once.sql" "$RUNNER_TEMP/schema-twice.sql" \
           || { echo "::error::the second migrate changed the schema"; exit 1; }
 
-    # The dump is already in hand, and it is the only place the real column type
-    # is visible: an ORM's `timestamp` is a hint, the database is the fact.
+    # The database that has just been migrated is the authority on its own
+    # column types — an ORM's `timestamp` is a hint — and it will answer the
+    # question directly, so nothing here parses a schema dump.
     - name: Every instant carries its zone
       shell: bash
       env:
-        INPUT_TIMESTAMP_ALLOWLIST: ${{ inputs.timestamp-allowlist }}
+        ALLOWLIST: ${{ inputs.timestamp-allowlist }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/timestamptz.ts" "$RUNNER_TEMP/schema-once.sql"
+        psql "$DATABASE_URL" --no-psqlrc --tuples-only --no-align --field-separator=. \
+          --command="select table_name, column_name from information_schema.columns \
+            where table_schema = 'public' and data_type = 'timestamp without time zone' \
+            order by table_name, column_name" > "$RUNNER_TEMP/wall-clock.txt"
+        status=0
+        while IFS= read -r column; do
+          [ -n "$column" ] || continue
+          case " $ALLOWLIST " in *" $column "*) continue ;; esac
+          echo "::error::$column is 'timestamp without time zone' — store instants as timestamptz, or list it in timestamp-allowlist if it is a deliberate wall-clock value"
+          status=1
+        done < "$RUNNER_TEMP/wall-clock.txt"
+        exit "$status"
 
     # Migrations applying is half of it; the app running against the schema they
     # produced is the other half. Health answers 200 only once the process is up

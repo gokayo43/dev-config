@@ -23,10 +23,12 @@ on:
         description: Hold docker-compose.yml to the deployment shape — for repos this box runs as containers.
         type: boolean
         default: false
-      static-site:
-        description: A marketing site — exempt from the docs spine the repo contract otherwise requires.
-        type: boolean
-        default: false
+      contract-exemptions:
+        description: >-
+          Repo-contract facts this repo is structurally unable to satisfy, space-separated
+          (config-lineage, ci-call, docs-spine, secrets). A marketing site names docs-spine.
+        type: string
+        default: ""
       start-command:
         description: How the boot gate starts the app.
         type: string
@@ -65,7 +67,7 @@ jobs:
       - uses: gokayo43/dev-config/.github/actions/repo-contract@81815076f22af2c330d0d1fe1e12702376651b27 # v0.6.2
         with:
           database: ${{ inputs.database }}
-          static-site: ${{ inputs.static-site }}
+          exemptions: ${{ inputs.contract-exemptions }}
 
       - uses: gokayo43/dev-config/.github/actions/stack-gate@81815076f22af2c330d0d1fe1e12702376651b27 # v0.6.2
 

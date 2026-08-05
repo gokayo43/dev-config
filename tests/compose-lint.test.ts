@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import { composeLint } from "../.github/actions/compose-lint/compose-lint.ts";
 
+import { containing } from "./matchers.ts";
+
 const FILE = "docker-compose.yml";
 
 const CLEAN = `name: clean
@@ -51,7 +53,7 @@ describe("compose lint", () => {
 
   test("a port on every interface is refused", () => {
     expect(lint(CLEAN.replace('"127.0.0.1:5180:3000"', '"5180:3000"'))).toEqual([
-      expect.stringContaining("web publishes"),
+      containing("web publishes"),
     ]);
   });
 
@@ -60,12 +62,12 @@ describe("compose lint", () => {
       '      - "127.0.0.1:5180:3000"',
       "      - target: 3000\n        published: 5180\n        host_ip: 0.0.0.0",
     );
-    expect(lint(long)).toEqual([expect.stringContaining("web publishes")]);
+    expect(lint(long)).toEqual([containing("web publishes")]);
   });
 
   test("a service with no memory cap is refused", () => {
     expect(lint(CLEAN.replace("    mem_limit: 1g\n", ""))).toEqual([
-      expect.stringContaining("web has no mem_limit"),
+      containing("web has no mem_limit"),
     ]);
   });
 
@@ -74,12 +76,12 @@ describe("compose lint", () => {
       "    x-no-healthcheck: a one-shot job that exits; it never reaches a steady state to probe\n",
       "",
     );
-    expect(lint(stripped)).toEqual([expect.stringContaining("migrate has no healthcheck")]);
+    expect(lint(stripped)).toEqual([containing("migrate has no healthcheck")]);
   });
 
   test("an empty opt-out reason does not count as one", () => {
     expect(lint(CLEAN.replace(/x-no-healthcheck: .*/, 'x-no-healthcheck: ""'))).toEqual([
-      expect.stringContaining("migrate has no healthcheck"),
+      containing("migrate has no healthcheck"),
     ]);
   });
 
@@ -89,21 +91,23 @@ describe("compose lint", () => {
       "",
     );
     expect(lint(withoutMigrate)).toEqual([
-      expect.stringContaining("no migrate service"),
-      expect.stringContaining("web must depend_on migrate"),
+      containing("no migrate service"),
+      containing("web must depend_on migrate"),
     ]);
   });
 
   test("a migrate service that restarts is refused", () => {
     expect(lint(CLEAN.replace('restart: "no"', "restart: unless-stopped"))).toEqual([
-      expect.stringContaining("restart:"),
+      containing("restart:"),
     ]);
   });
 
   test("an app service that does not wait for the migration is refused", () => {
     expect(
-      lint(CLEAN.replace("      migrate:\n        condition: service_completed_successfully\n", "")),
-    ).toEqual([expect.stringContaining("web must depend_on migrate")]);
+      lint(
+        CLEAN.replace("      migrate:\n        condition: service_completed_successfully\n", ""),
+      ),
+    ).toEqual([containing("web must depend_on migrate")]);
   });
 
   test("the short depends_on form carries no condition, so it does not satisfy the wait", () => {
@@ -111,11 +115,16 @@ describe("compose lint", () => {
       "    depends_on:\n      postgres:\n        condition: service_healthy\n      migrate:\n        condition: service_completed_successfully\n",
       "    depends_on:\n      - postgres\n      - migrate\n",
     );
-    expect(lint(short)).toEqual([expect.stringContaining("web must depend_on migrate")]);
+    expect(lint(short)).toEqual([containing("web must depend_on migrate")]);
   });
 
   test("an image-only service is infrastructure, not something the migration gates", () => {
-    // postgres has no `build` and is not asked to wait on the migration it hosts.
-    expect(lint(CLEAN)).toEqual([]);
+    // postgres has no `build`, so it is not asked to wait on the migration it
+    // hosts; give it one and the rule would fire on a circular dependency.
+    const building = CLEAN.replace(
+      "  postgres:\n    image: postgres:16-alpine\n",
+      "  postgres:\n    build:\n      context: ./db\n",
+    );
+    expect(lint(building)).toEqual([containing("postgres must depend_on migrate")]);
   });
 });

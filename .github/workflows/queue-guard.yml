@@ -3,10 +3,8 @@ name: Queue guard
 # Called from a repo's own workflow on `issues: labeled`:
 #   jobs.guard.uses: gokayo43/dev-config/.github/workflows/queue-guard.yml@<sha>
 #
-# The labels are the state machine, and `ready-for-agent` / `ready-for-human`
-# mean the product owner approved the work. The labelled event names who added
-# it, so "agents never promote their own proposals" is enforceable rather than
-# only written down.
+# The caller grants `issues: write`, because the guard takes the label back
+# rather than reporting it: the run is red *and* the invalid state is gone.
 on:
   workflow_call:
 
@@ -17,11 +15,18 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - uses: gokayo43/dev-config/.github/actions/queue-guard@81815076f22af2c330d0d1fe1e12702376651b27 # v0.6.2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         with:
           label: ${{ github.event.label.name }}
           actor: ${{ github.event.sender.login }}
           owner: ${{ github.repository_owner }}
+          issue: ${{ github.event.issue.number }}

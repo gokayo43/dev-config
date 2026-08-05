@@ -1,4 +1,4 @@
-import { type Problem, report } from "../_lib/gate.ts";
+import { inputs, type Problem, report } from "../_lib/gate.ts";
 
 /** The labels that mean "the product owner approved this". Everything else an agent may set freely. */
 const PROMOTIONS = new Set(["ready-for-agent", "ready-for-human"]);
@@ -13,7 +13,6 @@ export function queueGuard(label: string, actor: string, owner: string): Problem
 }
 
 if (import.meta.main) {
-  report(
-    queueGuard(Bun.env["INPUT_LABEL"] ?? "", Bun.env["INPUT_ACTOR"] ?? "", Bun.env["INPUT_OWNER"] ?? ""),
-  );
+  const read = inputs("label", "actor", "owner");
+  report(queueGuard(read["label"], read["actor"], read["owner"]));
 }

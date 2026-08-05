@@ -1,12 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { stackGate } from "../.github/actions/stack-gate/stack-gate.ts";
-import { discard, materialise, trackThenDelete, type Tree } from "./tree.ts";
+import { materialise, trackThenDelete, type Tree } from "./tree.ts";
+import { containing } from "./matchers.ts";
 
-const DENYLIST = new URL(
-  "../.github/actions/stack-gate/stack-denylist.json",
-  import.meta.url,
-);
+const DENYLIST = new URL("../.github/actions/stack-gate/stack-denylist.json", import.meta.url);
 
 const CLEAN: Tree = {
   ".gitignore": "node_modules/\n",
@@ -17,24 +15,17 @@ const CLEAN: Tree = {
   }),
 };
 
-const roots: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map(discard));
-});
-
 async function gate(tree: Tree): Promise<string[]> {
   const root = await materialise(tree);
-  roots.push(root);
   return (await stackGate(root, DENYLIST)).map(({ file, message }) => `${file ?? ""}: ${message}`);
 }
 
-async function withDependency(name: string, version = "1.0.0"): Promise<string[]> {
-  const manifest = JSON.parse(CLEAN["package.json"] ?? "") as {
+function withDependency(name: string, version = "1.0.0"): Tree {
+  const contents = JSON.parse(CLEAN["package.json"] ?? "") as {
     dependencies: Record<string, string>;
   };
-  manifest.dependencies[name] = version;
-  return await gate({ ...CLEAN, "package.json": JSON.stringify(manifest) });
+  contents.dependencies[name] = version;
+  return { ...CLEAN, "package.json": JSON.stringify(contents) };
 }
 
 describe("stack gate", () => {
@@ -59,17 +50,22 @@ describe("stack gate", () => {
     ["nativewind", "StyleSheet"],
     ["@react-native-async-storage/async-storage", "expo-secure-store"],
   ])("%s is refused and the diagnostic names the pick", async (name, pick) => {
-    const problems = await withDependency(name);
+    const problems = await gate(withDependency(name));
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain(`dependencies.${name}`);
     expect(problems[0]).toContain(pick);
   });
 
-  test("an exact-name entry does not take its prefixed neighbours with it", async () => {
+  test("a name entry does not take its prefixed neighbours with it", async () => {
     // jest-expo is the Expo test preset and is the only way to run a
     // React Native suite; the bare `jest` entry must not reach it.
     expect(await gate(CLEAN)).toEqual([]);
-    expect(await withDependency("jest")).toHaveLength(1);
+    expect(await gate(withDependency("jest"))).toHaveLength(1);
+  });
+
+  test("a pattern entry takes the whole scope", async () => {
+    expect(await gate(withDependency("@radix-ui/react-tooltip"))).toHaveLength(1);
+    expect(await gate(withDependency("@nivo/bar"))).toHaveLength(1);
   });
 
   test("a workspace package is read too", async () => {
@@ -77,9 +73,7 @@ describe("stack gate", () => {
       ...CLEAN,
       "apps/api/package.json": JSON.stringify({ dependencies: { redis: "5.9.1" } }),
     });
-    expect(problems).toEqual([
-      expect.stringContaining("apps/api/package.json: dependencies.redis"),
-    ]);
+    expect(problems).toEqual([containing("apps/api/package.json: dependencies.redis")]);
   });
 
   test("an ignored directory is not read", async () => {
@@ -95,40 +89,31 @@ describe("stack gate", () => {
     // scaffolded repo's index still lists package.json files that are gone.
     const root = await materialise({
       ...CLEAN,
-      "setup/monorepo/apps/api/package.json": JSON.stringify({ dependencies: { ioredis: "5.9.1" } }),
+      "setup/monorepo/apps/api/package.json": JSON.stringify({
+        dependencies: { ioredis: "5.9.1" },
+      }),
     });
-    roots.push(root);
     await trackThenDelete(root, "setup");
     expect(await stackGate(root, DENYLIST)).toEqual([]);
   });
 
   test("a recorded deviation unlocks the entry that names it", async () => {
-    const withState = await withDependency("zustand", "5.0.8");
+    const withState = await gate(withDependency("zustand", "5.0.8"));
     expect(withState).toHaveLength(1);
     expect(withState[0]).toContain("docs/adr/*state-management*.md");
 
-    const manifest = JSON.parse(CLEAN["package.json"] ?? "") as {
-      dependencies: Record<string, string>;
-    };
-    manifest.dependencies["zustand"] = "5.0.8";
     expect(
       await gate({
-        ...CLEAN,
-        "package.json": JSON.stringify(manifest),
+        ...withDependency("zustand", "5.0.8"),
         "docs/adr/0003-state-management.md": "# 3. Zustand for the editor's transient state\n",
       }),
     ).toEqual([]);
   });
 
   test("a deviation record does not unlock the entries that never offered one", async () => {
-    const manifest = JSON.parse(CLEAN["package.json"] ?? "") as {
-      dependencies: Record<string, string>;
-    };
-    manifest.dependencies["prisma"] = "6.18.0";
     expect(
       await gate({
-        ...CLEAN,
-        "package.json": JSON.stringify(manifest),
+        ...withDependency("prisma", "6.18.0"),
         "docs/adr/0003-state-management.md": "# 3. anything\n",
       }),
     ).toHaveLength(1);

@@ -1,0 +1,18 @@
+[install]
+# Supply-chain protection: refuse any version published in the last 7 days, so a
+# compromised release that is detected and yanked within hours never reaches the
+# lockfile. Paired with saveExact for exact, auditable pins.
+#
+# To bypass for one package (e.g. an urgent CVE patch):
+#   minimumReleaseAgeExcludes = ["pkg-name"]
+minimumReleaseAge = 604800 # 7 days, in seconds
+saveExact = true
+
+[test]
+coverage = true
+# A floor, not a target: it catches "shipped without tests", it is not something
+# to chase. Bun applies a bare number to both the line and function metrics and
+# exits non-zero on a breach WITHOUT printing why — a `bun test` that reports all
+# tests passing and still fails is this.
+coverageThreshold = { lines = 0.75, functions = 0.75 }
+coverageSkipTestFiles = true

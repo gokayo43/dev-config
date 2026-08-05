@@ -1,0 +1,27 @@
+# Install/refresh with: bun run prepare
+#
+# pre-commit stays fast and staged-only; the whole-project checks (typecheck,
+# knip, tests) live on pre-push so a green push is a green CI run.
+
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.{js,ts,json,md}"
+      run: bunx oxfmt --check {staged_files}
+    lint:
+      glob: "*.{js,ts}"
+      run: bunx oxlint {staged_files}
+    secrets:
+      # --staged scans the index, not the working tree: a key that reaches a
+      # commit is already burned, and a working-tree scan would fail over files
+      # that were never going anywhere.
+      run: gitleaks git --staged --redact --no-banner .
+
+pre-push:
+  parallel: true
+  commands:
+    typecheck:
+      run: bun run typecheck
+    test:
+      run: bun test

@@ -1,0 +1,17 @@
+name: Queue weekly
+
+on:
+  schedule:
+    # Monday morning, before the week's work is picked up.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    permissions:
+      contents: read
+      issues: read
+    uses: ./.github/workflows/queue-audit.yml

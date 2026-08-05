@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["bun"]
   },
-  "include": [".github/actions/**/*.ts", "tests/**/*.ts"]
+  "include": [".github/actions/**/*.ts", "tests/**/*.ts", "knip.ts", "knip.base.ts"]
 }

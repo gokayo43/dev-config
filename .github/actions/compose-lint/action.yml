@@ -10,16 +10,16 @@ inputs:
     description: Where the repository root is.
     default: .
   file:
-    description: The compose file to read.
+    description: The compose file to read, relative to the repository root.
     default: docker-compose.yml
 
 runs:
   using: composite
   steps:
     - shell: bash
-      working-directory: ${{ inputs.working-directory }}
       env:
-        COMPOSE_FILE_PATH: ${{ inputs.file }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_FILE: ${{ inputs.file }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/compose-lint.ts" "$COMPOSE_FILE_PATH"
+        bun "$GITHUB_ACTION_PATH/compose-lint.ts"

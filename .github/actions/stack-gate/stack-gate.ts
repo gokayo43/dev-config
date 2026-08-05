@@ -1,10 +1,19 @@
-import { basename } from "node:path";
-
-import { type Problem, report, repoFiles } from "../_lib/gate.ts";
+import {
+  DEPENDENCY_FIELDS,
+  inputs,
+  manifests,
+  type Problem,
+  record,
+  report,
+} from "../_lib/gate.ts";
 
 interface DenylistEntry {
-  readonly match: readonly string[];
+  /** Package names, matched exactly — which is what keeps `jest` from taking `jest-expo` with it. */
+  readonly names?: readonly string[];
+  /** Regular expressions over the package name, for a whole scope. */
+  readonly patterns?: readonly string[];
   readonly reason: string;
+  /** Where a deviation is legitimate, the glob whose existence records it. */
   readonly adr?: string;
 }
 
@@ -12,15 +21,11 @@ interface Denylist {
   readonly entries: readonly DenylistEntry[];
 }
 
-const DEPENDENCY_FIELDS = [
-  "dependencies",
-  "devDependencies",
-  "optionalDependencies",
-  "peerDependencies",
-] as const;
-
-function matches(pattern: string, name: string): boolean {
-  return pattern.startsWith("^") ? new RegExp(pattern).test(name) : pattern === name;
+function denies(entry: DenylistEntry, name: string): boolean {
+  return (
+    (entry.names?.includes(name) ?? false) ||
+    (entry.patterns?.some((pattern) => new RegExp(pattern).test(name)) ?? false)
+  );
 }
 
 function deviationRecorded(root: string, adr: string): boolean {
@@ -30,34 +35,29 @@ function deviationRecorded(root: string, adr: string): boolean {
 
 export async function stackGate(root: string, denylistPath: string | URL): Promise<Problem[]> {
   const { entries } = (await Bun.file(denylistPath).json()) as Denylist;
-  const problems: Problem[] = [];
+  // Resolved once per rule rather than once per dependency: whether the
+  // deviation is recorded is a property of the repo, and the scan hits disk.
+  const live = entries.filter(
+    (entry) => entry.adr === undefined || !deviationRecorded(root, entry.adr),
+  );
 
-  for (const file of await repoFiles(root, ["package.json", "*/package.json"])) {
-    if (basename(file) !== "package.json") continue;
-    const manifest = (await Bun.file(`${root}/${file}`).json()) as Record<string, unknown>;
-
-    for (const field of DEPENDENCY_FIELDS) {
-      const declared = manifest[field];
-      if (typeof declared !== "object" || declared === null) continue;
-
-      for (const name of Object.keys(declared)) {
-        for (const entry of entries) {
-          if (!entry.match.some((pattern) => matches(pattern, name))) continue;
-          if (entry.adr !== undefined && deviationRecorded(root, entry.adr)) continue;
-          const escape =
-            entry.adr === undefined ? "" : `; record the deviation at ${entry.adr} to allow it`;
-          problems.push({
+  return (await manifests(root)).flatMap(({ file, contents }) =>
+    DEPENDENCY_FIELDS.flatMap((field) =>
+      Object.keys(record(contents[field])).flatMap((name) =>
+        live
+          .filter((entry) => denies(entry, name))
+          .map((entry) => ({
             file,
-            message: `${field}.${name} is not the house pick — ${entry.reason}${escape}`,
-          });
-        }
-      }
-    }
-  }
-
-  return problems;
+            message: `${field}.${name} is not the house pick — ${entry.reason}${
+              entry.adr === undefined ? "" : `; record the deviation at ${entry.adr} to allow it`
+            }`,
+          })),
+      ),
+    ),
+  );
 }
 
 if (import.meta.main) {
-  report(await stackGate(process.cwd(), new URL("./stack-denylist.json", import.meta.url)));
+  const { "working-directory": root } = inputs("working-directory");
+  report(await stackGate(root, new URL("./stack-denylist.json", import.meta.url)));
 }
