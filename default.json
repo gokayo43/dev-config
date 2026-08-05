@@ -33,15 +33,20 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "gitleaks is pinned by tag and archive SHA-256 inside a run: block, which no built-in manager reads. github-release-attachments moves the pair together.",
+      "description": "Released binaries pinned by tag and archive SHA-256 inside a run: block, which no built-in manager reads. The renovate: comment above the pair names the dependency, so one manager covers every tool pinned this way.",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/",
-        "/(^|/)README\\.md$/"
+        "/^\\.github/actions/[^/]+/action\\.ya?ml$/"
       ],
       "matchStrings": [
-        "GITLEAKS_VERSION: (?<currentValue>v\\S+)\\s+GITLEAKS_SHA256: (?<currentDigest>[0-9a-f]{64})",
-        "GITLEAKS_VERSION=(?<currentValue>v\\S+)"
-      ],
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+_VERSION: (?<currentValue>v\\S+)\\s+\\w+_SHA256: (?<currentDigest>[0-9a-f]{64})"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "The same gitleaks pin appears unhashed in this repo's local install instructions.",
+      "managerFilePatterns": ["/(^|/)README\\.md$/"],
+      "matchStrings": ["GITLEAKS_VERSION=(?<currentValue>v\\S+)"],
       "depNameTemplate": "gitleaks/gitleaks",
       "datasourceTemplate": "github-release-attachments"
     }

@@ -1,0 +1,24 @@
+name: Test suite
+description: >-
+  Runs bun test and proves the run happened. A suite that skips when its
+  database is missing leaves CI green over nothing at all, and bun records both
+  shapes that takes: a skipped test as <skipped/>, one that returned early
+  instead as assertions="0".
+
+inputs:
+  working-directory:
+    description: Where the suite lives.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
+        grep -q 'testsuites[^>]* skipped="0"' "$RUNNER_TEMP/junit.xml" \
+          || { echo "::error::skipped tests: a suite whose infrastructure is absent must fail, never skip"; exit 1; }
+        ! grep -o '<testcase name="[^"]*"[^>]*assertions="0"' "$RUNNER_TEMP/junit.xml" \
+          || { echo "::error::the tests listed above asserted nothing — assert with expect, properties included; an assertion-free pass is indistinguishable from a test that never ran"; exit 1; }

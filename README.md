@@ -31,6 +31,7 @@ to override a shared setting, the override carries a comment naming the reason.
 | `lighthouserc.json` | `lhci` | `configPath` into `node_modules` |
 | `default.json` | Renovate | `extends` by GitHub preset name |
 | `.github/workflows/check.yml` | GitHub Actions | `uses` by repository path, pinned to a SHA |
+| `.github/actions/*/action.yml` | GitHub Actions | `uses` by repository path, pinned to a SHA |
 
 ## TypeScript
 
@@ -262,48 +263,64 @@ keeps lockfile maintenance on, and pins GitHub Action digests.
 The file is named `default.json` because that is the name Renovate resolves for a
 bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.
 
-### The gitleaks custom manager
+### The pinned-binary custom manager
 
-Every other pin in these repos sits somewhere a manager already looks. The
-gitleaks version and archive checksum sit in a `run:` block, so the preset adds
-a `customManagers` entry that reads them out of a workflow file or a README.
-Both patterns earn their place here: the pair lives in this repo's `check.yml`,
-which every repo runs by reference, and the version alone lives in this README's
-local install snippet for the pre-commit hook.
+Every other pin in these repos sits somewhere a manager already looks. A released
+binary pinned by tag and archive checksum sits in a `run:` block, which no
+built-in manager reads, so the preset adds a `customManagers` entry — one entry
+for every tool pinned this way, because the dependency names itself in a comment
+directly above the pair:
 
 ```json
 {
   "customType": "regex",
-  "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/", "/(^|/)README\\.md$/"],
-  "matchStrings": [
-    "GITLEAKS_VERSION: (?<currentValue>v\\S+)\\s+GITLEAKS_SHA256: (?<currentDigest>[0-9a-f]{64})",
-    "GITLEAKS_VERSION=(?<currentValue>v\\S+)"
+  "managerFilePatterns": [
+    "/^\\.github/workflows/[^/]+\\.ya?ml$/",
+    "/^\\.github/actions/[^/]+/action\\.ya?ml$/"
   ],
-  "depNameTemplate": "gitleaks/gitleaks",
-  "datasourceTemplate": "github-release-attachments"
+  "matchStrings": [
+    "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+_VERSION: (?<currentValue>v\\S+)\\s+\\w+_SHA256: (?<currentDigest>[0-9a-f]{64})"
+  ]
 }
 ```
+
+```yaml
+        env:
+          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: v8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+```
+
+That covers gitleaks in the secret-scan action and actionlint in this repo's own
+CI, and it covers the next one without touching the preset. A second, tiny
+manager handles the one place a version appears without a checksum: this README's
+local install snippet for the pre-commit hook.
 
 The datasource is what makes this safe. `github-releases` would move the version
 and leave the checksum, and a version bumped past a stale `sha256sum -c` fails
 every CI run until someone hashes the archive by hand.
 `github-release-attachments` instead searches the current release for the file
-the current checksum belongs to — matching the line in `gitleaks_*_checksums.txt`
-— then reads the same file's line out of the new release's checksums file. The
-version and the checksum are one dependency with one `replaceString` spanning
-both lines, so they cannot land apart.
+the current checksum belongs to — matching the line in `*_checksums.txt` — then
+reads the same file's line out of the new release's checksums file. The version
+and the checksum are one dependency with one `replaceString` spanning all three
+lines, so they cannot land apart.
 
 Finding the release means `currentValue` has to be a tag: a bare `8.30.1` is a
 404 on `releases/tags/`, which drops the update. So the pin is written `v8.30.1`
-and the URL strips the prefix for the asset name. The second `matchString` picks
-up the unhashed `GITLEAKS_VERSION=` line in the local install instructions, which
-is the same dependency and rides along in the same PR.
+and the URL strips the prefix for the asset name.
 
-### Validating the preset
+### Gating this repo
 
-This repo's own CI parses every JSON file it ships and validates the preset on
-every push. There is no standalone `renovate-config-validator` package on npm;
-the binary ships inside `renovate`:
+This repo's own CI parses every JSON file it ships, validates the preset, checks
+the Lighthouse budget, and lints the half of it that executes: `actionlint` over
+`.github/workflows/`, pinned by version and archive checksum exactly like
+gitleaks. actionlint only understands workflows — handed an `action.yml` it
+reports a workflow with no `jobs` — so the composite actions get a separate pass
+asserting what silently breaks them: a `run` step with no `shell` never runs the
+script it carries.
+
+There is no standalone `renovate-config-validator` package on npm; the binary
+ships inside `renovate`:
 
 ```sh
 npx --package renovate renovate-config-validator --strict --no-global default.json
@@ -408,6 +425,16 @@ the assertion that the suite ran. Everything up to the test suite is the local
 `bun run check`, so a green pre-push is a green CI run; the two steps after it
 are what only CI has.
 
+The steps that are shell rather than a `bun run` live in `.github/actions/` as
+composite actions — `secret-scan`, `test-suite`, `db-gate` — so the workflow
+above and any repo that has to run the same thing outside it share one copy.
+`check.yml` references them by full path and SHA rather than `./`: inside a
+called workflow a relative `uses:` resolves against the *caller's* checkout, and
+the alternative — checking this repo out into the caller's workspace — puts its
+files under the caller's linter, which is a real failure and not a theoretical
+one. Renovate reads the self-reference like any other action pin and keeps it
+current.
+
 The matching scripts:
 
 ```json
@@ -440,16 +467,16 @@ would keep working right up to the day one of these repos moved under an org.
 The CLI it wraps is MIT, so running it directly sheds the licence question
 entirely and puts the scanning version in the diff rather than inside a
 third-party action's bundled `dist/`. `GITLEAKS_SHA256` is the same contract the
-digest pins are — the version string beside it is the label. No built-in manager
-reads a `run:` block; the preset's gitleaks custom manager does, and moves the
-version and the checksum in one PR. It finds the release by tag, which is why the
-pin is written `v8.30.1` and the asset name in the URL strips the prefix again.
+digest pins are — the version string beside it is the label, and the preset's
+pinned-binary manager moves the two in one PR.
 
 `fetch-depth: 0` is what makes the scan worth running. `gitleaks git` reads
 history, and the default shallow checkout hands it exactly one commit — a secret
 committed and then deleted further along the same branch would go unreported,
 even though pushing it had already burned the key. A full-history scan costs
-about a second on repos this size.
+about a second on repos this size. Since the checkout belongs to the caller and
+the scan does not, the action asks git whether the clone is shallow and fails
+with that instruction rather than scanning one commit and reporting nothing.
 
 `setup-bun` is given no version input on purpose: with none it reads the repo's
 `packageManager` field from `package.json`, so CI and the dev machine never

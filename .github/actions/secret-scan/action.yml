@@ -1,0 +1,25 @@
+name: Secret scan
+description: >-
+  Scans the checked-out repository's history with gitleaks. The caller's
+  checkout has to set fetch-depth: 0 — a shallow clone hides a secret that was
+  committed and later deleted on the same branch — and this fails if it did not.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks
+        GITLEAKS_VERSION: v8.30.1
+        GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      run: |
+        set -euo pipefail
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "::error::checkout with fetch-depth: 0 — gitleaks reads history, and a shallow clone has none"
+          exit 1
+        fi
+        curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+          "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
+        echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+        tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+        "$RUNNER_TEMP/gitleaks" git . --redact --no-banner

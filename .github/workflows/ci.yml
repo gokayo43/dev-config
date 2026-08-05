@@ -19,6 +19,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
       - name: Parse every JSON config
         run: |
           node -e '
@@ -32,6 +34,43 @@ jobs:
               }
             }
           ' $(git ls-files "*.json")
+
+      # check.yml and the composite actions are the executable half of this
+      # repo: a schema error in one of them breaks every consumer at once.
+      - name: Lint the workflows and actions
+        env:
+          # renovate: datasource=github-release-attachments depName=rhysd/actionlint
+          ACTIONLINT_VERSION: v1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          curl -sSfL -o "$RUNNER_TEMP/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color .github/workflows/*.yml
+
+      # actionlint only reads workflows — handed an action.yml it reports a
+      # workflow with no `jobs`. So the composites are checked for what silently
+      # breaks them: a run step with no shell never runs the script it carries.
+      - name: Check the composite actions
+        run: |
+          set -euo pipefail
+          bun -e '
+            for (const file of Bun.argv.slice(1)) {
+              const action = Bun.YAML.parse(await Bun.file(file).text());
+              const problems = [];
+              if (!action.name || !action.description) problems.push("needs a name and a description");
+              if (action.runs?.using !== "composite") problems.push("runs.using must be composite");
+              for (const step of action.runs?.steps ?? []) {
+                if (step.run && !step.shell) problems.push(`step "${step.name ?? step.run.split("\n")[0]}" has run without shell`);
+              }
+              for (const problem of problems) {
+                console.log(`::error file=${file}::${problem}`);
+                process.exitCode = 1;
+              }
+            }
+          ' $(git ls-files '.github/actions/*/action.yml')
 
       - name: Validate the Renovate preset
         # Deliberately unpinned: the preset has to hold against the Renovate that runs it today.
