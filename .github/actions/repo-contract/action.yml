@@ -30,4 +30,4 @@ runs:
         INPUT_EXEMPTIONS: ${{ inputs.exemptions }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/repo-contract.ts"
+        bun "$GITHUB_ACTION_PATH/repo-contract.main.ts"

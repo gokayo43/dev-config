@@ -2,16 +2,12 @@ import { stat } from "node:fs/promises";
 
 import {
   DEPENDENCY_FIELDS,
-  inputs,
   isIgnored,
   isTracked,
-  list,
   type Manifest,
-  notice,
   manifests,
   type Problem,
   record,
-  report,
   repoFiles,
 } from "../_lib/gate.ts";
 
@@ -70,6 +66,14 @@ function specOf(contents: Record<string, unknown>, name: string): string | undef
 const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
 
 /**
+ * `npm:` aliases another package, so the alias's own spec is the one that has
+ * to be exact. The version is part of the match rather than something sliced
+ * off afterwards: `npm:bar` names no version at all, and a slice-then-recurse
+ * reading of it recurses on its own input forever.
+ */
+const NPM_ALIAS = /^npm:(?:@[^/]+\/)?[^@]+@(.+)$/;
+
+/**
  * An allowlist, not a blocklist. `18`, `next` and `1.x` float exactly as much
  * as `^1.2.3` does, and the ways npm spells "whatever is newest" are
  * open-ended — so a spec has to prove it resolves to one thing rather than fail
@@ -82,7 +86,8 @@ const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
 function isExact(spec: string): boolean {
   if (EXACT_SEMVER.test(spec)) return true;
   if (/^(workspace|file|link|catalog|portal):/.test(spec)) return true;
-  if (spec.startsWith("npm:")) return isExact(spec.slice(spec.lastIndexOf("@") + 1));
+  const alias = NPM_ALIAS.exec(spec);
+  if (alias !== null) return EXACT_SEMVER.test(alias[1] ?? "");
   if (/^(github|gitlab|bitbucket|git|git\+[a-z]+):/.test(spec)) return spec.includes("#");
   return false;
 }
@@ -335,10 +340,13 @@ function checkRoot(contents: Record<string, unknown>, contract: Contract): Probl
     });
   }
 
+  // Only a spec checkPins has already accepted is read for a major: anything
+  // else is reported there, and parsing `next` for a version number yields NaN
+  // and a second diagnostic about the same line.
   const typescript = specOf(contents, "typescript");
   if (typescript === undefined) {
     problems.push({ file: "package.json", message: "typescript is not declared" });
-  } else if (!(Number.parseInt(typescript, 10) >= 7)) {
+  } else if (EXACT_SEMVER.test(typescript) && Number.parseInt(typescript, 10) < 7) {
     problems.push({
       file: "package.json",
       message: `typescript is pinned at ${typescript} — the shared tsconfig is written against TypeScript 7`,
@@ -383,15 +391,4 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   ]);
 
   return [...checkRoot(rootManifest.contents, contract), ...checkPins(all), ...checks.flat()];
-}
-
-if (import.meta.main) {
-  const read = inputs("working-directory", "database", "exemptions");
-  for (const name of list(read["exemptions"])) notice(`exempt from '${name}'`);
-  report(
-    await repoContract(read["working-directory"], {
-      database: read["database"] === "true",
-      exemptions: list(read["exemptions"]),
-    }),
-  );
 }

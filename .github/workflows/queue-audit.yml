@@ -11,17 +11,17 @@ on:
   workflow_call:
     inputs:
       vocabulary:
-        description: Every label the repo may carry, space-separated.
+        description: Every label the repo may carry, space-separated. Empty means the canon set.
         type: string
-        default: needs-triage needs-info ready-for-agent ready-for-human roadmap commitment wontfix
+        default: ""
       state-labels:
-        description: The states an open issue may sit in, space-separated. Exactly one is required.
+        description: The states an open issue may sit in, space-separated. Empty means the canon set.
         type: string
-        default: needs-triage needs-info ready-for-agent ready-for-human roadmap wontfix
+        default: ""
       commitment-label:
-        description: The label whose issues must state a Trigger in the body.
+        description: The label whose issues must state a Trigger in the body. Empty means the canon one.
         type: string
-        default: commitment
+        default: ""
 
 permissions:
   contents: read

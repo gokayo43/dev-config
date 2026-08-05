@@ -15,8 +15,5 @@ coverage = true
 # that reports every test passing and still fails is this — and it applies the
 # threshold to EVERY FILE, not to the total, so the floor sits below the
 # least-covered file rather than below the summary line.
-#
-# Here that file is a gate's `import.meta.main` block: a few lines that only run
-# when GitHub executes the script as a program, in every one of these files.
-coverageThreshold = { lines = 0.65, functions = 0.75 }
+coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true

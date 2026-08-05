@@ -1,5 +1,4 @@
 {
-  "description": "Dependencies the house stack has already answered. `names` matches a package exactly — which is what keeps `jest` from taking `jest-expo` with it — and `patterns` holds regular expressions over the package name, for a whole scope. `adr` names a glob: where a deviation is legitimate, the entry unlocks once that file exists, so the exception is written down rather than argued in a review.",
   "entries": [
     {
       "names": ["pg", "postgres", "prisma", "typeorm", "kysely", "sequelize"],

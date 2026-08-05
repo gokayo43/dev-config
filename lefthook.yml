@@ -11,7 +11,9 @@ pre-commit:
       run: bunx oxfmt --check {staged_files}
     lint:
       glob: "*.{js,ts}"
-      run: bunx oxlint {staged_files}
+      # The same flag the `lint` script and CI carry: a directive that no longer
+      # suppresses anything is an error there, so it has to be one here too.
+      run: bunx oxlint --report-unused-disable-directives-severity=error {staged_files}
     secrets:
       # --staged scans the index, not the working tree: a key that reaches a
       # commit is already burned, and a working-tree scan would fail over files

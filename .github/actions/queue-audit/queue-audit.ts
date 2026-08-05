@@ -1,13 +1,19 @@
-import { inputs, list, type Problem, report } from "../_lib/gate.ts";
+import type { Problem } from "../_lib/gate.ts";
 
-interface Label {
+export interface Label {
   readonly name: string;
 }
 
-interface Issue {
+export interface Issue {
   readonly number: number;
   readonly labels: readonly Label[];
   readonly body: string | null;
+}
+
+/** Where the queue is read from. Injected so the rules can be driven without a repo. */
+export interface Queue {
+  labels(): Promise<Label[]>;
+  openIssues(): Promise<Issue[]>;
 }
 
 export interface QueueRules {
@@ -19,13 +25,36 @@ export interface QueueRules {
   readonly commitmentLabel: string;
 }
 
+/**
+ * The canon queue, in one place. The action and the workflow wrapping it both
+ * declare their inputs as empty-means-canon rather than repeating the list:
+ * three copies of a vocabulary are three chances to disagree about it.
+ */
+export const CANON: QueueRules = {
+  vocabulary: [
+    "needs-triage",
+    "needs-info",
+    "ready-for-agent",
+    "ready-for-human",
+    "roadmap",
+    "commitment",
+    "wontfix",
+  ],
+  stateLabels: [
+    "needs-triage",
+    "needs-info",
+    "ready-for-agent",
+    "ready-for-human",
+    "roadmap",
+    "wontfix",
+  ],
+  commitmentLabel: "commitment",
+};
+
 const TRIGGER = "**Trigger:**";
 
-export function queueAudit(
-  labels: readonly Label[],
-  issues: readonly Issue[],
-  rules: QueueRules,
-): Problem[] {
+export async function queueAudit(queue: Queue, rules: QueueRules): Promise<Problem[]> {
+  const [labels, issues] = await Promise.all([queue.labels(), queue.openIssues()]);
   const problems: Problem[] = [];
   const allowed = new Set(rules.vocabulary);
   const states = new Set(rules.stateLabels);
@@ -59,25 +88,4 @@ export function queueAudit(
   }
 
   return problems;
-}
-
-if (import.meta.main) {
-  const read = inputs(
-    "vocabulary",
-    "state-labels",
-    "commitment-label",
-    "labels-file",
-    "issues-file",
-  );
-  report(
-    queueAudit(
-      (await Bun.file(read["labels-file"]).json()) as Label[],
-      (await Bun.file(read["issues-file"]).json()) as Issue[],
-      {
-        vocabulary: list(read["vocabulary"]),
-        stateLabels: list(read["state-labels"]),
-        commitmentLabel: read["commitment-label"],
-      },
-    ),
-  );
 }

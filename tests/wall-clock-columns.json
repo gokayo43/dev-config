@@ -1,0 +1,14 @@
+[
+  {
+    "table_name": "audit log",
+    "column_name": "at"
+  },
+  {
+    "table_name": "user",
+    "column_name": "billing_day"
+  },
+  {
+    "table_name": "user",
+    "column_name": "opens_at"
+  }
+]

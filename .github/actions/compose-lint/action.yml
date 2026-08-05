@@ -22,4 +22,4 @@ runs:
         INPUT_FILE: ${{ inputs.file }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/compose-lint.ts"
+        bun "$GITHUB_ACTION_PATH/compose-lint.main.ts"

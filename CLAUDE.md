@@ -19,10 +19,12 @@ a change to a rule usually lands here too.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
 - `.github/workflows/check.yml` — the gate every repo calls. `queue-guard.yml`
   and `queue-audit.yml` are the same idea for the issue queue.
-- `.github/actions/*/` — the executable gates. Each is an `action.yml` plus a
-  TypeScript entry point; `_lib/gate.ts` is what they share.
+- `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
+  module the suite drives, and a `*.main.ts` that GitHub runs; `_lib/gate.ts`
+  and `_lib/gh.ts` are what they share.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
   clean one. A gate without one is a claim.
+- `docs/gates/*.md` — a reference page per gate. README holds the map.
 
 ## Commands
 
@@ -51,8 +53,12 @@ exactly the commit its pins name. After tagging, bump `project-template`'s pins:
 
 ## Adding a gate
 
-Write the check as `.github/actions/<name>/<name>.ts` exporting a pure function
-that returns `Problem[]`, with a thin `import.meta.main` block reading its
-inputs through `_lib/gate.ts`'s `inputs()`. Add the fixture suite in the same
-change, then wire it into `check.yml`. A diagnostic names what to do, not what
-went wrong.
+Write the check as `.github/actions/<name>/<name>.ts`, exporting a function that
+returns `Problem[]` and takes whatever it reads — a root path, injected
+fetchers — as arguments. The entry point is a separate `<name>.main.ts` that
+`action.yml` runs: it reads the inputs through `inputs()`, which throws on a
+missing one, and calls `report()`. Splitting them is what lets the coverage
+floor mean something, since nothing can drive an entry point from a test.
+
+Add the fixture suite and the `docs/gates/` page in the same change, then wire
+it into `check.yml`. A diagnostic names what to do, not what went wrong.

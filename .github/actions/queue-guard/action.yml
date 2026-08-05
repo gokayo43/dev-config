@@ -28,10 +28,7 @@ runs:
         INPUT_LABEL: ${{ inputs.label }}
         INPUT_ACTOR: ${{ inputs.actor }}
         INPUT_OWNER: ${{ inputs.owner }}
-        ISSUE: ${{ inputs.issue }}
+        INPUT_ISSUE: ${{ inputs.issue }}
       run: |
         set -euo pipefail
-        if bun "$GITHUB_ACTION_PATH/queue-guard.ts"; then exit 0; fi
-        gh issue edit "$ISSUE" --remove-label "$INPUT_LABEL"
-        gh issue comment "$ISSUE" --body "Removed \`$INPUT_LABEL\`: only @$INPUT_OWNER promotes a proposal, and @$INPUT_ACTOR is not @$INPUT_OWNER. Agents file \`needs-triage\` and never approve their own work — leave this for triage."
-        exit 1
+        bun "$GITHUB_ACTION_PATH/queue-guard.main.ts"

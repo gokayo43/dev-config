@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 
-import { inputs, list, type Problem, report, repoFiles } from "../_lib/gate.ts";
+import { type Problem, repoFiles } from "../_lib/gate.ts";
 
 const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
 
@@ -57,14 +57,4 @@ export async function suppressionHygiene({ root, fixtures }: Scope): Promise<Pro
   }
 
   return problems;
-}
-
-if (import.meta.main) {
-  const read = inputs("working-directory", "fixtures");
-  report(
-    await suppressionHygiene({
-      root: read["working-directory"],
-      fixtures: list(read["fixtures"]),
-    }),
-  );
 }

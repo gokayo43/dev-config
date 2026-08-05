@@ -1,11 +1,4 @@
-import {
-  DEPENDENCY_FIELDS,
-  inputs,
-  manifests,
-  type Problem,
-  record,
-  report,
-} from "../_lib/gate.ts";
+import { DEPENDENCY_FIELDS, manifests, type Problem, record } from "../_lib/gate.ts";
 
 interface DenylistEntry {
   /** Package names, matched exactly — which is what keeps `jest` from taking `jest-expo` with it. */
@@ -55,9 +48,4 @@ export async function stackGate(root: string, denylistPath: string | URL): Promi
       ),
     ),
   );
-}
-
-if (import.meta.main) {
-  const { "working-directory": root } = inputs("working-directory");
-  report(await stackGate(root, new URL("./stack-denylist.json", import.meta.url)));
 }

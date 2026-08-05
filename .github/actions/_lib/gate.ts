@@ -72,6 +72,15 @@ async function git(cwd: string, args: readonly string[]): Promise<number> {
 }
 
 /**
+ * Never a repo's own code, whatever its .gitignore says. `--others` lists
+ * anything git would keep, so a repo whose .gitignore forgets node_modules
+ * hands every gate tens of thousands of third-party files — and a gate that
+ * denounces a dependency's dependency is worse than no gate. Excluded here, at
+ * the one place every walking gate goes through, rather than in each of them.
+ */
+const NEVER = ":(exclude,glob)**/node_modules/**";
+
+/**
  * The files a gate looks at: what is on disk, minus what .gitignore describes.
  * Gates run against trees a scaffolder has just written into, where the new
  * files are untracked, and beside build output that must stay out — so the
@@ -83,7 +92,17 @@ async function git(cwd: string, args: readonly string[]): Promise<number> {
  */
 export async function repoFiles(root: string, pathspecs: readonly string[]): Promise<string[]> {
   const proc = Bun.spawn(
-    ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", ...pathspecs],
+    [
+      "git",
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      ...pathspecs,
+      NEVER,
+    ],
     { cwd: root, stdout: "pipe", stderr: "ignore" },
   );
   const stdout = await new Response(proc.stdout).text();

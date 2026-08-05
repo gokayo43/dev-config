@@ -1,4 +1,4 @@
-import { inputs, type Problem, record, report } from "../_lib/gate.ts";
+import { type Problem, record } from "../_lib/gate.ts";
 
 const MIGRATE = "migrate";
 const OPT_OUT = "x-no-healthcheck";
@@ -91,10 +91,4 @@ export function composeLint(file: string, text: string): Problem[] {
       ];
     }),
   ];
-}
-
-if (import.meta.main) {
-  const read = inputs("working-directory", "file");
-  const file = read["file"];
-  report(composeLint(file, await Bun.file(`${read["working-directory"]}/${file}`).text()));
 }

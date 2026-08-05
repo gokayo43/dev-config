@@ -18,4 +18,4 @@ runs:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/stack-gate.ts"
+        bun "$GITHUB_ACTION_PATH/stack-gate.main.ts"

@@ -34,6 +34,18 @@ to override a shared setting, the override carries a comment naming the reason.
 | `.github/workflows/*.yml`      | GitHub Actions | `uses` by repository path, pinned to a SHA |
 | `.github/actions/*/action.yml` | GitHub Actions | `uses` by repository path, pinned to a SHA |
 
+Each gate has a reference page of its own. This file holds the map and the
+settings every repo shares; what a single gate asserts, and why, lives beside it:
+
+| Gate                         | Page                                                                   |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| `repo-contract`              | [docs/gates/repo-contract.md](docs/gates/repo-contract.md)             |
+| `stack-gate`                 | [docs/gates/stack-gate.md](docs/gates/stack-gate.md)                   |
+| `suppression-hygiene`        | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md) |
+| `compose-lint`               | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)               |
+| `db-gate`                    | [docs/gates/db-gate.md](docs/gates/db-gate.md)                         |
+| `queue-guard`, `queue-audit` | [docs/gates/queue-integrity.md](docs/gates/queue-integrity.md)         |
+
 ## TypeScript
 
 `tsconfig.base.json` resolves through Node module resolution, so it is referenced
@@ -650,179 +662,13 @@ one that passed. Properties assert with `expect` inside the predicate — and
 then a suite that silently stopped running is a red build rather than a number
 nobody reads.
 
-### The repo contract
+### Where each gate is written down
 
-Every gate above rests on a string somewhere: a `packageManager` field, an
-`extends` path, a `[test]` block, a hook definition. Each of those can be
-deleted, renamed or never written, and when one is, the gate it feeds does not
-fail — it stops existing. `repo-contract` reads them and says so.
-
-| Fact                                                                                                            | Why it is load-bearing                                                                            |
-| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `packageManager` reads `bun@<version>`                                                                          | `setup-bun` takes the runner's Bun from it; without it CI and the dev machine drift               |
-| No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                         | a second lockfile installs a second dependency tree                                               |
-| Every spec outside `peerDependencies` resolves to one thing                                                     | a lockfile refresh must not be able to change what is installed                                   |
-| `typescript` major ≥ 7                                                                                          | the shared tsconfig is written against TypeScript 7                                               |
-| `oxlint-tsgolint` present, when `.oxlintrc.json` extends the base                                               | without it oxlint runs the base's type-aware rules over nothing and reports clean                 |
-| `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`   | a repo that stopped inheriting stops inheriting silently                                          |
-| `bunfig.toml` declares `minimumReleaseAge`, `saveExact`, and a `[test] coverageThreshold`                       | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
-| `lefthook.yml` runs a staged gitleaks scan pre-commit and typecheck + tests pre-push                            | the hooks are the half of the gate that runs before a push                                        |
-| `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern | a blanket `.env.*` rule silently deletes the two files that have to ship                          |
-| `CONTEXT.md` (or `CONTEXT-MAP.md`), `docs/adr/`, `CLAUDE.md`                                                    | the docs spine                                                                                    |
-| `db:migrate` exists, when `database: true`                                                                      | the database gate replays migrations through it                                                   |
-| a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                           | a tag is a name someone else can repoint                                                          |
-
-The knip case is the one that reads as arbitrary and is not: knip resolves
-`knip.json` before `knip.ts`, and a JSON config cannot import anything. A repo
-that answers "why isn't the shared base applying?" by adding a `knip.json`
-produces a config that works and inherits nothing, so the JSON forms are refused
-outright rather than merely unrecommended.
-
-The pin check is an allowlist rather than a list of the ways a spec can float.
-`^1.2.3` is the obvious one; `18`, `next`, `1.x`, `*` and `latest` float exactly
-as much, and the set of spellings is open-ended. So a spec passes only by
-proving it resolves to one thing: an exact semver, or a protocol that is exact
-by construction — `workspace:`, `file:`, `link:`, `catalog:`, an `npm:` alias
-whose own spec is exact, or a git dependency **carrying a ref**. A
-`github:owner/repo` with no `#ref` is a branch that moves, and it is refused.
-
-### Exemptions
-
-Some facts a repo cannot satisfy because of what it is, not because nobody got
-round to it — this repo cannot extend itself by package name, and its CI cannot
-pin a commit it is in the middle of making. Those are named at the call site:
-
-```yaml
-with:
-  contract-exemptions: config-lineage ci-call secrets
-```
-
-| Exemption        | Waives                                                                    |
-| ---------------- | ------------------------------------------------------------------------- |
-| `config-lineage` | _where_ the configs inherit from — not whether they exist                 |
-| `ci-call`        | the SHA-pinned call into `check.yml`                                      |
-| `docs-spine`     | the glossary, `docs/adr/` and `CLAUDE.md`                                 |
-| `secrets`        | the `.env` / `.env.example` shape, for a repo with no runtime environment |
-
-Every exemption is echoed as a `::notice` in the run, and a name outside the
-table fails rather than waiving anything — a typo cannot quietly turn a check
-off. The list is the whole mechanism: there are no per-repo special cases inside
-the gate.
-
-The gate reads tracked files plus untracked ones git would keep — the set
-`.gitignore` already describes. That is what lets it run against a tree a
-scaffolder has just written into, where every new file is untracked, without
-reading build output.
-
-### The stack denylist
-
-`STACK.md` picks one library per slot. `stack-gate` is that document with an exit
-code: one `stack-denylist.json` in this repo, read against every `package.json`
-in the tree.
-
-An entry is a set of package names and the reason they lost, so the diagnostic
-teaches the rule rather than only refusing the package:
-
-```
-::error file=package.json::dependencies.dayjs is not the house pick — Temporal on the server, @date-fns/tz in the client
-```
-
-An entry lists `names`, matched exactly, and `patterns`, which are regular
-expressions over the package name. Two fields rather than one convention,
-because the distinction is load-bearing in both directions: `^@radix-ui/` has to
-take a whole scope, and `jest` must not take `jest-expo` — the Expo test preset
-is the only way to run a React Native suite, and it is not the thing the entry
-is about.
-
-One kind of pick is a judgement call rather than a rule, and its entry carries an
-`adr` glob: the packages unlock once that file exists. Client state management is
-the case the canon names. The escape hatch is deliberately the same work as
-writing the decision down, which is the only form of exception worth having.
-
-### Suppression hygiene
-
-Two ways work hides in a tree rather than in the queue, both a failed step:
-
-- a lint directive with no ` -- reason` after the rule names, in either
-  spelling: oxlint honours `eslint-disable` exactly as it honours
-  `oxlint-disable`, so a gate that knew only its own name left the other one
-  unreasoned and unreported.
-- a tracked `TODO.md`, `BACKLOG.md`, `TASKS.md`, `ISSUES.md` or `ROADMAP.md`.
-
-The second one is not about the filename. A list in a file has no labels, no
-assignee, no close, and no one who has agreed to drain it; the register is GitHub
-issues in the repo the work belongs to, and a second register is deletion that
-feels responsible.
-
-A suite that tests this gate necessarily contains directives that are fixture
-text rather than suppressions. Those files are named in the `fixtures` input —
-narrower than teaching the scan enough TypeScript to tell a comment from a
-string literal, and visible in the caller's diff rather than hidden in a
-heuristic.
-
-### Repos this box runs as containers
-
-`compose: true` reads `docker-compose.yml` and holds it to the deployment shape
-every stack on this box shares:
-
-- every published port bound to `127.0.0.1` — nginx is the only thing that should
-  reach them, and the host firewall is not the only line of defence.
-- a `mem_limit` on every service — several unrelated stacks share the box, and
-  without caps the kernel OOM killer picks its victim by score rather than by who
-  caused the spike.
-- a healthcheck on every service, or `x-no-healthcheck: "<why it can never answer
-one>"`. A one-shot job that exits is the honest case; "we did not get round to
-  it" is the case the key is there to make visible.
-- a `migrate` service with `restart: "no"`, and every service that builds from
-  this repo waiting on it with `condition: service_completed_successfully`. A
-  failed migration then keeps the old container running rather than starting a
-  new one against a schema it does not match, and a restart policy on a migration
-  is a crash loop.
-
-Services that only pull an image are infrastructure and are not asked to wait on
-the migration they host.
-
-### Repos with a database
-
-`database: true` adds a second job: an empty Postgres — plus a Redis, for the
-shapes whose health route pings one — the migrations replayed onto it, and the
-app booted against the result. `start-command` and
-`health-url` are how a repo names its own app; everything else is the same for
-every repo, which is why it lives in the workflow rather than at the call site.
-
-An empty database is the one state no developer machine is ever in, and it is
-the state every deploy to a new box and every restore drill starts from. A
-migration carrying `ALTER TABLE ... DROP CONSTRAINT` for a constraint an earlier
-`DROP TABLE ... CASCADE` has already taken is the shape that gets through: it
-succeeds on the database it was written against, where that constraint was still
-there, and aborts the first time the history runs onto nothing — a database that
-cannot be rebuilt, discovered at the worst possible moment. Replaying from empty
-on every push is what turns that into a red build.
-
-The migrations then run a second time, and the gate is not the exit code but
-`pg_dump --schema-only` before and after: the schema has to come out
-identical. An exit code only says the second run did not error; the dump
-says the database came out in the same state, which a `push`-style sync or a
-hand-rolled runner can exit 0 without doing. With a journalled migrator the pass
-is cheap and proves the journal is honest; with anything that re-executes SQL,
-it proves the SQL is re-runnable.
-
-The database is then asked directly, through `information_schema.columns`,
-whether any column is `timestamp without time zone` — an ORM's `timestamp` is a
-hint and the database is the fact, and it will answer without anything having to
-parse a schema dump. A wall-clock
-column stores the digits someone typed and forgets which clock produced them, so
-one row means two different instants either side of a DST boundary or a server
-move, and nothing fails until it does. `timestamp-allowlist` takes
-`table.column` entries for the columns where a wall-clock reading is the point —
-an opening time that is 09:00 wherever the shop is.
-
-Booting is the half that migrations succeeding does not prove. Health answers
-200 only after the process has started against that schema and a query has
-round-tripped, so a migration that applies but leaves the app unable to run
-fails here. The server environment the job sets is the house contract with
-dummy secrets — a real secret in a workflow file is a leaked secret — and a repo
-whose contract needs more than that extends the workflow rather than the call.
+`repo-contract`, `stack-gate`, `suppression-hygiene` and `compose-lint` run in
+the static job; `db-gate` is the database job; `queue-guard` and `queue-audit`
+are called from a repo's own queue workflows rather than from `check.yml`. Each
+has its page under [`docs/gates/`](docs/gates/), listed in the table at the top
+of this file.
 
 ### Static sites
 
@@ -865,74 +711,6 @@ jobs:
 `lighthouserc.json` asserts performance, accessibility, best-practices and SEO at
 `minScore: 1` over three runs of `./dist`. A repo that builds somewhere else
 copies the file and changes `staticDistDir`.
-
-## Queue integrity
-
-The issue queue is the register for everything not being done right now, and it
-decays quietly: a label outside the vocabulary, an issue in no state, a
-commitment whose trigger nobody wrote down. Two reusable workflows hold it.
-
-Two triggers, so two files: one `if:` at a call site to sort out which half of
-a merged workflow is meant to run is a branch that only exists because the
-files were merged.
-
-```yaml
-# .github/workflows/queue-promotion.yml
-name: Queue promotion
-on:
-  issues:
-    types: [labeled]
-permissions:
-  contents: read
-jobs:
-  guard:
-    permissions:
-      contents: read
-      issues: write
-    uses: gokayo43/dev-config/.github/workflows/queue-guard.yml@<commit sha> # <release tag>
-```
-
-```yaml
-# .github/workflows/queue-weekly.yml
-name: Queue weekly
-on:
-  schedule:
-    - cron: "0 6 * * 1"
-  workflow_dispatch:
-permissions:
-  contents: read
-jobs:
-  audit:
-    permissions:
-      contents: read
-      issues: read
-    uses: gokayo43/dev-config/.github/workflows/queue-audit.yml@<commit sha> # <release tag>
-```
-
-`queue-guard` takes the promotion back when anyone but the repo owner adds
-`ready-for-agent` or `ready-for-human`: the label comes off, the issue gets a
-comment saying why, and the run still fails. Agents file proposals freely and
-never approve their own; the `labeled` event carries the actor, so that rule is
-enforced rather than reported, and the invalid state does not survive the run.
-The caller grants the job `issues: write` for exactly that reason.
-
-`queue-audit` reads the labels and every open issue on a schedule and asserts
-three things: the vocabulary is exactly the canon set and nothing else, every open
-issue carries exactly one state label, and every issue labelled `commitment`
-states a `**Trigger:**` in its body. Its inputs carry the canon defaults:
-
-| Input              | Default                                                                              |
-| ------------------ | ------------------------------------------------------------------------------------ |
-| `vocabulary`       | `needs-triage needs-info ready-for-agent ready-for-human roadmap commitment wontfix` |
-| `state-labels`     | `needs-triage needs-info ready-for-agent ready-for-human roadmap wontfix`            |
-| `commitment-label` | `commitment`                                                                         |
-
-`commitment` is the marker orthogonal to the state machine: a commitment is
-already in one of the six states, and the label is how the issues with a trigger
-are found on the day their trigger may have fired. GitHub's own starter labels —
-`bug`, `enhancement`, `duplicate` and the rest — are a taxonomy nobody drains, so
-the audit refuses them; the scaffolder deletes them when it creates the canon
-set.
 
 ## Version policy
 

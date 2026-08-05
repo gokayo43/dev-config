@@ -91,6 +91,9 @@ describe("repo contract", () => {
     "1.x",
     "1.2",
     "v1.2.3",
+    "npm:bar",
+    "npm:@scope/pkg",
+    "npm:bar@^1.2.3",
   ])("a floating spec (%s) is refused", async (spec) => {
     expect(await contract(withSpec("oxfmt", spec))).toEqual([
       containing(`devDependencies.oxfmt is declared as '${spec}'`),

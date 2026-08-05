@@ -23,4 +23,4 @@ runs:
         INPUT_FIXTURES: ${{ inputs.fixtures }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/suppression-hygiene.ts"
+        bun "$GITHUB_ACTION_PATH/suppression-hygiene.main.ts"

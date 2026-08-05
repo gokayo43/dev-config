@@ -4,10 +4,11 @@ import { base } from "./knip.base.ts";
 
 const config: KnipConfig = {
   ...base,
-  // Each action's script is an entry point: GitHub runs it directly, so nothing
-  // in this repo imports it and knip would otherwise report the whole gate as
-  // unreachable.
-  entry: [".github/actions/*/*.ts", "tests/*.test.ts"],
+  // A gate's `*.main.ts` is what GitHub runs, so nothing in this repo imports
+  // it. Splitting the entry point out of the gate module is also what lets the
+  // coverage floor mean something: a module the suite drives reports its own
+  // coverage, rather than carrying an entry block no test can reach.
+  entry: [".github/actions/*/*.main.ts", "tests/*.test.ts"],
   project: [".github/actions/**/*.ts", "tests/**/*.ts"],
   // knip reads every `run:` block for the binaries it invokes, which is worth
   // having — it is how a workflow reaching for an undeclared tool gets caught.

@@ -84,6 +84,21 @@ describe("stack gate", () => {
     expect(problems).toEqual([]);
   });
 
+  test("node_modules is never read, however the repo's .gitignore is written", async () => {
+    // `--others` lists whatever git would keep, so a repo whose .gitignore
+    // forgets node_modules used to hand the gate every third-party manifest —
+    // and denouncing a dependency's dependency is worse than not looking.
+    const problems = await gate({
+      ...CLEAN,
+      ".gitignore": "dist\n",
+      "node_modules/mobx/package.json": JSON.stringify({ dependencies: { mobx: "6.15.0" } }),
+      "apps/web/node_modules/zustand/package.json": JSON.stringify({
+        dependencies: { zustand: "5.0.8" },
+      }),
+    });
+    expect(problems).toEqual([]);
+  });
+
   test("a manifest deleted from the worktree is not read out of the index", async () => {
     // The scaffolder's last act is to delete itself and its staging tree, so a
     // scaffolded repo's index still lists package.json files that are gone.
