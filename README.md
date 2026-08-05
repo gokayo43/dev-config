@@ -356,8 +356,10 @@ hook with it reports nothing and looks exactly like a broken hook.
 
 ## CI
 
-Copy this into `.github/workflows/ci.yml`. It is the same gate as the local
-`bun run check` plus the test suite, so a green pre-push is a green CI run:
+Copy this into `.github/workflows/ci.yml`. Everything a developer machine can
+run is the local gate — `bun run check` plus the test suite — so a green
+pre-push is a green CI run. What follows it below is what only CI has: a
+database nobody has migrated yet, and proof that the suite ran at all.
 
 ```yaml
 name: CI
@@ -402,7 +404,18 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run knip
-      - run: bun test
+
+      - run: bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
+
+      # A suite that skips when its database is missing leaves CI green over
+      # nothing at all. Bun records both shapes that takes: a skipped test as
+      # <skipped/>, one that returned early instead as assertions="0".
+      - name: Assert the suite ran
+        run: |
+          grep -q 'testsuites[^>]* skipped="0"' "$RUNNER_TEMP/junit.xml" \
+            || { echo "::error::skipped tests: a suite whose infrastructure is absent must fail, never skip"; exit 1; }
+          ! grep -o '<testcase name="[^"]*"[^>]*assertions="0"' "$RUNNER_TEMP/junit.xml" \
+            || { echo "::error::the tests listed above asserted nothing"; exit 1; }
 ```
 
 The matching scripts:
@@ -450,6 +463,85 @@ A repo whose types depend on generated code that is not committed — a TanStack
 route tree, a codegen client — adds `bun run build` before the gate, since a
 clean checkout has none of it and both `tsc` and the type-aware lint rules would
 report the generated symbols as missing.
+
+### The suite has to have run
+
+A lane that can silently not run is not a gate, so the test step writes a JUnit
+report and the step after it reads the run out of that report. Both ways a suite
+disappears are visible there: `test.skipIf(!process.env.TEST_DATABASE_URL)` and
+friends report `<skipped/>`, while a test body that returns early on the same
+condition reports `assertions="0"`. Without the check, CI stays green while
+nothing below the pure-unit layer has executed since whenever the connection
+string stopped being set.
+
+The rule the gate enforces is that a test needing infrastructure fails without
+it: read the connection string through something that throws, or use an
+in-process engine — PGlite — that is always present. `test.todo` counts as
+skipped, deliberately. An assertion-free test fails the same step, which the
+house testing rules already reject in review and which costs nothing to reject
+here.
+
+### Repos with a database
+
+A repo with migrations gives the `check` job an empty Postgres and two steps
+after the tests:
+
+```yaml
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+```
+
+```yaml
+      - name: Migrate from empty, twice
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: |
+          bun run db:migrate
+          bun run db:migrate
+
+      - name: Boot against that database
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          PORT: 3000
+          SITE_URL: http://localhost:3000
+          BETTER_AUTH_SECRET: ci-not-a-secret-ci-not-a-secret-ci
+        run: |
+          bun run start > "$RUNNER_TEMP/server.log" 2>&1 &
+          timeout 60 bash -c 'until curl -sf http://localhost:3000/api/health; do sleep 2; done' \
+            || { cat "$RUNNER_TEMP/server.log"; exit 1; }
+```
+
+An empty database is the one state no developer machine is ever in, and it is
+the state every deploy to a new box and every restore drill starts from. A
+migration carrying `ALTER TABLE ... DROP CONSTRAINT` for a constraint an earlier
+`DROP TABLE ... CASCADE` has already taken is the shape that gets through: it
+succeeds on the database it was written against, where that constraint was still
+there, and aborts the first time the history runs onto nothing — a database that
+cannot be rebuilt, discovered at the worst possible moment. Replaying from empty
+on every push is what turns that into a red build.
+
+The second `db:migrate` asserts the step is re-runnable. With a journalled
+migrator that pass is about the runner's bookkeeping rather than the SQL, since
+recorded migrations are not applied again; it earns its two seconds on the steps
+that do re-execute — a `push`-style sync, a data-repair script bolted onto the
+migrate command, a hand-rolled runner.
+
+Booting is the half that migrations succeeding does not prove. Health answers
+200 only after the process has started against that schema and a query has
+round-tripped, so a migration that applies but leaves the app unable to run
+fails here. The environment values are dummies on purpose — a real secret in a
+workflow file is a leaked secret — and the health URL and start command are the
+two lines a repo changes to its own.
 
 ### Static sites
 
