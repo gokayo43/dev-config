@@ -17,8 +17,7 @@ a change to a rule usually lands here too.
 - `*.base.json` / `knip.base.ts` / `lighthouserc.json` — the bases repos inherit.
   Anything keyed to a repo's own paths does not belong in one.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
-- `.github/workflows/check.yml` — the gate every repo calls. `queue-audit.yml`
-  is a weekly read of the issue queue.
+- `.github/workflows/check.yml` — the gate every repo calls.
 - `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
   module the suite drives, and a `*.main.ts` that GitHub runs; `_lib/gate.ts`
   and `_lib/gh.ts` are what they share.
@@ -43,13 +42,13 @@ Every change to a composite action needs **two** tagged commits, because a
 commit cannot reference its own SHA:
 
 1. the commit that ships the actions — bump `version`, tag it;
-2. the commit that repoints `check.yml` and the queue workflows at (1) — bump
-   `version` again, tag that.
+2. the commit that repoints `check.yml` at (1) — bump `version` again, tag
+   that.
 
 Consumers pin the actions at (1) and the workflow call at (2). A tag must sit on
 exactly the commit its pins name. After tagging, bump `project-template`'s pins:
-`setup/ci.yml`, `setup/queue-*.yml`, `.github/workflows/template.yml`, and
-`DEV_CONFIG` in `setup.ts`.
+`setup/ci.yml`, `.github/workflows/template.yml`, and `DEV_CONFIG` in
+`setup.ts`.
 
 ## Adding a gate
 

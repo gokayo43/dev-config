@@ -27,7 +27,7 @@
       "automerge": false
     },
     {
-      "description": "This repo's own pins carry executable gate code, and the queue workflows' pins are exercised only by issue and schedule events \u2014 never by the PR that adopts them. Automerging one would land gate code that is neither read nor run.",
+      "description": "This repo's own pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody.",
       "matchPackageNames": ["gokayo43/dev-config"],
       "automerge": false
     },

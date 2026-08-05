@@ -86,9 +86,8 @@ jobs:
 
       - uses: gokayo43/dev-config/.github/actions/stack-gate@3a388e2effd073b75a1ee741348e174d3f9e2838 # v0.11.0
 
-      # The caller's own workflows — including the queue ones, which ask for
-      # issues: write — were schema-checked and pin-checked by nothing until
-      # this ran here. Needs Bun, which the step above already set up.
+      # The caller's own workflows were schema-checked and pin-checked by
+      # nothing until this ran here. Needs Bun, which the step above set up.
       - uses: gokayo43/dev-config/.github/actions/lint-workflows@3a388e2effd073b75a1ee741348e174d3f9e2838 # v0.11.0
 
       - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@3a388e2effd073b75a1ee741348e174d3f9e2838 # v0.11.0

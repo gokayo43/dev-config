@@ -98,7 +98,7 @@ describe("the files read", () => {
 
   test("an extra path that matches nothing is how a renamed file stops being checked", async () => {
     const root = await materialise(CLEAN);
-    const messages = (await pinGate(root, ["setup/queue-*.yml"])).map(({ message }) => message);
+    const messages = (await pinGate(root, ["setup/renamed-*.yml"])).map(({ message }) => message);
     expect(messages[0]).toEqual(containing("matched no file"));
     expect(messages).toHaveLength(3);
   });
