@@ -4,7 +4,7 @@ One source of truth for the tooling policy shared by my Bun projects: TypeScript
 strictness, the oxlint rule set including its type-aware rules, the architecture
 boundaries wiring, the formatter width, the workspace-agnostic knip settings, the
 Renovate policy, the coverage floor, the secret-scanning gate, and the CI
-workflows every repo runs.
+workflow every repo calls.
 
 Repos install it straight from GitHub — no registry, no build step, the files are
 consumed exactly as they are committed:
@@ -30,6 +30,7 @@ to override a shared setting, the override carries a comment naming the reason.
 | `knip.base.ts` | `knip` | imported by `knip.ts` |
 | `lighthouserc.json` | `lhci` | `configPath` into `node_modules` |
 | `default.json` | Renovate | `extends` by GitHub preset name |
+| `.github/workflows/check.yml` | GitHub Actions | `uses` by repository path, pinned to a SHA |
 
 ## TypeScript
 
@@ -265,7 +266,10 @@ bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.
 
 Every other pin in these repos sits somewhere a manager already looks. The
 gitleaks version and archive checksum sit in a `run:` block, so the preset adds
-a `customManagers` entry that reads them out of any workflow file or README:
+a `customManagers` entry that reads them out of a workflow file or a README.
+Both patterns earn their place here: the pair lives in this repo's `check.yml`,
+which every repo runs by reference, and the version alone lives in this README's
+local install snippet for the pre-commit hook.
 
 ```json
 {
@@ -356,10 +360,9 @@ hook with it reports nothing and looks exactly like a broken hook.
 
 ## CI
 
-Copy this into `.github/workflows/ci.yml`. Everything a developer machine can
-run is the local gate — `bun run check` plus the test suite — so a green
-pre-push is a green CI run. What follows it below is what only CI has: a
-database nobody has migrated yet, and proof that the suite ran at all.
+The gate is a workflow in this repo — `.github/workflows/check.yml` — and repos
+call it instead of retyping it. A consuming repo's `.github/workflows/ci.yml` is
+the whole of its CI:
 
 ```yaml
 name: CI
@@ -378,45 +381,30 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Secret scan
-        env:
-          GITLEAKS_VERSION: v8.30.1
-          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
-            "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
-          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" git . --redact --no-banner
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-      - run: bun install --frozen-lockfile
-
-      - run: bun run format:check
-      - run: bun run lint
-      - run: bun run typecheck
-      - run: bun run knip
-
-      - run: bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
-
-      # A suite that skips when its database is missing leaves CI green over
-      # nothing at all. Bun records both shapes that takes: a skipped test as
-      # <skipped/>, one that returned early instead as assertions="0".
-      - name: Assert the suite ran
-        run: |
-          grep -q 'testsuites[^>]* skipped="0"' "$RUNNER_TEMP/junit.xml" \
-            || { echo "::error::skipped tests: a suite whose infrastructure is absent must fail, never skip"; exit 1; }
-          ! grep -o '<testcase name="[^"]*"[^>]*assertions="0"' "$RUNNER_TEMP/junit.xml" \
-            || { echo "::error::the tests listed above asserted nothing"; exit 1; }
+    uses: gokayo43/dev-config/.github/workflows/check.yml@<commit sha> # v0.3.0
+    with:
+      build: true
+      database: true
 ```
+
+| Input | Default | Effect |
+| --- | --- | --- |
+| `build` | `false` | Runs `bun run build` before the static gate and before the boot gate. |
+| `database` | `false` | Adds the database job: an empty Postgres, the migrations replayed onto it twice, and the app booted against the result. |
+| `start-command` | `bun run start` | How the boot gate starts the app. |
+| `health-url` | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200. |
+
+The call is pinned by commit SHA with the release as the trailing comment — the
+same contract the actions inside it carry, and the reason a change here reaches
+a repo when its pin moves and not before. Renovate's github-actions manager
+reads a job-level `uses:` exactly as it reads a step's, so the pin moves in a PR
+like any other dependency.
+
+In order, the pinned workflow runs the gitleaks scan, `bun install`, the
+optional build, `format:check`, `lint`, `typecheck`, `knip`, the test suite, and
+the assertion that the suite ran. Everything up to the test suite is the local
+`bun run check`, so a green pre-push is a green CI run; the two steps after it
+are what only CI has.
 
 The matching scripts:
 
@@ -433,8 +421,14 @@ The matching scripts:
 }
 ```
 
-Actions are pinned to digests, so the tag in the trailing comment is a label and
-the SHA is the contract; Renovate moves both together.
+Everything the workflow reaches for is pinned by content, not by a name someone
+else can repoint: actions and the workflow call by commit SHA, the gitleaks
+archive by SHA-256, the Postgres and Redis service images by digest. The tag in
+the trailing comment — or beside the digest, for the images — is the label and
+the hash is the contract; Renovate moves both together. Service images are
+written `postgres:16-alpine@sha256:…` rather than digest-only because that is
+the form its docker datasource maintains, and the manager reads a job's
+`services:` block for exactly this.
 
 The secret scan downloads the released binary instead of using
 `gitleaks/gitleaks-action`, which since v2 is not open source: it ships under a
@@ -460,9 +454,9 @@ about a second on repos this size.
 drift.
 
 A repo whose types depend on generated code that is not committed — a TanStack
-route tree, a codegen client — adds `bun run build` before the gate, since a
-clean checkout has none of it and both `tsc` and the type-aware lint rules would
-report the generated symbols as missing.
+route tree, a codegen client — passes `build: true`, since a clean checkout has
+none of it and both `tsc` and the type-aware lint rules would report the
+generated symbols as missing.
 
 ### The suite has to have run
 
@@ -481,45 +475,20 @@ skipped, deliberately. An assertion-free test fails the same step, which the
 house testing rules already reject in review and which costs nothing to reject
 here.
 
+That last one binds property tests too, and it is the rule worth writing down
+because fast-check does not require it: a predicate that returns a boolean
+records no assertion, so a property that never actually ran looks identical to
+one that passed. Properties assert with `expect` inside the predicate — and
+then a suite that silently stopped running is a red build rather than a number
+nobody reads.
+
 ### Repos with a database
 
-A repo with migrations gives the `check` job an empty Postgres and two steps
-after the tests:
-
-```yaml
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 30
-```
-
-```yaml
-      - name: Migrate from empty, twice
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-        run: |
-          bun run db:migrate
-          bun run db:migrate
-
-      - name: Boot against that database
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-          PORT: 3000
-          SITE_URL: http://localhost:3000
-          BETTER_AUTH_SECRET: ci-not-a-secret-ci-not-a-secret-ci
-        run: |
-          bun run start > "$RUNNER_TEMP/server.log" 2>&1 &
-          timeout 60 bash -c 'until curl -sf http://localhost:3000/api/health; do sleep 2; done' \
-            || { cat "$RUNNER_TEMP/server.log"; exit 1; }
-```
+`database: true` adds a second job: an empty Postgres — plus a Redis, for the
+shapes whose health route pings one — the migrations replayed onto it, and the
+app booted against the result. `start-command` and
+`health-url` are how a repo names its own app; everything else is the same for
+every repo, which is why it lives in the workflow rather than at the call site.
 
 An empty database is the one state no developer machine is ever in, and it is
 the state every deploy to a new box and every restore drill starts from. A
@@ -530,18 +499,20 @@ there, and aborts the first time the history runs onto nothing — a database th
 cannot be rebuilt, discovered at the worst possible moment. Replaying from empty
 on every push is what turns that into a red build.
 
-The second `db:migrate` asserts the step is re-runnable. With a journalled
-migrator that pass is about the runner's bookkeeping rather than the SQL, since
-recorded migrations are not applied again; it earns its two seconds on the steps
-that do re-execute — a `push`-style sync, a data-repair script bolted onto the
-migrate command, a hand-rolled runner.
+The migrations then run a second time, and the gate is not the exit code but
+`pg_dump --schema-only` before and after: the schema has to come out
+byte-identical. An exit code only says the second run did not error; the dump
+says the database came out in the same state, which a `push`-style sync or a
+hand-rolled runner can exit 0 without doing. With a journalled migrator the pass
+is cheap and proves the journal is honest; with anything that re-executes SQL,
+it proves the SQL is re-runnable.
 
 Booting is the half that migrations succeeding does not prove. Health answers
 200 only after the process has started against that schema and a query has
 round-tripped, so a migration that applies but leaves the app unable to run
-fails here. The environment values are dummies on purpose — a real secret in a
-workflow file is a leaked secret — and the health URL and start command are the
-two lines a repo changes to its own.
+fails here. The server environment the job sets is the house contract with
+dummy secrets — a real secret in a workflow file is a leaked secret — and a repo
+whose contract needs more than that extends the workflow rather than the call.
 
 ### Static sites
 

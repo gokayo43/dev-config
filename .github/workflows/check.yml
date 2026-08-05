@@ -1,0 +1,147 @@
+name: Check
+
+# The gate every repo runs, held in one place and called by reference:
+#   jobs.check.uses: gokayo43/dev-config/.github/workflows/check.yml@<sha>
+on:
+  workflow_call:
+    inputs:
+      build:
+        description: Build before the static gate — for repos whose types come from generated code that is not committed.
+        type: boolean
+        default: false
+      database:
+        description: Replay the migrations onto an empty Postgres and boot the app against the result.
+        type: boolean
+        default: false
+      start-command:
+        description: How the boot gate starts the app.
+        type: string
+        default: bun run start
+      health-url:
+        description: What the boot gate polls until it answers 200.
+        type: string
+        default: http://localhost:3000/api/health
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # gitleaks reads history; the default shallow checkout hands it one
+          # commit, so a secret committed and later deleted on the same branch
+          # would go unreported even though pushing it already burned the key.
+          fetch-depth: 0
+
+      - name: Secret scan
+        env:
+          GITLEAKS_VERSION: v8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git . --redact --no-banner
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - run: bun install --frozen-lockfile
+
+      - if: inputs.build
+        run: bun run build
+
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run knip
+
+      - run: bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
+
+      # A suite that skips when its database is missing leaves CI green over
+      # nothing at all. Bun records both shapes that takes: a skipped test as
+      # <skipped/>, one that returned early instead as assertions="0".
+      - name: Assert the suite ran
+        run: |
+          grep -q 'testsuites[^>]* skipped="0"' "$RUNNER_TEMP/junit.xml" \
+            || { echo "::error::skipped tests: a suite whose infrastructure is absent must fail, never skip"; exit 1; }
+          ! grep -o '<testcase name="[^"]*"[^>]*assertions="0"' "$RUNNER_TEMP/junit.xml" \
+            || { echo "::error::the tests listed above asserted nothing — assert with expect, properties included; an assertion-free pass is indistinguishable from a test that never ran"; exit 1; }
+
+  database:
+    if: inputs.database
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Empty on every run, which is the one state no developer database is ever
+    # in. Images are pinned by digest for the same reason actions are, with the
+    # tag kept inline: that is the form Renovate's docker datasource maintains.
+    # Redis is started unconditionally — the API shape pings it from its health
+    # route, and an idle container costs a couple of seconds.
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      redis:
+        image: redis:7-alpine@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - run: bun install --frozen-lockfile
+
+      - if: inputs.build
+        run: bun run build
+
+      # A migration that only applies to an already-migrated database — a DROP
+      # CONSTRAINT for one a DROP TABLE ... CASCADE has already taken, say —
+      # succeeds where it was written and aborts the first time the history runs
+      # onto nothing. The second pass has to leave the schema byte-identical:
+      # an exit code alone would pass a runner that re-executed the DDL.
+      - name: Migrate from empty, twice
+        run: |
+          bun run db:migrate
+          pg_dump --schema-only "$DATABASE_URL" > "$RUNNER_TEMP/schema-once.sql"
+          bun run db:migrate
+          pg_dump --schema-only "$DATABASE_URL" > "$RUNNER_TEMP/schema-twice.sql"
+          diff -u "$RUNNER_TEMP/schema-once.sql" "$RUNNER_TEMP/schema-twice.sql" \
+            || { echo "::error::the second migrate changed the schema"; exit 1; }
+
+      # Migrations applying is half of it; the app running against the schema
+      # they produced is the other half. Health answers 200 only once the
+      # process is up and a query has round-tripped to Postgres. The values
+      # below are the house server env contract, with dummies for the secrets —
+      # a repo needing more than this adds it here rather than at the call site.
+      - name: Boot against that database
+        env:
+          REDIS_URL: redis://localhost:6379
+          SITE_URL: http://localhost
+          BETTER_AUTH_SECRET: ci-not-a-secret-ci-not-a-secret-ci
+        run: |
+          ${{ inputs.start-command }} > "$RUNNER_TEMP/server.log" 2>&1 &
+          timeout 60 bash -c 'until curl -sf "${{ inputs.health-url }}"; do sleep 2; done' \
+            || { cat "$RUNNER_TEMP/server.log"; exit 1; }

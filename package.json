@@ -1,6 +1,6 @@
 {
   "name": "@gokayo43/dev-config",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Shared TypeScript, oxlint, oxfmt, knip, Renovate and Lighthouse configuration for Bun projects.",
   "license": "MIT",
   "type": "module",
@@ -30,12 +30,26 @@
     "typescript": ">=7"
   },
   "peerDependenciesMeta": {
-    "eslint-import-resolver-typescript": { "optional": true },
-    "eslint-plugin-boundaries": { "optional": true },
-    "knip": { "optional": true },
-    "oxfmt": { "optional": true },
-    "oxlint": { "optional": true },
-    "oxlint-tsgolint": { "optional": true },
-    "typescript": { "optional": true }
+    "eslint-import-resolver-typescript": {
+      "optional": true
+    },
+    "eslint-plugin-boundaries": {
+      "optional": true
+    },
+    "knip": {
+      "optional": true
+    },
+    "oxfmt": {
+      "optional": true
+    },
+    "oxlint": {
+      "optional": true
+    },
+    "oxlint-tsgolint": {
+      "optional": true
+    },
+    "typescript": {
+      "optional": true
+    }
   }
 }
