@@ -11,6 +11,18 @@
   },
   "rules": {
     "no-console": "warn",
+    "no-empty": "error",
+    "eslint/no-warning-comments": [
+      "error",
+      { "terms": ["todo", "fixme", "xxx", "hack"], "location": "anywhere" }
+    ],
+    "typescript/no-explicit-any": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/ban-ts-comment": [
+      "error",
+      { "ts-expect-error": "allow-with-description", "minimumDescriptionLength": 12 }
+    ],
+    "unicorn/no-abusive-eslint-disable": "error",
     "max-lines": ["error", { "max": 1000 }],
     "max-depth": ["warn", { "max": 4 }],
     "complexity": ["warn", { "max": 20 }],
@@ -32,5 +44,29 @@
     "typescript/no-unsafe-member-access": "error",
     "typescript/no-unsafe-return": "error",
     "typescript/prefer-nullish-coalescing": "warn"
-  }
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "setTimeout",
+            "message": "a test that sleeps is slow and flaky — drive virtual time (TestClock) instead"
+          },
+          {
+            "name": "setInterval",
+            "message": "a test that sleeps is slow and flaky — drive virtual time (TestClock) instead"
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/server/**", "server/**", "apps/api/**"],
+      "rules": {
+        "no-console": "error"
+      }
+    }
+  ]
 }

@@ -1,0 +1,27 @@
+name: Queue guard
+
+# Called from a repo's own workflow on `issues: labeled`:
+#   jobs.guard.uses: gokayo43/dev-config/.github/workflows/queue-guard.yml@<sha>
+#
+# The labels are the state machine, and `ready-for-agent` / `ready-for-human`
+# mean the product owner approved the work. The labelled event names who added
+# it, so "agents never promote their own proposals" is enforceable rather than
+# only written down.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - uses: gokayo43/dev-config/.github/actions/queue-guard@513ba37df57ac3cbf919a02ab03a49b5bf6e1b6b # v0.5.0
+        with:
+          label: ${{ github.event.label.name }}
+          actor: ${{ github.event.sender.login }}
+          owner: ${{ github.repository_owner }}

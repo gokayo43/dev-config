@@ -1,0 +1,29 @@
+name: Queue guard
+description: >-
+  Fails when anyone but the repo owner promotes an issue to ready-for-agent or
+  ready-for-human. Agents file proposals freely and never approve their own, and
+  the labelled event names the actor, so the rule is enforceable rather than
+  merely written down.
+
+inputs:
+  label:
+    description: The label that was just added.
+    required: true
+  actor:
+    description: Who added it.
+    required: true
+  owner:
+    description: Who is allowed to.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_LABEL: ${{ inputs.label }}
+        INPUT_ACTOR: ${{ inputs.actor }}
+        INPUT_OWNER: ${{ inputs.owner }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/queue-guard.ts"

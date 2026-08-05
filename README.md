@@ -3,8 +3,9 @@
 One source of truth for the tooling policy shared by my Bun projects: TypeScript
 strictness, the oxlint rule set including its type-aware rules, the architecture
 boundaries wiring, the formatter width, the workspace-agnostic knip settings, the
-Renovate policy, the coverage floor, the secret-scanning gate, and the CI
-workflow every repo calls.
+Renovate policy, the coverage floor, the secret-scanning gate, the stack
+denylist, the contract a repo declares about itself, and the CI workflow every
+repo calls.
 
 Repos install it straight from GitHub — no registry, no build step, the files are
 consumed exactly as they are committed:
@@ -30,7 +31,7 @@ to override a shared setting, the override carries a comment naming the reason.
 | `knip.base.ts` | `knip` | imported by `knip.ts` |
 | `lighthouserc.json` | `lhci` | `configPath` into `node_modules` |
 | `default.json` | Renovate | `extends` by GitHub preset name |
-| `.github/workflows/check.yml` | GitHub Actions | `uses` by repository path, pinned to a SHA |
+| `.github/workflows/*.yml` | GitHub Actions | `uses` by repository path, pinned to a SHA |
 | `.github/actions/*/action.yml` | GitHub Actions | `uses` by repository path, pinned to a SHA |
 
 ## TypeScript
@@ -98,6 +99,13 @@ The base sets `correctness: error`, `suspicious: warn`, `perf: warn`,
 diagnostics are labelled `react-hooks`, but there is no `react-hooks` plugin to
 name in a config, and a config naming one silently lints nothing.
 
+**`warn` is advisory and cannot fail a build.** `oxlint` exits 0 with warnings
+outstanding, and no `--max-warnings` is passed anywhere in this repo's CI. So the
+deny tier is the gate and the warn tier is a report: a rule that has to hold goes
+to `error`, and a rule at `warn` is a hint whose count nobody is required to
+drive to zero. Moving something from `warn` to `error` is the whole of the
+decision — there is no middle setting that stops a merge.
+
 A config's own `plugins` array replaces oxlint's built-in defaults rather than
 adding to them, which is why the base names every plugin it wants including the
 defaults `oxc`, `unicorn` and `typescript`. Across `extends` the arrays are
@@ -106,6 +114,54 @@ unioned, so a repo that adds `plugins` of its own keeps the base's.
 The one rule the base switches off is `oxc/no-map-spread`, whose advice is to
 mutate in place — wrong for the copy-on-write style these codebases are written
 in.
+
+### The escape hatches, and their price
+
+Every way of telling the compiler or the linter to look away is denied, because
+each one converts a question into silence:
+
+- `typescript/no-explicit-any` — `unknown` forces the narrowing that `any`
+  skips, and the unsafe-`any` family below only fires on values that are already
+  `any`.
+- `typescript/no-non-null-assertion` — `!` asserts an invariant to the compiler
+  and to no one else. `noUncheckedIndexedAccess` is on, so array and record reads
+  are the common case: handle the `undefined` or prove it away with a check.
+- `typescript/ban-ts-comment` — `@ts-ignore` and `@ts-nocheck` are out;
+  `@ts-expect-error` is allowed with a description of at least 12 characters,
+  which is long enough that a real reason fits and `// @ts-expect-error fix` does
+  not.
+- `no-empty` — an empty block is either a swallowed failure or a deliberate
+  no-op, and only one of those is defensible. A comment inside the block
+  satisfies the rule, so an intentionally empty `catch` says what it is
+  intentionally ignoring.
+- `unicorn/no-abusive-eslint-disable` — a bare `oxlint-disable` with no rule
+  named turns off everything on that line, including the rules nobody has written
+  yet.
+- `eslint/no-warning-comments` — `TODO`, `FIXME`, `XXX` and `HACK` anywhere in a
+  comment. The register is GitHub issues in the repo the work belongs to; a
+  marker in a file is invisible to anyone who is not already reading that file.
+
+### Overrides
+
+Two facts are true of a file because of where it sits, not what it contains:
+
+```json
+{
+  "overrides": [
+    { "files": ["**/*.test.ts", "**/*.test.tsx"], "rules": { "no-restricted-globals": ["error", { "name": "setTimeout", "message": "…" }, { "name": "setInterval", "message": "…" }] } },
+    { "files": ["src/server/**", "server/**", "apps/api/**"], "rules": { "no-console": "error" } }
+  ]
+}
+```
+
+A test that sleeps is slow and flaky, so tests drive virtual time instead of the
+wall clock. And server code writes through the structured logger, so `no-console`
+rises from `warn` to `error` on the server globs — a one-shot CLI under those
+paths carries a file-level disable with its reason, which is the shape the
+directive rule below already requires.
+
+`overrides` survive `extends`, so a consuming repo inherits both without naming
+them.
 
 ### Architecture rules
 
@@ -140,12 +196,31 @@ the reason:
 if (payload.items) {
 ```
 
-A disable without a reason is a suppressed bug. The directive has to be one line
-— a wrapped second comment line becomes the "next line" and the suppression
-misses.
+A disable without a reason is a suppressed bug, and the `suppression-hygiene`
+action fails a run over one. The directive has to be one line — a wrapped second
+comment line becomes the "next line" and the suppression misses.
+
+The lint script also passes
+`--report-unused-disable-directives-severity=error`, which turns a directive that
+no longer suppresses anything into a failure. Without it, a disable outlives the
+finding it was written for and quietly widens: the rule it names stops applying
+to that line for the next person who writes there.
 
 Type-aware rules need resolved types, so a repo whose types come from generated
 code runs its codegen before linting, exactly as it does before `tsc`.
+
+### What the linter cannot see
+
+oxlint ships `jest` and `vitest` rule sets, and none of them fire on a `bun test`
+suite: they key off imports from `jest`/`vitest`, and these repos import from
+`bun:test`. Turning them on produces a config that reports nothing and looks like
+coverage.
+
+So the properties those rules would have checked — that a test asserted
+something, that nothing was skipped — are enforced by the JUnit greps in the
+`test-suite` action instead, on the report of a run that actually happened. That
+is the correct layer and the only one available: do not "improve" the gate by
+moving it into the linter.
 
 ## Architecture boundaries
 
@@ -260,6 +335,12 @@ The preset runs weekly, holds every release for 7 days, groups patch, minor, pin
 and digest updates into one automerging PR, opens majors as plain PRs to read,
 keeps lockfile maintenance on, and pins GitHub Action digests.
 
+Two families move as a unit rather than as packages. Every `expo*`,
+`@expo/*` and `react-native*` pin belongs to one Expo SDK release, and a partial
+bump builds and then fails on a device, so they group into one "Expo SDK" PR that
+is never automerged. `better-auth` and its `@better-auth/*` plugins are versioned
+in lockstep, and a plugin ahead of its core fails at import.
+
 The file is named `default.json` because that is the name Renovate resolves for a
 bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.
 
@@ -316,16 +397,32 @@ and the URL strips the prefix for the asset name.
 
 ### Gating this repo
 
-This repo's own CI parses every JSON file it ships, validates the preset, checks
-the Lighthouse budget, and lints the half of it that executes. That last one is
-the `lint-workflows` action — actionlint, pinned by version and archive checksum
-exactly like gitleaks, with shellcheck over every `run:` block — used here from
-the working tree and by the template repo at a SHA, so the pin has one home.
+This repo's own CI typechecks and tests the gates it ships, parses every JSON
+file, validates the preset, checks the Lighthouse budget, and lints the half of
+it that executes.
+
+The gates are TypeScript under `.github/actions/*/`, and `bun test` is what
+proves each one refuses a violating tree and passes a clean one — the suites
+build a real git repository per case, because the gates ask git what is tracked
+and what is ignored. Every other repo's gate is only as honest as those two
+lanes, which is why they run first.
+
+The linting is the `lint-workflows` action — actionlint, pinned by version and
+archive checksum exactly like gitleaks, with shellcheck over every `run:` block —
+used here from the working tree and by the template repo at a SHA, so the pin has
+one home.
 
 actionlint only understands workflows: handed an `action.yml` it reports a
 workflow with no `jobs`. So the composites get a pass of their own, asserting
 what silently breaks them — a `run` step with no `shell` never runs the script
 it carries — and their scripts go through the same shellcheck.
+
+actionlint is also silent on a floating tag, so the action carries a second step
+that reads every `uses:` in the workflows, in the composite actions, and in
+`extra-paths`, and fails anything whose ref is not a 40-character commit SHA. A
+tag is a name its owner can repoint at any commit, including after the version
+was read here. Local (`./…`) and `docker://` references carry no git ref and are
+skipped.
 
 There is no standalone `renovate-config-validator` package on npm; the binary
 ships inside `renovate`:
@@ -415,9 +512,12 @@ jobs:
 | Input | Default | Effect |
 | --- | --- | --- |
 | `build` | `false` | Runs `bun run build` before the static gate and before the boot gate. |
-| `database` | `false` | Adds the database job: an empty Postgres, the migrations replayed onto it twice, and the app booted against the result. |
+| `database` | `false` | Adds the database job: an empty Postgres, the migrations replayed onto it twice, and the app booted against the result. Also makes `db:migrate` part of the repo contract. |
+| `compose` | `false` | Holds `docker-compose.yml` to the deployment shape. |
+| `static-site` | `false` | Exempts the repo from the docs spine — a marketing site has no domain to glossary and no decisions to record. |
 | `start-command` | `bun run start` | How the boot gate starts the app. |
 | `health-url` | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200. |
+| `timestamp-allowlist` | `""` | `table.column` entries whose value really is a wall-clock reading rather than an instant. |
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches
@@ -427,16 +527,22 @@ the live one in `project-template`'s `setup/ci.yml`. Renovate's github-actions m
 reads a job-level `uses:` exactly as it reads a step's, so the pin moves in a PR
 like any other dependency.
 
-In order, the pinned workflow runs the gitleaks scan, `bun install`, the
-optional build, `format:check`, `lint`, `typecheck`, `knip`, the test suite, and
-the assertion that the suite ran. Everything up to the test suite is the local
-`bun run check`, so a green pre-push is a green CI run; the two steps after it
-are what only CI has.
+In order, the pinned workflow runs the gitleaks scan, the declarative gates
+(repo contract, stack denylist, suppression hygiene, and the compose lint when
+asked), `bun install`, the optional build, `format:check`, `lint`, `typecheck`,
+`knip`, the test suite, and the assertion that the suite ran. Everything from
+`format:check` to the test suite is the local `bun run check`, so a green
+pre-push is a green CI run; the rest is what only CI has.
 
-The steps that are shell rather than a `bun run` live in `.github/actions/` as
-composite actions — `secret-scan`, `test-suite`, `db-gate`, `lint-workflows` —
-so the workflow above and any repo that has to run the same thing outside it
-share one copy.
+The declarative gates come before `bun install` deliberately. They read the tree
+as committed, so a repo that has drifted out of the contract says so in seconds
+rather than after a full dependency resolution.
+
+The steps that are shell or a script rather than a `bun run` live in
+`.github/actions/` as composite actions — `secret-scan`, `repo-contract`,
+`stack-gate`, `suppression-hygiene`, `compose-lint`, `test-suite`, `db-gate`,
+`lint-workflows`, `queue-guard`, `queue-audit` — so the workflow above and any
+repo that has to run the same thing outside it share one copy.
 `check.yml` references them by full path and SHA rather than `./`: inside a
 called workflow a relative `uses:` resolves against the *caller's* checkout, and
 the alternative — checking this repo out into the caller's workspace — puts its
@@ -451,7 +557,7 @@ The matching scripts:
   "scripts": {
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "lint": "oxlint",
+    "lint": "oxlint --report-unused-disable-directives-severity=error",
     "typecheck": "tsc --noEmit",
     "knip": "knip",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run knip"
@@ -520,6 +626,97 @@ one that passed. Properties assert with `expect` inside the predicate — and
 then a suite that silently stopped running is a red build rather than a number
 nobody reads.
 
+### The repo contract
+
+Every gate above rests on a string somewhere: a `packageManager` field, an
+`extends` path, a `[test]` block, a hook definition. Each of those can be
+deleted, renamed or never written, and when one is, the gate it feeds does not
+fail — it stops existing. `repo-contract` reads them and says so.
+
+| Fact | Why it is load-bearing |
+| --- | --- |
+| `packageManager` reads `bun@<version>` | `setup-bun` takes the runner's Bun from it; without it CI and the dev machine drift |
+| No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock` | a second lockfile installs a second dependency tree |
+| No `^`, `~` or range specs outside `peerDependencies` | a lockfile refresh must not be able to change what is installed |
+| `typescript` major ≥ 7 | the shared tsconfig is written against TypeScript 7 |
+| `oxlint-tsgolint` present, when `.oxlintrc.json` extends the base | without it oxlint runs the base's type-aware rules over nothing and reports clean |
+| `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts` | a repo that stopped inheriting stops inheriting silently |
+| `bunfig.toml` declares `minimumReleaseAge`, `saveExact`, and a `[test] coverageThreshold` | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
+| `lefthook.yml` runs a staged gitleaks scan pre-commit and typecheck + tests pre-push | the hooks are the half of the gate that runs before a push |
+| `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern | a blanket `.env.*` rule silently deletes the two files that have to ship |
+| `CONTEXT.md` (or `CONTEXT-MAP.md`), `docs/adr/`, `CLAUDE.md` | the docs spine, unless `static-site: true` |
+| `db:migrate` exists, when `database: true` | the database gate replays migrations through it |
+| a job `uses:` this repo's `check.yml` at a 40-hex SHA | a tag is a name someone else can repoint |
+
+The knip case is the one that reads as arbitrary and is not: knip resolves
+`knip.json` before `knip.ts`, and a JSON config cannot import anything. A repo
+that answers "why isn't the shared base applying?" by adding a `knip.json`
+produces a config that works and inherits nothing, so the JSON forms are refused
+outright rather than merely unrecommended.
+
+The gate reads tracked files plus untracked ones git would keep — the set
+`.gitignore` already describes. That is what lets it run against a tree a
+scaffolder has just written into, where every new file is untracked, without
+reading build output.
+
+### The stack denylist
+
+`STACK.md` picks one library per slot. `stack-gate` is that document with an exit
+code: one `stack-denylist.json` in this repo, read against every `package.json`
+in the tree.
+
+An entry is a set of package names and the reason they lost, so the diagnostic
+teaches the rule rather than only refusing the package:
+
+```
+::error file=package.json::dependencies.dayjs is not the house pick — Temporal on the server, @date-fns/tz in the client
+```
+
+A bare name matches that package exactly; a `^`-prefixed entry is a regular
+expression over the package name. The distinction is load-bearing in both
+directions: `^@radix-ui/` has to take a scope, and `jest` must not take
+`jest-expo` — the Expo test preset is the only way to run a React Native suite,
+and it is not the thing the entry is about.
+
+One kind of pick is a judgement call rather than a rule, and its entry carries an
+`adr` glob: the packages unlock once that file exists. Client state management is
+the case the canon names. The escape hatch is deliberately the same work as
+writing the decision down, which is the only form of exception worth having.
+
+### Suppression hygiene
+
+Two ways work hides in a tree rather than in the queue, both a failed step:
+
+- an `oxlint-disable` directive with no ` -- reason` after the rule names.
+- a tracked `TODO.md`, `BACKLOG.md`, `TASKS.md`, `ISSUES.md` or `ROADMAP.md`.
+
+The second one is not about the filename. A list in a file has no labels, no
+assignee, no close, and no one who has agreed to drain it; the register is GitHub
+issues in the repo the work belongs to, and a second register is deletion that
+feels responsible.
+
+### Repos this box runs as containers
+
+`compose: true` reads `docker-compose.yml` and holds it to the deployment shape
+every stack on this box shares:
+
+- every published port bound to `127.0.0.1` — nginx is the only thing that should
+  reach them, and the host firewall is not the only line of defence.
+- a `mem_limit` on every service — several unrelated stacks share the box, and
+  without caps the kernel OOM killer picks its victim by score rather than by who
+  caused the spike.
+- a healthcheck on every service, or `x-no-healthcheck: "<why it can never answer
+  one>"`. A one-shot job that exits is the honest case; "we did not get round to
+  it" is the case the key is there to make visible.
+- a `migrate` service with `restart: "no"`, and every service that builds from
+  this repo waiting on it with `condition: service_completed_successfully`. A
+  failed migration then keeps the old container running rather than starting a
+  new one against a schema it does not match, and a restart policy on a migration
+  is a crash loop.
+
+Services that only pull an image are infrastructure and are not asked to wait on
+the migration they host.
+
 ### Repos with a database
 
 `database: true` adds a second job: an empty Postgres — plus a Redis, for the
@@ -544,6 +741,15 @@ says the database came out in the same state, which a `push`-style sync or a
 hand-rolled runner can exit 0 without doing. With a journalled migrator the pass
 is cheap and proves the journal is honest; with anything that re-executes SQL,
 it proves the SQL is re-runnable.
+
+The dump is in hand by then, and it is the only place a column's real type is
+visible — an ORM's `timestamp` is a hint and the database is the fact — so the
+same step asserts that no column is `timestamp without time zone`. A wall-clock
+column stores the digits someone typed and forgets which clock produced them, so
+one row means two different instants either side of a DST boundary or a server
+move, and nothing fails until it does. `timestamp-allowlist` takes
+`table.column` entries for the columns where a wall-clock reading is the point —
+an opening time that is 09:00 wherever the shop is.
 
 Booting is the half that migrations succeeding does not prove. Health answers
 200 only after the process has started against that schema and a query has
@@ -593,6 +799,63 @@ jobs:
 `lighthouserc.json` asserts performance, accessibility, best-practices and SEO at
 `minScore: 1` over three runs of `./dist`. A repo that builds somewhere else
 copies the file and changes `staticDistDir`.
+
+## Queue integrity
+
+The issue queue is the register for everything not being done right now, and it
+decays quietly: a label outside the vocabulary, an issue in no state, a
+commitment whose trigger nobody wrote down. Two reusable workflows hold it.
+
+```yaml
+name: Queue
+
+on:
+  issues:
+    types: [labeled]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    if: github.event_name == 'issues'
+    uses: gokayo43/dev-config/.github/workflows/queue-guard.yml@<commit sha> # <release tag>
+
+  audit:
+    if: github.event_name != 'issues'
+    permissions:
+      contents: read
+      issues: read
+    uses: gokayo43/dev-config/.github/workflows/queue-audit.yml@<commit sha> # <release tag>
+```
+
+`queue-guard` fails when anyone but the repo owner adds `ready-for-agent` or
+`ready-for-human`. Agents file proposals freely and never approve their own; the
+`labeled` event carries the actor, so that rule is enforceable rather than merely
+written down. It is the one gate here whose failure is informational — the label
+is already on the issue by the time the run starts, and the red run is what says
+to take it off.
+
+`queue-audit` reads the labels and every open issue on a schedule and asserts
+three things: the vocabulary is exactly the canon set and nothing else, every open
+issue carries exactly one state label, and every issue labelled `commitment`
+states a `**Trigger:**` in its body. Its inputs carry the canon defaults:
+
+| Input | Default |
+| --- | --- |
+| `vocabulary` | `needs-triage needs-info ready-for-agent ready-for-human roadmap commitment wontfix` |
+| `state-labels` | `needs-triage needs-info ready-for-agent ready-for-human roadmap wontfix` |
+| `commitment-label` | `commitment` |
+
+`commitment` is the marker orthogonal to the state machine: a commitment is
+already in one of the six states, and the label is how the issues with a trigger
+are found on the day their trigger may have fired. GitHub's own starter labels —
+`bug`, `enhancement`, `duplicate` and the rest — are a taxonomy nobody drains, so
+the audit refuses them; the scaffolder deletes them when it creates the canon
+set.
 
 ## Version policy
 

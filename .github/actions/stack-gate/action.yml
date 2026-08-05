@@ -1,0 +1,20 @@
+name: Stack gate
+description: >-
+  Fails on a dependency the house stack has already answered. One denylist
+  covers every repo and every entry names the pick it lost to, so the
+  diagnostic teaches the rule instead of only refusing the package. Where a
+  deviation is legitimate the entry unlocks once its ADR exists.
+
+inputs:
+  working-directory:
+    description: Where the repository root is.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/stack-gate.ts"

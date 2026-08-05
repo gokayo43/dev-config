@@ -1,0 +1,31 @@
+name: Queue audit
+description: >-
+  Reads the repo's labels and open issues and holds the queue to its own rules:
+  the vocabulary is the canon set and nothing else, every open issue sits in
+  exactly one state, and a commitment names the event that makes it due. Needs
+  GH_TOKEN and GH_REPO in the environment.
+
+inputs:
+  vocabulary:
+    description: Every label the repo may carry, space-separated.
+    default: needs-triage needs-info ready-for-agent ready-for-human roadmap commitment wontfix
+  state-labels:
+    description: The states an open issue may sit in, space-separated. Exactly one is required.
+    default: needs-triage needs-info ready-for-agent ready-for-human roadmap wontfix
+  commitment-label:
+    description: The label whose issues must state a Trigger in the body.
+    default: commitment
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_VOCABULARY: ${{ inputs.vocabulary }}
+        INPUT_STATE_LABELS: ${{ inputs.state-labels }}
+        INPUT_COMMITMENT_LABEL: ${{ inputs.commitment-label }}
+      run: |
+        set -euo pipefail
+        gh label list --limit 200 --json name > "$RUNNER_TEMP/labels.json"
+        gh issue list --state open --limit 500 --json number,labels,body > "$RUNNER_TEMP/issues.json"
+        bun "$GITHUB_ACTION_PATH/queue-audit.ts" "$RUNNER_TEMP/labels.json" "$RUNNER_TEMP/issues.json"

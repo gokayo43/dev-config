@@ -28,6 +28,17 @@
       "description": "Majors are read before they are merged.",
       "matchUpdateTypes": ["major"],
       "automerge": false
+    },
+    {
+      "description": "An Expo SDK is one release across every package it ships. A partial bump builds and then fails on a device, so the packages move together and a human reads the SDK's changelog before they do.",
+      "matchPackageNames": ["/^expo(-|$)/", "/^@expo\\//", "/^react-native(-|$)/"],
+      "groupName": "Expo SDK",
+      "automerge": false
+    },
+    {
+      "description": "Better Auth's plugins are versioned in lockstep with the core; a plugin ahead of the core fails at import.",
+      "matchPackageNames": ["better-auth", "/^@better-auth\\//"],
+      "groupName": "Better Auth"
     }
   ],
   "customManagers": [

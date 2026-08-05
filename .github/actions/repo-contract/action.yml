@@ -1,0 +1,30 @@
+name: Repo contract
+description: >-
+  Asserts the facts a repo has to declare about itself: the package manager and
+  its pins, the config lineage back to this repo, the install and coverage
+  policy, the hooks, the shape of its secrets, the docs spine, and a CI call
+  pinned by commit SHA. Every one of them is a string a repo can drift out of
+  silently, and each one that drifts turns another gate into a no-op.
+
+inputs:
+  working-directory:
+    description: Where the repository root is.
+    default: .
+  database:
+    description: The repo owns migrations, so it has to expose a db:migrate script.
+    default: "false"
+  static-site:
+    description: A marketing site with no domain to glossary and no decisions to record.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_DATABASE: ${{ inputs.database }}
+        INPUT_STATIC_SITE: ${{ inputs.static-site }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/repo-contract.ts"

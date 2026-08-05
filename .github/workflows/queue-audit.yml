@@ -1,0 +1,46 @@
+name: Queue audit
+
+# Called from a repo's own workflow on a schedule:
+#   jobs.audit.uses: gokayo43/dev-config/.github/workflows/queue-audit.yml@<sha>
+#
+# A queue nobody drains is deletion that feels responsible, and it decays
+# quietly: a label outside the vocabulary, an issue in no state, a commitment
+# whose trigger nobody wrote down. None of those fail anything on their own,
+# which is why they need a run of their own.
+on:
+  workflow_call:
+    inputs:
+      vocabulary:
+        description: Every label the repo may carry, space-separated.
+        type: string
+        default: needs-triage needs-info ready-for-agent ready-for-human roadmap commitment wontfix
+      state-labels:
+        description: The states an open issue may sit in, space-separated. Exactly one is required.
+        type: string
+        default: needs-triage needs-info ready-for-agent ready-for-human roadmap wontfix
+      commitment-label:
+        description: The label whose issues must state a Trigger in the body.
+        type: string
+        default: commitment
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - uses: gokayo43/dev-config/.github/actions/queue-audit@513ba37df57ac3cbf919a02ab03a49b5bf6e1b6b # v0.5.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        with:
+          vocabulary: ${{ inputs.vocabulary }}
+          state-labels: ${{ inputs.state-labels }}
+          commitment-label: ${{ inputs.commitment-label }}

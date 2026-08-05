@@ -1,0 +1,19 @@
+name: Suppression hygiene
+description: >-
+  Two ways work hides in a tree rather than in the queue: a lint directive that
+  suppresses a finding without saying why, and a checked-in list of things to do
+  that nobody can label, assign or close.
+
+inputs:
+  working-directory:
+    description: Where the repository root is.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/suppression-hygiene.ts"

@@ -1,0 +1,25 @@
+name: Compose lint
+description: >-
+  Holds a compose file to the deployment shape this box runs: every port bound
+  to the loopback behind nginx, every service memory-capped and probed, and a
+  one-shot migrate service every app waits on. These are the properties nobody
+  notices missing until the night the box is under load.
+
+inputs:
+  working-directory:
+    description: Where the repository root is.
+    default: .
+  file:
+    description: The compose file to read.
+    default: docker-compose.yml
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        COMPOSE_FILE_PATH: ${{ inputs.file }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/compose-lint.ts" "$COMPOSE_FILE_PATH"

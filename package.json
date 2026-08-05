@@ -14,11 +14,20 @@
     "knip.base.ts",
     "lighthouserc.json"
   ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "check": "bun run typecheck && bun test"
+  },
   "exports": {
     "./tsconfig.base.json": "./tsconfig.base.json",
     "./oxlint.base.json": "./oxlint.base.json",
     "./knip.base.ts": "./knip.base.ts",
     "./lighthouserc.json": "./lighthouserc.json"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "7.0.2"
   },
   "peerDependencies": {
     "eslint-import-resolver-typescript": ">=4",

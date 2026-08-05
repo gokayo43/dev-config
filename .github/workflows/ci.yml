@@ -21,6 +21,14 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
+      - run: bun install --frozen-lockfile
+
+      # The gates this repo ships are TypeScript, and their suite is what proves
+      # each one refuses a violating tree and passes a clean one. Every other
+      # repo's gate is only as honest as these two lanes.
+      - run: bun run typecheck
+      - run: bun test
+
       - name: Parse every JSON config
         run: |
           set -euo pipefail

@@ -1,8 +1,8 @@
 name: Lint workflows
 description: >-
   Runs actionlint over the calling repository's workflows, with shellcheck over
-  every run: block. actionlint finds `.github/workflows` itself; extra-paths is
-  for workflow files kept elsewhere.
+  every run: block, and holds every `uses:` to a commit SHA. actionlint finds
+  `.github/workflows` itself; extra-paths is for workflow files kept elsewhere.
 
 inputs:
   extra-paths:
@@ -30,3 +30,41 @@ runs:
           # shellcheck disable=SC2086
           "$RUNNER_TEMP/actionlint" -color $EXTRA_PATHS
         fi
+
+    # actionlint is silent on a floating tag, and a tag is a name its owner can
+    # repoint at any commit — including after the version was reviewed here.
+    # Composite actions are read too: they carry `uses:` of their own.
+    - name: Pin every action by commit SHA
+      shell: bash
+      env:
+        EXTRA_PATHS: ${{ inputs.extra-paths }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        files=(.github/workflows/*.yml .github/workflows/*.yaml .github/actions/*/action.yml)
+        shopt -u nullglob
+        if [ -n "$EXTRA_PATHS" ]; then
+          # Splitting is the point: EXTRA_PATHS is a list of files.
+          # shellcheck disable=SC2206
+          files+=($EXTRA_PATHS)
+        fi
+        status=0
+        for file in "${files[@]}"; do
+          while IFS= read -r hit; do
+            line=${hit%%:*}
+            value=${hit#*uses:}
+            value=${value%%#*}
+            value=$(printf '%s' "$value" | tr -d '[:space:]')
+            # A local action carries no ref, and a docker:// image is pinned by
+            # its own digest syntax rather than a git commit.
+            case "$value" in
+              ./* | docker://*) continue ;;
+            esac
+            ref=${value##*@}
+            if [ "$ref" = "$value" ] || ! printf '%s' "$ref" | grep -qE '^[0-9a-f]{40}$'; then
+              echo "::error file=$file,line=$line::pin by commit SHA with the tag as trailing comment: $value"
+              status=1
+            fi
+          done < <(grep -nE '^[[:space:]]*(- )?uses:' "$file" || true)
+        done
+        exit "$status"
