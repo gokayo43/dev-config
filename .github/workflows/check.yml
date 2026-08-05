@@ -46,7 +46,9 @@ on:
         type: string
         default: ""
       capacity-path:
-        description: A hot path to ramp alongside the health route, e.g. /api/things.
+        description: >-
+          Paths to ramp alongside the health route, e.g. /api/things — comma- or
+          newline-separated, since the route floor asks for every route the app serves.
         type: string
         default: ""
       capacity-report:
@@ -55,8 +57,9 @@ on:
         default: capacity-report
       route-allowlist:
         description: >-
-          Routes the capacity ramp is not expected to reach, as `METHOD /path` entries,
-          comma- or newline-separated. Each one's reason belongs in a comment beside it.
+          Routes the capacity ramp cannot cover, as `METHOD /path -- why` entries,
+          comma- or newline-separated. The reason is part of the entry, and an entry
+          without one is refused — the price a lint directive already pays.
         type: string
         default: ""
       timestamp-allowlist:
