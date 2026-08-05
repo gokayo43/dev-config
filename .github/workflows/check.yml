@@ -60,24 +60,24 @@ jobs:
           # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@04d2938c7e1368d79169426d944107c9a0674fbc # v0.8.2
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@04d2938c7e1368d79169426d944107c9a0674fbc # v0.8.2
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@04d2938c7e1368d79169426d944107c9a0674fbc # v0.8.2
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@04d2938c7e1368d79169426d944107c9a0674fbc # v0.8.2
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@04d2938c7e1368d79169426d944107c9a0674fbc # v0.8.2
+        uses: gokayo43/dev-config/.github/actions/compose-lint@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
 
       - run: bun install --frozen-lockfile
 
@@ -89,7 +89,7 @@ jobs:
       - run: bun run typecheck
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@04d2938c7e1368d79169426d944107c9a0674fbc # v0.8.2
+      - uses: gokayo43/dev-config/.github/actions/test-suite@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
 
   database:
     if: inputs.database
@@ -139,7 +139,7 @@ jobs:
       - if: inputs.build
         run: bun run build
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@04d2938c7e1368d79169426d944107c9a0674fbc # v0.8.2
+      - uses: gokayo43/dev-config/.github/actions/db-gate@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
         with:
           database-url: ${{ env.DATABASE_URL }}
           start-command: ${{ inputs.start-command }}
