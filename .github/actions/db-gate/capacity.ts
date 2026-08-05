@@ -1,4 +1,4 @@
-import { record } from "../_lib/gate.ts";
+import { isObject, kindOf, record } from "../_lib/gate.ts";
 
 export interface Summary {
   readonly metrics: Record<string, Record<string, number>>;
@@ -12,7 +12,18 @@ export interface Summary {
  */
 export function parseSummary(text: string): Summary {
   const parsed: unknown = JSON.parse(text);
-  const metrics = record(record(parsed)["metrics"]);
+  if (!isObject(parsed)) {
+    throw new Error(`the summary is not the k6 export shape: the top level is ${kindOf(parsed)}`);
+  }
+  // An absent metrics is a summary holding nothing, which the table reports as
+  // the run that measured nothing. One that is there and is not an object
+  // belongs to a file k6 did not write, and no arithmetic over it means
+  // anything — least of all the zero it would otherwise read as.
+  const found = parsed["metrics"];
+  if (found !== undefined && !isObject(found)) {
+    throw new Error(`the summary is not the k6 export shape: metrics is ${kindOf(found)}`);
+  }
+  const metrics = record(found);
   return {
     metrics: Object.fromEntries(
       Object.entries(metrics).map(([name, stats]) => [
@@ -41,10 +52,11 @@ function ms(value: number): string {
  * The measurement, for $GITHUB_STEP_SUMMARY — or nothing, when the ramp made no
  * requests and there is no number to record.
  *
- * That absence is the only failure. A latency bound would be measuring the
- * runner GitHub happened to give us, and a gate that fails on that gets
- * disabled within a month, so the numbers are published for trend comparison
- * and nothing here compares them to a target.
+ * That absence is the only failure this side of k6, which refuses a run whose
+ * requests mostly failed before the summary is read at all. A latency bound
+ * would be measuring the runner GitHub happened to give us, and a gate that
+ * fails on that gets disabled within a month, so the numbers are published for
+ * trend comparison and nothing here compares them to a target.
  */
 export function capacityTable(summary: Summary): string | undefined {
   const requests = summary.metrics["http_reqs"];
@@ -55,7 +67,10 @@ export function capacityTable(summary: Summary): string | undefined {
     "",
     "| Measurement | Value |",
     "| --- | --- |",
-    `| Sustained requests/s | ${stat(summary, "http_reqs", "rate").toFixed(1)} |`,
+    // The whole run over its whole duration, ramp-up and ramp-down included,
+    // which is the only rate k6's summary carries: below the plateau, and a
+    // trend datum rather than a throughput this app reached.
+    `| Mean requests/s (whole run incl. ramp) | ${stat(summary, "http_reqs", "rate").toFixed(1)} |`,
     `| Requests | ${stat(summary, "http_reqs", "count")} |`,
     `| Peak VUs | ${stat(summary, "vus_max", "max")} |`,
     `| Failed requests | ${(stat(summary, "http_req_failed", "value") * 100).toFixed(2)}% |`,

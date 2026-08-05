@@ -56,6 +56,14 @@ describe("stack gate", () => {
     expect(problems[0]).toContain(pick);
   });
 
+  // JSON.parse answers null as readily as an object, and the walk below goes
+  // straight to a dependency field of one.
+  test("a manifest that is JSON but not an object is named, not crashed on", async () => {
+    expect(await gate({ ...CLEAN, "package.json": "null" })).toEqual([
+      containing("package.json: is not a JSON object"),
+    ]);
+  });
+
   test("a name entry does not take its prefixed neighbours with it", async () => {
     // jest-expo is the Expo test preset and is the only way to run a
     // React Native suite; the bare `jest` entry must not reach it.

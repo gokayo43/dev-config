@@ -4,6 +4,7 @@ import {
   DEPENDENCY_FIELDS,
   isIgnored,
   isTracked,
+  jsonObjects,
   type Manifest,
   manifests,
   type Problem,
@@ -36,9 +37,23 @@ const EXEMPTIONS = {
 
 type Exemption = keyof typeof EXEMPTIONS;
 
-async function readJson(path: string): Promise<Record<string, unknown> | undefined> {
-  const file = Bun.file(path);
-  return (await file.exists()) ? ((await file.json()) as Record<string, unknown>) : undefined;
+interface Config {
+  /** Undefined whenever there is nothing to grade — `problems` says which of the two reasons. */
+  readonly contents: Record<string, unknown> | undefined;
+  readonly problems: readonly Problem[];
+}
+
+/**
+ * A JSON config this contract grades, or the problem standing in for it.
+ * Missing and unreadable are different states — only the first is fixed by
+ * writing the file — and neither leaves a caller fields to read.
+ */
+async function readJson(root: string, file: string): Promise<Config> {
+  if (!(await Bun.file(`${root}/${file}`).exists())) {
+    return { contents: undefined, problems: [{ file, message: `${file} is missing` }] };
+  }
+  const batch = await jsonObjects(root, [file]);
+  return { contents: batch.read[0]?.value, problems: batch.problems };
 }
 
 async function readText(path: string): Promise<string | undefined> {
@@ -136,12 +151,12 @@ async function checkLineage(
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
 
-  const tsconfig = await readJson(`${root}/tsconfig.json`);
-  if (tsconfig === undefined) {
-    problems.push({ file: "tsconfig.json", message: "tsconfig.json is missing" });
-  } else if (
+  const tsconfig = await readJson(root, "tsconfig.json");
+  problems.push(...tsconfig.problems);
+  if (
+    tsconfig.contents !== undefined &&
     !exempt &&
-    !extendsList(tsconfig["extends"]).includes(`${DEV_CONFIG}/tsconfig.base.json`)
+    !extendsList(tsconfig.contents["extends"]).includes(`${DEV_CONFIG}/tsconfig.base.json`)
   ) {
     problems.push({
       file: "tsconfig.json",
@@ -149,11 +164,10 @@ async function checkLineage(
     });
   }
 
-  const oxlintrc = await readJson(`${root}/.oxlintrc.json`);
-  if (oxlintrc === undefined) {
-    problems.push({ file: ".oxlintrc.json", message: ".oxlintrc.json is missing" });
-  } else {
-    const inherits = extendsList(oxlintrc["extends"]).some((entry) =>
+  const oxlintrc = await readJson(root, ".oxlintrc.json");
+  problems.push(...oxlintrc.problems);
+  if (oxlintrc.contents !== undefined) {
+    const inherits = extendsList(oxlintrc.contents["extends"]).some((entry) =>
       entry.endsWith(`${DEV_CONFIG}/oxlint.base.json`),
     );
     if (!inherits && !exempt) {

@@ -1,6 +1,8 @@
-import { inputs, report } from "../_lib/gate.ts";
+import { entry, inputs, report } from "../_lib/gate.ts";
 import { stackGate } from "./stack-gate.ts";
 
-const { "working-directory": root } = inputs("working-directory");
+await entry(async () => {
+  const { "working-directory": root } = inputs("working-directory");
 
-report(await stackGate(root, new URL("./stack-denylist.json", import.meta.url)));
+  report(await stackGate(root, new URL("./stack-denylist.json", import.meta.url)));
+});

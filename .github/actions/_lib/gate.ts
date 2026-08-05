@@ -32,6 +32,25 @@ export function notice(message: string): void {
 }
 
 /**
+ * The work a `*.main.ts` hands over, so that a gate which throws — an input the
+ * action forgot to pass, a database refusing the connection, a file that is not
+ * the shape it claims — reaches the log as the annotation GitHub renders on the
+ * step rather than as a stack trace in the raw output.
+ *
+ * It exits rather than returning, because a gate that dies mid-read may be
+ * holding something that keeps the runtime alive, and a step waiting on that
+ * costs the job's whole timeout to say what it already knows.
+ */
+export async function entry(run: () => Promise<void>): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    console.log(`::error::${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
+/**
  * The inputs the calling action.yml promises to set. A missing one is a wiring
  * bug in the action, and a gate that defaults it silently grades every repo
  * against a contract nobody chose.
@@ -61,9 +80,24 @@ export function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
+/**
+ * Whether there is an object here at all. `record` reads a field off whatever
+ * it is handed; this is for the boundary that has to refuse the value instead,
+ * because nothing below it can say anything true about a config that is `null`.
+ */
+export function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** What was there instead, for a diagnostic that has to say what it refused. */
+export function kindOf(value: unknown): string {
+  if (value === null) return "null";
+  return Array.isArray(value) ? "an array" : `a ${typeof value}`;
+}
+
 /** A space-separated action input, as a list. */
 export function list(value: string): string[] {
-  return value.split(/\s+/).filter((entry) => entry !== "");
+  return value.split(/\s+/).filter((item) => item !== "");
 }
 
 async function git(cwd: string, args: readonly string[]): Promise<number> {
@@ -153,18 +187,36 @@ export async function parseEach<T>(
 
 export type Manifest = Parsed<Record<string, unknown>>;
 
+/**
+ * Every one of these files as the object a JSON config has to be. `JSON.parse`
+ * answers `null`, a number or an array as readily as an object, and every
+ * reader downstream goes straight to a field — so the shape is settled here,
+ * where the file can still be named, rather than as a TypeError inside whichever
+ * check reached the value first.
+ */
+export async function jsonObjects(
+  root: string,
+  files: readonly string[],
+): Promise<Batch<Record<string, unknown>>> {
+  const parsed = await parseEach(root, files, (text) => JSON.parse(text) as unknown, "JSON");
+  const read: Manifest[] = [];
+  const problems = [...parsed.problems];
+  for (const { file, value } of parsed.read) {
+    if (isObject(value)) {
+      read.push({ file, value });
+    } else {
+      problems.push({ file, message: `is not a JSON object — the top level is ${kindOf(value)}` });
+    }
+  }
+  return { read, problems };
+}
+
 // Every package.json in the repo, root and workspaces alike. A git pathspec
 // matches a wildcard across "/", so the second pathspec below reaches any depth
 // while still requiring the whole final path segment: "apps/my-package.json"
 // does not match, and neither pathspec can return anything but a package.json.
 export async function manifests(root: string): Promise<Batch<Record<string, unknown>>> {
-  const files = await repoFiles(root, ["package.json", "*/package.json"]);
-  return await parseEach(
-    root,
-    files,
-    (text) => JSON.parse(text) as Record<string, unknown>,
-    "JSON",
-  );
+  return await jsonObjects(root, await repoFiles(root, ["package.json", "*/package.json"]));
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {

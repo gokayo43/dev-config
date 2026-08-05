@@ -457,9 +457,13 @@ actionlint is also silent on a floating tag, so the action carries a second step
 that reads every `uses:` in the workflows, in the composite actions, and in
 `extra-paths`, and fails anything whose ref is not a 40-character commit SHA. A
 tag is a name its owner can repoint at any commit, including after the version
-was read here. A `docker://` image is held to the same standard in its own
-syntax — `@sha256:` and not a tag — and only a local `./…` reference is skipped,
-because it is this repo's own tree at this commit and has no ref to pin.
+was read here. Only a local `./…` reference is skipped, because it is this
+repo's own tree at this commit and has no ref to pin.
+
+The images a job runs are read the same way: a `docker://` action, a job's
+`container:` in either spelling, and every `services.*.image`. Each is held to
+the digest rule — `@sha256:` and not a tag — since a service image is as much of
+a dependency as an action is, and its tag moves whenever it is repushed.
 
 There is no standalone `renovate-config-validator` package on npm; the binary
 ships inside `renovate`:

@@ -9,10 +9,18 @@ const SUMMARY = parseSummary(await Bun.file(new URL("./k6-summary.json", import.
 describe("capacity table", () => {
   test("a ramp that measured something records the number", () => {
     const table = capacityTable(SUMMARY) ?? "";
-    expect(table).toContain("Sustained requests/s");
     expect(table).toContain("22289.8");
     expect(table).toContain("Latency p(95)");
     expect(table).toContain("Latency p(99)");
+  });
+
+  // http_reqs.rate is the whole run divided by its whole duration, ramp-up and
+  // ramp-down included, so it sits below the plateau a row calling itself
+  // "sustained" was read as.
+  test("the requests/s row names the number it is", () => {
+    const table = capacityTable(SUMMARY) ?? "";
+    expect(table).toContain("Mean requests/s (whole run incl. ramp)");
+    expect(table).not.toContain("Sustained");
   });
 
   // The whole point of the gate: it asserts a measurement happened. A latency
@@ -62,5 +70,19 @@ describe("capacity table", () => {
 
   test("a summary that is not JSON at all throws rather than measuring nothing", () => {
     expect(() => parseSummary("not json")).toThrow();
+  });
+
+  // Each of these used to narrow silently to an empty metrics map, which the
+  // table reports as a ramp that made no requests — a diagnostic pointing at
+  // the app when the file is the problem.
+  test.each([
+    ["a summary that is null", "null", "the top level is null"],
+    ["a summary that is a number", "42", "the top level is a number"],
+    ["a summary that is an array", "[]", "the top level is an array"],
+    ["metrics that is not an object", '{"metrics":42}', "metrics is a number"],
+    ["metrics that is null", '{"metrics":null}', "metrics is null"],
+  ])("%s says so rather than looking like a run that measured nothing", (_, text, detail) => {
+    expect(() => parseSummary(text)).toThrow("the summary is not the k6 export shape");
+    expect(() => parseSummary(text)).toThrow(detail);
   });
 });

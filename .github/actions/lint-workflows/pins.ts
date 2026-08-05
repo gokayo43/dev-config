@@ -28,16 +28,43 @@ export function referencesIn(document: unknown): string[] {
   ];
 }
 
+/** `container: node:22` and `container: {image: node:22}` are one declaration, and a service is written the second way. */
+function imageOf(node: unknown): string[] {
+  if (typeof node === "string") return [node];
+  const image = record(node)["image"];
+  return typeof image === "string" ? [image] : [];
+}
+
+/**
+ * Every image a job runs in or beside: its container, and each of its services.
+ * Read off the jobs rather than walked the way `uses:` is — an image sits at
+ * exactly this depth, and a walk would take an action input that happens to be
+ * called `container` with it.
+ */
+export function imagesIn(document: unknown): string[] {
+  return Object.values(record(record(document)["jobs"])).flatMap((job) => {
+    const node = record(job);
+    return [
+      ...imageOf(node["container"]),
+      ...Object.values(record(node["services"])).flatMap(imageOf),
+    ];
+  });
+}
+
 export interface Reference {
   readonly file: string;
+  /** An image is held to the digest rule, an action to the commit rule. */
+  readonly kind: "action" | "image";
   readonly value: string;
 }
 
 export function unpinned(references: readonly Reference[]): Problem[] {
-  return references.flatMap(({ file, value }) => {
+  return references.flatMap(({ file, kind, value }) => {
     // A local action is this repo's own tree at this commit; there is no ref.
-    if (value.startsWith("./")) return [];
-    if (value.startsWith("docker://")) {
+    if (kind === "action" && value.startsWith("./")) return [];
+    // A job's image and a docker:// action are one kind of reference: a
+    // registry name, where only the digest names a build for good.
+    if (kind === "image" || value.startsWith("docker://")) {
       return DIGEST.test(value)
         ? []
         : [
@@ -72,13 +99,10 @@ export async function pinGate(root: string, extraPaths: readonly string[]): Prom
   const files = [...new Set([...own, ...extra.flat()])].toSorted((a, b) => a.localeCompare(b));
   const documents = await parseEach(root, files, (text) => Bun.YAML.parse(text), "YAML");
 
-  return [
-    ...missing,
-    ...documents.problems,
-    ...unpinned(
-      documents.read.flatMap(({ file, value }) =>
-        referencesIn(value).map((used) => ({ file, value: used })),
-      ),
-    ),
-  ];
+  const references: Reference[] = documents.read.flatMap(({ file, value }) => [
+    ...referencesIn(value).map((used) => ({ file, kind: "action" as const, value: used })),
+    ...imagesIn(value).map((image) => ({ file, kind: "image" as const, value: image })),
+  ]);
+
+  return [...missing, ...documents.problems, ...unpinned(references)];
 }

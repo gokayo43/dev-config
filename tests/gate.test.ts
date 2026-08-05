@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { join } from "node:path";
 
 import { inputs, notice, report } from "../.github/actions/_lib/gate.ts";
 
@@ -53,6 +54,34 @@ describe("annotations", () => {
     restore();
     expect(lines).toEqual(["::notice::exempt from 'ci-call'"]);
     expect(process.exitCode).toBe(0);
+  });
+});
+
+// A gate that throws dies as a stack trace on stderr, which GitHub renders on
+// no file and no step. Asked of every entry point at once, because the one
+// added next is the one that would go back to a stack trace.
+describe("entry points", () => {
+  const ACTIONS = new URL("../.github/actions/", import.meta.url).pathname;
+  const MAINS = [...new Bun.Glob("*/*.main.ts").scanSync({ cwd: ACTIONS })].toSorted((a, b) =>
+    a.localeCompare(b),
+  );
+
+  test("the suite found the entry points to ask", () => {
+    expect(MAINS.length).toBeGreaterThan(0);
+  });
+
+  // An inherited environment would hand these the inputs they read, so the
+  // environment is built rather than passed through: with none of them set,
+  // every entry point throws on the first input it asks for.
+  test.each(MAINS)("%s annotates what it died of", async (main) => {
+    const proc = Bun.spawn(["bun", join(ACTIONS, main)], {
+      env: { PATH: Bun.env["PATH"] ?? "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(1);
+    expect(stdout).toContain("::error::");
   });
 });
 

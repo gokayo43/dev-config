@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   ACTION_FILES,
+  imagesIn,
   pinGate,
   referencesIn,
   unpinned,
@@ -13,7 +14,15 @@ const COMMIT = "3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DIGEST = "sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416";
 
 function uses(...values: string[]): string[] {
-  return unpinned(values.map((value) => ({ file: "w.yml", value }))).map(({ message }) => message);
+  return unpinned(values.map((value) => ({ file: "w.yml", kind: "action", value }))).map(
+    ({ message }) => message,
+  );
+}
+
+function images(...values: string[]): string[] {
+  return unpinned(values.map((value) => ({ file: "w.yml", kind: "image", value }))).map(
+    ({ message }) => message,
+  );
 }
 
 describe("reading uses out of a document", () => {
@@ -41,6 +50,40 @@ describe("reading uses out of a document", () => {
       `oven-sh/setup-bun@${COMMIT}`,
       `owner/repo/.github/workflows/check.yml@${COMMIT}`,
     ]);
+  });
+});
+
+// An action is one of two things a job runs by reference; the images it runs
+// in and beside are the other, and they were read by nothing.
+describe("reading the images a job runs", () => {
+  test("both container spellings, and every service", () => {
+    const document = Bun.YAML.parse(
+      [
+        "jobs:",
+        "  a:",
+        "    container: node:22",
+        "    services:",
+        "      postgres:",
+        `        image: postgres:16-alpine@${DIGEST}`,
+        "      redis:",
+        "        image: redis:7-alpine",
+        "  b:",
+        "    container:",
+        "      image: oven/bun:1",
+        "    steps:",
+        `      - uses: actions/checkout@${COMMIT}`,
+      ].join("\n"),
+    );
+    expect(imagesIn(document).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      "node:22",
+      "oven/bun:1",
+      `postgres:16-alpine@${DIGEST}`,
+      "redis:7-alpine",
+    ]);
+  });
+
+  test("a document with no jobs has no images", () => {
+    expect(imagesIn(Bun.YAML.parse("runs:\n  using: composite\n"))).toEqual([]);
   });
 });
 
@@ -73,6 +116,14 @@ describe("pinning", () => {
     expect(uses("docker://alpine:3.22")).toEqual([containing("mutable image tag")]);
     expect(uses(`docker://alpine@${DIGEST}`)).toEqual([]);
   });
+
+  // A service is the same registry reference a docker:// action is, and a tag
+  // moves under it just as freely.
+  test("a job's image is held to the digest rule, not the commit rule", () => {
+    expect(images("postgres:16-alpine")).toEqual([containing("mutable image tag")]);
+    expect(images("postgres:16-alpine@sha256:short")).toEqual([containing("mutable image tag")]);
+    expect(images(`postgres:16-alpine@${DIGEST}`)).toEqual([]);
+  });
 });
 
 describe("the files read", () => {
@@ -93,6 +144,33 @@ describe("the files read", () => {
       ".github/workflows/lighthouse.yaml",
       "setup/ci.yml",
     ]);
+  });
+
+  // The gate walked `uses:` alone, so a job could run every action by SHA
+  // inside a service image that moves under it whenever the tag is repushed.
+  test("the images a job declares are read out of the file its actions are", async () => {
+    const workflow = (image: string): Tree => ({
+      ".gitignore": "node_modules\n",
+      ".github/workflows/db.yml": [
+        "jobs:",
+        "  check:",
+        "    container: oven/bun:1@" + DIGEST,
+        "    services:",
+        "      postgres:",
+        `        image: ${image}`,
+        "    steps:",
+        `      - uses: actions/checkout@${COMMIT}`,
+        "",
+      ].join("\n"),
+    });
+
+    const mutable = await pinGate(await materialise(workflow("postgres:16-alpine")), []);
+    expect(mutable.map(({ file, message }) => `${file ?? ""}: ${message}`)).toEqual([
+      containing(".github/workflows/db.yml: postgres:16-alpine is a mutable image tag"),
+    ]);
+    expect(await pinGate(await materialise(workflow(`postgres:16-alpine@${DIGEST}`)), [])).toEqual(
+      [],
+    );
   });
 
   test("an extra path that matches nothing is how a renamed file stops being checked", async () => {

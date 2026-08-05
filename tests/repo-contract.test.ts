@@ -286,6 +286,30 @@ describe("a manifest that will not parse", () => {
     expect(problems[0]).not.toContain("has no package.json");
   });
 
+  // JSON.parse answers null, a number or an array as readily as an object, and
+  // every check here goes straight to a field of one.
+  test.each(["null", "42", "[]", '"a string"'])(
+    "a root manifest that is JSON but not an object (%s) is refused, not crashed on",
+    async (text) => {
+      expect(await contract({ ...CLEAN, "package.json": text })).toEqual([
+        containing("is not a JSON object"),
+      ]);
+    },
+  );
+
+  test("a config that is JSON but not an object says so, rather than failing to extend", async () => {
+    expect(await contract({ ...CLEAN, "tsconfig.json": "null" })).toEqual([
+      containing("is not a JSON object"),
+    ]);
+  });
+
+  // The file is there, so "missing" is the wrong diagnostic and the crash it
+  // used to be was no diagnostic at all.
+  test("a config that will not parse is named", async () => {
+    const problems = await contract({ ...CLEAN, ".oxlintrc.json": "{ oops" });
+    expect(problems).toEqual([containing("is not valid JSON")]);
+  });
+
   test("an absent root still says it is absent", async () => {
     expect(await contract(without(CLEAN, "package.json"))).toEqual([
       containing("the repo has no package.json"),

@@ -109,9 +109,11 @@ runs:
           sleep 2
         done
 
-    # A number, not a threshold. See docs/gates/capacity.md: on a shared runner
-    # a latency bound measures the runner, and a gate that fails on that is one
-    # people turn off. The step fails only when no measurement was produced.
+    # A number, not a latency threshold. See docs/gates/capacity.md: on a shared
+    # runner a latency bound measures the runner, and a gate that fails on that
+    # is one people turn off. The step fails when k6 died or breached the one
+    # bound that is not the runner's — its failure rate — and when it produced
+    # no measurement to record.
     - name: Capacity ramp
       if: ${{ inputs.capacity == 'true' }}
       shell: bash

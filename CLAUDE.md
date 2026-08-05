@@ -59,9 +59,11 @@ exactly the commit its pins name. After tagging, bump `project-template`'s pins:
 Write the check as `.github/actions/<name>/<name>.ts`, exporting a function that
 returns `Problem[]` and takes whatever it reads — a root path, injected
 fetchers — as arguments. The entry point is a separate `<name>.main.ts` that
-`action.yml` runs: it reads the inputs through `inputs()`, which throws on a
-missing one, and calls `report()`. Splitting them is what lets the coverage
-floor mean something, since nothing can drive an entry point from a test.
+`action.yml` runs: it hands its whole body to `entry()`, so that a throw reaches
+the log as an annotation rather than a stack trace, reads the inputs through
+`inputs()`, which throws on a missing one, and calls `report()`. Splitting them
+is what lets the coverage floor mean something, since nothing can drive an entry
+point from a test.
 
 Add the fixture suite and the `docs/gates/` page in the same change, then wire
 it into `check.yml`. A diagnostic names what to do, not what went wrong.

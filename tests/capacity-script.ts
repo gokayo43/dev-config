@@ -25,12 +25,18 @@ const RAMP = new URL("../.github/actions/db-gate/capacity.js", import.meta.url).
 const PORT = 58231;
 const hits = new Map<string, number>();
 
+const ANSWERS = new Set(["/api/health", "/api/things"]);
+
+// Everything else 404s, which is what a mistyped capacity-path meets and what
+// the ramp's failure threshold is there to refuse.
 const server = Bun.serve({
   port: PORT,
   fetch(request) {
     const { pathname } = new URL(request.url);
     hits.set(pathname, (hits.get(pathname) ?? 0) + 1);
-    return Response.json({ status: "ok" });
+    return ANSWERS.has(pathname)
+      ? Response.json({ status: "ok" })
+      : new Response("no such route", { status: 404 });
   },
 });
 
@@ -38,14 +44,15 @@ const server = Bun.serve({
 // machine's throughput — the ramp shape is the action's business.
 const STAGE = "--stage=2s:5";
 
-async function ramp(
-  capacityPath: string | undefined,
-): Promise<Record<string, Record<string, number>>> {
+interface Ramp {
+  /** k6 exits 99 on a threshold it breached, which is the whole of the failure bound. */
+  readonly exitCode: number;
+  readonly metrics: Record<string, Record<string, number>>;
+}
+
+async function ramp(capacityPath: string | undefined, name: string): Promise<Ramp> {
   hits.clear();
-  const out = join(
-    tmpdir(),
-    `capacity-${capacityPath === undefined ? "absent" : capacityPath === "" ? "health" : "hot"}.json`,
-  );
+  const out = join(tmpdir(), `capacity-${name}.json`);
   const proc = Bun.spawn([k6, "run", "--quiet", STAGE, "--summary-export", out, RAMP], {
     env: {
       PATH: requireEnv("PATH"),
@@ -55,49 +62,62 @@ async function ramp(
     stdout: "pipe",
     stderr: "pipe",
   });
-  if ((await proc.exited) !== 0) {
-    throw new Error(`k6 failed: ${await new Response(proc.stderr).text()}`);
-  }
+  const exitCode = await proc.exited;
   const summary = (await Bun.file(out).json()) as {
     metrics: Record<string, Record<string, number>>;
   };
   await rm(out, { force: true });
-  return summary.metrics;
+  return { exitCode, metrics: summary.metrics };
 }
 
 function expect(condition: boolean, what: string): void {
   if (!condition) throw new Error(what);
 }
 
-const health = await ramp("");
+const health = await ramp("", "health");
 expect((hits.get("/api/health") ?? 0) > 0, "the health route was never rammed");
 expect(hits.size === 1, `only the health route should be hit, saw ${[...hits.keys()].join(", ")}`);
+expect(health.exitCode === 0, "a ramp against a server that answers 200 did not exit 0");
 expect(
-  (health["checks"]?.["fails"] ?? 1) === 0,
+  (health.metrics["checks"]?.["fails"] ?? 1) === 0,
   "a check failed against a server that answers everything",
 );
 
 // The variable is absent when a person runs this by hand, and the branch used
 // to build a URL ending in the literal "undefined".
-const absent = await ramp(undefined);
+const absent = await ramp(undefined, "absent");
 expect(
   hits.size === 1,
   `an absent CAPACITY_PATH must ramp the health route alone, saw ${[...hits.keys()].join(", ")}`,
 );
 expect(
-  (absent["checks"]?.["fails"] ?? 1) === 0,
+  (absent.metrics["checks"]?.["fails"] ?? 1) === 0,
   "an absent CAPACITY_PATH produced a failing request",
 );
 
-const both = await ramp("/api/things");
+const both = await ramp("/api/things", "hot");
 expect(
   (hits.get("/api/health") ?? 0) > 0,
   "the health route was dropped when a hot path was given",
 );
 expect((hits.get("/api/things") ?? 0) > 0, "the hot path was never rammed — the branch is dead");
+expect(both.exitCode === 0, "a ramp against two routes that answer 200 did not exit 0");
 expect(
-  (both["http_reqs"]?.["count"] ?? 0) > (health["http_reqs"]?.["count"] ?? 0) / 2,
+  (both.metrics["http_reqs"]?.["count"] ?? 0) > (health.metrics["http_reqs"]?.["count"] ?? 0) / 2,
   "the two-URL ramp made suspiciously few requests",
+);
+
+// A capacity-path with a typo in it: k6 keeps ramping, every check fails, and
+// checks reach no exit code. Without the failure threshold this run publishes
+// the throughput of a 404 as the number the trend is read against.
+const typo = await ramp("/api/thigns", "typo");
+expect(
+  typo.exitCode === 99,
+  `a ramp where half the requests 404 exited ${typo.exitCode} — the failure threshold is bounding nothing`,
+);
+expect(
+  (typo.metrics["http_req_failed"]?.["value"] ?? 0) > 0.1,
+  "the run k6 refused did not have the failure rate the threshold names",
 );
 
 await server.stop(true);
