@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { stackGate } from "../.github/actions/stack-gate/stack-gate.ts";
-import { discard, materialise, type Tree } from "./tree.ts";
+import { discard, materialise, trackThenDelete, type Tree } from "./tree.ts";
 
 const DENYLIST = new URL(
   "../.github/actions/stack-gate/stack-denylist.json",
@@ -88,6 +88,18 @@ describe("stack gate", () => {
       "node_modules/left-pad/package.json": JSON.stringify({ dependencies: { mobx: "6.15.0" } }),
     });
     expect(problems).toEqual([]);
+  });
+
+  test("a manifest deleted from the worktree is not read out of the index", async () => {
+    // The scaffolder's last act is to delete itself and its staging tree, so a
+    // scaffolded repo's index still lists package.json files that are gone.
+    const root = await materialise({
+      ...CLEAN,
+      "setup/monorepo/apps/api/package.json": JSON.stringify({ dependencies: { ioredis: "5.9.1" } }),
+    });
+    roots.push(root);
+    await trackThenDelete(root, "setup");
+    expect(await stackGate(root, DENYLIST)).toEqual([]);
   });
 
   test("a recorded deviation unlocks the entry that names it", async () => {

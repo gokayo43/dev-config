@@ -27,6 +27,12 @@ export async function discard(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true });
 }
 
+/** Tracks a file and then deletes it, which is what a scaffolder that removes itself leaves behind. */
+export async function trackThenDelete(root: string, path: string): Promise<void> {
+  await run(root, ["add", "--force", "--", path]);
+  await rm(join(root, path), { recursive: true, force: true });
+}
+
 async function run(cwd: string, args: readonly string[]): Promise<void> {
   const proc = Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "pipe" });
   if ((await proc.exited) !== 0) {

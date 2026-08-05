@@ -30,10 +30,14 @@ async function git(cwd: string, args: readonly string[]): Promise<number> {
 }
 
 /**
- * The files a gate looks at: tracked, plus untracked ones git would keep. Gates
- * run against trees a scaffolder has just written into, where the new files are
- * untracked, and beside build output that must stay out — which is exactly the
- * set .gitignore already describes.
+ * The files a gate looks at: what is on disk, minus what .gitignore describes.
+ * Gates run against trees a scaffolder has just written into, where the new
+ * files are untracked, and beside build output that must stay out — so the
+ * listing is git's rather than a walk of the filesystem.
+ *
+ * The existence filter is the other half of that: `--cached` still lists a file
+ * deleted from the worktree, which is precisely what a scaffolder that removes
+ * itself leaves behind.
  */
 export async function repoFiles(root: string, pathspecs: readonly string[]): Promise<string[]> {
   const proc = Bun.spawn(
@@ -42,7 +46,9 @@ export async function repoFiles(root: string, pathspecs: readonly string[]): Pro
   );
   const stdout = await new Response(proc.stdout).text();
   if ((await proc.exited) !== 0) throw new Error(`git ls-files failed in ${root}`);
-  return stdout.split("\0").filter((path) => path !== "");
+  const listed = stdout.split("\0").filter((path) => path !== "");
+  const present = await Promise.all(listed.map((path) => Bun.file(`${root}/${path}`).exists()));
+  return listed.filter((_, index) => present[index] === true);
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {
