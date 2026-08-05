@@ -1,6 +1,6 @@
 {
   "name": "@gokayo43/dev-config",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Shared TypeScript, oxlint, oxfmt, knip, Renovate and Lighthouse configuration for Bun projects.",
   "license": "MIT",
   "repository": {
