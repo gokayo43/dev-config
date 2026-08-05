@@ -23,6 +23,10 @@ jobs:
 
       - name: Parse every JSON config
         run: |
+          set -euo pipefail
+          mapfile -t files < <(git ls-files '*.json')
+          # The ${} below are JS template literals, not shell expansions.
+          # shellcheck disable=SC2016
           node -e '
             const { readFileSync } = require("node:fs");
             for (const file of process.argv.slice(1)) {
@@ -33,7 +37,7 @@ jobs:
                 process.exitCode = 1;
               }
             }
-          ' $(git ls-files "*.json")
+          ' "${files[@]}"
 
       # check.yml and the composite actions are the executable half of this
       # repo: a schema error in one of them breaks every consumer at once.
@@ -51,26 +55,35 @@ jobs:
           "$RUNNER_TEMP/actionlint" -color .github/workflows/*.yml
 
       # actionlint only reads workflows — handed an action.yml it reports a
-      # workflow with no `jobs`. So the composites are checked for what silently
-      # breaks them: a run step with no shell never runs the script it carries.
+      # workflow with no `jobs`. So the composites are checked here for what
+      # silently breaks them (a run step with no shell never runs the script it
+      # carries) and their scripts go through the same shellcheck that
+      # actionlint runs over a workflow's.
       - name: Check the composite actions
         run: |
           set -euo pipefail
+          mapfile -t actions < <(git ls-files '.github/actions/*/action.yml')
+          # The ${} below are JS template literals, not shell expansions.
+          # shellcheck disable=SC2016
           bun -e '
+            let index = 0;
             for (const file of Bun.argv.slice(1)) {
               const action = Bun.YAML.parse(await Bun.file(file).text());
               const problems = [];
               if (!action.name || !action.description) problems.push("needs a name and a description");
               if (action.runs?.using !== "composite") problems.push("runs.using must be composite");
               for (const step of action.runs?.steps ?? []) {
-                if (step.run && !step.shell) problems.push(`step "${step.name ?? step.run.split("\n")[0]}" has run without shell`);
+                if (!step.run) continue;
+                if (!step.shell) problems.push(`step "${step.name ?? step.run.split("\n")[0]}" has run without shell`);
+                await Bun.write(`${process.env.RUNNER_TEMP}/composite-${index++}.sh`, step.run);
               }
               for (const problem of problems) {
                 console.log(`::error file=${file}::${problem}`);
                 process.exitCode = 1;
               }
             }
-          ' $(git ls-files '.github/actions/*/action.yml')
+          ' "${actions[@]}"
+          shellcheck --shell=bash "$RUNNER_TEMP"/composite-*.sh
 
       - name: Validate the Renovate preset
         # Deliberately unpinned: the preset has to hold against the Renovate that runs it today.
@@ -78,6 +91,9 @@ jobs:
 
       - name: Check the Lighthouse budget
         run: |
+          set -euo pipefail
+          # The ${} below are JS template literals, not shell expansions.
+          # shellcheck disable=SC2016
           node -e '
             const assert = require("node:assert/strict");
             const { readFileSync } = require("node:fs");
