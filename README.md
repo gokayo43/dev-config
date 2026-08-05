@@ -381,7 +381,7 @@ concurrency:
 
 jobs:
   check:
-    uses: gokayo43/dev-config/.github/workflows/check.yml@<commit sha> # v0.3.0
+    uses: gokayo43/dev-config/.github/workflows/check.yml@ed1409f176c69d21f93577889d191a5a514c1961 # v0.3.0
     with:
       build: true
       database: true
