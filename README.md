@@ -325,7 +325,11 @@ coverageSkipTestFiles = true
 ```
 
 `bun test` exits non-zero below the threshold, which is what makes it a gate
-rather than a report.
+rather than a report. Two properties of it cost a probe to discover: the breach
+is not printed — a run that reports every test passing and still exits 1 is
+this — and the threshold is applied to **every file**, not to the total. So the
+floor goes below the least-covered file, and a repo whose summary line reads 86%
+can still be failing on one file at 64%.
 
 0.75 is a floor, not a target: it is set at or below what the repo already
 covers, and it is raised only after the coverage is there. A floor above current
