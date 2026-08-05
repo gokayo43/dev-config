@@ -30,6 +30,12 @@ inputs:
       The artifact name for the k6 summary. A matrix that ramps more than one
       leg gives each its own, since an artifact name may only be claimed once.
     default: capacity-report
+  route-allowlist:
+    description: >-
+      Routes the ramp is not expected to reach, as `METHOD /path` entries
+      matching the app's own route table, comma- or newline-separated. The
+      reason for each belongs in a comment beside the input.
+    default: ""
   timestamp-allowlist:
     description: >-
       schema.table.column entries whose value really is a wall-clock reading
@@ -84,6 +90,10 @@ runs:
         HEALTH_URL: ${{ inputs.health-url }}
         SITE_URL: http://localhost
         BETTER_AUTH_SECRET: ci-not-a-secret-ci-not-a-secret-ci
+        # The app names the routes it serves, and the ones the ramp reaches, on
+        # the stdout this step is already capturing. Only under the ramp: it is
+        # an instrument for the coverage floor, not an access log.
+        ROUTE_LOG: ${{ inputs.capacity }}
       run: |
         set -euo pipefail
         bash -c "$START_COMMAND" > "$RUNNER_TEMP/server.log" 2>&1 &
@@ -137,6 +147,19 @@ runs:
           --summary-export "$RUNNER_TEMP/capacity.json" "$script"
         INPUT_SUMMARY_FILE="$RUNNER_TEMP/capacity.json" INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
           bun "$GITHUB_ACTION_PATH/capacity.main.ts"
+
+    # The floor, not a realism claim: a route no request reached has never been
+    # under load at all, which is the same thing the coverage threshold catches
+    # about a module no test imports.
+    - name: Every route the ramp reaches
+      if: ${{ inputs.capacity == 'true' }}
+      shell: bash
+      env:
+        INPUT_SERVER_LOG: ${{ runner.temp }}/server.log
+        INPUT_ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/route-coverage.main.ts"
 
     # A ramp that failed on the way to a number is exactly when the partial
     # summary is worth having; a cancelled run has nothing to say.

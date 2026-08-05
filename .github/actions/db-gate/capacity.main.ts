@@ -1,22 +1,15 @@
 import { appendFile } from "node:fs/promises";
 
 import { entry, inputs, report } from "../_lib/gate.ts";
-import { capacityTable, parseSummary } from "./capacity.ts";
+import { capacity, parseSummary } from "./capacity.ts";
 
 await entry(async () => {
   const read = inputs("summary-file", "step-summary");
 
-  const table = capacityTable(parseSummary(await Bun.file(read["summary-file"]).text()));
+  const { table, problems } = capacity(parseSummary(await Bun.file(read["summary-file"]).text()));
+  // Published even for a run this step is about to fail: the table is what says
+  // which way the ramp went wrong.
   if (table !== undefined) await appendFile(read["step-summary"], table);
 
-  report(
-    table === undefined
-      ? [
-          {
-            message:
-              "the capacity ramp produced no requests — k6 ran but measured nothing, so there is no number to record",
-          },
-        ]
-      : [],
-  );
+  report(problems);
 });

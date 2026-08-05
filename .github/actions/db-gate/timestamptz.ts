@@ -38,17 +38,6 @@ export function timestamptzGate(
     }));
 }
 
-/**
- * Comma- or newline-separated, not space-separated: a quoted identifier may
- * contain a space, and `public.audit log.at` is one entry rather than two.
- */
-export function allowlistFrom(value: string): string[] {
-  return value
-    .split(/[,\n]/)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry !== "");
-}
-
 // Every schema except the catalogue's own, not just `public`: a drizzle
 // `pgSchema()` table lives elsewhere and is no less wrong for it. That does
 // include a schema an extension installed — a false positive is a line in the

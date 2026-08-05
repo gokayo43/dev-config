@@ -36,19 +36,31 @@ function imageOf(node: unknown): string[] {
 }
 
 /**
- * Every image a job runs in or beside: its container, and each of its services.
- * Read off the jobs rather than walked the way `uses:` is — an image sits at
- * exactly this depth, and a walk would take an action input that happens to be
- * called `container` with it.
+ * A Docker container action names its image in its metadata rather than in a
+ * `uses:`. Only the `docker://` form is a registry reference — every other
+ * value is a Dockerfile in the repo, which is this tree at this commit and has
+ * nothing to pin.
+ */
+function actionImageOf(document: unknown): string[] {
+  const image = record(record(document)["runs"])["image"];
+  return typeof image === "string" && image.startsWith("docker://") ? [image] : [];
+}
+
+/**
+ * Every image a document declares: a job's container, each of its services, and
+ * a Docker action's own. Read off the jobs and the metadata rather than walked
+ * the way `uses:` is — an image sits at exactly these depths, and a walk would
+ * take an action input that happens to be called `container` with it.
  */
 export function imagesIn(document: unknown): string[] {
-  return Object.values(record(record(document)["jobs"])).flatMap((job) => {
+  const jobs = Object.values(record(record(document)["jobs"])).flatMap((job) => {
     const node = record(job);
     return [
       ...imageOf(node["container"]),
       ...Object.values(record(node["services"])).flatMap(imageOf),
     ];
   });
+  return [...jobs, ...actionImageOf(document)];
 }
 
 export interface Reference {

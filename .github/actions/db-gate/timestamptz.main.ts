@@ -1,12 +1,7 @@
 import { SQL } from "bun";
 
-import { entry, inputs, report } from "../_lib/gate.ts";
-import {
-  allowlistFrom,
-  timestamptzGate,
-  WALL_CLOCK_QUERY,
-  type WallClockColumn,
-} from "./timestamptz.ts";
+import { allowlistFrom, entry, inputs, report } from "../_lib/gate.ts";
+import { timestamptzGate, WALL_CLOCK_QUERY, type WallClockColumn } from "./timestamptz.ts";
 
 await entry(async () => {
   const read = inputs("timestamp-allowlist");

@@ -53,6 +53,12 @@ on:
         description: The artifact name for the k6 summary, for a matrix that ramps more than one leg.
         type: string
         default: capacity-report
+      route-allowlist:
+        description: >-
+          Routes the capacity ramp is not expected to reach, as `METHOD /path` entries,
+          comma- or newline-separated. Each one's reason belongs in a comment beside it.
+        type: string
+        default: ""
       timestamp-allowlist:
         description: schema.table.column entries whose value is a wall-clock reading rather than an instant, comma- or newline-separated.
         type: string
@@ -176,3 +182,4 @@ jobs:
           capacity-script: ${{ inputs.capacity-script }}
           capacity-path: ${{ inputs.capacity-path }}
           capacity-report: ${{ inputs.capacity-report }}
+          route-allowlist: ${{ inputs.route-allowlist }}

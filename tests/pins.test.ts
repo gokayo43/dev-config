@@ -25,6 +25,18 @@ function images(...values: string[]): string[] {
   );
 }
 
+/** A Docker container action's metadata, which names its image where no `uses:` can reach it. */
+function dockerAction(image: string): unknown {
+  return Bun.YAML.parse(`name: x\ndescription: y\nruns:\n  using: docker\n  image: ${image}\n`);
+}
+
+function dockerActionTree(image: string): Tree {
+  return {
+    ".gitignore": "node_modules\n",
+    ".github/actions/dockery/action.yml": `name: x\ndescription: y\nruns:\n  using: docker\n  image: ${image}\n`,
+  };
+}
+
 describe("reading uses out of a document", () => {
   // Each of these was a hole in the pattern this replaced: extra spacing after
   // the dash, a quoted value, a job-level `uses:` for a reusable workflow, and
@@ -84,6 +96,16 @@ describe("reading the images a job runs", () => {
 
   test("a document with no jobs has no images", () => {
     expect(imagesIn(Bun.YAML.parse("runs:\n  using: composite\n"))).toEqual([]);
+  });
+
+  // A Docker container action names its image in metadata rather than in a
+  // `uses:`, so neither walk reached it and its tag moved freely.
+  test("a docker action's image is read off its metadata", () => {
+    expect(imagesIn(dockerAction("docker://alpine:3.22"))).toEqual(["docker://alpine:3.22"]);
+    // The Dockerfile form names a build in the repo at this commit, not a
+    // registry reference, so there is no digest to ask for.
+    expect(imagesIn(dockerAction("Dockerfile"))).toEqual([]);
+    expect(imagesIn(dockerAction("./docker/Dockerfile"))).toEqual([]);
   });
 });
 
@@ -171,6 +193,17 @@ describe("the files read", () => {
     expect(await pinGate(await materialise(workflow(`postgres:16-alpine@${DIGEST}`)), [])).toEqual(
       [],
     );
+  });
+
+  test("a docker action's image is refused by the file that declares it", async () => {
+    const mutable = await pinGate(await materialise(dockerActionTree("docker://alpine:3.22")), []);
+    expect(mutable.map(({ file, message }) => `${file ?? ""}: ${message}`)).toEqual([
+      containing(".github/actions/dockery/action.yml: docker://alpine:3.22 is a mutable image tag"),
+    ]);
+    expect(
+      await pinGate(await materialise(dockerActionTree(`docker://alpine@${DIGEST}`)), []),
+    ).toEqual([]);
+    expect(await pinGate(await materialise(dockerActionTree("Dockerfile")), [])).toEqual([]);
   });
 
   test("an extra path that matches nothing is how a renamed file stops being checked", async () => {

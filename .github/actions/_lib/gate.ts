@@ -100,6 +100,18 @@ export function list(value: string): string[] {
   return value.split(/\s+/).filter((item) => item !== "");
 }
 
+/**
+ * An allowlist input, as a list. Comma- or newline-separated rather than
+ * space-separated, because an entry may contain a space: a quoted SQL
+ * identifier, or the method and path of a route.
+ */
+export function allowlistFrom(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter((item) => item !== "");
+}
+
 async function git(cwd: string, args: readonly string[]): Promise<number> {
   const proc = Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "ignore" });
   return await proc.exited;

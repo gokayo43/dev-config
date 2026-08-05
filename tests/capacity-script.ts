@@ -108,16 +108,18 @@ expect(
 );
 
 // A capacity-path with a typo in it: k6 keeps ramping, every check fails, and
-// checks reach no exit code. Without the failure threshold this run publishes
-// the throughput of a 404 as the number the trend is read against.
+// checks reach no exit code — the run is a clean exit carrying the throughput
+// of a 404. The bound that refuses it lives in the step that reads the summary,
+// so what this proves is the seam it reads across: the field the failures land
+// in, and that they land there rather than in the exit code.
 const typo = await ramp("/api/thigns", "typo");
 expect(
-  typo.exitCode === 99,
-  `a ramp where half the requests 404 exited ${typo.exitCode} — the failure threshold is bounding nothing`,
+  typo.exitCode === 0,
+  `a ramp against a 404 exited ${typo.exitCode} — the shipped script declares no threshold, so the summary is what carries the failures`,
 );
 expect(
   (typo.metrics["http_req_failed"]?.["value"] ?? 0) > 0.1,
-  "the run k6 refused did not have the failure rate the threshold names",
+  "half the ramp's requests 404d and http_req_failed.value did not record it — the gate reads that field",
 );
 
 await server.stop(true);

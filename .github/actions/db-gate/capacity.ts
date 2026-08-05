@@ -1,4 +1,4 @@
-import { isObject, kindOf, record } from "../_lib/gate.ts";
+import { isObject, kindOf, type Problem, record } from "../_lib/gate.ts";
 
 export interface Summary {
   readonly metrics: Record<string, Record<string, number>>;
@@ -51,14 +51,8 @@ function ms(value: number): string {
 /**
  * The measurement, for $GITHUB_STEP_SUMMARY — or nothing, when the ramp made no
  * requests and there is no number to record.
- *
- * That absence is the only failure this side of k6, which refuses a run whose
- * requests mostly failed before the summary is read at all. A latency bound
- * would be measuring the runner GitHub happened to give us, and a gate that
- * fails on that gets disabled within a month, so the numbers are published for
- * trend comparison and nothing here compares them to a target.
  */
-export function capacityTable(summary: Summary): string | undefined {
+function capacityTable(summary: Summary): string | undefined {
   const requests = summary.metrics["http_reqs"];
   if (requests === undefined || (requests["count"] ?? 0) === 0) return undefined;
 
@@ -83,4 +77,54 @@ export function capacityTable(summary: Summary): string | undefined {
     '"how much load does this hold" comes from a ramp against the deploy.',
     "",
   ].join("\n");
+}
+
+/**
+ * A tenth of the ramp's requests. Latency and throughput belong to the runner
+ * GitHub happened to give us, and a gate that fails on those gets disabled
+ * within a month — but a request the app refused is refused on any machine, so
+ * this one bound says something about the commit.
+ */
+const FAILURE_BOUND = 0.1;
+
+export interface Capacity {
+  /** The table for $GITHUB_STEP_SUMMARY, absent when the ramp measured nothing. */
+  readonly table: string | undefined;
+  readonly problems: Problem[];
+}
+
+/**
+ * What the step publishes and what it fails on, from the one file k6 leaves
+ * behind. The bound lives here rather than in the shipped script's thresholds
+ * because `capacity-script` replaces that file entirely: a repo ramping with a
+ * script of its own would otherwise publish the throughput of its own error
+ * page, and the rule that decides what counts as a measurement would have two
+ * homes that could disagree.
+ */
+export function capacity(summary: Summary): Capacity {
+  const table = capacityTable(summary);
+  if (table === undefined) {
+    return {
+      table,
+      problems: [
+        {
+          message:
+            "the capacity ramp produced no requests — k6 ran but measured nothing, so there is no number to record",
+        },
+      ],
+    };
+  }
+
+  const failed = stat(summary, "http_req_failed", "value");
+  return {
+    table,
+    problems:
+      failed > FAILURE_BOUND
+        ? [
+            {
+              message: `${(failed * 100).toFixed(2)}% of the ramp's requests failed, over the ${(FAILURE_BOUND * 100).toFixed(0)}% this gate allows — the published number is the throughput of whatever answered, so fix the app or the path the scenario ramps`,
+            },
+          ]
+        : [],
+  };
 }

@@ -461,9 +461,12 @@ was read here. Only a local `./…` reference is skipped, because it is this
 repo's own tree at this commit and has no ref to pin.
 
 The images a job runs are read the same way: a `docker://` action, a job's
-`container:` in either spelling, and every `services.*.image`. Each is held to
-the digest rule — `@sha256:` and not a tag — since a service image is as much of
-a dependency as an action is, and its tag moves whenever it is repushed.
+`container:` in either spelling, every `services.*.image`, and the `runs.image`
+of a Docker container action. Each is held to the digest rule — `@sha256:` and
+not a tag — since an image is as much of a dependency as an action is, and its
+tag moves whenever it is repushed. An action's `runs.image` that names a
+`Dockerfile` is skipped: that is a build from this tree at this commit, with no
+registry reference to pin.
 
 There is no standalone `renovate-config-validator` package on npm; the binary
 ships inside `renovate`:

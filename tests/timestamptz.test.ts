@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  allowlistFrom,
-  timestamptzGate,
-  type WallClockColumn,
-} from "../.github/actions/db-gate/timestamptz.ts";
+import { allowlistFrom } from "../.github/actions/_lib/gate.ts";
+import { timestamptzGate, type WallClockColumn } from "../.github/actions/db-gate/timestamptz.ts";
 
 import { containing } from "./matchers.ts";
 

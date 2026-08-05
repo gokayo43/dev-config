@@ -2,10 +2,11 @@
 // `capacity-script` at its own file instead; this one exists so that turning
 // the gate on costs one input rather than a k6 script nobody has written yet.
 //
-// Deliberately no latency threshold: on a shared CI runner a latency bound is a
-// coin toss, and a gate people disable is worse than a number people read. The
-// numbers go to the summary; the one bound below is the one that is not the
-// runner's to fail.
+// Deliberately no thresholds: on a shared CI runner a latency bound is a coin
+// toss, and a gate people disable is worse than a number people read. The one
+// bound that is not the runner's — the share of requests the app refused — is
+// held by the step that reads the summary, so that it binds a repo ramping with
+// a script of its own too. See docs/gates/capacity.md.
 import http from "k6/http";
 import { check } from "k6";
 
@@ -21,11 +22,6 @@ export const options = {
     { duration: "30s", target: 20 },
     { duration: "10s", target: 0 },
   ],
-  // A request the app refused is refused on any machine, so this bound says
-  // nothing about the runner. Checks do not reach the exit code, so without it
-  // a mistyped capacity-path ramps a 404 route and publishes the throughput of
-  // the error page as the measurement.
-  thresholds: { http_req_failed: ["rate<0.10"] },
 };
 
 export default function () {
