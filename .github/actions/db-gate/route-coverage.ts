@@ -1,14 +1,8 @@
 import { isObject, type Problem } from "../_lib/gate.ts";
 
-/** A route as both halves of the contract name it: the router's own pattern, not a URL. */
-interface Route {
-  readonly method: string;
-  readonly path: string;
-}
-
 /**
  * The app's half of the floor, printed on stdout — which the boot step already
- * captures — under the flag the ramp sets:
+ * captures:
  *
  * - once at boot, `{"routeTable":[{"method","path"},…]}`: every route it serves;
  * - the first time each route serves a request, `{"routeServed":{"method","path"}}`.
@@ -22,36 +16,82 @@ interface Route {
 const TABLE = "routeTable";
 const SERVED = "routeServed";
 
-function routeOf(value: unknown): Route[] {
+/** A route as both halves of the contract name it: the router's own pattern, not a URL. */
+interface Route {
+  readonly method: string;
+  readonly path: string;
+}
+
+interface Read {
+  readonly routes: Route[];
+  readonly problems: Problem[];
+}
+
+function readRoute(value: unknown, source: string): Read {
   const node = isObject(value) ? value : {};
   const { method, path } = node;
-  return typeof method === "string" && typeof path === "string" ? [{ method, path }] : [];
+  if (typeof method === "string" && typeof path === "string") {
+    return { routes: [{ method, path }], problems: [] };
+  }
+  // Dropping this quietly would shrink the floor to whatever the app happened
+  // to spell correctly, which is the one failure a floor may not have.
+  return {
+    routes: [],
+    problems: [
+      {
+        message: `${source} names ${JSON.stringify(value)}, which is not a {"method","path"} pair — the table is what the ramp is measured against, so an entry that will not read is a hole in the floor`,
+      },
+    ],
+  };
+}
+
+function parsed(line: string): unknown {
+  try {
+    return JSON.parse(line);
+  } catch {
+    // A line of the app's own that merely looks like JSON.
+    return undefined;
+  }
+}
+
+export interface Log {
+  /** Everything the app has printed, which is where the table it announced at boot sits. */
+  readonly all: string;
+  /** What it printed while the ramp ran, which is the only traffic that counts as coverage. */
+  readonly underRamp: string;
 }
 
 /**
  * The lines the app printed, out of everything else in the log. Read per line
  * and by key rather than by position: the file holds the migrate output, the
  * app's own log records and whatever the runtime prints at boot.
+ *
+ * The table is read from the whole log, because it is announced once at boot.
+ * What counts as covered is read from the ramp's window alone — the app answers
+ * the boot step's health poll too, and a route reached by a curl this action
+ * made is not a route the ramp exercised.
  */
-function linesOf(log: string): { table: Route[]; served: Route[] } {
-  const table: Route[] = [];
-  const served: Route[] = [];
-  for (const line of log.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("{")) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      // A line of the app's own that merely looks like JSON.
-      continue;
+function linesOf(log: Log): { table: Read; served: Route[] } {
+  const routes: Route[] = [];
+  const problems: Problem[] = [];
+  for (const line of log.all.split("\n")) {
+    const node = parsed(line.trim());
+    const declared = isObject(node) ? node[TABLE] : undefined;
+    if (!Array.isArray(declared)) continue;
+    for (const entry of declared) {
+      const read = readRoute(entry, "the app's route table");
+      routes.push(...read.routes);
+      problems.push(...read.problems);
     }
-    if (!isObject(parsed)) continue;
-    const declared = parsed[TABLE];
-    if (Array.isArray(declared)) table.push(...declared.flatMap(routeOf));
-    if (SERVED in parsed) served.push(...routeOf(parsed[SERVED]));
   }
-  return { table, served };
+
+  const served: Route[] = [];
+  for (const line of log.underRamp.split("\n")) {
+    const node = parsed(line.trim());
+    if (isObject(node) && SERVED in node) served.push(...readRoute(node[SERVED], SERVED).routes);
+  }
+
+  return { table: { routes, problems }, served };
 }
 
 function key({ method, path }: Route): string {
@@ -59,13 +99,14 @@ function key({ method, path }: Route): string {
 }
 
 /**
- * An allowlist entry as it compares to a route. A method is a fixed vocabulary
- * and reads as well in either case; a path is a path, and `/Presets` is not
- * `/presets` to any router.
+ * An allowlist entry as the route it waives, or nothing when it is not one. A
+ * method is a fixed vocabulary and reads as well in either case; a path is a
+ * path, and `/Presets` is not `/presets` to any router.
  */
-function entryKey(entry: string): string {
-  const [method = "", ...rest] = entry.split(/\s+/);
-  return [method.toUpperCase(), ...rest].join(" ");
+function entryFor(entry: string): Route | undefined {
+  const [method = "", path, ...rest] = entry.split(/\s+/);
+  const shaped = method !== "" && path !== undefined && path.startsWith("/") && rest.length === 0;
+  return shaped ? { method: method.toUpperCase(), path } : undefined;
 }
 
 /** A route registered for every method is reached by whichever one the ramp used. */
@@ -92,14 +133,14 @@ export interface Coverage {
  * touch it resembles production. Shipping an endpoint the ramp does not reach
  * is red for the same reason shipping code with no test is.
  */
-export function routeCoverage(log: string, allowlist: readonly string[]): Coverage {
+export function routeCoverage(log: Log, allowlist: readonly string[]): Coverage {
   const { table, served } = linesOf(log);
-  const allowed = allowlist.map((entry) => ({ entry, key: entryKey(entry) }));
 
-  if (table.length === 0) {
+  if (table.routes.length === 0) {
     return {
       summary: "route coverage: no route table",
       problems: [
+        ...table.problems,
         {
           message:
             'no route table reached the log — an app under the capacity ramp prints one {"routeTable":[…]} line at boot, naming every route it serves, or the ramp cannot be held to any floor',
@@ -108,23 +149,39 @@ export function routeCoverage(log: string, allowlist: readonly string[]): Covera
     };
   }
 
-  const waivable = new Set(allowed.map(({ key: name }) => name));
-  const unexercised = table.filter((route) => !exercised(route, served));
+  const read = allowlist.map((entry) => ({ entry, route: entryFor(entry) }));
+  const waivable = new Set(read.flatMap(({ route }) => (route === undefined ? [] : [key(route)])));
+  const names = new Set(table.routes.map(key));
+
+  const unexercised = table.routes.filter((route) => !exercised(route, served));
   const uncovered = unexercised.filter((route) => !waivable.has(key(route)));
   const waived = unexercised.length - uncovered.length;
 
-  const names = new Set(table.map(key));
-  const stale = allowed.filter(({ key: name }) => !names.has(name));
-
   return {
-    summary: `route coverage: ${table.length - unexercised.length} of ${table.length} routes exercised by the ramp, ${waived} allowlisted`,
+    summary: `route coverage: ${table.routes.length - unexercised.length} of ${table.routes.length} routes exercised by the ramp, ${waived} allowlisted`,
     problems: [
+      ...table.problems,
       ...uncovered.map((route) => ({
-        message: `${key(route)} is served but no ramp request exercises it — extend the capacity scenario, or list it in route-allowlist with a reason`,
+        message: `${key(route)} is served but no ramp request exercises it — ramp it from capacity-path or the capacity script, or list it in route-allowlist with a reason`,
       })),
-      ...stale.map(({ entry }) => ({
-        message: `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
-      })),
+      ...read.flatMap(({ entry, route }) =>
+        route === undefined
+          ? [
+              {
+                message: `route-allowlist entry '${entry}' is not a route — write 'METHOD /path', matching a line of the app's own route table`,
+              },
+            ]
+          : [],
+      ),
+      ...read.flatMap(({ entry, route }) =>
+        route !== undefined && !names.has(key(route))
+          ? [
+              {
+                message: `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
+              },
+            ]
+          : [],
+      ),
     ],
   };
 }

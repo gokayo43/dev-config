@@ -29,11 +29,11 @@ does not reach a failure rate: a request the app refused is refused on every
 machine, and a ramp whose requests are mostly errors measures the error path.
 More than a tenth of the requests failing is the one number this gate refuses.
 
-That bound is applied to the summary, not declared in the k6 script. A repo
-pointing `capacity-script` at a script of its own replaces every threshold the
-shipped ramp declares, and a rule a caller can drop by accident is not a rule —
-so the gate that reads the summary is the single place it lives, whatever ran
-the ramp.
+That bound is applied to the summary, and the shipped script declares no
+threshold of its own. A repo pointing `capacity-script` at a script of its own
+replaces the shipped file entirely, and a rule a caller can drop by accident is
+not a rule — so the gate that reads the summary is the single place it lives,
+whatever ran the ramp.
 
 So the step fails when: k6 died, or more than a tenth of its requests failed; it
 ran and made no requests, so there is no number to record; the summary it wrote
@@ -61,8 +61,12 @@ already captures — whenever `ROUTE_LOG` is `true`, which the ramp sets:
 
 The first is printed once at boot and names every route the app serves. The
 second is printed the first time each route answers a request — once per route,
-not per request, so the log is a record of what the ramp reached rather than an
+not per request, so the log is a record of what was reached rather than an
 access log.
+
+Only the lines printed while k6 was running count. The app is already serving by
+then — the boot step polls the health route until it answers — and crediting
+that would pass a scenario that never touched health as though it had.
 
 Both name the route **as the router registered it**, not as a URL: `/presets/42`
 is reported as `/presets/:id`. That is what keeps the gate out of the matching
@@ -71,11 +75,19 @@ business, and it is not only convenience — where routes overlap, a literal
 and a gate that guessed would credit coverage to a route that served nothing.
 
 A route registered for every method (`ALL`) is covered by whichever method
-reached it. A route the ramp is not expected to reach goes in `route-allowlist`
-as a `METHOD /path` entry, with its reason in a comment beside the input — a
-CORS preflight handler is the usual one. An entry naming a route the app does
-not serve is itself refused, because an escape hatch nobody can see rotting is
-how a gate quietly stops covering what it names.
+reached it. A route the ramp cannot cover goes in `route-allowlist` as a
+`METHOD /path -- why` entry: the reason is part of the entry, the same price a
+lint directive pays, and an entry that is not a route, or names a route the app
+does not serve, is refused in its turn — an escape hatch nobody can see rotting
+is how a gate quietly stops covering what it names.
+
+The usual entries are a CORS plugin's `OPTIONS` handlers, and their reason is
+worth knowing, because it is not "no load generator sends a preflight": a
+handler that answers **before** the response hook runs is invisible to the floor
+whatever reaches it. `@elysiajs/cors` answers every `OPTIONS` that way,
+including one to a route the app registered itself, so such a route can be
+ramped and still never appear. The reason on the entry is what says which of the
+two is true — unreachable by the ramp, or unseeable by the floor.
 
 An app that prints no route table fails the step: a floor that cannot see the
 routes is not a floor, and "the app said nothing" is exactly the never-load-
@@ -90,16 +102,17 @@ jobs:
     with:
       database: true
       capacity: true
-      capacity-path: /api/things
+      capacity-path: /api/things, /api/things/:id
+      route-allowlist: OPTIONS /* -- the cors plugin answers these before the response hook
 ```
 
 | Input             | Effect                                                                                                                                                                                                                                                                                                                    |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `capacity`        | Runs the ramp. Needs `database: true`, since it ramps the app the database job booted.                                                                                                                                                                                                                                    |
-| `capacity-path`   | A path ramped alongside the health route. A health route measures the socket and one round trip; point this at an endpoint doing the work the project is for, and prefer one that reads or writes.                                                                                                                        |
+| `capacity-path`   | Paths ramped alongside the health route, comma- or newline-separated. A health route measures the socket and one round trip; point these at the endpoints doing the work the project is for, and prefer ones that read or write. Every route the app serves belongs here or in `route-allowlist`.                         |
 | `capacity-script` | A k6 script of the repo's own, when the default ramp is the wrong shape — a write path needing a body, an authenticated route. It replaces the shipped script entirely; `HEALTH_URL` and `CAPACITY_PATH` are in its environment, and the failure bound and the route floor hold it exactly as they hold the shipped ramp. |
 | `capacity-report` | The artifact name for the k6 summary. A matrix that ramps more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                                          |
-| `route-allowlist` | Routes the ramp is not expected to reach, as `METHOD /path` entries matching the app's own route table, comma- or newline-separated. The reason for each belongs in a comment beside the input — that is the whole price of the hatch.                                                                                    |
+| `route-allowlist` | Routes the ramp cannot cover, as `METHOD /path -- why` entries matching the app's own route table, comma- or newline-separated. The reason is part of the entry and an entry without one is refused — that is the whole price of the hatch.                                                                               |
 
 Enable it on a repo that serves something: an API with its own process, a server
 route that does real work. A static site has nothing to ramp, and a repo whose

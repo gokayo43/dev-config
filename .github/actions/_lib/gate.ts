@@ -100,16 +100,52 @@ export function list(value: string): string[] {
   return value.split(/\s+/).filter((item) => item !== "");
 }
 
+/** The separator oxlint uses between a suppression and its reason, and every allowlist here follows it. */
+export const REASON = " -- ";
+
 /**
- * An allowlist input, as a list. Comma- or newline-separated rather than
- * space-separated, because an entry may contain a space: a quoted SQL
- * identifier, or the method and path of a route.
+ * Comma- or newline-separated rather than space-separated, because an entry may
+ * contain a space: a quoted SQL identifier, the method and path of a route, and
+ * the reason each of them carries.
  */
-export function allowlistFrom(value: string): string[] {
+function entriesIn(value: string): string[] {
   return value
     .split(/[,\n]/)
     .map((item) => item.trim())
     .filter((item) => item !== "");
+}
+
+export interface Allowlist {
+  /** Each entry with its reason stripped: the part a gate compares against. */
+  readonly entries: string[];
+  /** One per entry that waives something and says nothing about why. */
+  readonly problems: Problem[];
+}
+
+/**
+ * An allowlist input, as the list a gate compares against plus what is wrong
+ * with it. Every entry carries `-- why`, the same price a lint directive pays:
+ * an exemption whose reason nobody had to write is one nobody has to justify,
+ * and a year later it is indistinguishable from a bug someone silenced.
+ *
+ * A reasonless entry still waives its subject — the gate fails on the missing
+ * reason, and reporting the waived subject as well would be two diagnostics for
+ * one mistake.
+ */
+export function allowlistFrom(value: string, input: string): Allowlist {
+  const read = entriesIn(value).map((item) => {
+    const [subject = "", ...reason] = item.split(REASON);
+    return { subject: subject.trim(), reasoned: reason.join(REASON).trim() !== "" };
+  });
+
+  return {
+    entries: read.map(({ subject }) => subject),
+    problems: read
+      .filter(({ reasoned }) => !reasoned)
+      .map(({ subject }) => ({
+        message: `${input} waives ${subject} without saying why — write '${subject}${REASON}<reason>', the same price a lint directive pays`,
+      })),
+  };
 }
 
 async function git(cwd: string, args: readonly string[]): Promise<number> {

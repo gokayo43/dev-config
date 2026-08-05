@@ -1,11 +1,8 @@
 import { basename } from "node:path";
 
-import { type Problem, repoFiles } from "../_lib/gate.ts";
+import { type Problem, REASON, repoFiles } from "../_lib/gate.ts";
 
 const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
-
-/** oxlint's own separator between the rules a directive suppresses and the reason it exists. */
-const REASON = " -- ";
 
 /**
  * Both spellings, because oxlint honours both: an `eslint-disable-next-line`

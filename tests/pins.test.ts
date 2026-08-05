@@ -26,14 +26,14 @@ function images(...values: string[]): string[] {
 }
 
 /** A Docker container action's metadata, which names its image where no `uses:` can reach it. */
-function dockerAction(image: string): unknown {
-  return Bun.YAML.parse(`name: x\ndescription: y\nruns:\n  using: docker\n  image: ${image}\n`);
+function dockerAction(image: string): string {
+  return `name: x\ndescription: y\nruns:\n  using: docker\n  image: ${image}\n`;
 }
 
 function dockerActionTree(image: string): Tree {
   return {
     ".gitignore": "node_modules\n",
-    ".github/actions/dockery/action.yml": `name: x\ndescription: y\nruns:\n  using: docker\n  image: ${image}\n`,
+    ".github/actions/dockery/action.yml": dockerAction(image),
   };
 }
 
@@ -101,11 +101,13 @@ describe("reading the images a job runs", () => {
   // A Docker container action names its image in metadata rather than in a
   // `uses:`, so neither walk reached it and its tag moved freely.
   test("a docker action's image is read off its metadata", () => {
-    expect(imagesIn(dockerAction("docker://alpine:3.22"))).toEqual(["docker://alpine:3.22"]);
+    expect(imagesIn(Bun.YAML.parse(dockerAction("docker://alpine:3.22")))).toEqual([
+      "docker://alpine:3.22",
+    ]);
     // The Dockerfile form names a build in the repo at this commit, not a
     // registry reference, so there is no digest to ask for.
-    expect(imagesIn(dockerAction("Dockerfile"))).toEqual([]);
-    expect(imagesIn(dockerAction("./docker/Dockerfile"))).toEqual([]);
+    expect(imagesIn(Bun.YAML.parse(dockerAction("Dockerfile")))).toEqual([]);
+    expect(imagesIn(Bun.YAML.parse(dockerAction("./docker/Dockerfile")))).toEqual([]);
   });
 });
 

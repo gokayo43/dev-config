@@ -31,7 +31,8 @@ the deviation is written down.
 
 **Escape hatch** — a way to proceed past a gate that costs the same work as
 recording the decision: an ADR file, a healthcheck opt-out carrying its reason,
-a lint directive carrying its reason. A hatch that costs nothing is a hole.
+a lint directive or an allowlist entry carrying its reason after `--`. A hatch
+that costs nothing is a hole.
 
 **Floor** — a bound set below what honest work already produces, there to catch
 the absence of the work rather than to be aimed at: the coverage threshold, and
@@ -39,10 +40,9 @@ the capacity ramp's route coverage. A floor says a route has been under load
 once; it says nothing about whether that load resembled production.
 
 **Route table** — the routes an app serves, named by the app itself as its
-router registered them (`/presets/:id`, not `/presets/42`). One line on stdout
-at boot, and one the first time each route answers a request; the capacity ramp
-reads both. Only the router knows which route answered a URL, so it is the only
-honest source.
+router registered them (`/presets/:id`, not `/presets/42`). Only the router
+knows which route answered a URL, so it is the only honest source, and the
+capacity ramp's floor is measured against it.
 
 **Pin** — a reference by content rather than by name: a commit SHA for an
 action or a workflow, a SHA-256 for a released binary, a digest for an image,

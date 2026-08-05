@@ -26,8 +26,12 @@ function log(...lines: string[]): string {
   return [...NOISE, ...lines].join("\n");
 }
 
-function problems(text: string, allowlist = ""): string[] {
-  return routeCoverage(text, allowlistFrom(allowlist)).problems.map(({ message }) => message);
+/** The whole log doubles as the ramp's window unless a case says otherwise. */
+function problems(text: string, allowlist = "", underRamp = text): string[] {
+  const read = allowlistFrom(allowlist, "route-allowlist");
+  return [...read.problems, ...routeCoverage({ all: text, underRamp }, read.entries).problems].map(
+    ({ message }) => message,
+  );
 }
 
 describe("the route-coverage floor", () => {
@@ -39,7 +43,7 @@ describe("the route-coverage floor", () => {
 
   test("a route the ramp never reaches is the whole point of the floor", () => {
     expect(problems(log(ROUTES, served("GET", "/health"), served("GET", "/presets/:id")))).toEqual([
-      "POST /presets is served but no ramp request exercises it — extend the capacity scenario, or list it in route-allowlist with a reason",
+      "POST /presets is served but no ramp request exercises it — ramp it from capacity-path or the capacity script, or list it in route-allowlist with a reason",
     ]);
   });
 
@@ -81,15 +85,15 @@ describe("the route-coverage floor", () => {
       served("GET", "/health"),
     );
     expect(problems(preflight)).toEqual([containing("OPTIONS /* is served")]);
-    expect(problems(preflight, "OPTIONS /*")).toEqual([]);
-    expect(problems(preflight, "options /*")).toEqual([]);
+    expect(problems(preflight, "OPTIONS /* -- answered before the hook runs")).toEqual([]);
+    expect(problems(preflight, "options /* -- answered before the hook runs")).toEqual([]);
   });
 
   // The same rule extra-paths carries in the pin gate: an escape hatch nobody
   // can see rotting is how a gate quietly stops covering what it names.
   test("an allowlist entry the app does not serve is a stale hatch", () => {
     const gone = log(table({ method: "GET", path: "/health" }), served("GET", "/health"));
-    expect(problems(gone, "POST /retired")).toEqual([
+    expect(problems(gone, "POST /retired -- gone in v2")).toEqual([
       containing("route-allowlist names POST /retired, which this app does not serve"),
     ]);
   });
@@ -107,8 +111,87 @@ describe("the route-coverage floor", () => {
       table({ method: "GET", path: "/health" }, { method: "OPTIONS", path: "/*" }),
       served("GET", "/health"),
     );
-    expect(routeCoverage(covered, allowlistFrom("OPTIONS /*")).summary).toBe(
-      "route coverage: 1 of 2 routes exercised by the ramp, 1 allowlisted",
-    );
+    expect(
+      routeCoverage(
+        { all: covered, underRamp: covered },
+        allowlistFrom("OPTIONS /* -- answered before the hook runs", "route-allowlist").entries,
+      ).summary,
+    ).toBe("route coverage: 1 of 2 routes exercised by the ramp, 1 allowlisted");
   });
+});
+
+describe("what counts as coverage", () => {
+  const ROUTES = table({ method: "GET", path: "/health" }, { method: "POST", path: "/presets" });
+
+  // ROUTE_LOG is on from boot, so the poll that waits for the app to answer
+  // writes routeServed lines of its own. Crediting those would let a scenario
+  // that never touches the health route pass as if it had.
+  test("a route the boot poll reached and the ramp did not is uncovered", () => {
+    const boot = log(ROUTES, served("GET", "/health"));
+    const underRamp = served("POST", "/presets");
+    expect(problems(`${boot}\n${underRamp}`, "", underRamp)).toEqual([
+      containing("GET /health is served but no ramp request exercises it"),
+    ]);
+  });
+
+  test("the table is still read from before the ramp, where the app printed it", () => {
+    const boot = log(ROUTES, served("GET", "/health"));
+    const underRamp = [served("GET", "/health"), served("POST", "/presets")].join("\n");
+    expect(problems(`${boot}\n${underRamp}`, "", underRamp)).toEqual([]);
+  });
+});
+
+describe("a route table that will not read", () => {
+  // Dropping the entry silently would shrink the floor to whatever the app
+  // spelled correctly, and the step would pass while covering less.
+  test("a malformed entry is named rather than dropped", () => {
+    const partial = log(
+      JSON.stringify({ routeTable: [{ method: "GET", path: "/health" }, { path: "/presets" }] }),
+      served("GET", "/health"),
+    );
+    expect(problems(partial)).toEqual([
+      containing('names {"path":"/presets"}, which is not a {"method","path"} pair'),
+    ]);
+  });
+
+  test("an entry that is not an object at all is named too", () => {
+    const junk = log(JSON.stringify({ routeTable: ["GET /health"] }));
+    expect(problems(junk)).toEqual([
+      containing('names "GET /health", which is not a {"method","path"} pair'),
+      containing("no route table reached the log"),
+    ]);
+  });
+});
+
+describe("the price of the hatch", () => {
+  const ROUTES = table({ method: "GET", path: "/health" }, { method: "OPTIONS", path: "/*" });
+  const RAN = log(ROUTES, served("GET", "/health"));
+  // A tree with nothing else wrong, so a malformed entry is the only thing left
+  // to report: it waives no route, since there is no route to read out of it.
+  const COVERED = log(table({ method: "GET", path: "/health" }), served("GET", "/health"));
+
+  // The same price a lint directive pays: an exemption nobody had to justify is
+  // one nobody can review a year later.
+  test("an entry that waives a route without saying why is refused", () => {
+    expect(problems(RAN, "OPTIONS /*")).toEqual([
+      containing("route-allowlist waives OPTIONS /* without saying why"),
+    ]);
+  });
+
+  test("the reason is stripped before the entry is compared", () => {
+    expect(
+      problems(RAN, "OPTIONS /* -- the cors plugin answers these before the hook runs"),
+    ).toEqual([]);
+  });
+
+  // Read as a route, `/health` has no method: reporting it as a route the app
+  // does not serve would send the reader looking for the wrong mistake.
+  test.each(["/health -- no method", "GET -- no path", "GET /a /b -- two paths"])(
+    "an entry that is not a route (%s) says so",
+    (entry) => {
+      expect(problems(COVERED, entry)).toEqual([
+        containing("is not a route — write 'METHOD /path'"),
+      ]);
+    },
+  );
 });

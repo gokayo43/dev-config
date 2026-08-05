@@ -5,6 +5,8 @@ import { timestamptzGate, type WallClockColumn } from "../.github/actions/db-gat
 
 import { containing } from "./matchers.ts";
 
+const entries = (value: string): string[] => allowlistFrom(value, "timestamp-allowlist").entries;
+
 // Captured from information_schema on a real Postgres 16 carrying one of each
 // escape: a table in a non-public schema, an array of wall-clock timestamps
 // whose data_type is ARRAY, and a quoted identifier with a space in it. The
@@ -80,15 +82,16 @@ describe("timestamptz gate", () => {
   // A table name can carry a space — information_schema reports it verbatim —
   // so a space-separated input could not name one.
   test("an entry naming a quoted identifier survives the parse", () => {
-    expect(allowlistFrom("public.audit log.at, app.events.occurred_at")).toEqual([
+    expect(
+      entries("public.audit log.at -- the shift's wall clock, app.events.occurred_at -- ditto"),
+    ).toEqual(["public.audit log.at", "app.events.occurred_at"]);
+    expect(entries("public.audit log.at -- why\napp.events.occurred_at -- why\n")).toEqual([
       "public.audit log.at",
       "app.events.occurred_at",
     ]);
-    expect(allowlistFrom("public.audit log.at\napp.events.occurred_at\n")).toEqual([
-      "public.audit log.at",
-      "app.events.occurred_at",
-    ]);
-    expect(allowlistFrom("")).toEqual([]);
-    expect(timestamptzGate(COLUMNS, allowlistFrom("public.audit log.at"))).toHaveLength(2);
+    expect(entries("")).toEqual([]);
+    expect(
+      timestamptzGate(COLUMNS, entries("public.audit log.at -- the shift's wall clock")),
+    ).toHaveLength(2);
   });
 });

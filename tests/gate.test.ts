@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 
-import { inputs, notice, report } from "../.github/actions/_lib/gate.ts";
+import { allowlistFrom, inputs, notice, report } from "../.github/actions/_lib/gate.ts";
 
 function captureLog(): { lines: string[]; restore: () => void } {
   const lines: string[] = [];
@@ -105,5 +105,44 @@ describe("action inputs", () => {
   test("an input the action forgot to pass fails loudly", () => {
     delete process.env["INPUT_NEVER_SET"];
     expect(() => inputs("never-set")).toThrow("INPUT_NEVER_SET is not set");
+  });
+});
+
+// Every allowlist input in this repo pays what a lint directive pays: an
+// exemption whose reason nobody had to write is one nobody can review later.
+describe("allowlist entries", () => {
+  test("an entry carries its reason, and the reason is not part of the subject", () => {
+    const read = allowlistFrom("OPTIONS /* -- the cors plugin answers these", "route-allowlist");
+    expect(read.entries).toEqual(["OPTIONS /*"]);
+    expect(read.problems).toEqual([]);
+  });
+
+  test("a reasonless entry is refused, and still waives what it names", () => {
+    const read = allowlistFrom("public.audit.at", "timestamp-allowlist");
+    expect(read.entries).toEqual(["public.audit.at"]);
+    expect(read.problems.map(({ message }) => message)).toEqual([
+      "timestamp-allowlist waives public.audit.at without saying why — write 'public.audit.at -- <reason>', the same price a lint directive pays",
+    ]);
+  });
+
+  test("an empty reason is no reason", () => {
+    expect(allowlistFrom("GET /x --   ", "route-allowlist").problems).toHaveLength(1);
+  });
+
+  // A reason may say anything, including something with the separator in it.
+  test("only the first separator divides the entry", () => {
+    const read = allowlistFrom("GET /x -- it -- really -- is fine", "route-allowlist");
+    expect(read.entries).toEqual(["GET /x"]);
+    expect(read.problems).toEqual([]);
+  });
+
+  test("entries are comma- or newline-separated, and blank ones are not entries", () => {
+    const read = allowlistFrom("a -- one,\n b -- two \n\n", "x");
+    expect(read.entries).toEqual(["a", "b"]);
+    expect(read.problems).toEqual([]);
+  });
+
+  test("nothing allowlisted is nothing to report", () => {
+    expect(allowlistFrom("", "route-allowlist")).toEqual({ entries: [], problems: [] });
   });
 });

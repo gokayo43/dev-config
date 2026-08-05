@@ -25,10 +25,10 @@ const RAMP = new URL("../.github/actions/db-gate/capacity.js", import.meta.url).
 const PORT = 58231;
 const hits = new Map<string, number>();
 
-const ANSWERS = new Set(["/api/health", "/api/things"]);
+const ANSWERS = new Set(["/api/health", "/api/things", "/api/presets"]);
 
-// Everything else 404s, which is what a mistyped capacity-path meets and what
-// the ramp's failure threshold is there to refuse.
+// Everything else 404s, which is what a mistyped capacity-path meets — and what
+// the failure bound in capacity.ts refuses once the summary reaches it.
 const server = Bun.serve({
   port: PORT,
   fetch(request) {
@@ -45,7 +45,7 @@ const server = Bun.serve({
 const STAGE = "--stage=2s:5";
 
 interface Ramp {
-  /** k6 exits 99 on a threshold it breached, which is the whole of the failure bound. */
+  /** The shipped script declares no threshold, so a ramp that ran at all exits 0. */
   readonly exitCode: number;
   readonly metrics: Record<string, Record<string, number>>;
 }
@@ -107,6 +107,19 @@ expect(
   "the two-URL ramp made suspiciously few requests",
 );
 
+// Every path the caller named, not just the first: an app serves more than one
+// route, and one ramped route is what the coverage floor refuses.
+const many = await ramp("/api/things,\n/api/presets", "many");
+expect(many.exitCode === 0, `a ramp over a list of paths exited ${many.exitCode}`);
+expect(
+  (hits.get("/api/things") ?? 0) > 0 && (hits.get("/api/presets") ?? 0) > 0,
+  `a comma-and-newline list must ramp every path in it, saw ${[...hits.keys()].join(", ")}`,
+);
+expect(
+  (hits.get("/api/health") ?? 0) > 0,
+  "the health route was dropped when a list of paths was given",
+);
+
 // A capacity-path with a typo in it: k6 keeps ramping, every check fails, and
 // checks reach no exit code — the run is a clean exit carrying the throughput
 // of a 404. The bound that refuses it lives in the step that reads the summary,
@@ -123,4 +136,6 @@ expect(
 );
 
 await server.stop(true);
-console.log(`capacity.js: health-only and hot-path branches both executed (${hits.size} routes)`);
+console.log(
+  `capacity.js: health-only, one-path and list branches all executed (${hits.size} routes seen)`,
+);

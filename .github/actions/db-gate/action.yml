@@ -23,7 +23,10 @@ inputs:
     description: A k6 script of the repo's own. Empty runs the ramp shipped with this action.
     default: ""
   capacity-path:
-    description: A hot path to ramp alongside the health route, e.g. /api/things.
+    description: >-
+      Paths to ramp alongside the health route, e.g. /api/things — comma- or
+      newline-separated, since an app serves more than one route and the floor
+      below asks for all of them.
     default: ""
   capacity-report:
     description: >-
@@ -32,9 +35,9 @@ inputs:
     default: capacity-report
   route-allowlist:
     description: >-
-      Routes the ramp is not expected to reach, as `METHOD /path` entries
-      matching the app's own route table, comma- or newline-separated. The
-      reason for each belongs in a comment beside the input.
+      Routes the ramp is not expected to reach, as `METHOD /path -- why`
+      entries matching the app's own route table, comma- or newline-separated.
+      The reason is part of the entry, the price a lint directive pays.
     default: ""
   timestamp-allowlist:
     description: >-
@@ -142,6 +145,10 @@ runs:
           "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
           "$K6_SHA256" "k6-${K6_VERSION}-linux-amd64/k6"
         script="${CAPACITY_SCRIPT:-$GITHUB_ACTION_PATH/capacity.js}"
+        # Where the app's log stands before any of the scenario's traffic. The
+        # route floor reads from here on, so the health poll that got the app
+        # this far cannot be mistaken for a route the ramp exercised.
+        echo "RAMP_BEGAN_AT=$(stat -c %s "$RUNNER_TEMP/server.log")" >> "$GITHUB_ENV"
         "$RUNNER_TEMP/k6" run --quiet \
           --summary-trend-stats='avg,min,med,p(95),p(99),max' \
           --summary-export "$RUNNER_TEMP/capacity.json" "$script"
@@ -156,6 +163,7 @@ runs:
       shell: bash
       env:
         INPUT_SERVER_LOG: ${{ runner.temp }}/server.log
+        INPUT_RAMP_BEGAN_AT: ${{ env.RAMP_BEGAN_AT }}
         INPUT_ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
       run: |
         set -euo pipefail
