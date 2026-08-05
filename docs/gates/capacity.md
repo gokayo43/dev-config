@@ -60,13 +60,15 @@ already captures — whenever `ROUTE_LOG` is `true`, which the ramp sets:
 ```
 
 The first is printed once at boot and names every route the app serves. The
-second is printed the first time each route answers a request — once per route,
-not per request, so the log is a record of what was reached rather than an
-access log.
+second is printed while a route is answering requests, at most once a second per
+route — not once per request, which would put an access log's worth of I/O on
+the hot path this step is measuring.
 
 Only the lines printed while k6 was running count. The app is already serving by
 then — the boot step polls the health route until it answers — and crediting
-that would pass a scenario that never touched health as though it had.
+that poll would pass a scenario that never touched health as though it had. The
+two halves are one design: a route announcing itself only once, ever, could
+never appear inside that window if the poll had already reached it.
 
 Both name the route **as the router registered it**, not as a URL: `/presets/42`
 is reported as `/presets/:id`. That is what keeps the gate out of the matching

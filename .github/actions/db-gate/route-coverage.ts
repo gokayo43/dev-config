@@ -5,7 +5,9 @@ import { isObject, type Problem } from "../_lib/gate.ts";
  * captures:
  *
  * - once at boot, `{"routeTable":[{"method","path"},…]}`: every route it serves;
- * - the first time each route serves a request, `{"routeServed":{"method","path"}}`.
+ * - `{"routeServed":{"method","path"}}` while a route is answering requests, at
+ *   most once a second — often enough that the ramp's own window holds one for
+ *   every route it reached, rarely enough not to be an access log.
  *
  * The router names the route both times, so the two sides compare as strings and
  * nothing here re-implements path matching. That is not a convenience: where
