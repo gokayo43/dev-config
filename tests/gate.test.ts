@@ -59,10 +59,10 @@ describe("annotations", () => {
 describe("action inputs", () => {
   test("a declared input is read from the variable the action sets", () => {
     process.env["INPUT_WORKING_DIRECTORY"] = "apps/api";
-    process.env["INPUT_STATE_LABELS"] = "needs-triage wontfix";
-    expect(inputs("working-directory", "state-labels")).toEqual({
+    process.env["INPUT_COMMITMENT_LABEL"] = "commitment";
+    expect(inputs("working-directory", "commitment-label")).toEqual({
       "working-directory": "apps/api",
-      "state-labels": "needs-triage wontfix",
+      "commitment-label": "commitment",
     });
   });
 

@@ -1,23 +1,17 @@
 name: Queue audit
 description: >-
-  Reads the repo's labels and open issues and holds the queue to its own rules:
-  the vocabulary is the canon set and nothing else, every open issue sits in
-  exactly one state, and a commitment names the event that makes it due. Needs
-  GH_TOKEN and GH_REPO in the environment.
+  Reads the repo's labels and open issues, and reports the two ways a queue rots
+  without anyone noticing: a vocabulary that has drifted, and a commitment whose
+  trigger was never written down. Read-only. Needs GH_TOKEN and GH_REPO in the
+  environment.
 
 inputs:
   vocabulary:
     description: Every label the repo may carry, space-separated. Empty means the canon set.
     default: ""
-  state-labels:
-    description: The states an open issue may sit in, space-separated. Empty means the canon set.
-    default: ""
   commitment-label:
     description: The label whose issues must state a Trigger in the body. Empty means the canon one.
     default: ""
-  owner:
-    description: The only login allowed to have promoted an issue.
-    required: true
 
 runs:
   using: composite
@@ -25,9 +19,7 @@ runs:
     - shell: bash
       env:
         INPUT_VOCABULARY: ${{ inputs.vocabulary }}
-        INPUT_STATE_LABELS: ${{ inputs.state-labels }}
         INPUT_COMMITMENT_LABEL: ${{ inputs.commitment-label }}
-        INPUT_OWNER: ${{ inputs.owner }}
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/queue-audit.main.ts"

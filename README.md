@@ -37,15 +37,15 @@ to override a shared setting, the override carries a comment naming the reason.
 Each gate has a reference page of its own. This file holds the map and the
 settings every repo shares; what a single gate asserts, and why, lives beside it:
 
-| Gate                         | Page                                                                   |
-| ---------------------------- | ---------------------------------------------------------------------- |
-| `repo-contract`              | [docs/gates/repo-contract.md](docs/gates/repo-contract.md)             |
-| `stack-gate`                 | [docs/gates/stack-gate.md](docs/gates/stack-gate.md)                   |
-| `suppression-hygiene`        | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md) |
-| `compose-lint`               | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)               |
-| `db-gate`                    | [docs/gates/db-gate.md](docs/gates/db-gate.md)                         |
-| the capacity ramp            | [docs/gates/capacity.md](docs/gates/capacity.md)                       |
-| `queue-guard`, `queue-audit` | [docs/gates/queue-integrity.md](docs/gates/queue-integrity.md)         |
+| Gate                  | Page                                                                   |
+| --------------------- | ---------------------------------------------------------------------- |
+| `repo-contract`       | [docs/gates/repo-contract.md](docs/gates/repo-contract.md)             |
+| `stack-gate`          | [docs/gates/stack-gate.md](docs/gates/stack-gate.md)                   |
+| `suppression-hygiene` | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md) |
+| `compose-lint`        | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)               |
+| `db-gate`             | [docs/gates/db-gate.md](docs/gates/db-gate.md)                         |
+| the capacity ramp     | [docs/gates/capacity.md](docs/gates/capacity.md)                       |
+| `queue-audit`         | [docs/gates/queue-integrity.md](docs/gates/queue-integrity.md)         |
 
 ## TypeScript
 
@@ -581,7 +581,7 @@ rather than after a full dependency resolution.
 The steps that are shell or a script rather than a `bun run` live in
 `.github/actions/` as composite actions — `secret-scan`, `repo-contract`,
 `stack-gate`, `suppression-hygiene`, `compose-lint`, `test-suite`, `db-gate`,
-`lint-workflows`, `queue-guard`, `queue-audit` — so the workflow above and any
+`lint-workflows`, `queue-audit` — so the workflow above and any
 repo that has to run the same thing outside it share one copy.
 `check.yml` references them by full path and SHA rather than `./`: inside a
 called workflow a relative `uses:` resolves against the _caller's_ checkout, and
@@ -669,8 +669,8 @@ nobody reads.
 ### Where each gate is written down
 
 `repo-contract`, `stack-gate`, `suppression-hygiene` and `compose-lint` run in
-the static job; `db-gate` is the database job; `queue-guard` and `queue-audit`
-are called from a repo's own queue workflows rather than from `check.yml`. Each
+the static job; `db-gate` is the database job; `queue-audit` is called from a
+repo's own weekly workflow rather than from `check.yml`. Each
 has its page under [`docs/gates/`](docs/gates/), listed in the table at the top
 of this file.
 

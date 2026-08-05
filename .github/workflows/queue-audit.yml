@@ -3,19 +3,16 @@ name: Queue audit
 # Called from a repo's own workflow on a schedule:
 #   jobs.audit.uses: gokayo43/dev-config/.github/workflows/queue-audit.yml@<sha>
 #
-# A queue nobody drains is deletion that feels responsible, and it decays
-# quietly: a label outside the vocabulary, an issue in no state, a commitment
-# whose trigger nobody wrote down. None of those fail anything on their own,
-# which is why they need a run of their own.
+# A tripwire, not an enforcer. Which label an issue carries is a convention out
+# of the canon; this reads the queue once a week for the two things that rot
+# without anyone noticing — a vocabulary that has drifted, and a commitment
+# whose trigger nobody wrote down. Neither fails anything on its own, which is
+# why they need a run of their own.
 on:
   workflow_call:
     inputs:
       vocabulary:
         description: Every label the repo may carry, space-separated. Empty means the canon set.
-        type: string
-        default: ""
-      state-labels:
-        description: The states an open issue may sit in, space-separated. Empty means the canon set.
         type: string
         default: ""
       commitment-label:
@@ -42,6 +39,4 @@ jobs:
           GH_REPO: ${{ github.repository }}
         with:
           vocabulary: ${{ inputs.vocabulary }}
-          state-labels: ${{ inputs.state-labels }}
           commitment-label: ${{ inputs.commitment-label }}
-          owner: ${{ github.repository_owner }}

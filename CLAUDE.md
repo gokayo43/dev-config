@@ -17,8 +17,8 @@ a change to a rule usually lands here too.
 - `*.base.json` / `knip.base.ts` / `lighthouserc.json` — the bases repos inherit.
   Anything keyed to a repo's own paths does not belong in one.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
-- `.github/workflows/check.yml` — the gate every repo calls. `queue-guard.yml`
-  and `queue-audit.yml` are the same idea for the issue queue.
+- `.github/workflows/check.yml` — the gate every repo calls. `queue-audit.yml`
+  is a weekly read of the issue queue.
 - `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
   module the suite drives, and a `*.main.ts` that GitHub runs; `_lib/gate.ts`
   and `_lib/gh.ts` are what they share.
