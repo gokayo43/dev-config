@@ -13,9 +13,15 @@ const read = inputs("timestamp-allowlist");
 // The same DATABASE_URL the migrate step ran against — one value, from the
 // environment the calling job owns. Taking it as an action input too would be
 // two sources that can disagree about which database was just migrated.
+//
+// The migrate step asserts this first, and says what the caller has to do; this
+// one says which step is left holding nothing, for the case where the steps are
+// ever reordered or run alone.
 const url = Bun.env["DATABASE_URL"];
 if (url === undefined || url === "") {
-  throw new Error("the calling job must set DATABASE_URL for the database it declared");
+  throw new Error(
+    "DATABASE_URL is unset — the timestamp check reads the database migrate just used",
+  );
 }
 
 // Read through Bun's own client: the runner needs no psql, and the rows arrive
