@@ -44,6 +44,7 @@ settings every repo shares; what a single gate asserts, and why, lives beside it
 | `suppression-hygiene`        | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md) |
 | `compose-lint`               | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)               |
 | `db-gate`                    | [docs/gates/db-gate.md](docs/gates/db-gate.md)                         |
+| the capacity ramp            | [docs/gates/capacity.md](docs/gates/capacity.md)                       |
 | `queue-guard`, `queue-audit` | [docs/gates/queue-integrity.md](docs/gates/queue-integrity.md)         |
 
 ## TypeScript
@@ -554,6 +555,9 @@ jobs:
 | `start-command`       | `bun run start`                    | How the boot gate starts the app.                                                                                                                                          |
 | `health-url`          | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200.                                                                                                                             |
 | `timestamp-allowlist` | `""`                               | `table.column` entries whose value really is a wall-clock reading rather than an instant.                                                                                  |
+| `capacity`            | `false`                            | Ramps the booted app with k6 and publishes the measurement.                                                                                                                |
+| `capacity-path`       | `""`                               | A hot path to ramp alongside the health route.                                                                                                                             |
+| `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                 |
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches

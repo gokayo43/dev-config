@@ -37,6 +37,18 @@ on:
         description: What the boot gate polls until it answers 200.
         type: string
         default: http://localhost:3000/api/health
+      capacity:
+        description: Ramp the booted app with k6 and publish the measurement. Requires the database job.
+        type: boolean
+        default: false
+      capacity-script:
+        description: A k6 script of the repo's own. Empty runs the ramp shipped with db-gate.
+        type: string
+        default: ""
+      capacity-path:
+        description: A hot path to ramp alongside the health route, e.g. /api/things.
+        type: string
+        default: ""
       timestamp-allowlist:
         description: table.column entries whose value is a wall-clock reading rather than an instant, comma- or newline-separated.
         type: string
@@ -73,6 +85,11 @@ jobs:
           exemptions: ${{ inputs.contract-exemptions }}
 
       - uses: gokayo43/dev-config/.github/actions/stack-gate@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
+
+      # The caller's own workflows — including the queue ones, which ask for
+      # issues: write — were schema-checked and pin-checked by nothing until
+      # this ran here. Needs Bun, which the step above already set up.
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
 
       - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@8fd2d272552dfd5ff95cade5a3998efbafaaf83d # v0.9.0
 
@@ -145,3 +162,6 @@ jobs:
           start-command: ${{ inputs.start-command }}
           health-url: ${{ inputs.health-url }}
           timestamp-allowlist: ${{ inputs.timestamp-allowlist }}
+          capacity: ${{ inputs.capacity }}
+          capacity-script: ${{ inputs.capacity-script }}
+          capacity-path: ${{ inputs.capacity-path }}
