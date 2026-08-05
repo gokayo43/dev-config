@@ -55,24 +55,24 @@ jobs:
           # would go unreported even though pushing it had already burned the key.
           fetch-depth: 0
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@4db898e6e4773fc9c242c3fb956960f9780f5c48 # v0.6.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@33df1759cfa7f577899dfa82be5e09966ad943a3 # v0.6.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@4db898e6e4773fc9c242c3fb956960f9780f5c48 # v0.6.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@33df1759cfa7f577899dfa82be5e09966ad943a3 # v0.6.0
         with:
           database: ${{ inputs.database }}
           static-site: ${{ inputs.static-site }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@4db898e6e4773fc9c242c3fb956960f9780f5c48 # v0.6.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@33df1759cfa7f577899dfa82be5e09966ad943a3 # v0.6.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@4db898e6e4773fc9c242c3fb956960f9780f5c48 # v0.6.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@33df1759cfa7f577899dfa82be5e09966ad943a3 # v0.6.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@4db898e6e4773fc9c242c3fb956960f9780f5c48 # v0.6.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@33df1759cfa7f577899dfa82be5e09966ad943a3 # v0.6.0
 
       - run: bun install --frozen-lockfile
 
@@ -84,7 +84,7 @@ jobs:
       - run: bun run typecheck
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@4db898e6e4773fc9c242c3fb956960f9780f5c48 # v0.6.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@33df1759cfa7f577899dfa82be5e09966ad943a3 # v0.6.0
 
   database:
     if: inputs.database
@@ -132,7 +132,7 @@ jobs:
       - if: inputs.build
         run: bun run build
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@4db898e6e4773fc9c242c3fb956960f9780f5c48 # v0.6.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@33df1759cfa7f577899dfa82be5e09966ad943a3 # v0.6.0
         with:
           start-command: ${{ inputs.start-command }}
           health-url: ${{ inputs.health-url }}
