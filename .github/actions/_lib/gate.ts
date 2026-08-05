@@ -124,10 +124,10 @@ export interface Batch<T> {
 }
 
 /**
- * Parses every file, one at a time and rescued per file. A batch that threw
- * would take every finding the other files had already produced with it, and
- * report a parse error naming no file at all — which is the least useful
- * diagnostic a gate can emit.
+ * Parses every file, each rescued on its own. A batch that threw would take
+ * every finding the other files had already produced with it, and report a
+ * parse error naming no file at all — which is the least useful diagnostic a
+ * gate can emit.
  */
 export async function parseEach<T>(
   root: string,
@@ -152,13 +152,12 @@ export async function parseEach<T>(
 }
 
 export type Manifest = Parsed<Record<string, unknown>>;
-export type Manifests = Batch<Record<string, unknown>>;
 
 // Every package.json in the repo, root and workspaces alike. A git pathspec
 // matches a wildcard across "/", so the second pathspec below reaches any depth
 // while still requiring the whole final path segment: "apps/my-package.json"
 // does not match, and neither pathspec can return anything but a package.json.
-export async function manifests(root: string): Promise<Manifests> {
+export async function manifests(root: string): Promise<Batch<Record<string, unknown>>> {
   const files = await repoFiles(root, ["package.json", "*/package.json"]);
   return await parseEach(
     root,

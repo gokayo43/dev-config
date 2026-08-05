@@ -40,8 +40,9 @@ jobs:
 | Input             | Effect                                                                                                                                                                                                                           |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `capacity`        | Runs the ramp. Needs `database: true`, since it ramps the app the database job booted.                                                                                                                                           |
-| `capacity-path`   | A path ramped alongside the health route. A health route measures the socket and one round trip; a real endpoint measures the thing that will fall over.                                                                         |
+| `capacity-path`   | A path ramped alongside the health route. A health route measures the socket and one round trip; point this at an endpoint doing the work the project is for, and prefer one that reads or writes.                               |
 | `capacity-script` | A k6 script of the repo's own, when the default ramp is the wrong shape — a write path needing a body, an authenticated route. It replaces the shipped script entirely; `HEALTH_URL` and `CAPACITY_PATH` are in its environment. |
+| `capacity-report` | The artifact name for the k6 summary. A matrix that ramps more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                 |
 
 Enable it on a repo that serves something: an API with its own process, a server
 route that does real work. A static site has nothing to ramp, and a repo whose

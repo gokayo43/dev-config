@@ -1,6 +1,8 @@
 import { inputs, list, report } from "../_lib/gate.ts";
 import { pinGate } from "./pins.ts";
 
-const read = inputs("working-directory", "extra-paths");
+const read = inputs("extra-paths");
 
-report(await pinGate(read["working-directory"], list(read["extra-paths"])));
+// The checkout the calling job made, which is where every other step in this
+// action already looks.
+report(await pinGate(".", list(read["extra-paths"])));

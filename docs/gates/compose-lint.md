@@ -5,6 +5,10 @@ every stack on this box shares:
 
 - every published port bound to `127.0.0.1` — nginx is the only thing that should
   reach them, and the host firewall is not the only line of defence.
+- no `network_mode: host`, or `x-host-network: "<why>"` where a service really
+  needs the host's stack. Compose drops a host-networked service's `ports` key
+  without a word, so every listener it opens is on every interface and the rule
+  above has nothing left to check.
 - a `mem_limit` on every service — several unrelated stacks share the box, and
   without caps the kernel OOM killer picks its victim by score rather than by who
   caused the spike.

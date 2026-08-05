@@ -1,70 +1,71 @@
-import type { Problem } from "../_lib/gate.ts";
-
-type Metric = Record<string, number>;
+import { record } from "../_lib/gate.ts";
 
 export interface Summary {
-  readonly metrics?: Record<string, Metric>;
-}
-
-export interface Capacity {
-  readonly problems: Problem[];
-  /** The measurement, for $GITHUB_STEP_SUMMARY. Empty when there was none. */
-  readonly markdown: string;
-}
-
-function ms(value: number | undefined): string {
-  return value === undefined ? "—" : `${value.toFixed(1)} ms`;
+  readonly metrics: Record<string, Record<string, number>>;
 }
 
 /**
- * Reads a k6 summary and reports the number it measured.
- *
- * The only failure is the absence of a measurement. A latency bound would be
- * measuring the runner GitHub happened to give us, and a gate that fails on
- * that gets disabled within a month — so the numbers are published for trend
- * comparison and nothing here compares them to a target.
+ * Parsed at the boundary rather than asserted through. k6's summary is a file
+ * this action did not write — a repo may point `capacity-script` at its own
+ * script — so a shape that is not the one read here says so loudly instead of
+ * surfacing later as an arithmetic result nobody can explain.
  */
-export function capacityReport(summary: Summary): Capacity {
-  const metrics = summary.metrics ?? {};
-  const requests = metrics["http_reqs"];
-  const duration = metrics["http_req_duration"] ?? {};
-  const failed = metrics["http_req_failed"] ?? {};
-  const vus = metrics["vus_max"] ?? {};
-
-  if (requests === undefined || (requests["count"] ?? 0) === 0) {
-    return {
-      problems: [
-        {
-          message:
-            "the capacity ramp produced no requests — k6 ran but measured nothing, so there is no number to record",
-        },
-      ],
-      markdown: "",
-    };
-  }
-
-  const rate = requests["rate"] ?? 0;
-  const errorRate = (failed["value"] ?? 0) * 100;
-
+export function parseSummary(text: string): Summary {
+  const parsed: unknown = JSON.parse(text);
+  const metrics = record(record(parsed)["metrics"]);
   return {
-    problems: [],
-    markdown: [
-      "### Capacity",
-      "",
-      "| Measurement | Value |",
-      "| --- | --- |",
-      `| Sustained requests/s | ${rate.toFixed(1)} |`,
-      `| Requests | ${requests["count"] ?? 0} |`,
-      `| Peak VUs | ${vus["max"] ?? vus["value"] ?? 0} |`,
-      `| Failed requests | ${errorRate.toFixed(2)}% |`,
-      `| Latency p(95) | ${ms(duration["p(95)"])} |`,
-      `| Latency p(99) | ${ms(duration["p(99)"])} |`,
-      `| Latency max | ${ms(duration["max"])} |`,
-      "",
-      "Measured on a CI runner, which is not the deployed shape: read it against",
-      "the last run rather than as a capacity claim. The number that answers",
-      '"how much load does this hold" comes from a ramp against the deploy.',
-      "",
-    ].join("\n"),
+    metrics: Object.fromEntries(
+      Object.entries(metrics).map(([name, stats]) => [
+        name,
+        Object.fromEntries(
+          Object.entries(record(stats)).filter(
+            (entry): entry is [string, number] => typeof entry[1] === "number",
+          ),
+        ),
+      ]),
+    ),
   };
+}
+
+function stat(summary: Summary, metric: string, name: string): number {
+  const value = summary.metrics[metric]?.[name];
+  if (value === undefined) throw new Error(`the k6 summary has no ${metric}.${name}`);
+  return value;
+}
+
+function ms(value: number): string {
+  return `${value.toFixed(1)} ms`;
+}
+
+/**
+ * The measurement, for $GITHUB_STEP_SUMMARY — or nothing, when the ramp made no
+ * requests and there is no number to record.
+ *
+ * That absence is the only failure. A latency bound would be measuring the
+ * runner GitHub happened to give us, and a gate that fails on that gets
+ * disabled within a month, so the numbers are published for trend comparison
+ * and nothing here compares them to a target.
+ */
+export function capacityTable(summary: Summary): string | undefined {
+  const requests = summary.metrics["http_reqs"];
+  if (requests === undefined || (requests["count"] ?? 0) === 0) return undefined;
+
+  return [
+    "### Capacity",
+    "",
+    "| Measurement | Value |",
+    "| --- | --- |",
+    `| Sustained requests/s | ${stat(summary, "http_reqs", "rate").toFixed(1)} |`,
+    `| Requests | ${stat(summary, "http_reqs", "count")} |`,
+    `| Peak VUs | ${stat(summary, "vus_max", "max")} |`,
+    `| Failed requests | ${(stat(summary, "http_req_failed", "value") * 100).toFixed(2)}% |`,
+    `| Latency p(95) | ${ms(stat(summary, "http_req_duration", "p(95)"))} |`,
+    `| Latency p(99) | ${ms(stat(summary, "http_req_duration", "p(99)"))} |`,
+    `| Latency max | ${ms(stat(summary, "http_req_duration", "max"))} |`,
+    "",
+    "Measured on a CI runner, which is not the deployed shape: read it against",
+    "the last run rather than as a capacity claim. The number that answers",
+    '"how much load does this hold" comes from a ramp against the deploy.',
+    "",
+  ].join("\n");
 }

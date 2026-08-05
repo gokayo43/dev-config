@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { pinGate, referencesIn, unpinned } from "../.github/actions/lint-workflows/pins.ts";
+import {
+  ACTION_FILES,
+  pinGate,
+  referencesIn,
+  unpinned,
+} from "../.github/actions/lint-workflows/pins.ts";
 import { containing } from "./matchers.ts";
 import { materialise, type Tree } from "./tree.ts";
 
@@ -119,5 +124,19 @@ describe("the files read", () => {
     expect((await pinGate(root, [])).map(({ file }) => file ?? "")).not.toContain(
       "node_modules/some-action/.github/workflows/ci.yml",
     );
+  });
+});
+
+// ci.yml runs its own pass over the composite actions — the one actionlint
+// cannot read — and it has to reach the same files this gate does. Two lists
+// that drift leave a spelling checked by one and not the other.
+describe("the composite check looks where the pin gate looks", () => {
+  test("ci.yml's pathspec covers every action spelling", async () => {
+    const ci = await Bun.file(new URL("../.github/workflows/ci.yml", import.meta.url)).text();
+    const pathspec = /git ls-files '(\.github\/actions\/[^']+)'/.exec(ci)?.[1];
+    expect(pathspec).toBeDefined();
+    for (const pattern of ACTION_FILES) {
+      expect(pathspec).toBe(pattern.replace(/\.ya?ml$/, ".y*ml"));
+    }
   });
 });

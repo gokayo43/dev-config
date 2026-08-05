@@ -92,7 +92,10 @@ runs:
         # dies on its first line otherwise looks exactly like a slow boot, and
         # the run spends its whole budget before saying so.
         deadline=$((SECONDS + 60))
-        until curl -sf "$HEALTH_URL" > /dev/null; do
+        # --max-time bounds each attempt: a process that accepts the connection
+        # and never answers is otherwise indistinguishable from a slow boot, and
+        # curl would sit on it until the job timeout with nothing logged.
+        until curl -sf --connect-timeout 2 --max-time 5 "$HEALTH_URL" > /dev/null; do
           if ! kill -0 "$app" 2> /dev/null; then
             echo "::error::the app exited before $HEALTH_URL answered"
             cat "$RUNNER_TEMP/server.log"
@@ -133,10 +136,10 @@ runs:
         INPUT_SUMMARY_FILE="$RUNNER_TEMP/capacity.json" INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
           bun "$GITHUB_ACTION_PATH/capacity.main.ts"
 
-    # always(): a ramp that failed on the way to a number is exactly when the
-    # partial summary is worth having.
+    # A ramp that failed on the way to a number is exactly when the partial
+    # summary is worth having; a cancelled run has nothing to say.
     - name: Publish the capacity report
-      if: ${{ always() && inputs.capacity == 'true' }}
+      if: ${{ !cancelled() && inputs.capacity == 'true' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.capacity-report }}

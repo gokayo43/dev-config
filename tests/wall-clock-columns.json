@@ -2,16 +2,19 @@
   {
     "table_schema": "app",
     "table_name": "events",
-    "column_name": "occurred_at"
+    "column_name": "occurred_at",
+    "udt_name": "timestamp"
   },
   {
     "table_schema": "public",
     "table_name": "audit log",
-    "column_name": "at"
+    "column_name": "at",
+    "udt_name": "timestamp"
   },
   {
     "table_schema": "public",
     "table_name": "reading",
-    "column_name": "samples"
+    "column_name": "samples",
+    "udt_name": "_timestamp"
   }
 ]

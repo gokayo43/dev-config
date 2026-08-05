@@ -59,10 +59,10 @@ describe("annotations", () => {
 describe("action inputs", () => {
   test("a declared input is read from the variable the action sets", () => {
     process.env["INPUT_WORKING_DIRECTORY"] = "apps/api";
-    process.env["INPUT_COMMITMENT_LABEL"] = "commitment";
-    expect(inputs("working-directory", "commitment-label")).toEqual({
+    process.env["INPUT_TIMESTAMP_ALLOWLIST"] = "public.audit log.at";
+    expect(inputs("working-directory", "timestamp-allowlist")).toEqual({
       "working-directory": "apps/api",
-      "commitment-label": "commitment",
+      "timestamp-allowlist": "public.audit log.at",
     });
   });
 

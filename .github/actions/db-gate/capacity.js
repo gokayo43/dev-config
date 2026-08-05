@@ -10,7 +10,9 @@ import { check } from "k6";
 
 const health = __ENV.HEALTH_URL;
 const origin = health.replace(/^(https?:\/\/[^/]+).*$/, "$1");
-const hot = __ENV.CAPACITY_PATH === "" ? null : origin + __ENV.CAPACITY_PATH;
+// Truthiness, not a comparison against "": the variable is absent when this
+// script is run by hand, and `origin + undefined` is a URL ending "undefined".
+const hot = __ENV.CAPACITY_PATH ? origin + __ENV.CAPACITY_PATH : null;
 
 export const options = {
   stages: [

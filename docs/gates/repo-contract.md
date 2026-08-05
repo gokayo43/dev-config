@@ -31,8 +31,10 @@ The pin check is an allowlist rather than a list of the ways a spec can float.
 as much, and the set of spellings is open-ended. So a spec passes only by
 proving it resolves to one thing: an exact semver, or a protocol that is exact
 by construction — `workspace:`, `file:`, `link:`, `catalog:`, an `npm:` alias
-whose own spec is exact, or a git dependency **carrying a ref**. A
-`github:owner/repo` with no `#ref` is a branch that moves, and it is refused.
+whose own spec is exact, or a git dependency **whose ref is a commit**. A tag
+can be repointed and `#main` moves by design, so `github:owner/repo#v1.2.3` is
+refused exactly as `github:owner/repo` with no ref is — only a 40-character
+commit names one tree for good.
 
 # Exemptions
 

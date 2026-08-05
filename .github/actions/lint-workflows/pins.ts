@@ -1,12 +1,8 @@
 import { type Problem, parseEach, record, repoFiles } from "../_lib/gate.ts";
 
 /** GitHub accepts both spellings for every one of these, so both are read. */
-const OWN = [
-  ".github/workflows/*.yml",
-  ".github/workflows/*.yaml",
-  ".github/actions/*/action.yml",
-  ".github/actions/*/action.yaml",
-];
+export const ACTION_FILES = [".github/actions/*/action.yml", ".github/actions/*/action.yaml"];
+const OWN = [".github/workflows/*.yml", ".github/workflows/*.yaml", ...ACTION_FILES];
 
 const COMMIT = /@[0-9a-f]{40}$/;
 const DIGEST = /@sha256:[0-9a-f]{64}$/;
@@ -24,11 +20,11 @@ export function referencesIn(document: unknown): string[] {
 
   const node = record(document);
   const uses = node["uses"];
+  // No need to skip the `uses` key below: its value is the string just taken,
+  // and a string has no references inside it.
   return [
     ...(typeof uses === "string" ? [uses] : []),
-    ...Object.entries(node)
-      .filter(([key]) => key !== "uses")
-      .flatMap(([, value]) => referencesIn(value)),
+    ...Object.values(node).flatMap(referencesIn),
   ];
 }
 
@@ -38,19 +34,28 @@ export interface Reference {
 }
 
 export function unpinned(references: readonly Reference[]): Problem[] {
-  return references
-    .filter(({ value }) => {
-      // A local action is this repo's own tree at this commit; there is no ref.
-      if (value.startsWith("./")) return false;
-      if (value.startsWith("docker://")) return !DIGEST.test(value);
-      return !COMMIT.test(value);
-    })
-    .map(({ file, value }) => ({
-      file,
-      message: value.startsWith("docker://")
-        ? `${value} is a mutable image tag — pin by @sha256: digest with the tag as a trailing comment`
-        : `${value} is not pinned — use a 40-character commit SHA with the tag as a trailing comment`,
-    }));
+  return references.flatMap(({ file, value }) => {
+    // A local action is this repo's own tree at this commit; there is no ref.
+    if (value.startsWith("./")) return [];
+    if (value.startsWith("docker://")) {
+      return DIGEST.test(value)
+        ? []
+        : [
+            {
+              file,
+              message: `${value} is a mutable image tag — pin by @sha256: digest with the tag as a trailing comment`,
+            },
+          ];
+    }
+    return COMMIT.test(value)
+      ? []
+      : [
+          {
+            file,
+            message: `${value} is not pinned — use a 40-character commit SHA with the tag as a trailing comment`,
+          },
+        ];
+  });
 }
 
 export async function pinGate(root: string, extraPaths: readonly string[]): Promise<Problem[]> {

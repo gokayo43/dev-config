@@ -34,6 +34,19 @@ describe("timestamptz gate", () => {
     expect(timestamptzGate(COLUMNS, [])[0]?.message).toContain("timestamp-allowlist");
   });
 
+  // An array of wall-clock timestamps becomes timestamptz[], not timestamptz —
+  // a diagnostic naming the scalar type would be telling the author to make a
+  // second wrong change.
+  test("an array column is told to become timestamptz[]", () => {
+    const messages = timestamptzGate(COLUMNS, []).map(({ message }) => message);
+    expect(messages.find((m) => m.includes("reading.samples"))).toContain(
+      "store instants as timestamptz[]",
+    );
+    expect(messages.find((m) => m.includes("events.occurred_at"))).toContain(
+      "store instants as timestamptz,",
+    );
+  });
+
   test("an allowlisted column is the deliberate wall-clock case", () => {
     const deliberate = COLUMNS.map(({ table_schema, table_name, column_name }) =>
       [table_schema, table_name, column_name].join("."),
@@ -49,8 +62,18 @@ describe("timestamptz gate", () => {
     expect(
       timestamptzGate(
         [
-          { table_schema: "app", table_name: "events", column_name: "occurred_at" },
-          { table_schema: "public", table_name: "events", column_name: "occurred_at" },
+          {
+            table_schema: "app",
+            table_name: "events",
+            column_name: "occurred_at",
+            udt_name: "timestamp",
+          },
+          {
+            table_schema: "public",
+            table_name: "events",
+            column_name: "occurred_at",
+            udt_name: "timestamp",
+          },
         ],
         ["public.events.occurred_at"],
       ).map(({ message }) => message),

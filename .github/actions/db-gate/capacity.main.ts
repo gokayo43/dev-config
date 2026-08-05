@@ -1,14 +1,20 @@
 import { appendFile } from "node:fs/promises";
 
 import { inputs, report } from "../_lib/gate.ts";
-import { capacityReport, type Summary } from "./capacity.ts";
+import { capacityTable, parseSummary } from "./capacity.ts";
 
 const read = inputs("summary-file", "step-summary");
 
-const { problems, markdown } = capacityReport(
-  (await Bun.file(read["summary-file"]).json()) as Summary,
+const table = capacityTable(parseSummary(await Bun.file(read["summary-file"]).text()));
+if (table !== undefined) await appendFile(read["step-summary"], table);
+
+report(
+  table === undefined
+    ? [
+        {
+          message:
+            "the capacity ramp produced no requests — k6 ran but measured nothing, so there is no number to record",
+        },
+      ]
+    : [],
 );
-
-if (markdown !== "") await appendFile(read["step-summary"], markdown);
-
-report(problems);

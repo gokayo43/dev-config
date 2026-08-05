@@ -443,9 +443,10 @@ and what is ignored. Every other repo's gate is only as honest as those two
 lanes, which is why they run first.
 
 The linting is the `lint-workflows` action — actionlint, pinned by version and
-archive checksum exactly like gitleaks, with shellcheck over every `run:` block —
-used here from the working tree and by the template repo at a SHA, so the pin has
-one home.
+archive checksum exactly like gitleaks, with shellcheck over every `run:` block.
+It runs here from the working tree, and `check.yml` runs it for every consuming
+repo, so a scaffolded repo's own workflows are held to the same schema and the
+same pins as this one's.
 
 actionlint only understands workflows: handed an `action.yml` it reports a
 workflow with no `jobs`. So the composites get a pass of their own, asserting
@@ -456,8 +457,9 @@ actionlint is also silent on a floating tag, so the action carries a second step
 that reads every `uses:` in the workflows, in the composite actions, and in
 `extra-paths`, and fails anything whose ref is not a 40-character commit SHA. A
 tag is a name its owner can repoint at any commit, including after the version
-was read here. Local (`./…`) and `docker://` references carry no git ref and are
-skipped.
+was read here. A `docker://` image is held to the same standard in its own
+syntax — `@sha256:` and not a tag — and only a local `./…` reference is skipped,
+because it is this repo's own tree at this commit and has no ref to pin.
 
 There is no standalone `renovate-config-validator` package on npm; the binary
 ships inside `renovate`:
@@ -666,10 +668,10 @@ nobody reads.
 
 ### Where each gate is written down
 
-`repo-contract`, `stack-gate`, `suppression-hygiene` and `compose-lint` run in
-the static job and `db-gate` is the database job. Each
-has its page under [`docs/gates/`](docs/gates/), listed in the table at the top
-of this file.
+`repo-contract`, `stack-gate`, `suppression-hygiene`, `lint-workflows` and
+`compose-lint` run in the static job; `db-gate` is the database job, and the
+capacity ramp is a step of it. Each has its page under
+[`docs/gates/`](docs/gates/), listed in the table at the top of this file.
 
 ### Static sites
 

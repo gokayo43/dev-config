@@ -6,14 +6,14 @@ description: >-
   The pin check parses the YAML, so the caller sets Bun up first.
 
 inputs:
-  working-directory:
-    description: Where the repository root is.
-    default: .
   extra-paths:
     description: >-
-      Additional workflow files to lint, space-separated. Globs are allowed; one
-      that matches nothing is an error, since that is how a renamed file stops
-      being checked.
+      Additional workflow files to lint, space-separated. Globs are allowed and
+      one that matches nothing is an error — that is how a renamed file stops
+      being checked. Two expanders see them: bash for actionlint and git's
+      pathspec matcher for the pin check. They agree on `*` and on literal
+      paths, which is all these patterns need; `**` and leading-dot patterns
+      would not, so keep them simple.
     default: ""
 
 runs:
@@ -44,7 +44,6 @@ runs:
     - name: Pin every action by commit SHA
       shell: bash
       env:
-        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_EXTRA_PATHS: ${{ inputs.extra-paths }}
       run: |
         set -euo pipefail

@@ -5,6 +5,8 @@ export interface WallClockColumn {
   readonly table_schema: string;
   readonly table_name: string;
   readonly column_name: string;
+  /** `timestamp` or `_timestamp`, which is the difference between timestamptz and timestamptz[]. */
+  readonly udt_name: string;
 }
 
 /**
@@ -24,12 +26,15 @@ export function timestamptzGate(
 ): Problem[] {
   const deliberate = new Set(allowlist);
   return columns
-    .map(({ table_schema, table_name, column_name }) =>
-      [table_schema, table_name, column_name].join("."),
-    )
-    .filter((column) => !deliberate.has(column))
-    .map((column) => ({
-      message: `${column} is a wall-clock timestamp — store instants as timestamptz, or list it in timestamp-allowlist if it is a deliberate wall-clock value`,
+    .map(({ table_schema, table_name, column_name, udt_name }) => ({
+      column: [table_schema, table_name, column_name].join("."),
+      // The array element type is the fix, not the column type: an array of
+      // wall-clock timestamps becomes timestamptz[], not timestamptz.
+      fix: udt_name === "_timestamp" ? "timestamptz[]" : "timestamptz",
+    }))
+    .filter(({ column }) => !deliberate.has(column))
+    .map(({ column, fix }) => ({
+      message: `${column} is a wall-clock timestamp — store instants as ${fix}, or list it in timestamp-allowlist if it is a deliberate wall-clock value`,
     }));
 }
 
@@ -44,12 +49,16 @@ export function allowlistFrom(value: string): string[] {
     .filter((entry) => entry !== "");
 }
 
-// Every schema the deploy owns, not just `public`: a drizzle `pgSchema()` table
-// lives elsewhere and is no less wrong for it. And `udt_name` rather than
-// `data_type`, because an array of wall-clock timestamps reports its data_type
-// as ARRAY and hides the element type in `_timestamp`.
+// Every schema except the catalogue's own, not just `public`: a drizzle
+// `pgSchema()` table lives elsewhere and is no less wrong for it. That does
+// include a schema an extension installed — a false positive is a line in the
+// allowlist, and the alternative is a pg_depend join for a case no repo here
+// has yet.
+//
+// `udt_name` rather than `data_type`, because an array of wall-clock timestamps
+// reports its data_type as ARRAY and hides the element type in `_timestamp`.
 export const WALL_CLOCK_QUERY = `
-  select table_schema, table_name, column_name
+  select table_schema, table_name, column_name, udt_name
   from information_schema.columns
   where table_schema <> 'information_schema'
     and table_schema not like 'pg\\_%'
