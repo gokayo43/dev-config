@@ -9,10 +9,12 @@ import {
 } from "./timestamptz.ts";
 
 const read = inputs("timestamp-allowlist", "database-url");
+if (read["database-url"] === "") {
+  throw new Error("database-url is empty — the calling job owns the database it declared");
+}
 
-// The database the migrations just ran against, read through Bun's own client:
-// the runner needs no psql, and the rows arrive typed rather than as text to
-// split on a separator a column name could itself contain.
+// Read through Bun's own client: the runner needs no psql, and the rows arrive
+// typed rather than as text to split on a separator an identifier could contain.
 const sql = new SQL(read["database-url"]);
 const columns = (await sql.unsafe(WALL_CLOCK_QUERY)) as WallClockColumn[];
 await sql.close();

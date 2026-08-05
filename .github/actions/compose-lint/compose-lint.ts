@@ -2,6 +2,7 @@ import { type Problem, record } from "../_lib/gate.ts";
 
 const MIGRATE = "migrate";
 const OPT_OUT = "x-no-healthcheck";
+const HOST_NETWORK_OPT_OUT = "x-host-network";
 
 type Service = Record<string, unknown>;
 
@@ -40,6 +41,23 @@ function checkPorts(name: string, service: Service, file: string): Problem[] {
       file,
       message: `${name} publishes ${JSON.stringify(port)} on every interface — nginx is the only thing that reaches these, so bind 127.0.0.1`,
     }));
+}
+
+/**
+ * Compose drops a host-networked service's `ports` key without a word, so every
+ * listener it opens is on every interface and the loopback rule above has
+ * nothing left to check.
+ */
+function checkNetworkMode(name: string, service: Service, file: string): Problem[] {
+  if (service["network_mode"] !== "host") return [];
+  const reason = service[HOST_NETWORK_OPT_OUT];
+  if (typeof reason === "string" && reason.trim() !== "") return [];
+  return [
+    {
+      file,
+      message: `${name} runs with network_mode: host — compose ignores its ports and it listens on every interface. Publish through the loopback instead, or ${HOST_NETWORK_OPT_OUT}: "<why this service has to share the host's stack>"`,
+    },
+  ];
 }
 
 function checkMigrationOrder(name: string, service: Service, file: string): Problem[] {
@@ -87,6 +105,7 @@ export function composeLint(file: string, text: string): Problem[] {
         ...checkHealthcheck(name, service, file),
         ...checkMemoryCap(name, service, file),
         ...checkPorts(name, service, file),
+        ...checkNetworkMode(name, service, file),
         ...checkMigrationOrder(name, service, file),
       ];
     }),

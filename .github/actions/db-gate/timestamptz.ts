@@ -1,7 +1,8 @@
 import type { Problem } from "../_lib/gate.ts";
 
-/** A `timestamp without time zone` column, as `information_schema.columns` names it. */
+/** A wall-clock column, as `information_schema.columns` names it. */
 export interface WallClockColumn {
+  readonly table_schema: string;
   readonly table_name: string;
   readonly column_name: string;
 }
@@ -9,9 +10,13 @@ export interface WallClockColumn {
 /**
  * `timestamp without time zone` stores the digits someone typed and forgets
  * which clock produced them, so one row means two different instants either
- * side of a DST boundary or a server move. The database is asked directly
+ * side of a DST boundary or a server move. The catalogue is asked directly
  * rather than a schema dump parsed: an ORM's `timestamp` is a hint, and the
- * catalogue is the fact.
+ * database is the fact.
+ *
+ * Keyed by schema as well as table, because `app.events.occurred_at` and
+ * `public.events.occurred_at` are two different columns and an allowlist that
+ * could not tell them apart would exempt both.
  */
 export function timestamptzGate(
   columns: readonly WallClockColumn[],
@@ -19,16 +24,18 @@ export function timestamptzGate(
 ): Problem[] {
   const deliberate = new Set(allowlist);
   return columns
-    .map(({ table_name, column_name }) => `${table_name}.${column_name}`)
+    .map(({ table_schema, table_name, column_name }) =>
+      [table_schema, table_name, column_name].join("."),
+    )
     .filter((column) => !deliberate.has(column))
     .map((column) => ({
-      message: `${column} is 'timestamp without time zone' — store instants as timestamptz, or list it in timestamp-allowlist if it is a deliberate wall-clock value`,
+      message: `${column} is a wall-clock timestamp — store instants as timestamptz, or list it in timestamp-allowlist if it is a deliberate wall-clock value`,
     }));
 }
 
 /**
  * Comma- or newline-separated, not space-separated: a quoted identifier may
- * contain a space, and `audit log.at` is one entry rather than two.
+ * contain a space, and `public.audit log.at` is one entry rather than two.
  */
 export function allowlistFrom(value: string): string[] {
   return value
@@ -37,9 +44,15 @@ export function allowlistFrom(value: string): string[] {
     .filter((entry) => entry !== "");
 }
 
+// Every schema the deploy owns, not just `public`: a drizzle `pgSchema()` table
+// lives elsewhere and is no less wrong for it. And `udt_name` rather than
+// `data_type`, because an array of wall-clock timestamps reports its data_type
+// as ARRAY and hides the element type in `_timestamp`.
 export const WALL_CLOCK_QUERY = `
-  select table_name, column_name
+  select table_schema, table_name, column_name
   from information_schema.columns
-  where table_schema = 'public' and data_type = 'timestamp without time zone'
-  order by table_name, column_name
+  where table_schema <> 'information_schema'
+    and table_schema not like 'pg\\_%'
+    and udt_name in ('timestamp', '_timestamp')
+  order by table_schema, table_name, column_name
 `;

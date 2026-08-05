@@ -34,18 +34,23 @@ export async function stackGate(root: string, denylistPath: string | URL): Promi
     (entry) => entry.adr === undefined || !deviationRecorded(root, entry.adr),
   );
 
-  return (await manifests(root)).flatMap(({ file, contents }) =>
-    DEPENDENCY_FIELDS.flatMap((field) =>
-      Object.keys(record(contents[field])).flatMap((name) =>
-        live
-          .filter((entry) => denies(entry, name))
-          .map((entry) => ({
-            file,
-            message: `${field}.${name} is not the house pick — ${entry.reason}${
-              entry.adr === undefined ? "" : `; record the deviation at ${entry.adr} to allow it`
-            }`,
-          })),
+  const found = await manifests(root);
+
+  return [
+    ...found.problems,
+    ...found.read.flatMap(({ file, contents }) =>
+      DEPENDENCY_FIELDS.flatMap((field) =>
+        Object.keys(record(contents[field])).flatMap((name) =>
+          live
+            .filter((entry) => denies(entry, name))
+            .map((entry) => ({
+              file,
+              message: `${field}.${name} is not the house pick — ${entry.reason}${
+                entry.adr === undefined ? "" : `; record the deviation at ${entry.adr} to allow it`
+              }`,
+            })),
+        ),
       ),
     ),
-  );
+  ];
 }

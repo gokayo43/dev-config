@@ -11,7 +11,7 @@ const MANIFEST = {
   packageManager: "bun@1.3.11",
   scripts: { "db:migrate": "bun run src/server/migrate.ts", test: "bun test" },
   devDependencies: {
-    "@gokayo43/dev-config": "github:gokayo43/dev-config#v0.6.0",
+    "@gokayo43/dev-config": "github:gokayo43/dev-config#04d2938c7e1368d79169426d944107c9a0674fbc",
     typescript: "7.0.2",
     "oxlint-tsgolint": "7.1.0",
   },
@@ -108,17 +108,24 @@ describe("repo contract", () => {
     "file:../local",
     "link:../local",
     "catalog:default",
-    "github:gokayo43/dev-config#v0.6.0",
-    "git+ssh://git@github.com/o/r.git#3f9a1c2",
+    "github:gokayo43/dev-config#04d2938c7e1368d79169426d944107c9a0674fbc",
+    "git+ssh://git@github.com/o/r.git#04d2938c7e1368d79169426d944107c9a0674fbc",
     "npm:@scope/other@1.2.3",
   ])("a spec that resolves to one thing (%s) passes", async (spec) => {
     expect(await contract(withSpec("oxfmt", spec))).toEqual([]);
   });
 
-  test("a git dependency with no ref is a moving branch, so it is refused", async () => {
-    expect(await contract(withSpec("oxfmt", "github:gokayo43/dev-config"))).toEqual([
-      containing("devDependencies.oxfmt"),
-    ]);
+  // A tag can be repointed at any commit, `#main` moves by design, and
+  // `#semver:` is a range wearing a fragment. Only a commit names one tree.
+  test.each([
+    "github:gokayo43/dev-config",
+    "github:gokayo43/dev-config#",
+    "github:gokayo43/dev-config#main",
+    "github:gokayo43/dev-config#v0.8.3",
+    "github:gokayo43/dev-config#semver:^1.0.0",
+    "git+ssh://git@github.com/o/r.git#3f9a1c2",
+  ])("a git ref that is not a commit (%s) is refused", async (spec) => {
+    expect(await contract(withSpec("oxfmt", spec))).toEqual([containing("devDependencies.oxfmt")]);
   });
 
   test("a peer range is the one place a range means something", async () => {
@@ -175,6 +182,38 @@ describe("repo contract", () => {
       containing("minimumReleaseAge"),
       containing("saveExact"),
       containing("coverageThreshold"),
+    ]);
+  });
+
+  // lefthook 2.x leads with `jobs:` — a list whose entries may be a `group:`
+  // holding another list — and a gate that knew only `commands:` passed a
+  // config declaring every hook it asks for while reading none of them.
+  test("the jobs form is read, groups and all", async () => {
+    const jobs = [
+      "pre-commit:",
+      "  jobs:",
+      "    - name: secrets",
+      "      run: gitleaks git --staged --redact --no-banner .",
+      "",
+      "pre-push:",
+      "  jobs:",
+      "    - name: whole project",
+      "      group:",
+      "        jobs:",
+      "          - run: bun run typecheck",
+      "          - run: bun test",
+      "",
+    ].join("\n");
+    expect(await contract({ ...CLEAN, "lefthook.yml": jobs })).toEqual([]);
+  });
+
+  test("a jobs-form config that declares the hooks and runs nothing is still refused", async () => {
+    const empty =
+      "pre-commit:\n  jobs:\n    - run: echo hi\n\npre-push:\n  jobs:\n    - run: echo hi\n";
+    expect(await contract({ ...CLEAN, "lefthook.yml": empty })).toEqual([
+      containing("gitleaks git --staged"),
+      containing("pre-push must typecheck"),
+      containing("pre-push must run the test suite"),
     ]);
   });
 

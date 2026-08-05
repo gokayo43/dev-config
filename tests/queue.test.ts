@@ -4,6 +4,7 @@ import {
   CANON,
   type Issue,
   type Label,
+  type LabelEvent,
   type Queue,
   queueAudit,
 } from "../.github/actions/queue-audit/queue-audit.ts";
@@ -16,13 +17,27 @@ import {
 import { containing } from "./matchers.ts";
 
 const LABELS: Label[] = CANON.vocabulary.map((name) => ({ name }));
+const OWNER = "gokayo43";
+const RULES = { ...CANON, owner: OWNER };
 
-function queue(labels: Label[], issues: Issue[] = []): Queue {
-  return { labels: async () => labels, openIssues: async () => issues };
+function queue(
+  labels: Label[],
+  issues: Issue[] = [],
+  timelines: Record<number, LabelEvent[]> = {},
+): Queue {
+  return {
+    labels: async () => labels,
+    openIssues: async () => issues,
+    labelEvents: async (issue) => timelines[issue] ?? [],
+  };
 }
 
-async function audit(labels: Label[], issues: Issue[] = []): Promise<string[]> {
-  return (await queueAudit(queue(labels, issues), CANON)).map(({ message }) => message);
+async function audit(
+  labels: Label[],
+  issues: Issue[] = [],
+  timelines: Record<number, LabelEvent[]> = {},
+): Promise<string[]> {
+  return (await queueAudit(queue(labels, issues, timelines), RULES)).map(({ message }) => message);
 }
 
 /** Records what reached the issue, and can be told to fail at either step. */
@@ -57,14 +72,18 @@ async function rejection(work: Promise<unknown>): Promise<string> {
 const PROMOTION: Promotion = {
   label: "ready-for-agent",
   actor: "some-agent",
-  owner: "gokayo43",
+  owner: OWNER,
   issue: "42",
 };
 
 describe("queue guard", () => {
-  test("the owner promotes a proposal, and nothing is touched", async () => {
+  // Encodes a known limitation, not a security property: an agent acting
+  // through the owner's account is the owner in every payload, so this branch
+  // is also the one that lets such an agent promote its own proposal. See
+  // docs/gates/queue-integrity.md.
+  test("a promotion by the owner's account is allowed, agent or not", async () => {
     const seam = desk();
-    expect(await queueGuard({ ...PROMOTION, actor: "gokayo43" }, seam)).toEqual([]);
+    expect(await queueGuard({ ...PROMOTION, actor: OWNER }, seam)).toEqual([]);
     expect(seam.comments).toEqual([]);
     expect(seam.removed).toEqual([]);
   });
@@ -109,14 +128,18 @@ describe("queue guard", () => {
 describe("queue audit", () => {
   test("the canon vocabulary with well-formed issues passes", async () => {
     expect(
-      await audit(LABELS, [
-        { number: 1, labels: [{ name: "needs-triage" }], body: "evidence" },
-        {
-          number: 2,
-          labels: [{ name: "ready-for-agent" }, { name: "commitment" }],
-          body: "Drop the shim.\n\n**Trigger:** the grace period closes.",
-        },
-      ]),
+      await audit(
+        LABELS,
+        [
+          { number: 1, labels: [{ name: "needs-triage" }], body: "evidence" },
+          {
+            number: 2,
+            labels: [{ name: "ready-for-agent" }, { name: "commitment" }],
+            body: "Drop the shim.\n\n**Trigger:** the grace period closes.",
+          },
+        ],
+        { 2: [{ label: "ready-for-agent", actor: OWNER }] },
+      ),
     ).toEqual([]);
   });
 
@@ -140,9 +163,11 @@ describe("queue audit", () => {
 
   test("an issue in two states is refused", async () => {
     expect(
-      await audit(LABELS, [
-        { number: 5, labels: [{ name: "needs-triage" }, { name: "ready-for-agent" }], body: "" },
-      ]),
+      await audit(
+        LABELS,
+        [{ number: 5, labels: [{ name: "needs-triage" }, { name: "ready-for-agent" }], body: "" }],
+        { 5: [{ label: "ready-for-agent", actor: OWNER }] },
+      ),
     ).toEqual([containing("needs-triage and ready-for-agent")]);
   });
 
@@ -156,6 +181,37 @@ describe("queue audit", () => {
         },
       ]),
     ).toEqual([containing("issue #6 is a commitment")]);
+  });
+
+  // A label applied with the job's own token starts no workflow run, so the
+  // guard never saw it. The timeline still records who did it.
+  test("a promotion the guard never saw is caught on the schedule", async () => {
+    const issue: Issue = { number: 9, labels: [{ name: "ready-for-agent" }], body: "x" };
+    expect(
+      await audit(LABELS, [issue], { 9: [{ label: "ready-for-agent", actor: "some-bot" }] }),
+    ).toEqual([containing("promoted to 'ready-for-agent' by some-bot")]);
+    expect(
+      await audit(LABELS, [issue], { 9: [{ label: "ready-for-agent", actor: OWNER }] }),
+    ).toEqual([]);
+  });
+
+  test("the latest application of the label is the one that counts", async () => {
+    const issue: Issue = { number: 10, labels: [{ name: "ready-for-human" }], body: "x" };
+    expect(
+      await audit(LABELS, [issue], {
+        10: [
+          { label: "ready-for-human", actor: "some-bot" },
+          { label: "ready-for-human", actor: OWNER },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  test("a promotion with no event at all cannot be attributed, so it is refused", async () => {
+    const issue: Issue = { number: 11, labels: [{ name: "ready-for-agent" }], body: "x" };
+    expect(await audit(LABELS, [issue])).toEqual([
+      containing("with no labelled event naming who added it"),
+    ]);
   });
 
   test("an issue with no body at all is still audited", async () => {

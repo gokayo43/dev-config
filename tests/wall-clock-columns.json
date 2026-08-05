@@ -1,14 +1,17 @@
 [
   {
+    "table_schema": "app",
+    "table_name": "events",
+    "column_name": "occurred_at"
+  },
+  {
+    "table_schema": "public",
     "table_name": "audit log",
     "column_name": "at"
   },
   {
-    "table_name": "user",
-    "column_name": "billing_day"
-  },
-  {
-    "table_name": "user",
-    "column_name": "opens_at"
+    "table_schema": "public",
+    "table_name": "reading",
+    "column_name": "samples"
   }
 ]

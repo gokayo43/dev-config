@@ -15,6 +15,12 @@ inputs:
   health-url:
     description: The URL to poll until it answers 200.
     required: true
+  database-url:
+    description: >-
+      The database to read column types from. The calling job declares the
+      service, so it owns the URL; the migrate and boot steps read the same
+      value from DATABASE_URL in the environment.
+    required: true
   timestamp-allowlist:
     description: >-
       table.column entries whose value really is a wall-clock reading rather
@@ -51,10 +57,11 @@ runs:
     - name: Every instant carries its zone
       shell: bash
       env:
+        INPUT_DATABASE_URL: ${{ inputs.database-url }}
         INPUT_TIMESTAMP_ALLOWLIST: ${{ inputs.timestamp-allowlist }}
       run: |
         set -euo pipefail
-        INPUT_DATABASE_URL="$DATABASE_URL" bun "$GITHUB_ACTION_PATH/timestamptz.main.ts"
+        bun "$GITHUB_ACTION_PATH/timestamptz.main.ts"
 
     # Migrations applying is half of it; the app running against the schema they
     # produced is the other half. Health answers 200 only once the process is up
@@ -72,7 +79,21 @@ runs:
       run: |
         set -euo pipefail
         bash -c "$START_COMMAND" > "$RUNNER_TEMP/server.log" 2>&1 &
-        # HEALTH_URL is expanded by the inner shell, from the environment.
-        # shellcheck disable=SC2016
-        timeout 60 bash -c 'until curl -sf "$HEALTH_URL"; do sleep 2; done' \
-          || { cat "$RUNNER_TEMP/server.log"; exit 1; }
+        app=$!
+        # Polled against the process as well as the URL: a start command that
+        # dies on its first line otherwise looks exactly like a slow boot, and
+        # the run spends its whole budget before saying so.
+        deadline=$((SECONDS + 60))
+        until curl -sf "$HEALTH_URL" > /dev/null; do
+          if ! kill -0 "$app" 2> /dev/null; then
+            echo "::error::the app exited before $HEALTH_URL answered"
+            cat "$RUNNER_TEMP/server.log"
+            exit 1
+          fi
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "::error::$HEALTH_URL did not answer within 60s"
+            cat "$RUNNER_TEMP/server.log"
+            exit 1
+          fi
+          sleep 2
+        done

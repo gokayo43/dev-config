@@ -118,6 +118,24 @@ describe("compose lint", () => {
     expect(lint(short)).toEqual([containing("web must depend_on migrate")]);
   });
 
+  // Compose drops the ports key for a host-networked service without a word,
+  // so the loopback rule above has nothing left to check.
+  test("a host-networked service is refused", () => {
+    const host = CLEAN.replace('      - "127.0.0.1:5180:3000"', "    network_mode: host").replace(
+      "    ports:\n",
+      "",
+    );
+    expect(lint(host)).toEqual([containing("web runs with network_mode: host")]);
+  });
+
+  test("a host-networked service with a reasoned opt-out passes", () => {
+    const host = CLEAN.replace(
+      '      - "127.0.0.1:5180:3000"',
+      "    network_mode: host\n    x-host-network: the ingest listener needs the host stack for PROXY protocol",
+    ).replace("    ports:\n", "");
+    expect(lint(host)).toEqual([]);
+  });
+
   test("an image-only service is infrastructure, not something the migration gates", () => {
     // postgres has no `build`, so it is not asked to wait on the migration it
     // hosts; give it one and the rule would fire on a circular dependency.

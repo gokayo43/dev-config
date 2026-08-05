@@ -15,6 +15,9 @@ inputs:
   commitment-label:
     description: The label whose issues must state a Trigger in the body. Empty means the canon one.
     default: ""
+  owner:
+    description: The only login allowed to have promoted an issue.
+    required: true
 
 runs:
   using: composite
@@ -24,6 +27,7 @@ runs:
         INPUT_VOCABULARY: ${{ inputs.vocabulary }}
         INPUT_STATE_LABELS: ${{ inputs.state-labels }}
         INPUT_COMMITMENT_LABEL: ${{ inputs.commitment-label }}
+        INPUT_OWNER: ${{ inputs.owner }}
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/queue-audit.main.ts"

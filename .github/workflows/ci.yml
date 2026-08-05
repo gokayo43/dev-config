@@ -21,6 +21,9 @@ jobs:
         with:
           # gitleaks reads history, and a shallow clone has none.
           fetch-depth: 0
+          # Nothing here pushes, and the job runs third-party code (an
+          # unpinned npx, a scaffolded tree's dependencies) in this workspace.
+          persist-credentials: false
 
       - uses: ./.github/actions/secret-scan
 
@@ -86,7 +89,7 @@ jobs:
       - name: Check the composite actions
         run: |
           set -euo pipefail
-          mapfile -t actions < <(git ls-files '.github/actions/*/action.yml')
+          mapfile -t actions < <(git ls-files '.github/actions/*/action.y*ml')
           # The ${} below are JS template literals, not shell expansions.
           # shellcheck disable=SC2016
           bun -e '

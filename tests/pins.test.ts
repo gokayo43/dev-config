@@ -1,0 +1,105 @@
+import { describe, expect, test } from "bun:test";
+
+import { pinGate, referencesIn, unpinned } from "../.github/actions/lint-workflows/pins.ts";
+import { containing } from "./matchers.ts";
+import { materialise, type Tree } from "./tree.ts";
+
+const COMMIT = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+const DIGEST = "sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416";
+
+function uses(...values: string[]): string[] {
+  return unpinned(values.map((value) => ({ file: "w.yml", value }))).map(({ message }) => message);
+}
+
+describe("reading uses out of a document", () => {
+  // Each of these was a hole in the pattern this replaced: extra spacing after
+  // the dash, a quoted value, a job-level `uses:` for a reusable workflow, and
+  // a composite action's own steps.
+  test("every shape a uses: can take is found", () => {
+    const document = Bun.YAML.parse(
+      [
+        "jobs:",
+        "  a:",
+        "    steps:",
+        `      -   uses: actions/checkout@${COMMIT}`,
+        `      - uses: "oven-sh/setup-bun@${COMMIT}"`,
+        "  b:",
+        `    uses: owner/repo/.github/workflows/check.yml@${COMMIT}`,
+        "runs:",
+        "  steps:",
+        `    - uses: actions/cache@${COMMIT}`,
+      ].join("\n"),
+    );
+    expect(
+      referencesIn("w.yml", document)
+        .map(({ value }) => value)
+        .toSorted(),
+    ).toEqual(
+      [
+        `actions/cache@${COMMIT}`,
+        `actions/checkout@${COMMIT}`,
+        `oven-sh/setup-bun@${COMMIT}`,
+        `owner/repo/.github/workflows/check.yml@${COMMIT}`,
+      ].toSorted(),
+    );
+  });
+});
+
+describe("pinning", () => {
+  test("a commit SHA passes, in every position", () => {
+    expect(
+      uses(`actions/checkout@${COMMIT}`, `owner/repo/.github/workflows/x.yml@${COMMIT}`),
+    ).toEqual([]);
+  });
+
+  test("a local action carries no ref and needs none", () => {
+    expect(uses("./.github/actions/secret-scan")).toEqual([]);
+  });
+
+  test.each([
+    "actions/checkout@v5",
+    "some/action@main",
+    "owner/repo/.github/workflows/x.yml@v0.8.3",
+  ])("a floating ref (%s) is refused", (value) => {
+    expect(uses(value)).toEqual([containing("is not pinned")]);
+  });
+
+  test("a short SHA is not a commit pin", () => {
+    expect(uses("some/action@3d3c42e")).toEqual([containing("is not pinned")]);
+  });
+
+  // The pattern this replaced skipped every docker:// reference while its
+  // comment claimed they were pinned by digest syntax.
+  test("a docker image tag is refused, and its digest is not", () => {
+    expect(uses("docker://alpine:3.22")).toEqual([containing("mutable image tag")]);
+    expect(uses(`docker://alpine@${DIGEST}`)).toEqual([]);
+  });
+});
+
+describe("the files read", () => {
+  const CLEAN: Tree = {
+    ".gitignore": "node_modules\n",
+    ".github/workflows/ci.yml": `jobs:\n  a:\n    steps:\n      - uses: actions/checkout@${COMMIT}\n`,
+    ".github/workflows/lighthouse.yaml": `jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v5\n`,
+    ".github/actions/one/action.yml": `runs:\n  steps:\n    - uses: actions/cache@${COMMIT}\n`,
+    ".github/actions/nested/deeper/action.yaml": `runs:\n  steps:\n    - uses: actions/cache@v4\n`,
+    "setup/ci.yml": `jobs:\n  a:\n    uses: owner/repo/.github/workflows/check.yml@main\n`,
+  };
+
+  test("both spellings, at any depth, and the extra paths", async () => {
+    const root = await materialise(CLEAN);
+    const problems = (await pinGate(root, ["setup/*.yml"])).map(({ file }) => file ?? "");
+    expect(problems.toSorted((a, b) => (a < b ? -1 : 1))).toEqual([
+      ".github/actions/nested/deeper/action.yaml",
+      ".github/workflows/lighthouse.yaml",
+      "setup/ci.yml",
+    ]);
+  });
+
+  test("an extra path that matches nothing is how a renamed file stops being checked", async () => {
+    const root = await materialise(CLEAN);
+    const messages = (await pinGate(root, ["setup/queue-*.yml"])).map(({ message }) => message);
+    expect(messages[0]).toEqual(containing("matched no file"));
+    expect(messages).toHaveLength(3);
+  });
+});

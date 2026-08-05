@@ -73,6 +73,10 @@ const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
  */
 const NPM_ALIAS = /^npm:(?:@[^/]+\/)?[^@]+@(.+)$/;
 
+/** A git dependency resolves to one tree only when its ref is a commit. */
+const GIT_PROTOCOL = /^(github|gitlab|bitbucket|git|git\+[a-z]+):/;
+const COMMIT = /^[0-9a-f]{40}$/;
+
 /**
  * An allowlist, not a blocklist. `18`, `next` and `1.x` float exactly as much
  * as `^1.2.3` does, and the ways npm spells "whatever is newest" are
@@ -88,7 +92,9 @@ function isExact(spec: string): boolean {
   if (/^(workspace|file|link|catalog|portal):/.test(spec)) return true;
   const alias = NPM_ALIAS.exec(spec);
   if (alias !== null) return EXACT_SEMVER.test(alias[1] ?? "");
-  if (/^(github|gitlab|bitbucket|git|git\+[a-z]+):/.test(spec)) return spec.includes("#");
+  // `#main` moves, a tag can be repointed, and `#semver:^1.0.0` is a range
+  // wearing a fragment. Only a commit names one tree for good.
+  if (GIT_PROTOCOL.test(spec)) return COMMIT.test(spec.slice(spec.indexOf("#") + 1));
   return false;
 }
 
@@ -150,13 +156,15 @@ async function checkLineage(
     const inherits = extendsList(oxlintrc["extends"]).some((entry) =>
       entry.endsWith(`${DEV_CONFIG}/oxlint.base.json`),
     );
-    if (!exempt && !inherits) {
+    if (!inherits && !exempt) {
       problems.push({
         file: ".oxlintrc.json",
         message: `.oxlintrc.json must extend ./node_modules/${DEV_CONFIG}/oxlint.base.json`,
       });
     }
-    if (specOf(contents, "oxlint-tsgolint") === undefined) {
+    // Only the base turns the type-aware rules on, so only a repo that
+    // inherits it needs the package that runs them.
+    if (inherits && specOf(contents, "oxlint-tsgolint") === undefined) {
       problems.push({
         file: "package.json",
         message:
@@ -220,19 +228,43 @@ async function checkBunfig(root: string): Promise<Problem[]> {
   return problems;
 }
 
+/**
+ * Both config shapes. lefthook 2.x leads with `jobs:` — a list, whose entries
+ * may be a `group:` holding another list — and still accepts the older
+ * `commands:` map. A gate that knew only one of them passes a config that
+ * declares every hook it asks for and reads none of them.
+ */
+function runsOf(entry: unknown): string[] {
+  const node = record(entry);
+  const run = node["run"];
+  const nested = record(node["group"])["jobs"];
+  return [
+    ...(typeof run === "string" ? [run] : []),
+    ...(Array.isArray(nested) ? nested.flatMap(runsOf) : []),
+  ];
+}
+
+function hookRuns(hooks: Record<string, unknown>, hook: string): string[] {
+  const node = record(hooks[hook]);
+  const jobs = node["jobs"];
+  return [
+    ...Object.values(record(node["commands"])).flatMap(runsOf),
+    ...(Array.isArray(jobs) ? jobs.flatMap(runsOf) : []),
+  ];
+}
+
 async function checkLefthook(root: string): Promise<Problem[]> {
   const text = await readText(`${root}/lefthook.yml`);
   if (text === undefined) return [{ file: "lefthook.yml", message: "lefthook.yml is missing" }];
 
   const hooks = record(Bun.YAML.parse(text));
-  const runs = (hook: string): string[] =>
-    Object.values(record(record(hooks[hook])["commands"])).map((command) => {
-      const run = record(command)["run"];
-      return typeof run === "string" ? run : "";
-    });
-
   const problems: Problem[] = [];
-  if (!runs("pre-commit").some((run) => run.includes("gitleaks") && run.includes("--staged"))) {
+
+  if (
+    !hookRuns(hooks, "pre-commit").some(
+      (run) => run.includes("gitleaks") && run.includes("--staged"),
+    )
+  ) {
     problems.push({
       file: "lefthook.yml",
       message:
@@ -240,7 +272,7 @@ async function checkLefthook(root: string): Promise<Problem[]> {
     });
   }
 
-  const prePush = runs("pre-push");
+  const prePush = hookRuns(hooks, "pre-push");
   if (!prePush.some((run) => run.includes("typecheck"))) {
     problems.push({
       file: "lefthook.yml",
@@ -374,7 +406,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   const exempt = (name: Exemption): boolean => contract.exemptions.includes(name);
 
   const all = await manifests(root);
-  const rootManifest = all.find(({ file }) => file === "package.json");
+  const rootManifest = all.read.find(({ file }) => file === "package.json");
   if (rootManifest === undefined) {
     return [{ file: "package.json", message: "the repo has no package.json" }];
   }
@@ -390,5 +422,10 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     exempt("ci-call") ? none : checkWorkflow(root),
   ]);
 
-  return [...checkRoot(rootManifest.contents, contract), ...checkPins(all), ...checks.flat()];
+  return [
+    ...checkRoot(rootManifest.contents, contract),
+    ...all.problems,
+    ...checkPins(all.read),
+    ...checks.flat(),
+  ];
 }

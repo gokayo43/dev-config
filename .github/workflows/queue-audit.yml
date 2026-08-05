@@ -44,3 +44,4 @@ jobs:
           vocabulary: ${{ inputs.vocabulary }}
           state-labels: ${{ inputs.state-labels }}
           commitment-label: ${{ inputs.commitment-label }}
+          owner: ${{ github.repository_owner }}

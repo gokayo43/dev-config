@@ -117,18 +117,39 @@ export interface Manifest {
   readonly contents: Record<string, unknown>;
 }
 
+export interface Manifests {
+  readonly read: Manifest[];
+  /** One per file that would not parse, naming it. */
+  readonly problems: Problem[];
+}
+
 // Every package.json in the repo, root and workspaces alike. A git pathspec
 // matches a wildcard across "/", so the second pathspec below reaches any depth
 // while still requiring the whole final path segment: "apps/my-package.json"
 // does not match, and neither pathspec can return anything but a package.json.
-export async function manifests(root: string): Promise<Manifest[]> {
+export async function manifests(root: string): Promise<Manifests> {
   const files = await repoFiles(root, ["package.json", "*/package.json"]);
-  return await Promise.all(
-    files.map(async (file) => ({
-      file,
-      contents: (await Bun.file(`${root}/${file}`).json()) as Record<string, unknown>,
-    })),
+  // Rescued per file: one unparseable manifest anywhere — a scratch file, a
+  // half-written edit — would otherwise reject the batch, discard every finding
+  // the other gates had already made, and report a SyntaxError naming nothing.
+  const results = await Promise.all(
+    files.map(async (file) => {
+      try {
+        return {
+          file,
+          contents: (await Bun.file(`${root}/${file}`).json()) as Record<string, unknown>,
+        };
+      } catch (error) {
+        return { file, error: error instanceof Error ? error.message : String(error) };
+      }
+    }),
   );
+  return {
+    read: results.filter((result): result is Manifest => "contents" in result),
+    problems: results
+      .filter((result): result is { file: string; error: string } => "error" in result)
+      .map(({ file, error }) => ({ file, message: `is not valid JSON: ${error}` })),
+  };
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {

@@ -1,4 +1,5 @@
 import type { Problem } from "../_lib/gate.ts";
+import { PROMOTION_LABELS } from "../_lib/queue.ts";
 
 export interface Label {
   readonly name: string;
@@ -10,10 +11,17 @@ export interface Issue {
   readonly body: string | null;
 }
 
+/** Who added a label, and which. Chronological. */
+export interface LabelEvent {
+  readonly label: string;
+  readonly actor: string;
+}
+
 /** Where the queue is read from. Injected so the rules can be driven without a repo. */
 export interface Queue {
   labels(): Promise<Label[]>;
   openIssues(): Promise<Issue[]>;
+  labelEvents(issue: number): Promise<LabelEvent[]>;
 }
 
 export interface QueueRules {
@@ -23,6 +31,8 @@ export interface QueueRules {
   readonly stateLabels: readonly string[];
   /** Marks an issue whose body names the event that makes it due. */
   readonly commitmentLabel: string;
+  /** The only login allowed to have promoted an issue. */
+  readonly owner: string;
 }
 
 /**
@@ -49,6 +59,7 @@ export const CANON: QueueRules = {
     "wontfix",
   ],
   commitmentLabel: "commitment",
+  owner: "",
 };
 
 const TRIGGER = "**Trigger:**";
@@ -87,5 +98,52 @@ export async function queueAudit(queue: Queue, rules: QueueRules): Promise<Probl
     }
   }
 
+  problems.push(...(await checkPromotions(queue, issues, rules)));
+
   return problems;
+}
+
+/**
+ * A label applied with the job's own GITHUB_TOKEN starts no workflow run, which
+ * is documented GitHub behaviour and means the guard never fires for in-repo
+ * automation. The timeline still records who did it, so the promotion is
+ * re-checked here on a schedule — the gap narrows from "never noticed" to "noticed
+ * within a week".
+ */
+async function checkPromotions(
+  queue: Queue,
+  issues: readonly Issue[],
+  rules: QueueRules,
+): Promise<Problem[]> {
+  const promoted = issues
+    .map((issue) => ({
+      issue,
+      labels: issue.labels
+        .map(({ name }) => name)
+        .filter((name) => PROMOTION_LABELS.includes(name)),
+    }))
+    .filter(({ labels }) => labels.length > 0);
+
+  const timelines = await Promise.all(
+    promoted.map(async ({ issue }) => await queue.labelEvents(issue.number)),
+  );
+
+  return promoted.flatMap(({ issue, labels }, index) =>
+    labels.flatMap((label) => {
+      const applied = (timelines[index] ?? []).filter((event) => event.label === label).at(-1);
+      if (applied === undefined) {
+        return [
+          {
+            message: `issue #${issue.number} carries '${label}' with no labelled event naming who added it — the promotion cannot be attributed`,
+          },
+        ];
+      }
+      if (applied.actor === rules.owner) return [];
+      return [
+        {
+          message: `issue #${issue.number} was promoted to '${label}' by ${applied.actor}, not ${rules.owner} — only the owner promotes a proposal`,
+        },
+      ];
+    }),
+  );
 }
