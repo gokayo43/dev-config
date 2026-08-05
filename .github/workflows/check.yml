@@ -43,7 +43,7 @@ jobs:
           # would go unreported even though pushing it had already burned the key.
           fetch-depth: 0
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@3893d06d16ba8c6654ca37f13e6e65d28170dcf8 # v0.4.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@d3c9e24023698c0faaaba2beab86ae83576149f9 # v0.4.1
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
@@ -57,7 +57,7 @@ jobs:
       - run: bun run typecheck
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@3893d06d16ba8c6654ca37f13e6e65d28170dcf8 # v0.4.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@d3c9e24023698c0faaaba2beab86ae83576149f9 # v0.4.1
 
   database:
     if: inputs.database
@@ -105,7 +105,7 @@ jobs:
       - if: inputs.build
         run: bun run build
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@3893d06d16ba8c6654ca37f13e6e65d28170dcf8 # v0.4.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@d3c9e24023698c0faaaba2beab86ae83576149f9 # v0.4.1
         with:
           start-command: ${{ inputs.start-command }}
           health-url: ${{ inputs.health-url }}
