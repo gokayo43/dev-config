@@ -1,0 +1,32 @@
+name: Lint workflows
+description: >-
+  Runs actionlint over the calling repository's workflows, with shellcheck over
+  every run: block. actionlint finds `.github/workflows` itself; extra-paths is
+  for workflow files kept elsewhere.
+
+inputs:
+  extra-paths:
+    description: Additional workflow files to lint, space-separated.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        # renovate: datasource=github-release-attachments depName=rhysd/actionlint
+        ACTIONLINT_VERSION: v1.7.12
+        ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        EXTRA_PATHS: ${{ inputs.extra-paths }}
+      run: |
+        set -euo pipefail
+        curl -sSfL -o "$RUNNER_TEMP/actionlint.tar.gz" \
+          "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz"
+        echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+        tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+        "$RUNNER_TEMP/actionlint" -color
+        if [ -n "$EXTRA_PATHS" ]; then
+          # Splitting is the point: EXTRA_PATHS is a list of files.
+          # shellcheck disable=SC2086
+          "$RUNNER_TEMP/actionlint" -color $EXTRA_PATHS
+        fi

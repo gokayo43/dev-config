@@ -286,15 +286,20 @@ directly above the pair:
 
 ```yaml
         env:
-          # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks
-          GITLEAKS_VERSION: v8.30.1
-          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          # renovate: datasource=github-release-attachments depName=owner/tool
+          TOOL_VERSION: v1.2.3
+          TOOL_SHA256: <sha256 of the release archive>
 ```
 
-That covers gitleaks in the secret-scan action and actionlint in this repo's own
-CI, and it covers the next one without touching the preset. A second, tiny
-manager handles the one place a version appears without a checksum: this README's
-local install snippet for the pre-commit hook.
+The shape above is illustrative on purpose: this file is not in the manager's
+patterns, so a real version and checksum written here would be the one pin
+nobody moves. The live ones sit in `.github/actions/secret-scan/action.yml` and
+this repo's own CI, which the patterns do cover, and it covers the next tool
+without touching the preset.
+
+One pin does live in this README and is managed: the `GITLEAKS_VERSION=` line in
+the local install snippet below, which carries no checksum and has a second,
+tiny manager of its own.
 
 The datasource is what makes this safe. `github-releases` would move the version
 and leave the checksum, and a version bumped past a stale `sha256sum -c` fails
@@ -312,12 +317,15 @@ and the URL strips the prefix for the asset name.
 ### Gating this repo
 
 This repo's own CI parses every JSON file it ships, validates the preset, checks
-the Lighthouse budget, and lints the half of it that executes: `actionlint` over
-`.github/workflows/`, pinned by version and archive checksum exactly like
-gitleaks. actionlint only understands workflows — handed an `action.yml` it
-reports a workflow with no `jobs` — so the composite actions get a separate pass
-asserting what silently breaks them: a `run` step with no `shell` never runs the
-script it carries.
+the Lighthouse budget, and lints the half of it that executes. That last one is
+the `lint-workflows` action — actionlint, pinned by version and archive checksum
+exactly like gitleaks, with shellcheck over every `run:` block — used here from
+the working tree and by the template repo at a SHA, so the pin has one home.
+
+actionlint only understands workflows: handed an `action.yml` it reports a
+workflow with no `jobs`. So the composites get a pass of their own, asserting
+what silently breaks them — a `run` step with no `shell` never runs the script
+it carries — and their scripts go through the same shellcheck.
 
 There is no standalone `renovate-config-validator` package on npm; the binary
 ships inside `renovate`:
@@ -398,7 +406,7 @@ concurrency:
 
 jobs:
   check:
-    uses: gokayo43/dev-config/.github/workflows/check.yml@<commit sha> # v0.3.1
+    uses: gokayo43/dev-config/.github/workflows/check.yml@<commit sha> # <release tag>
     with:
       build: true
       database: true
@@ -426,8 +434,9 @@ the assertion that the suite ran. Everything up to the test suite is the local
 are what only CI has.
 
 The steps that are shell rather than a `bun run` live in `.github/actions/` as
-composite actions — `secret-scan`, `test-suite`, `db-gate` — so the workflow
-above and any repo that has to run the same thing outside it share one copy.
+composite actions — `secret-scan`, `test-suite`, `db-gate`, `lint-workflows` —
+so the workflow above and any repo that has to run the same thing outside it
+share one copy.
 `check.yml` references them by full path and SHA rather than `./`: inside a
 called workflow a relative `uses:` resolves against the *caller's* checkout, and
 the alternative — checking this repo out into the caller's workspace — puts its

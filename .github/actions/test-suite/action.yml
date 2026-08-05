@@ -18,7 +18,10 @@ runs:
       run: |
         set -euo pipefail
         bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
-        grep -q 'testsuites[^>]* skipped="0"' "$RUNNER_TEMP/junit.xml" \
+        # Anchored on the root element: a per-file <testsuite name="…"> line
+        # carries its own skipped count, and a file whose name contains
+        # "testsuites" would otherwise answer for the whole run.
+        grep -q '<testsuites [^>]* skipped="0"' "$RUNNER_TEMP/junit.xml" \
           || { echo "::error::skipped tests: a suite whose infrastructure is absent must fail, never skip"; exit 1; }
         ! grep -o '<testcase name="[^"]*"[^>]*assertions="0"' "$RUNNER_TEMP/junit.xml" \
           || { echo "::error::the tests listed above asserted nothing — assert with expect, properties included; an assertion-free pass is indistinguishable from a test that never ran"; exit 1; }

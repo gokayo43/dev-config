@@ -40,19 +40,10 @@ jobs:
           ' "${files[@]}"
 
       # check.yml and the composite actions are the executable half of this
-      # repo: a schema error in one of them breaks every consumer at once.
-      - name: Lint the workflows and actions
-        env:
-          # renovate: datasource=github-release-attachments depName=rhysd/actionlint
-          ACTIONLINT_VERSION: v1.7.12
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-        run: |
-          set -euo pipefail
-          curl -sSfL -o "$RUNNER_TEMP/actionlint.tar.gz" \
-            "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz"
-          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint" -color .github/workflows/*.yml
+      # repo: a schema error in one of them breaks every consumer at once. The
+      # action used here is this repo's own, at this commit — the repos that
+      # scaffold from the template reach the same one by SHA.
+      - uses: ./.github/actions/lint-workflows
 
       # actionlint only reads workflows — handed an action.yml it reports a
       # workflow with no `jobs`. So the composites are checked here for what
