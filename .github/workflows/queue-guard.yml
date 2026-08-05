@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - uses: gokayo43/dev-config/.github/actions/queue-guard@6b498ebbf5960e48ddf8adc120c54746c52fc30a # v0.7.0
+      - uses: gokayo43/dev-config/.github/actions/queue-guard@cec13553a2190061625e390c19bc2e6ba5eac7bb # v0.7.1
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
