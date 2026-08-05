@@ -124,10 +124,13 @@ jobs:
       # an exit code alone would pass a runner that re-executed the DDL.
       - name: Migrate from empty, twice
         run: |
+          # pg_dump wraps its output in \restrict tokens that are random per
+          # invocation, so two dumps of one schema never compare equal as-is.
+          dump() { pg_dump --schema-only "$DATABASE_URL" | grep -vE '^\\(un)?restrict '; }
           bun run db:migrate
-          pg_dump --schema-only "$DATABASE_URL" > "$RUNNER_TEMP/schema-once.sql"
+          dump > "$RUNNER_TEMP/schema-once.sql"
           bun run db:migrate
-          pg_dump --schema-only "$DATABASE_URL" > "$RUNNER_TEMP/schema-twice.sql"
+          dump > "$RUNNER_TEMP/schema-twice.sql"
           diff -u "$RUNNER_TEMP/schema-once.sql" "$RUNNER_TEMP/schema-twice.sql" \
             || { echo "::error::the second migrate changed the schema"; exit 1; }
 

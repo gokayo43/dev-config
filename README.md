@@ -381,7 +381,7 @@ concurrency:
 
 jobs:
   check:
-    uses: gokayo43/dev-config/.github/workflows/check.yml@ed1409f176c69d21f93577889d191a5a514c1961 # v0.3.0
+    uses: gokayo43/dev-config/.github/workflows/check.yml@<commit sha> # v0.3.1
     with:
       build: true
       database: true
@@ -396,7 +396,9 @@ jobs:
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches
-a repo when its pin moves and not before. Renovate's github-actions manager
+a repo when its pin moves and not before. The example above is deliberately not
+a real SHA: nothing keeps a README snippet current, so the pin worth copying is
+the live one in `project-template`'s `setup/ci.yml`. Renovate's github-actions manager
 reads a job-level `uses:` exactly as it reads a step's, so the pin moves in a PR
 like any other dependency.
 
@@ -501,7 +503,7 @@ on every push is what turns that into a red build.
 
 The migrations then run a second time, and the gate is not the exit code but
 `pg_dump --schema-only` before and after: the schema has to come out
-byte-identical. An exit code only says the second run did not error; the dump
+identical. An exit code only says the second run did not error; the dump
 says the database came out in the same state, which a `push`-style sync or a
 hand-rolled runner can exit 0 without doing. With a journalled migrator the pass
 is cheap and proves the journal is honest; with anything that re-executes SQL,
