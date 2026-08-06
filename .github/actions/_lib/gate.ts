@@ -117,6 +117,20 @@ export function kindOf(value: unknown): string {
   return Array.isArray(value) ? "an array" : `a ${typeof value}`;
 }
 
+/**
+ * The value as one of a fixed vocabulary, or nothing. `includes` on a `const`
+ * tuple does not narrow the value, and an assertion to make it narrow is the
+ * thing worth avoiding — so the find *is* the narrowing, and each caller
+ * decides for itself whether absent is a problem to report or an input to
+ * refuse outright.
+ */
+export function oneOf<const Name extends string>(
+  names: readonly Name[],
+  value: unknown,
+): Name | undefined {
+  return names.find((name) => name === value);
+}
+
 /** A space-separated action input, as a list. */
 export function list(value: string): string[] {
   return value.split(/\s+/).filter((item) => item !== "");

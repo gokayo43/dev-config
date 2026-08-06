@@ -89,13 +89,33 @@ jobs:
           # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
-      # The upgrade path is replayed by the database job, so asking for it
-      # without one is a request that would otherwise be ignored in silence —
-      # and a gate nobody notices is off is the worst kind.
-      - if: ${{ !inputs.database && inputs.upgrade-gate }}
+      # Every one of these is aimed at a step of the database job, so asking for
+      # one without that job is a request that would otherwise be ignored in
+      # silence — and a gate nobody notices is off is the worst kind. A repo
+      # that has written out the routes it wants ramped, or the reasons a route
+      # cannot be, has said plainly that it expects a ramp.
+      - if: >-
+          ${{ !inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
+          || inputs.capacity-script != '' || inputs.route-allowlist != '') }}
+        env:
+          UPGRADE_GATE: ${{ inputs.upgrade-gate }}
+          CAPACITY_PATH: ${{ inputs.capacity-path }}
+          CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
+          ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
         run: |
           set -euo pipefail
-          echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
+          if [ "$UPGRADE_GATE" = true ]; then
+            echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
+          fi
+          if [ -n "$CAPACITY_PATH" ]; then
+            echo "::error::capacity-path needs database: true — the ramp runs against the app the database job boots"
+          fi
+          if [ -n "$CAPACITY_SCRIPT" ]; then
+            echo "::error::capacity-script needs database: true — the ramp runs against the app the database job boots"
+          fi
+          if [ -n "$ROUTE_ALLOWLIST" ]; then
+            echo "::error::route-allowlist needs database: true — the route floor is measured across the database job's ramp"
+          fi
           exit 1
 
       - uses: gokayo43/dev-config/.github/actions/secret-scan@c2582e6ead5f5eaa85546d68508a1bf8a4100f61 # v0.33.0

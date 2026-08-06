@@ -1,5 +1,6 @@
 import { allowlistFrom, entry, inputs, notice, report } from "../_lib/gate.ts";
-import { parseRouteLog, type RouteLog, routeCoverage } from "./route-coverage.ts";
+import type { RouteLog } from "../../../route-log.ts";
+import { parseRouteLog, routeCoverage } from "./route-coverage.ts";
 
 async function routeLog(file: string, source: string): Promise<RouteLog> {
   return parseRouteLog(await Bun.file(file).text(), source);

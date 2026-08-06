@@ -54,17 +54,40 @@ has to be remembered: everything below is derived from that word rather than
 turned on one gate at a time, because a checklist is something you can do half
 of.
 
-| What `"live"` requires                              | Why it cannot wait                                                                                                                                              |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| the `check.yml` call passes `upgrade-gate: true`    | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
-| `scripts/backup.sh` exists and is executable        | a systemd timer runs it directly, and an undumped database is one nobody has                                                                                    |
-| `scripts/restore-drill.sh` exists and is executable | a backup nobody has restored is a backup nobody has                                                                                                             |
-| a Sentry SDK is declared somewhere in the workspace | a failure only the user sees is one nobody fixes                                                                                                                |
+| What `"live"` requires                              | When                     | Why it cannot wait                                                                                                                                              |
+| --------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a Sentry SDK among what the workspace ships         | always                   | a failure only the user sees is one nobody fixes                                                                                                                |
+| the `check.yml` call passes `database: true`        | the repo owns migrations | nothing replays the schema otherwise, and the gate below has no job to run in                                                                                   |
+| the `check.yml` call passes `upgrade-gate: true`    | the repo owns migrations | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
+| `scripts/backup.sh` exists and is executable        | the repo owns migrations | a systemd timer runs it directly, and an undumped database is one nobody has                                                                                    |
+| `scripts/restore-drill.sh` exists and is executable | the repo owns migrations | a backup nobody has restored is a backup nobody has                                                                                                             |
 
-Any of `@sentry/bun`, `@sentry/tanstackstart-react` or `@sentry/react-native`
-satisfies the last one, in any manifest in the workspace: the fact being
-asserted is that something in the repo reports its crashes, not which package a
-given program reaches for.
+Only crash reporting is owed by every live repo. The rest is about a database,
+and half this fleet is a static site with a hostname and no schema — demanding a
+backup script of one would teach people to write a script that does nothing in
+order to get past a gate. The upgrade gate is scoped the same way for a harder
+reason than symmetry: `check.yml` **refuses** `upgrade-gate: true` without
+`database: true`, so asking for it there would be this contract demanding the
+one configuration the shared workflow rejects.
+
+**"Owns migrations" is read from the repo, never from the `database` input.**
+The signal is a `db:migrate` script, which is the entry point every database
+gate here drives. That input says which CI job runs, and it lives in the very
+file these rules are about — so keying off it would let a live repo shed its
+backup script, its rehearsed restore and its upgrade gate by deleting one line
+of its own workflow. A repo that owns migrations and passes `database: false` is
+told so by name rather than quietly excused.
+
+Any `@sentry/*` package satisfies the first, in any manifest in the workspace,
+and only among what that manifest ships — `dependencies` and
+`optionalDependencies`. Sentry ships one SDK per runtime (`@sentry/bun`,
+`@sentry/astro`, `@sentry/tanstackstart-react`, `@sentry/react-native`) and the
+fact asserted is that something in the repo reports its crashes, not which
+package a given program reaches for; a list of the ones this house uses today
+would fail the first repo on a runtime nobody had thought of. A devDependency
+builds and tests the repo and reaches no deployment, and a peer range states
+what a consumer may bring, so an SDK in either is a repo whose crashes nobody
+hears.
 
 A field that is absent, or reads anything but those two words, is its own
 problem and the only one reported — a repo that has not said which it is gets

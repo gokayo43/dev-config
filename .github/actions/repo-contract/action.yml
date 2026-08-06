@@ -2,9 +2,17 @@ name: Repo contract
 description: >-
   Asserts the facts a repo has to declare about itself: the package manager and
   its pins, the config lineage back to this repo, the install and coverage
-  policy, the hooks, the shape of its secrets, the docs spine, and a CI call
-  pinned by commit SHA. Every one of them is a string a repo can drift out of
-  silently, and each one that drifts turns another gate into a no-op.
+  policy, the hooks, the shape of its secrets, the docs spine, a CI call pinned
+  by commit SHA, and whether it is carrying real people. Every one of them is a
+  string a repo can drift out of silently, and each one that drifts turns
+  another gate into a no-op.
+
+  That last one is `lifecycle`, which reads "dev" or "live". "live" derives what
+  a repo with users owes — crash reporting, and for one that owns migrations a
+  backup script, a rehearsed restore and the upgrade gate — from the repo
+  itself rather than from this action's inputs, so none of it can be shed by
+  editing the workflow those rules are about. docs/gates/repo-contract.md has
+  the table.
 
 inputs:
   working-directory:

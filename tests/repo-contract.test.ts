@@ -547,6 +547,26 @@ describe("what going live requires", () => {
       }),
     ).toEqual([]);
   });
+
+  // Declaring is not shipping. A devDependency builds and tests the repo and
+  // reaches no deployment, and a peer range states what a consumer may bring —
+  // so an SDK in either is a repo whose crashes nobody hears.
+  test.each(["devDependencies", "peerDependencies"])(
+    "a Sentry SDK in %s alone is not crash reporting",
+    async (field) => {
+      const declared = manifestWith((contents) => {
+        contents["lifecycle"] = "live";
+        const existing = contents[field];
+        contents[field] = {
+          ...(typeof existing === "object" && existing !== null ? existing : {}),
+          "@sentry/bun": "10.24.0",
+        };
+      });
+      expect(await live({ ...LIVE, "package.json": declared["package.json"] ?? "" })).toEqual([
+        containing("a live repo reports its crashes"),
+      ]);
+    },
+  );
 });
 
 // The rules are scoped to what the repo is. Half this fleet is a static site
@@ -570,14 +590,30 @@ describe("a live repo with no database of its own", () => {
     ).toEqual([containing("a live repo reports its crashes")]);
   });
 
-  // The same tree, once it owns migrations: the two scripts are about a
-  // database, so they are owed exactly when there is one.
-  test("a live repo that does own a database is asked for both scripts", async () => {
-    expect(await live(LIVE_STATIC, { database: true })).toEqual([
-      containing("db:migrate"),
-      containing("must pass `upgrade-gate: true`"),
+  // Owning a schema is read from the repo, so turning the CI job on does not
+  // conjure one: the caller is told its input has no migration entry point
+  // behind it, and the database rules stay off because there is still no
+  // database.
+  test("running the database job over a repo with no migrations is the caller's problem", async () => {
+    expect(await live(LIVE_STATIC, { database: true })).toEqual([containing("db:migrate")]);
+  });
+});
+
+// The `database` input says which CI job runs, and it lives in the very file
+// these rules are about. Keying off it would let a live repo drop its backup
+// script, its rehearsed restore and its upgrade gate by deleting one line of
+// its own workflow — so the contract asks the repo instead.
+describe("a live repo cannot shed the database rules by editing its workflow", () => {
+  test("owning migrations and running no database job is its own problem", async () => {
+    expect(await live(LIVE, { database: false })).toEqual([
+      containing("must pass `database: true`"),
+    ]);
+  });
+
+  test("and every rule it would have shed still holds", async () => {
+    expect(await live(without(LIVE, BACKUP), { database: false })).toEqual([
+      containing("must pass `database: true`"),
       containing("a live repo owns scripts/backup.sh"),
-      containing("a live repo owns scripts/restore-drill.sh"),
     ]);
   });
 });

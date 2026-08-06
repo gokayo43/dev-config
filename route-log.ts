@@ -1,11 +1,14 @@
 /**
  * The protocol between an app and the capacity ramp's route-coverage floor,
- * declared once and imported by both ends. Types only: an app imports these
- * with `import type`, so nothing here reaches a bundle and this package stays
- * the devDependency it is. The two constants an implementation needs — the
- * endpoint's path and the spelling for a route registered for every method —
- * are deliberately not here; sharing a *value* would put an identifier from
- * this package into a server's production bundle to save two lines.
+ * declared once and imported by both ends — the two strings as well as the
+ * three shapes.
+ *
+ * Exporting the strings costs an app one identifier from a devDependency in
+ * whatever bundle its instrument lands in, and that cost is accepted: `"ALL"`
+ * is a protocol constant that exists only because Elysia spells its catch-all
+ * `.all()`, and a value with a reason that arbitrary is one nobody will
+ * reproduce correctly from memory. It was reproduced by hand in three places
+ * before this line existed.
  *
  * An app that sets `ROUTE_LOG` serves `GET /__route-log`, which answers both
  * lists in a single fetch:
@@ -37,10 +40,23 @@
  * answered, and a gate that guessed would credit coverage to a route that
  * served nothing.
  *
- * The endpoint leaves itself out of both lists: it is an instrument, not a
- * route the floor is about, and the gate's own two fetches are not the
+ */
+
+/**
+ * Where an app serves the report. Any app under `ROUTE_LOG` answers here, and
+ * leaves this path out of both lists it reports: an instrument is not one of
+ * the routes the floor is about, and the gate's own two fetches are not the
  * scenario's traffic.
  */
+export const ENDPOINT = "/__route-log";
+
+/**
+ * How a route registered for every method is named. Elysia spells that
+ * `.all()`, which is where the word comes from; TanStack Start spells the same
+ * thing `ANY` and its implementation translates. The gate credits such a route
+ * with whichever method reached it.
+ */
+export const EVERY_METHOD = "ALL";
 
 /** A route as both halves of the contract name it: the router's own pattern, not a URL. */
 export interface Route {

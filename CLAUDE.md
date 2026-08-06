@@ -20,8 +20,13 @@ a change to a rule usually lands here too.
 - `.github/workflows/check.yml` — the gate every repo calls.
 - `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
   module the suite drives, and a `*.main.ts` that GitHub runs. `_lib/gate.ts` is
-  what they share, and `_lib/pinned-tool.sh` is the one shell helper — the
-  verified fetch every pinned binary goes through.
+  what they share. The shell helpers beside it are `pinned-tool.sh` — the
+  verified fetch every pinned binary goes through — and `k6.sh`, which is that
+  fetch plus the one k6 pin, so the three ramps in this house run one binary.
+- `route-log.ts` at the root is the protocol between an app and the
+  route-coverage floor: the two strings and the three shapes, exported so that
+  neither end reproduces them. It is in `files` and `exports` because a
+  consuming repo's app imports the types.
 - `db-gate/capacity.js` is the exception: it runs inside k6, not under this
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
@@ -55,7 +60,8 @@ commit cannot reference its own SHA:
 
 Consumers pin the actions at (1) and the workflow call at (2). A tag must sit on
 exactly the commit its pins name. After tagging, bump `project-template`'s pins:
-`setup/ci.yml`, `.github/workflows/template.yml`, and `DEV_CONFIG` in
+`setup/ci.single.yml` and `setup/ci.monorepo.yml` (one per shape, and both carry
+the workflow call), `.github/workflows/template.yml`, and `DEV_CONFIG` in
 `setup.ts`.
 
 ## Adding a gate

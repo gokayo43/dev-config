@@ -8,6 +8,7 @@ import {
   jsonObjects,
   type Manifest,
   manifests,
+  oneOf,
   type Problem,
   record,
   repoFiles,
@@ -27,8 +28,22 @@ type Lifecycle = (typeof LIFECYCLES)[number];
 
 /** The field as one of those, or nothing — which is its own problem and never a default. */
 function lifecycleOf(contents: Record<string, unknown>): Lifecycle | undefined {
-  const declared = contents["lifecycle"];
-  return LIFECYCLES.find((name) => name === declared);
+  return oneOf(LIFECYCLES, contents["lifecycle"]);
+}
+
+/**
+ * Whether the repo owns a database, asked of the repo rather than of the
+ * caller. `db:migrate` is the entry point every database gate here drives, so
+ * a repo that declares one owns migrations and a repo that does not, does not.
+ *
+ * It matters that this is not the `database` input. That input says which CI
+ * job runs, and it lives in the very file the live rules are about — so a live
+ * repo could shed its backup script, its rehearsed restore and its upgrade
+ * gate by deleting one line from its own workflow, which is the opposite of
+ * what a contract is for.
+ */
+function ownsDatabase(contents: Record<string, unknown>): boolean {
+  return record(contents["scripts"])["db:migrate"] !== undefined;
 }
 
 const DEV_CONFIG = "@gokayo43/dev-config";
@@ -125,9 +140,18 @@ function specOf(contents: Record<string, unknown>, name: string): string | undef
   return undefined;
 }
 
-/** Any of Sentry's per-runtime SDKs, in any manifest's dependencies. */
+/**
+ * The fields a package is actually shipped from. `devDependencies` declares
+ * what builds and tests the repo and reaches no deployment, and
+ * `peerDependencies` states what a consumer may bring — the same reasoning the
+ * pin check applies in reverse. A Sentry SDK in either is a repo that does not
+ * report its crashes.
+ */
+const SHIPPED_FIELDS = ["dependencies", "optionalDependencies"] as const;
+
+/** Any of Sentry's per-runtime SDKs, among what a manifest actually ships. */
 function hasSentry(contents: Record<string, unknown>): boolean {
-  return DEPENDENCY_FIELDS.some((field) =>
+  return SHIPPED_FIELDS.some((field) =>
     Object.keys(record(contents[field])).some((name) => name.startsWith(SENTRY)),
   );
 }
@@ -462,20 +486,43 @@ async function checkCall(root: string): Promise<Call> {
  * upgrade and no drill to rehearse — demanding them would teach people to write
  * a script that does nothing in order to get past a gate.
  */
+interface Database {
+  /** The repo declares a migration entry point, so it owns a schema. */
+  readonly owned: boolean;
+  /** The caller runs the database job, so something replays that schema. */
+  readonly gated: boolean;
+}
+
 async function checkLive(
   root: string,
   all: readonly Manifest[],
-  contract: Contract,
+  database: Database,
   call: Call,
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
 
-  // Everything about a database is owed exactly when there is one. The upgrade
-  // gate is here rather than beside the other workflow rules for a harder
-  // reason than symmetry: check.yml *refuses* `upgrade-gate: true` without
-  // `database: true`, so asking a live site with no database for it would be
-  // this contract demanding the one config the shared workflow rejects.
-  if (contract.database) {
+  // Everything about a database is owed exactly when the repo owns one — read
+  // from its own migration entry point, never from the workflow input, which
+  // would let a live repo shed all three of these by deleting one line of the
+  // file they are about.
+  //
+  // A repo that owns a schema and runs no job over it is that same hole from
+  // the other side: the rules would apply and every one of them would be
+  // unenforceable, since the gate proving an upgrade never runs.
+  if (database.owned && !database.gated) {
+    problems.push({
+      file: CI_WORKFLOW,
+      message:
+        "a live repo that owns migrations must pass `database: true` to check.yml — nothing replays this schema otherwise, and the upgrade gate below has no job to run in",
+    });
+  }
+
+  // The upgrade gate is here rather than beside the other workflow rules for a
+  // harder reason than symmetry: check.yml *refuses* `upgrade-gate: true`
+  // without `database: true`, so asking a live site with no database for it
+  // would be this contract demanding the one config the shared workflow
+  // rejects.
+  if (database.owned) {
     // Read off the call rather than out of the file's text, for the reason the
     // pin is: the fact is "this job asks check.yml for the upgrade gate", and a
     // repo can spell those words in a comment, in a second job, or in a
@@ -605,23 +652,38 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   const call = exempt("ci-call") ? { asked: undefined, problems: [] } : await checkCall(root);
 
   const none = Promise.resolve<Problem[]>([]);
-  const checks = await Promise.all([
+  const [lockfiles, lineage, bunfig, lefthook, secrets, docs, live] = await Promise.all([
     checkLockfiles(root),
     checkLineage(root, rootManifest.value, exempt("config-lineage")),
     checkBunfig(root),
     checkLefthook(root),
     exempt("secrets") ? none : checkSecrets(root),
     exempt("docs-spine") ? none : checkDocs(root),
-    // Already read, and here rather than in the return so that the workflow's
-    // own problems keep their place in the order the diagnostics come out in.
-    Promise.resolve(call.problems),
-    lifecycle === "live" ? checkLive(root, all.read, contract, call) : none,
+    lifecycle === "live"
+      ? checkLive(
+          root,
+          all.read,
+          { owned: ownsDatabase(rootManifest.value), gated: contract.database },
+          call,
+        )
+      : none,
   ]);
 
+  // Spelled out rather than flattened from the batch, because the order is the
+  // thing being decided here — it is what a reader of a failing run sees, and
+  // what the fixtures assert. `call.problems` was read before the batch and
+  // takes its place in that order like anything else.
   return [
     ...checkRoot(rootManifest.value, contract),
     ...all.problems,
     ...checkPins(all.read),
-    ...checks.flat(),
+    ...lockfiles,
+    ...lineage,
+    ...bunfig,
+    ...lefthook,
+    ...secrets,
+    ...docs,
+    ...call.problems,
+    ...live,
   ];
 }

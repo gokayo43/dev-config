@@ -1,4 +1,4 @@
-import { isObject, kindOf, type Problem, record } from "../_lib/gate.ts";
+import { isObject, kindOf, oneOf, type Problem, record } from "../_lib/gate.ts";
 
 export interface Summary {
   readonly metrics: Record<string, Record<string, number>>;
@@ -61,7 +61,7 @@ export type RanOn = (typeof RAN_ON)[number];
 
 /** The input as one of those, refused rather than defaulted — a default would publish a claim nobody made. */
 export function ranOnFrom(value: string): RanOn {
-  const found = RAN_ON.find((name) => name === value);
+  const found = oneOf(RAN_ON, value);
   if (found === undefined) {
     throw new Error(`ran-on is '${value}' — it names one of: ${RAN_ON.join(", ")}`);
   }

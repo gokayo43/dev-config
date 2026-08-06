@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { allowlistFrom } from "../.github/actions/_lib/gate.ts";
+import type { RouteLog } from "../route-log.ts";
 import {
   type Coverage,
   parseRouteLog,
-  type RouteLog,
   routeCoverage,
 } from "../.github/actions/db-gate/route-coverage.ts";
 

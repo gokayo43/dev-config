@@ -1,4 +1,4 @@
-import type { Route, RouteLog, Served } from "../../../route-log.ts";
+import { EVERY_METHOD, type Route, type RouteLog, type Served } from "../../../route-log.ts";
 import { type Allowlist, isObject, kindOf, type Problem } from "../_lib/gate.ts";
 
 /**
@@ -52,14 +52,9 @@ export function parseRouteLog(text: string, source: string): RouteLog {
   };
 }
 
-export type { RouteLog };
-
 function key({ method, path }: Route): string {
   return `${method.toUpperCase()} ${path}`;
 }
-
-/** A route registered for every method is reached by whichever one the ramp used. */
-const EVERY_METHOD = "ALL";
 
 function totalOf(counts: readonly Served[], matches: (served: Served) => boolean): number {
   return counts.filter(matches).reduce((total, served) => total + served.count, 0);

@@ -143,6 +143,10 @@ runs:
         # The route floor is the difference between these two reads of the app's
         # counters, so the health poll that got the app this far sits inside the
         # first and cannot be mistaken for a route the ramp exercised.
+        #
+        # The one place the protocol's endpoint is written out rather than
+        # imported: this is bash, and nothing here can read route-log.ts. Every
+        # other copy — the gate's, and both apps' — comes from ENDPOINT there.
         route_log="$(echo "$HEALTH_URL" | sed -E 's#^(https?://[^/]+).*#\1#')/__route-log"
         # Bounded for the reason the health poll above is: an app wedged under
         # the ramp accepts the connection and never answers, which is otherwise
