@@ -696,6 +696,50 @@ describe("replay gate", () => {
     await rm(copy ?? "", { recursive: true, force: true });
   });
 
+  // The base replay runs the base ref's files, so a statement that fails there
+  // is that commit's. Saying "which statement did not apply" and leaving it
+  // there would send the author looking through migrations they just wrote.
+  test("a failure in the base replay says whose migration it was", async () => {
+    const broken = { ...SLUG, sql: `ALTER TABLE "missing" ADD COLUMN "x" text;\n` };
+    const repo = await fixture(
+      { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING, broken) },
+      {
+        ...migratesFrom(JOURNALLED, "drizzle"),
+        ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
+      },
+    );
+
+    const refused = await refusal(replay(repo, pushedOver(repo.revs[0] ?? "")));
+
+    expect(refused).toContain("failed replaying");
+    expect(refused).toContain("rather than this branch's");
+    expect(await git(repo.root, ["status", "--porcelain"])).toBe("");
+  });
+
+  // The gate drops this database. A caller that declared it as its own would be
+  // asking the check to destroy the one the app boots against.
+  test("a caller that declares the gate's own database is refused", async () => {
+    const repo = await fixture(
+      { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
+      {
+        ...migratesFrom(JOURNALLED, "drizzle"),
+        ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
+      },
+    );
+    await onServer([`create database "${UPGRADE_DATABASE}"`]);
+    databases.push(UPGRADE_DATABASE);
+
+    const verdict = await replayGate({
+      root: repo.root,
+      url: beside(SERVER, UPGRADE_DATABASE),
+      upgrade: pushedOver(repo.revs[0] ?? ""),
+    });
+
+    expect(messages(verdict)).toEqual([
+      containing(`the declared database is called ${UPGRADE_DATABASE}`),
+    ]);
+  });
+
   // The one way this gate could pass by having been given nothing: a checkout
   // with no history reads as a repo with no base ref.
   test("a shallow checkout is refused rather than skipped", async () => {
