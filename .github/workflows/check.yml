@@ -108,28 +108,28 @@ jobs:
           fi
           exit 1
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@b6f44fc5581c73aeff54dfbcd80560ba89580ea2 # v0.24.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@aff3be1ea61c1b7ed76c4fb5130c8f056eb67110 # v0.25.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@b6f44fc5581c73aeff54dfbcd80560ba89580ea2 # v0.24.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@aff3be1ea61c1b7ed76c4fb5130c8f056eb67110 # v0.25.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@b6f44fc5581c73aeff54dfbcd80560ba89580ea2 # v0.24.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@aff3be1ea61c1b7ed76c4fb5130c8f056eb67110 # v0.25.0
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.
-      - uses: gokayo43/dev-config/.github/actions/lint-workflows@b6f44fc5581c73aeff54dfbcd80560ba89580ea2 # v0.24.0
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@aff3be1ea61c1b7ed76c4fb5130c8f056eb67110 # v0.25.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@b6f44fc5581c73aeff54dfbcd80560ba89580ea2 # v0.24.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@aff3be1ea61c1b7ed76c4fb5130c8f056eb67110 # v0.25.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@b6f44fc5581c73aeff54dfbcd80560ba89580ea2 # v0.24.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@aff3be1ea61c1b7ed76c4fb5130c8f056eb67110 # v0.25.0
 
       - run: bun install --frozen-lockfile
 
@@ -141,7 +141,7 @@ jobs:
       - run: bun run typecheck
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@b6f44fc5581c73aeff54dfbcd80560ba89580ea2 # v0.24.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@aff3be1ea61c1b7ed76c4fb5130c8f056eb67110 # v0.25.0
 
   database:
     if: inputs.database
@@ -201,7 +201,7 @@ jobs:
       - if: inputs.build
         run: bun run build
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@b6f44fc5581c73aeff54dfbcd80560ba89580ea2 # v0.24.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@aff3be1ea61c1b7ed76c4fb5130c8f056eb67110 # v0.25.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           start-command: ${{ inputs.start-command }}
