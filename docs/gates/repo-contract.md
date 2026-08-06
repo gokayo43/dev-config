@@ -19,6 +19,7 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `CONTEXT.md` (or `CONTEXT-MAP.md`), `docs/adr/`, `CLAUDE.md`                                                    | the docs spine                                                                                    |
 | `db:migrate` exists, when `database: true`                                                                      | the database gate replays migrations through it                                                   |
 | a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                           | a tag is a name someone else can repoint                                                          |
+| `lifecycle` reads `"dev"` or `"live"`                                                                           | it is what every rule under "Going live" below reconfigures off                                   |
 
 The knip case is the one that reads as arbitrary and is not: knip resolves
 `knip.json` before `knip.ts`, and a JSON config cannot import anything. A repo
@@ -36,6 +37,40 @@ can be repointed and `#main` moves by design, so `github:owner/repo#v1.2.3` is
 refused exactly as `github:owner/repo` with no ref is — only a 40-character
 commit names one tree for good.
 
+# Going live
+
+Nothing can derive whether a repo is carrying real people. A repo with a
+hostname, a compose file and a backup script looks exactly like one three days
+from its first deploy, and the difference is the whole difference — so the repo
+declares it, in one field of its root `package.json`:
+
+```json
+{ "lifecycle": "dev" }
+```
+
+`project-template` scaffolds `"dev"`. Moving it to `"live"` is the owner's own
+commit, made when the repo starts serving users, and it is the only thing that
+has to be remembered: everything below is derived from that word rather than
+turned on one gate at a time, because a checklist is something you can do half
+of.
+
+| What `"live"` requires                              | Why it cannot wait                                                                                                                                              |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the `check.yml` call passes `upgrade-gate: true`    | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
+| `scripts/backup.sh` exists and is executable        | a systemd timer runs it directly, and an undumped database is one nobody has                                                                                    |
+| `scripts/restore-drill.sh` exists and is executable | a backup nobody has restored is a backup nobody has                                                                                                             |
+| a Sentry SDK is declared somewhere in the workspace | a failure only the user sees is one nobody fixes                                                                                                                |
+
+Any of `@sentry/bun`, `@sentry/tanstackstart-react` or `@sentry/react-native`
+satisfies the last one, in any manifest in the workspace: the fact being
+asserted is that something in the repo reports its crashes, not which package a
+given program reaches for.
+
+A field that is absent, or reads anything but those two words, is its own
+problem and the only one reported — a repo that has not said which it is gets
+graded against neither set of rules, because choosing for it is exactly what the
+field exists to prevent.
+
 # Exemptions
 
 Some facts a repo cannot satisfy because of what it is, not because nobody got
@@ -47,12 +82,12 @@ with:
   contract-exemptions: config-lineage ci-call secrets
 ```
 
-| Exemption        | Waives                                                                    |
-| ---------------- | ------------------------------------------------------------------------- |
-| `config-lineage` | _where_ the configs inherit from — not whether they exist                 |
-| `ci-call`        | the SHA-pinned call into `check.yml`                                      |
-| `docs-spine`     | the glossary, `docs/adr/` and `CLAUDE.md`                                 |
-| `secrets`        | the `.env` / `.env.example` shape, for a repo with no runtime environment |
+| Exemption        | Waives                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| `config-lineage` | _where_ the configs inherit from — not whether they exist                                   |
+| `ci-call`        | the SHA-pinned call into `check.yml`, and the `upgrade-gate: true` a live repo passes to it |
+| `docs-spine`     | the glossary, `docs/adr/` and `CLAUDE.md`                                                   |
+| `secrets`        | the `.env` / `.env.example` shape, for a repo with no runtime environment                   |
 
 Every exemption is echoed as a `::notice` in the run, and a name outside the
 table fails rather than waiving anything — a typo cannot quietly turn a check

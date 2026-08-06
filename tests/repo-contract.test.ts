@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { chmod } from "node:fs/promises";
+import { join } from "node:path";
 
 import { type Contract, repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { materialise, type Tree, without } from "./tree.ts";
@@ -9,6 +11,7 @@ const PIN = "f1a8afef270d30bf25f2f30275ecf988123d9fb3";
 const MANIFEST = {
   name: "clean",
   packageManager: "bun@1.3.11",
+  lifecycle: "dev",
   scripts: { "db:migrate": "bun run src/server/migrate.ts", test: "bun test" },
   devDependencies: {
     "@gokayo43/dev-config": "github:gokayo43/dev-config#04d2938c7e1368d79169426d944107c9a0674fbc",
@@ -380,4 +383,143 @@ describe("contract exemptions", () => {
       containing("'docs_spine' is not a contract fact"),
     ]);
   });
+});
+
+const BACKUP = "scripts/backup.sh";
+const RESTORE_DRILL = "scripts/restore-drill.sh";
+
+/** Everything `lifecycle: "live"` derives, all of it satisfied. */
+const LIVE: Tree = {
+  ...manifestWith((contents) => {
+    contents["lifecycle"] = "live";
+    contents["dependencies"] = { "@sentry/bun": "10.24.0" };
+  }),
+  [BACKUP]: "#!/usr/bin/env bash\n",
+  [RESTORE_DRILL]: "#!/usr/bin/env bash\n",
+  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: true\n      upgrade-gate: true\n`,
+};
+
+/**
+ * The same materialisation, with the two scripts marked executable — the state
+ * git records and a systemd unit needs. Bun.write leaves a new file at the
+ * umask's 0644, which is exactly the tree the not-executable case wants.
+ */
+async function live(
+  tree: Tree,
+  executable: readonly string[] = [BACKUP, RESTORE_DRILL],
+): Promise<string[]> {
+  const root = await materialise(tree, [".env.example"]);
+  await Promise.all(
+    executable.filter((path) => path in tree).map((path) => chmod(join(root, path), 0o755)),
+  );
+  return (await repoContract(root, DEFAULTS)).map(({ message }) => message);
+}
+
+// The field is the switch, so a repo that has not thrown it is graded against
+// neither set of rules — the gate says only that nobody has said which repo
+// this is.
+describe("the lifecycle field", () => {
+  test("a repo that does not declare one is refused", async () => {
+    expect(await contract(manifestWith((contents) => delete contents["lifecycle"]))).toEqual([
+      containing("lifecycle is absent"),
+    ]);
+  });
+
+  test.each(["prod", "", "production", "Live", "true"])(
+    "a lifecycle nobody defined (%s) is refused rather than read as either",
+    async (value) => {
+      expect(await contract(manifestWith((contents) => (contents["lifecycle"] = value)))).toEqual([
+        containing(`lifecycle reads ${JSON.stringify(value)}`),
+      ]);
+    },
+  );
+
+  // Each row is the argument list, so the array case is a row of one array —
+  // written flat it would be spread into the string "live" and test the opposite.
+  test.each([[true], [1], [null], [["live"]]])(
+    "a lifecycle that is not even a string (%p) is refused, not crashed on",
+    async (value: unknown) => {
+      expect(await contract(manifestWith((contents) => (contents["lifecycle"] = value)))).toEqual([
+        containing('it says "dev" or "live"'),
+      ]);
+    },
+  );
+
+  test("a dev repo owes none of what going live requires", async () => {
+    // The clean tree has no backup script, no restore drill, no Sentry and no
+    // upgrade gate, and that is a complete repo until the day it is deployed.
+    expect(await contract(CLEAN)).toEqual([]);
+  });
+
+  test("a live repo that has all of it passes", async () => {
+    expect(await live(LIVE)).toEqual([]);
+  });
+});
+
+describe("what going live requires", () => {
+  test("CI has to ask check.yml for the upgrade gate", async () => {
+    expect(
+      await live({ ...LIVE, ".github/workflows/ci.yml": CLEAN[".github/workflows/ci.yml"] ?? "" }),
+    ).toEqual([containing("must pass `upgrade-gate: true`")]);
+  });
+
+  // GitHub casts it to the boolean the input declares, so the repo asking this
+  // way is a repo running the gate.
+  test("the quoted spelling asks for it too", async () => {
+    const quoted = (LIVE[".github/workflows/ci.yml"] ?? "").replace(
+      "upgrade-gate: true",
+      'upgrade-gate: "true"',
+    );
+    expect(await live({ ...LIVE, ".github/workflows/ci.yml": quoted })).toEqual([]);
+  });
+
+  test("an upgrade-gate on a job that calls something else is not the call's", async () => {
+    const elsewhere = `${LIVE[".github/workflows/ci.yml"] ?? ""}  other:\n    uses: someone/else/.github/workflows/check.yml@${PIN}\n    with:\n      upgrade-gate: true\n`;
+    const off = elsewhere.replace(
+      "      database: true\n      upgrade-gate: true\n",
+      "      database: true\n",
+    );
+    expect(await live({ ...LIVE, ".github/workflows/ci.yml": off })).toEqual([
+      containing("must pass `upgrade-gate: true`"),
+    ]);
+  });
+
+  test.each([
+    [BACKUP, "a live repo owns scripts/backup.sh"],
+    [RESTORE_DRILL, "a live repo owns scripts/restore-drill.sh"],
+  ])("%s has to exist", async (path, message) => {
+    expect(await live(without(LIVE, path))).toEqual([containing(message)]);
+  });
+
+  // A script systemd execs directly, committed without its bit, fails at 3am
+  // and not before.
+  test.each([BACKUP, RESTORE_DRILL])("%s has to be executable", async (path) => {
+    const others = [BACKUP, RESTORE_DRILL].filter((each) => each !== path);
+    expect(await live(LIVE, others)).toEqual([containing(`${path} is not executable`)]);
+  });
+
+  test("something in the repo has to report its crashes", async () => {
+    const blind = manifestWith((contents) => {
+      contents["lifecycle"] = "live";
+    });
+    expect(await live({ ...LIVE, "package.json": blind["package.json"] ?? "" })).toEqual([
+      containing("a live repo reports its crashes"),
+    ]);
+  });
+
+  test.each(["@sentry/bun", "@sentry/tanstackstart-react", "@sentry/react-native"])(
+    "%s satisfies it, from anywhere in the workspace",
+    async (name) => {
+      const blind = manifestWith((contents) => {
+        contents["lifecycle"] = "live";
+      });
+      expect(
+        await live({
+          ...LIVE,
+          "package.json": blind["package.json"] ?? "",
+          "apps/api/package.json": JSON.stringify({ dependencies: { [name]: "10.24.0" } }),
+        }),
+      ).toEqual([]);
+    },
+  );
 });

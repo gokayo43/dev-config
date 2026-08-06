@@ -12,6 +12,22 @@ import {
   repoFiles,
 } from "../_lib/gate.ts";
 
+/**
+ * Whether the repo is deployed and carrying people, said by the repo about
+ * itself rather than inferred from anything. Nothing derives it — a repo with a
+ * hostname, a compose file and a backup script is indistinguishable from one
+ * three days away from its first deploy — so it is declared, and moving it to
+ * `live` is the owner's own commit. Everything below it reconfigures off that
+ * one word.
+ */
+const LIFECYCLES = ["dev", "live"] as const;
+
+type Lifecycle = (typeof LIFECYCLES)[number];
+
+function isLifecycle(value: unknown): value is Lifecycle {
+  return LIFECYCLES.some((name) => name === value);
+}
+
 const DEV_CONFIG = "@gokayo43/dev-config";
 
 const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
@@ -22,6 +38,22 @@ const KNIP_JSON_CONFIGS = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc
 const KNIP_CONFIGS = ["knip.ts", "knip.config.ts", "knip.js", "knip.config.js", "knip.mjs"];
 
 const CHECK_CALL = /^gokayo43\/dev-config\/\.github\/workflows\/check\.yml@[0-9a-f]{40}$/;
+
+/** The two scripts a live repo's data rests on, and what is on the other end of each. */
+const LIVE_SCRIPTS = [
+  ["scripts/backup.sh", "a systemd timer runs it, and an undumped database is one nobody has"],
+  ["scripts/restore-drill.sh", "a backup nobody has restored is a backup nobody has"],
+] as const;
+
+/**
+ * The Sentry SDK for each shape this house ships — the Bun API program, the
+ * TanStack Start app, the React Native app. Any one of them anywhere in the
+ * workspace satisfies it: the fact being asserted is that something in the repo
+ * reports its crashes, not which package a given program reaches for.
+ */
+const SENTRY = ["@sentry/bun", "@sentry/tanstackstart-react", "@sentry/react-native"];
+
+const EXECUTABLE = 0o111;
 
 /**
  * Facts a repo can be structurally unable to satisfy, as opposed to merely not
@@ -67,6 +99,19 @@ async function isDirectory(path: string): Promise<boolean> {
   } catch {
     // Nothing at that path, which is the answer the caller asked for.
     return false;
+  }
+}
+
+/**
+ * The file's permission bits, or undefined when there is nothing at that path.
+ * Absent and present-but-unrunnable are different states of a script something
+ * else execs, and only one of them is fixed by writing the file.
+ */
+async function modeOf(path: string): Promise<number | undefined> {
+  try {
+    return (await stat(path)).mode;
+  } catch {
+    return undefined;
   }
 }
 
@@ -350,21 +395,73 @@ async function checkDocs(root: string): Promise<Problem[]> {
   return problems;
 }
 
-async function checkWorkflow(root: string): Promise<Problem[]> {
+async function checkWorkflow(root: string, live: boolean): Promise<Problem[]> {
   const file = ".github/workflows/ci.yml";
   const text = await readText(`${root}/${file}`);
   if (text === undefined) return [{ file, message: "the repo has no CI workflow" }];
 
   const jobs = record(record(Bun.YAML.parse(text))["jobs"]);
-  const calls = Object.values(jobs).map((job) => record(job)["uses"]);
-  if (calls.some((uses) => typeof uses === "string" && CHECK_CALL.test(uses))) return [];
+  const call = Object.values(jobs)
+    .map((job) => record(job))
+    .find(({ uses }) => typeof uses === "string" && CHECK_CALL.test(uses));
+  if (call === undefined) {
+    return [
+      {
+        file,
+        message:
+          "no job calls gokayo43/dev-config/.github/workflows/check.yml pinned to a 40-character commit SHA — a tag is a name someone else can repoint",
+      },
+    ];
+  }
+  if (!live) return [];
+
+  // Read off the call rather than from the file's text, for the reason the pin
+  // above is: the fact is "this job asks check.yml for the upgrade gate", and a
+  // repo can spell `upgrade-gate: true` in a comment, in a second job, or in a
+  // workflow that calls something else entirely. Both YAML spellings are read —
+  // GitHub casts a quoted `"true"` to the boolean the input declares, so a repo
+  // that wrote it that way is asking for the gate and getting it.
+  const asked = record(call["with"])["upgrade-gate"];
+  if (asked === true || asked === "true") return [];
   return [
     {
       file,
       message:
-        "no job calls gokayo43/dev-config/.github/workflows/check.yml pinned to a 40-character commit SHA — a tag is a name someone else can repoint",
+        "a live repo's check.yml call must pass `upgrade-gate: true` — from the first deploy the migration lineage is a one-way record, and that is the gate proving an upgrade reaches the schema a rebuild does",
     },
   ];
+}
+
+/**
+ * What `lifecycle: "live"` asserts the repo already has. Each is something the
+ * day it is needed is far too late to acquire: a dump nobody took, a restore
+ * nobody rehearsed, a crash nobody was told about. They are derived from the
+ * one field rather than asked for per repo, so going live is one commit and not
+ * a checklist somebody works half of.
+ */
+async function checkLive(root: string, all: readonly Manifest[]): Promise<Problem[]> {
+  const modes = await Promise.all(LIVE_SCRIPTS.map(([path]) => modeOf(`${root}/${path}`)));
+
+  const problems: Problem[] = LIVE_SCRIPTS.flatMap(([path, why], index) => {
+    const mode = modes[index];
+    if (mode === undefined) return [{ file: path, message: `a live repo owns ${path} — ${why}` }];
+    if ((mode & EXECUTABLE) !== 0) return [];
+    return [
+      {
+        file: path,
+        message: `${path} is not executable — chmod +x it, since it is run as a program rather than handed to an interpreter`,
+      },
+    ];
+  });
+
+  if (!all.some(({ value }) => SENTRY.some((name) => specOf(value, name) !== undefined))) {
+    problems.push({
+      file: "package.json",
+      message: `a live repo reports its crashes — declare one of ${SENTRY.join(", ")}, since a failure only the user sees is one nobody fixes`,
+    });
+  }
+
+  return problems;
 }
 
 export interface Contract {
@@ -399,6 +496,15 @@ function checkRoot(contents: Record<string, unknown>, contract: Contract): Probl
     });
   }
 
+  const lifecycle = contents["lifecycle"];
+  if (!isLifecycle(lifecycle)) {
+    const found = lifecycle === undefined ? "is absent" : `reads ${JSON.stringify(lifecycle)}`;
+    problems.push({
+      file: "package.json",
+      message: `lifecycle ${found} — it says "dev" or "live", and moving it to "live" is the commit that declares this repo carries real users: from then on it owes backups, a rehearsed restore, crash reporting and the upgrade gate`,
+    });
+  }
+
   if (contract.database && record(contents["scripts"])["db:migrate"] === undefined) {
     problems.push({
       file: "package.json",
@@ -430,6 +536,11 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
       : [{ file: "package.json", message: "the repo has no package.json" }];
   }
 
+  // A repo that has not said which it is gets the one diagnostic about the
+  // field; grading it against either set of rules would be this gate choosing
+  // for it, which is the choice the field exists to take away from us.
+  const live = rootManifest.value["lifecycle"] === "live";
+
   const none = Promise.resolve<Problem[]>([]);
   const checks = await Promise.all([
     checkLockfiles(root),
@@ -438,7 +549,8 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     checkLefthook(root),
     exempt("secrets") ? none : checkSecrets(root),
     exempt("docs-spine") ? none : checkDocs(root),
-    exempt("ci-call") ? none : checkWorkflow(root),
+    exempt("ci-call") ? none : checkWorkflow(root, live),
+    live ? checkLive(root, all.read) : none,
   ]);
 
   return [
