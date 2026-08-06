@@ -16,9 +16,9 @@ import { containing } from "./matchers.ts";
  * two OPTIONS routes, an `.all` auth route, and a few of its own — with traffic
  * arranged the way a run arranges it:
  *
- * - `GET /health` answered the boot poll **and** the ramp. It is the case the
- *   line-based design read as uncovered whenever the two fell inside one
- *   throttle window, and the whole reason coverage is now a difference.
+ * - `GET /health` answered the boot poll **and** the ramp — exercised
+ *   throughout, and the case a sampled announcement reads as uncovered whenever
+ *   the two fall inside one interval. It is why coverage is a difference.
  * - `GET /ready` was touched before the ramp only, and must stay uncovered:
  *   traffic this action made is not the scenario's.
  * - `GET /presets`, `GET /presets/:id` and the `ALL /api/auth/*` route were
@@ -63,9 +63,10 @@ describe("the route-coverage floor", () => {
     ]);
   });
 
-  // The race the counter exists to kill: the boot step's health poll and the
-  // ramp both reached GET /health, and a design that read announcements could
-  // credit the poll's to the ramp or the ramp's to neither.
+  // The race a counter has no room for: the boot step's health poll and the ramp
+  // both reached GET /health, and a floor that had to place a sampled
+  // announcement on one side of the boundary could credit the poll's traffic to
+  // the ramp, or the ramp's to neither.
   test("a route the poll reached and the ramp reached again is covered", () => {
     expect(problems()).not.toContainEqual(containing("GET /health"));
     expect(coverage().summary).toContain("4 of 8 routes exercised");

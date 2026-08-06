@@ -19,10 +19,11 @@ import { type Allowlist, isObject, kindOf, type Problem } from "../_lib/gate.ts"
  * The endpoint leaves itself out of both lists, so the gate's own two fetches
  * are never mistaken for traffic.
  *
- * A counter rather than the announcements it replaced, because a count is a
- * state: two reads of one subtract, and nothing here has to reason about *when*
- * a route said something relative to when the ramp began — the question that
- * made the previous design's answer depend on how long k6 took to start.
+ * A counter rather than announced events, because a count is a state: two reads
+ * of one subtract, and nothing here has to reason about *when* a route said
+ * something relative to when the ramp began. That question has no reliable
+ * answer — an announcement cheap enough for the hot path this step is measuring
+ * is a sampled one — and docs/gates/capacity.md has the argument in full.
  *
  * Both lists name a route as its router registered it, `/presets/42` as
  * `/presets/:id`, which is what keeps this file out of the path-matching
