@@ -1,61 +1,15 @@
+import type { Route, RouteLog, Served } from "../../../route-log.ts";
 import { type Allowlist, isObject, kindOf, type Problem } from "../_lib/gate.ts";
 
 /**
- * The other half of the floor is the app's, and the protocol between them is one
- * flag-gated endpoint. `GET /__route-log` — which the ramp step fetches once
- * before the k6 run and once after — answers both lists in a single fetch:
+ * The gate's half of the route-coverage floor. The protocol it reads — the
+ * endpoint, the two lists, and why coverage is the difference between two
+ * fetches of them rather than a count of one — is declared once in
+ * `route-log.ts` at the root of this package, which is what both ends import.
  *
- * ```json
- * {
- *   "routeTable": [{ "method": "GET", "path": "/health" }],
- *   "counts": [{ "method": "GET", "path": "/health", "count": 12 }]
- * }
- * ```
- *
- * Every route the app serves, and how many requests each has taken since it
- * started. Coverage is the difference between the two fetches: a route whose
- * count rose is a route the ramp reached, and one whose count stood still is
- * uncovered however often the boot step's health poll had already touched it.
- * The endpoint leaves itself out of both lists, so the gate's own two fetches
- * are never mistaken for traffic.
- *
- * A counter rather than announced events, because a count is a state: two reads
- * of one subtract, and nothing here has to reason about *when* a route said
- * something relative to when the ramp began. That question has no reliable
- * answer — an announcement cheap enough for the hot path this step is measuring
- * is a sampled one — and docs/gates/capacity.md has the argument in full.
- *
- * Both lists name a route as its router registered it, `/presets/42` as
- * `/presets/:id`, which is what keeps this file out of the path-matching
- * business. That is not a convenience: where routes overlap — a literal
- * `/presets/new` beside `/presets/:id` — only the router knows which one
- * answered, and a gate that guessed would credit coverage to a route that
- * served nothing.
+ * What lives here is the reading of that payload and the grading of it.
  */
 
-/** A route as both halves of the contract name it: the router's own pattern, not a URL. */
-interface Route {
-  readonly method: string;
-  readonly path: string;
-}
-
-/** One route the app has taken requests on, and how many it has taken. */
-interface Served extends Route {
-  readonly count: number;
-}
-
-/** One fetch of the endpoint. */
-export interface RouteLog {
-  readonly routeTable: Route[];
-  readonly counts: Served[];
-}
-
-/**
- * Refused rather than dropped, and refused as a whole: the table is what the
- * ramp is measured against, so an entry that will not read is a hole in the
- * floor — and an app that spelled one of them this way spelled the protocol
- * wrong rather than one route.
- */
 function routeIn(value: unknown, source: string): Route {
   const { method, path } = isObject(value) ? value : {};
   if (typeof method === "string" && typeof path === "string") return { method, path };
@@ -97,6 +51,8 @@ export function parseRouteLog(text: string, source: string): RouteLog {
     counts: counts.map((entry) => servedIn(entry, `${source}: counts`)),
   };
 }
+
+export type { RouteLog };
 
 function key({ method, path }: Route): string {
   return `${method.toUpperCase()} ${path}`;

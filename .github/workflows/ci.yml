@@ -79,18 +79,11 @@ jobs:
       # The k6 ramp this repo ships is the one file its own linter cannot read,
       # so it gets executed instead: both branches, against a stub server.
       - name: Execute the capacity ramp
-        env:
-          # renovate: datasource=github-release-attachments depName=grafana/k6
-          K6_VERSION: v2.1.0
-          K6_SHA256: 295d961ebfca306f295f1133068dcd403a8171c87f387928f5f30b0fbcff858a
         run: |
           set -euo pipefail
           # shellcheck source=/dev/null
-          . .github/actions/_lib/pinned-tool.sh
-          pinned_tool \
-            "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
-            "$K6_SHA256" "k6-${K6_VERSION}-linux-amd64/k6"
-          K6="$RUNNER_TEMP/k6" bun tests/capacity-script.ts
+          . .github/actions/_lib/k6.sh
+          bun tests/capacity-script.ts
 
       - name: Parse every JSON config
         run: |

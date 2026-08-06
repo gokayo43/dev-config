@@ -46,11 +46,11 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Released binaries pinned by tag and archive SHA-256 — inside a run: block, which no built-in manager reads, or in a shell script a person runs on the box. The renovate: comment above the pair names the dependency, so one manager covers every tool pinned this way, in either spelling of an assignment.",
+      "description": "Released binaries pinned by tag and archive SHA-256, which no built-in manager reads: in a run: block, or in the shared shell library that fetches a tool more than one caller needs. The renovate: comment above the pair names the dependency, so one manager covers every tool pinned this way — a YAML key or a shell assignment.",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/",
         "/^\\.github/actions/[^/]+/action\\.ya?ml$/",
-        "/^scripts/[^/]+\\.sh$/"
+        "/^\\.github/actions/_lib/[^/]+\\.sh$/"
       ],
       "matchStrings": [
         "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+_VERSION[:=] ?(?<currentValue>v\\S+)\\s+\\w+_SHA256[:=] ?(?<currentDigest>[0-9a-f]{64})"

@@ -385,7 +385,7 @@ directly above the pair:
   "managerFilePatterns": [
     "/^\\.github/workflows/[^/]+\\.ya?ml$/",
     "/^\\.github/actions/[^/]+/action\\.ya?ml$/",
-    "/^scripts/[^/]+\\.sh$/"
+    "/^\\.github/actions/_lib/[^/]+\\.sh$/"
   ],
   "matchStrings": [
     "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+_VERSION[:=] ?(?<currentValue>v\\S+)\\s+\\w+_SHA256[:=] ?(?<currentDigest>[0-9a-f]{64})"
@@ -400,9 +400,10 @@ env:
   TOOL_SHA256: <sha256 of the release archive>
 ```
 
-A `scripts/*.sh` that fetches the same way writes the pair as shell assignments,
-and the one manager reads both — a tool a person runs on the box has the same
-supply-chain story as one a runner does:
+A tool more than one caller needs is fetched by a shell library under
+`.github/actions/_lib/` instead, and the pin goes there — beside the fetch, so
+it is written once however many callers there are. The one manager reads a shell
+assignment as readily as a YAML key:
 
 ```sh
 # renovate: datasource=github-release-attachments depName=owner/tool
@@ -410,10 +411,15 @@ TOOL_VERSION=v1.2.3
 TOOL_SHA256=<sha256 of the release archive>
 ```
 
+`_lib/k6.sh` is the live one: db-gate's ramp, this repo's own execution of the
+shipped script, and `project-template`'s ramp against a preview stack are three
+callers of one pin, and a ramp is only comparable with another ramp of the same
+k6.
+
 The shape above is illustrative on purpose: this file is not in the manager's
 patterns, so a real version and checksum written here would be the one pin
 nobody moves. The live ones sit in `.github/actions/secret-scan/action.yml`,
-this repo's own CI, and `project-template`'s `scripts/preview-capacity.sh` —
+`.github/actions/lint-workflows/action.yml` and `.github/actions/_lib/k6.sh` —
 all of which the patterns cover, and they cover the next tool without touching
 the preset.
 

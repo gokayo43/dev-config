@@ -82,12 +82,12 @@ with:
   contract-exemptions: config-lineage ci-call secrets
 ```
 
-| Exemption        | Waives                                                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------- |
-| `config-lineage` | _where_ the configs inherit from — not whether they exist                                   |
-| `ci-call`        | the SHA-pinned call into `check.yml`, and the `upgrade-gate: true` a live repo passes to it |
-| `docs-spine`     | the glossary, `docs/adr/` and `CLAUDE.md`                                                   |
-| `secrets`        | the `.env` / `.env.example` shape, for a repo with no runtime environment                   |
+| Exemption        | Waives                                                                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config-lineage` | _where_ the configs inherit from — not whether they exist                                                                                   |
+| `ci-call`        | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to |
+| `docs-spine`     | the glossary, `docs/adr/` and `CLAUDE.md`                                                                                                   |
+| `secrets`        | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                   |
 
 Every exemption is echoed as a `::notice` in the run, and a name outside the
 table fails rather than waiving anything — a typo cannot quietly turn a check

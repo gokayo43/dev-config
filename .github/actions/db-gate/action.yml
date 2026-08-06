@@ -132,19 +132,13 @@ runs:
     - name: Capacity ramp
       shell: bash
       env:
-        # renovate: datasource=github-release-attachments depName=grafana/k6
-        K6_VERSION: v2.1.0
-        K6_SHA256: 295d961ebfca306f295f1133068dcd403a8171c87f387928f5f30b0fbcff858a
         HEALTH_URL: ${{ inputs.health-url }}
         CAPACITY_PATH: ${{ inputs.capacity-path }}
         CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
       run: |
         set -euo pipefail
         # shellcheck source=/dev/null
-        . "$GITHUB_ACTION_PATH/../_lib/pinned-tool.sh"
-        pinned_tool \
-          "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
-          "$K6_SHA256" "k6-${K6_VERSION}-linux-amd64/k6"
+        . "$GITHUB_ACTION_PATH/../_lib/k6.sh"
         script="${CAPACITY_SCRIPT:-$GITHUB_ACTION_PATH/capacity.js}"
         # The route floor is the difference between these two reads of the app's
         # counters, so the health poll that got the app this far sits inside the
@@ -161,7 +155,7 @@ runs:
           return 1
         }
         snapshot "$RUNNER_TEMP/route-log-before.json"
-        "$RUNNER_TEMP/k6" run --quiet \
+        "$K6" run --quiet \
           --summary-trend-stats='avg,min,med,p(95),p(99),max' \
           --summary-export "$RUNNER_TEMP/capacity.json" "$script"
         # An app that died under the ramp fails the snapshot below AND breaches

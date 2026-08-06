@@ -406,14 +406,34 @@ const LIVE: Tree = {
  */
 async function live(
   tree: Tree,
-  executable: readonly string[] = [BACKUP, RESTORE_DRILL],
+  { executable = [BACKUP, RESTORE_DRILL], ...overrides }: LiveOptions = {},
 ): Promise<string[]> {
   const root = await materialise(tree, [".env.example"]);
   await Promise.all(
     executable.filter((path) => path in tree).map((path) => chmod(join(root, path), 0o755)),
   );
-  return (await repoContract(root, DEFAULTS)).map(({ message }) => message);
+  return (await repoContract(root, { ...DEFAULTS, ...overrides })).map(({ message }) => message);
 }
+
+interface LiveOptions extends Partial<Contract> {
+  readonly executable?: readonly string[];
+}
+
+/** A live repo with no database of its own: a marketing site, and half the fleet. */
+const LIVE_STATIC: Tree = {
+  ...without(
+    without(
+      manifestWith((contents) => {
+        contents["lifecycle"] = "live";
+        contents["dependencies"] = { "@sentry/astro": "10.24.0" };
+        delete (contents["scripts"] as Record<string, string>)["db:migrate"];
+      }),
+      BACKUP,
+    ),
+    RESTORE_DRILL,
+  ),
+  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
+};
 
 // The field is the switch, so a repo that has not thrown it is graded against
 // neither set of rules — the gate says only that nobody has said which repo
@@ -494,8 +514,8 @@ describe("what going live requires", () => {
   // A script systemd execs directly, committed without its bit, fails at 3am
   // and not before.
   test.each([BACKUP, RESTORE_DRILL])("%s has to be executable", async (path) => {
-    const others = [BACKUP, RESTORE_DRILL].filter((each) => each !== path);
-    expect(await live(LIVE, others)).toEqual([containing(`${path} is not executable`)]);
+    const executable = [BACKUP, RESTORE_DRILL].filter((each) => each !== path);
+    expect(await live(LIVE, { executable })).toEqual([containing(`${path} is not executable`)]);
   });
 
   test("something in the repo has to report its crashes", async () => {
@@ -507,19 +527,72 @@ describe("what going live requires", () => {
     ]);
   });
 
-  test.each(["@sentry/bun", "@sentry/tanstackstart-react", "@sentry/react-native"])(
-    "%s satisfies it, from anywhere in the workspace",
-    async (name) => {
-      const blind = manifestWith((contents) => {
-        contents["lifecycle"] = "live";
-      });
-      expect(
-        await live({
-          ...LIVE,
-          "package.json": blind["package.json"] ?? "",
-          "apps/api/package.json": JSON.stringify({ dependencies: { [name]: "10.24.0" } }),
-        }),
-      ).toEqual([]);
-    },
-  );
+  // Sentry ships one SDK per runtime and the fact asserted is that something
+  // reports its crashes — so a list of the ones we use today would fail the
+  // first repo on a runtime nobody had thought of.
+  test.each([
+    "@sentry/bun",
+    "@sentry/tanstackstart-react",
+    "@sentry/react-native",
+    "@sentry/astro",
+  ])("%s satisfies it, from anywhere in the workspace", async (name) => {
+    const blind = manifestWith((contents) => {
+      contents["lifecycle"] = "live";
+    });
+    expect(
+      await live({
+        ...LIVE,
+        "package.json": blind["package.json"] ?? "",
+        "apps/api/package.json": JSON.stringify({ dependencies: { [name]: "10.24.0" } }),
+      }),
+    ).toEqual([]);
+  });
+});
+
+// The rules are scoped to what the repo is. Half this fleet is a static site
+// with a hostname and no database, and a gate that demanded a backup script of
+// one would be teaching people to write a script that does nothing.
+describe("a live repo with no database of its own", () => {
+  test("owes crash reporting, and no database rituals", async () => {
+    expect(await live(LIVE_STATIC, { database: false })).toEqual([]);
+  });
+
+  test("still owes the crash reporting", async () => {
+    const blind = manifestWith((contents) => {
+      contents["lifecycle"] = "live";
+      delete (contents["scripts"] as Record<string, string>)["db:migrate"];
+    });
+    expect(
+      await live(
+        { ...LIVE_STATIC, "package.json": blind["package.json"] ?? "" },
+        { database: false },
+      ),
+    ).toEqual([containing("a live repo reports its crashes")]);
+  });
+
+  // The same tree, once it owns migrations: the two scripts are about a
+  // database, so they are owed exactly when there is one.
+  test("a live repo that does own a database is asked for both scripts", async () => {
+    expect(await live(LIVE_STATIC, { database: true })).toEqual([
+      containing("db:migrate"),
+      containing("must pass `upgrade-gate: true`"),
+      containing("a live repo owns scripts/backup.sh"),
+      containing("a live repo owns scripts/restore-drill.sh"),
+    ]);
+  });
+});
+
+// The exemption says CI is not a call into check.yml. There is then no call to
+// pass `upgrade-gate: true` to, and the docs say so — this is that sentence,
+// executed.
+describe("ci-call waives the upgrade-gate rule with the call it is about", () => {
+  test("a live repo whose CI is its own is not asked about a call it does not make", async () => {
+    const own = {
+      ...LIVE,
+      ".github/workflows/ci.yml":
+        "name: CI\non:\n  pull_request:\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo green\n",
+    };
+    expect(await live(own, { exemptions: ["ci-call"] })).toEqual([]);
+    expect(await live(own)).toEqual([containing("check.yml")]);
+  });
 });
