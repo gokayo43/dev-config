@@ -24,6 +24,9 @@ import { containing } from "./matchers.ts";
  * - `GET /presets`, `GET /presets/:id` and the `ALL /api/auth/*` route were
  *   reached by the ramp alone.
  * - `POST /presets` and the two OPTIONS routes were never reached at all.
+ * - `/events` carries both `ALL /events` and a `GET /events` of its own, and the
+ *   ramp sent it GETs. The router hands those to the concrete handler, so the
+ *   catch-all is uncovered: it is one path, two routes, and only one of them ran.
  */
 async function fixture(when: string): Promise<RouteLog> {
   return parseRouteLog(
@@ -60,6 +63,7 @@ describe("the route-coverage floor", () => {
       containing("OPTIONS /* is served but no ramp request exercises it"),
       containing("GET /ready is served but no ramp request exercises it"),
       containing("POST /presets is served but no ramp request exercises it"),
+      containing("ALL /events is served but no ramp request exercises it"),
     ]);
   });
 
@@ -69,7 +73,7 @@ describe("the route-coverage floor", () => {
   // the ramp, or the ramp's to neither.
   test("a route the poll reached and the ramp reached again is covered", () => {
     expect(problems()).not.toContainEqual(containing("GET /health"));
-    expect(coverage().summary).toContain("4 of 8 routes exercised");
+    expect(coverage().summary).toContain("5 of 10 routes exercised");
   });
 
   // ROUTE_LOG is on from boot, so the poll that waits for the app to answer
@@ -99,26 +103,51 @@ describe("the route-coverage floor", () => {
     expect(problems()).not.toContainEqual(containing("/api/auth/*"));
   });
 
+  // ...but only by the methods it actually answers. `/events` carries a GET
+  // route of its own, so the router hands the ramp's GETs to that one and the
+  // catch-all beside it never runs — and one path reports both, so crediting
+  // every count on the path would mark a handler covered on its neighbour's
+  // traffic.
+  test("a catch-all is not covered by a request its concrete neighbour answered", () => {
+    expect(problems()).toContainEqual(
+      containing("ALL /events is served but no ramp request exercises it"),
+    );
+    expect(problems()).not.toContainEqual(containing("GET /events is served"));
+  });
+
+  test("a method no route of its own claims is what does cover the catch-all", () => {
+    const table = [
+      { method: "ALL", path: "/events" },
+      { method: "GET", path: "/events" },
+    ];
+    const posted = log(table, [{ method: "POST", path: "/events", count: 4 }]);
+    expect(problems("", log(table), posted)).toEqual([
+      containing("GET /events is served but no ramp request exercises it"),
+    ]);
+  });
+
   test("an allowlisted route is covered by the reason recorded beside it", () => {
     expect(
       problems(`${WAIVED}\nGET /ready -- a readiness probe the ramp has no reason to hold`),
-    ).toEqual([containing("POST /presets is served")]);
+    ).toEqual([containing("POST /presets is served"), containing("ALL /events is served")]);
   });
 
   test("the allowlist reads a method in either case", () => {
     expect(problems(WAIVED.toLowerCase())).toEqual([
       containing("GET /ready is served"),
       containing("POST /presets is served"),
+      containing("ALL /events is served"),
     ]);
   });
 
   test("the log carries a line for a green step to show the floor ran", () => {
     const clean = `${WAIVED}
       GET /ready -- a readiness probe the ramp has no reason to hold
-      POST /presets -- a write path the read-only ramp has no body for`;
+      POST /presets -- a write path the read-only ramp has no body for
+      ALL /events -- the ramp sends no method the GET route beside it does not answer`;
     expect(problems(clean)).toEqual([]);
     expect(coverage(clean).summary).toBe(
-      "route coverage: 4 of 8 routes exercised by the ramp, 4 allowlisted",
+      "route coverage: 5 of 10 routes exercised by the ramp, 5 allowlisted",
     );
   });
 

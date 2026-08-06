@@ -31,6 +31,14 @@
     {
       "method": "GET",
       "path": "/presets/:id"
+    },
+    {
+      "method": "ALL",
+      "path": "/events"
+    },
+    {
+      "method": "GET",
+      "path": "/events"
     }
   ],
   "counts": [

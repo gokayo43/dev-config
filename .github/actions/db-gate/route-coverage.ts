@@ -105,16 +105,44 @@ function key({ method, path }: Route): string {
 /** A route registered for every method is reached by whichever one the ramp used. */
 const EVERY_METHOD = "ALL";
 
-/** What the route has taken, summed over every method that reaches it. */
-function hits(counts: readonly Served[], route: Route): number {
+function totalOf(counts: readonly Served[], matches: (served: Served) => boolean): number {
+  return counts.filter(matches).reduce((total, served) => total + served.count, 0);
+}
+
+/**
+ * The methods this path has a route of its own for. A router hands a GET to the
+ * `GET /events` registered beside `ALL /events`, and both are reported under
+ * the one path — so those methods are exactly the traffic the catch-all did
+ * *not* serve.
+ */
+function siblingMethods(table: readonly Route[], path: string): Set<string> {
+  return new Set(
+    table
+      .filter((route) => route.path === path)
+      .map((route) => route.method.toUpperCase())
+      .filter((method) => method !== EVERY_METHOD),
+  );
+}
+
+/**
+ * What the route has taken. A route registered for every method is credited
+ * with every method no route of its own path claims — crediting it with all of
+ * them would mark a catch-all covered on the strength of a request its
+ * concrete neighbour answered, which is a handler the ramp never ran.
+ */
+function hits(counts: readonly Served[], route: Route, table: readonly Route[]): number {
   const method = route.method.toUpperCase();
-  return counts
-    .filter(
-      (served) =>
-        served.path === route.path &&
-        (method === EVERY_METHOD || served.method.toUpperCase() === method),
-    )
-    .reduce((total, served) => total + served.count, 0);
+  if (method !== EVERY_METHOD) {
+    return totalOf(
+      counts,
+      (served) => served.path === route.path && served.method.toUpperCase() === method,
+    );
+  }
+  const siblings = siblingMethods(table, route.path);
+  return totalOf(
+    counts,
+    (served) => served.path === route.path && !siblings.has(served.method.toUpperCase()),
+  );
 }
 
 /**
@@ -162,9 +190,10 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
 
   // A difference, not a count: the boot step polled the health route to get the
   // app this far, and traffic this action made is not the scenario's.
+  const routes = after.routeTable;
   const covered = new Set(
     [...table]
-      .filter(([, route]) => hits(after.counts, route) > hits(before.counts, route))
+      .filter(([, route]) => hits(after.counts, route, routes) > hits(before.counts, route, routes))
       .map(([name]) => name),
   );
 

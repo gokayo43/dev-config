@@ -149,8 +149,13 @@ runs:
         # counters, so the health poll that got the app this far sits inside the
         # first and cannot be mistaken for a route the ramp exercised.
         route_log="$(echo "$HEALTH_URL" | sed -E 's#^(https?://[^/]+).*#\1#')/__route-log"
+        # Bounded for the reason the health poll above is: an app wedged under
+        # the ramp accepts the connection and never answers, which is otherwise
+        # indistinguishable from a slow read and costs the job's whole timeout
+        # to say so. The ceiling is generous — this is a small JSON body from a
+        # local process — so only a hang can reach it.
         snapshot() {
-          curl -sSf "$route_log" > "$1" && return 0
+          curl -sSf --connect-timeout 5 --max-time 30 "$route_log" > "$1" && return 0
           echo "::error::$route_log did not answer — an app under the capacity ramp serves the route-log endpoint when ROUTE_LOG is set"
           return 1
         }
@@ -158,9 +163,15 @@ runs:
         "$RUNNER_TEMP/k6" run --quiet \
           --summary-trend-stats='avg,min,med,p(95),p(99),max' \
           --summary-export "$RUNNER_TEMP/capacity.json" "$script"
-        snapshot "$RUNNER_TEMP/route-log-after.json"
+        # An app that died under the ramp fails the snapshot below AND breaches
+        # the failure bound, and the bound is the diagnostic that says what
+        # happened — so the snapshot's failure is held until the measurement has
+        # been read and published, and the step then fails carrying both.
+        status=0
+        snapshot "$RUNNER_TEMP/route-log-after.json" || status=1
         INPUT_SUMMARY_FILE="$RUNNER_TEMP/capacity.json" INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
-          bun "$GITHUB_ACTION_PATH/capacity.main.ts"
+          bun "$GITHUB_ACTION_PATH/capacity.main.ts" || status=1
+        exit "$status"
 
     # The floor, not a realism claim: a route no request reached has never been
     # under load at all, which is the same thing the coverage threshold catches

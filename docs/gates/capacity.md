@@ -77,6 +77,14 @@ first fetch, so only what the ramp added counts.
 The endpoint leaves itself out of both lists: it is an instrument, not a route
 the floor is about, and the gate's two fetches are not the scenario's traffic.
 
+What "covered" means precisely, then, is **took traffic between the two reads** —
+not "k6 sent it a request". Anything else talking to the app during the ramp
+counts too: a container `HEALTHCHECK`, an uptime probe, a sidecar. On a runner
+that is normally only k6, but a repo whose `capacity-script` does not ramp the
+health route can still see it covered by a healthcheck polling it, and the floor
+will not have caught what it looks like it caught. If that matters, ramp the
+route explicitly rather than reading the pass as proof.
+
 ### Why a counter, and why an endpoint
 
 An app can tell a gate what its routes are doing two ways: announce each hit as

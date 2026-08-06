@@ -31,6 +31,14 @@
     {
       "method": "GET",
       "path": "/presets/:id"
+    },
+    {
+      "method": "ALL",
+      "path": "/events"
+    },
+    {
+      "method": "GET",
+      "path": "/events"
     }
   ],
   "counts": [
@@ -58,6 +66,11 @@
       "method": "GET",
       "path": "/api/auth/*",
       "count": 12
+    },
+    {
+      "method": "GET",
+      "path": "/events",
+      "count": 18
     }
   ]
 }
