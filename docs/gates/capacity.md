@@ -1,9 +1,16 @@
 # The capacity ramp
 
-`capacity: true` adds a k6 ramp to the database job, after the app has booted
-and answered its health route. It publishes what it measured, and asserts three
-things about it: that a measurement happened, that the app answered the requests
-it was measured on, and that no route the app serves sat the ramp out.
+`database: true` ends in a k6 ramp, after the app has booted and answered its
+health route. It publishes what it measured, and asserts three things about it:
+that a measurement happened, that the app answered the requests it was measured
+on, and that no route the app serves sat the ramp out.
+
+There is no knob. An app the database job can boot is an app that serves
+something, and a serving surface nothing has ever put under load is the case
+this exists to catch — so a repo cannot be in the position of having the ramp
+available and switched off. What a repo still chooses is _what_ the ramp hits:
+`capacity-path`, a `capacity-script` of its own, and the reasoned
+`route-allowlist` for whatever neither can reach.
 
 ## What the number means
 
@@ -139,7 +146,7 @@ see the routes is not a floor, and "the app named nothing" is exactly the
 never-load-tested case this exists to catch. So does an app that serves no
 `/__route-log` at all, which is the same failure one step earlier.
 
-## Turning it on
+## Aiming it
 
 ```yaml
 jobs:
@@ -147,22 +154,21 @@ jobs:
     uses: gokayo43/dev-config/.github/workflows/check.yml@<commit sha> # <release tag>
     with:
       database: true
-      capacity: true
       capacity-path: /api/things, /api/things/:id
       route-allowlist: OPTIONS /* -- the cors plugin answers these before the request reaches a route
 ```
 
 | Input             | Effect                                                                                                                                                                                                                                                                                                                    |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `capacity`        | Runs the ramp. Needs `database: true`, since it ramps the app the database job booted.                                                                                                                                                                                                                                    |
 | `capacity-path`   | Paths ramped alongside the health route, comma- or newline-separated. A health route measures the socket and one round trip; point these at the endpoints doing the work the project is for, and prefer ones that read or write. Every route the app serves belongs here or in `route-allowlist`.                         |
 | `capacity-script` | A k6 script of the repo's own, when the default ramp is the wrong shape — a write path needing a body, an authenticated route. It replaces the shipped script entirely; `HEALTH_URL` and `CAPACITY_PATH` are in its environment, and the failure bound and the route floor hold it exactly as they hold the shipped ramp. |
 | `capacity-report` | The artifact name for the k6 summary. A matrix that ramps more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                                          |
 | `route-allowlist` | Routes the ramp cannot cover, as `METHOD /path -- why` entries matching the app's own route table, comma- or newline-separated. The reason is part of the entry and an entry without one is refused — that is the whole price of the hatch.                                                                               |
 
-Enable it on a repo that serves something: an API with its own process, a server
-route that does real work. A static site has nothing to ramp, and a repo whose
-only route is a health check will measure its own health check.
+A repo whose only route is a health check measures its own health check, and the
+floor passes on it — which is the true statement about a repo that serves
+nothing yet. It stops being a formality the moment a real route is added, since
+that route has to be ramped or reasoned about by name.
 
 ## What is published
 

@@ -16,7 +16,9 @@ on:
         type: boolean
         default: false
       database:
-        description: Replay the migrations onto an empty Postgres and boot the app against the result.
+        description: >-
+          Replay the migrations onto an empty Postgres, boot the app against the result,
+          and ramp it — every route it serves, or an allowlisted reason why not.
         type: boolean
         default: false
       upgrade-gate:
@@ -43,10 +45,6 @@ on:
         description: What the boot gate polls until it answers 200.
         type: string
         default: http://localhost:3000/api/health
-      capacity:
-        description: Ramp the booted app with k6 and publish the measurement. Requires the database job.
-        type: boolean
-        default: false
       capacity-script:
         description: A k6 script of the repo's own. Empty runs the ramp shipped with db-gate.
         type: string
@@ -91,21 +89,13 @@ jobs:
           # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
-      # Every one of these is a step of the database job, so asking for one
-      # without it is a request that would otherwise be ignored in silence — and
-      # a gate nobody notices is off is the worst kind.
-      - if: ${{ !inputs.database && (inputs.capacity || inputs.upgrade-gate) }}
-        env:
-          CAPACITY: ${{ inputs.capacity }}
-          UPGRADE_GATE: ${{ inputs.upgrade-gate }}
+      # The upgrade path is replayed by the database job, so asking for it
+      # without one is a request that would otherwise be ignored in silence —
+      # and a gate nobody notices is off is the worst kind.
+      - if: ${{ !inputs.database && inputs.upgrade-gate }}
         run: |
           set -euo pipefail
-          if [ "$CAPACITY" = true ]; then
-            echo "::error::capacity: true needs database: true — the ramp runs against the app the database job boots"
-          fi
-          if [ "$UPGRADE_GATE" = true ]; then
-            echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
-          fi
+          echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
           exit 1
 
       - uses: gokayo43/dev-config/.github/actions/secret-scan@17cadb3511cdb7e3cfdc30947c918403c6f26068 # v0.27.0
@@ -207,7 +197,6 @@ jobs:
           start-command: ${{ inputs.start-command }}
           health-url: ${{ inputs.health-url }}
           timestamp-allowlist: ${{ inputs.timestamp-allowlist }}
-          capacity: ${{ inputs.capacity }}
           capacity-script: ${{ inputs.capacity-script }}
           capacity-path: ${{ inputs.capacity-path }}
           capacity-report: ${{ inputs.capacity-report }}

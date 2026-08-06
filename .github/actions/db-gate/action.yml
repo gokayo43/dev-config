@@ -2,7 +2,7 @@ name: Database gate
 description: >-
   Replays the migrations onto the empty Postgres the caller declared, twice —
   and, where the caller asks for it, from the base ref's migrations as well —
-  boots the app against the result, and optionally ramps it. Every step reads
+  boots the app against the result, and ramps it. Every step reads
   DATABASE_URL from the environment — the caller declares the service, so it
   owns the URL, and one value means no two steps can disagree about which
   database was migrated — plus REDIS_URL when the app needs one.
@@ -23,9 +23,6 @@ inputs:
   health-url:
     description: The URL to poll until it answers 200.
     required: true
-  capacity:
-    description: Run a k6 ramp against the booted app and publish what it measured.
-    default: "false"
   capacity-script:
     description: A k6 script of the repo's own. Empty runs the ramp shipped with this action.
     default: ""
@@ -99,9 +96,9 @@ runs:
         SITE_URL: http://localhost
         BETTER_AUTH_SECRET: ci-not-a-secret-ci-not-a-secret-ci
         # The app serves a counter endpoint naming every route it has and how
-        # many requests each has taken. Only under the ramp: it is an instrument
-        # for the coverage floor, not a surface.
-        ROUTE_LOG: ${{ inputs.capacity }}
+        # many requests each has taken. Set only here: it is an instrument for
+        # the coverage floor, not a surface, and no deployment sets it.
+        ROUTE_LOG: "true"
       run: |
         set -euo pipefail
         bash -c "$START_COMMAND" > "$RUNNER_TEMP/server.log" 2>&1 &
@@ -133,7 +130,6 @@ runs:
     # bound that is not the runner's — its failure rate — and when it produced
     # no measurement to record.
     - name: Capacity ramp
-      if: ${{ inputs.capacity == 'true' }}
       shell: bash
       env:
         # renovate: datasource=github-release-attachments depName=grafana/k6
@@ -182,7 +178,6 @@ runs:
     # under load at all, which is the same thing the coverage threshold catches
     # about a module no test imports.
     - name: Every route the ramp reaches
-      if: ${{ inputs.capacity == 'true' }}
       shell: bash
       env:
         INPUT_ROUTE_LOG_BEFORE: ${{ runner.temp }}/route-log-before.json
@@ -195,7 +190,7 @@ runs:
     # A ramp that failed on the way to a number is exactly when the partial
     # summary is worth having; a cancelled run has nothing to say.
     - name: Publish the capacity report
-      if: ${{ !cancelled() && inputs.capacity == 'true' }}
+      if: ${{ !cancelled() }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.capacity-report }}

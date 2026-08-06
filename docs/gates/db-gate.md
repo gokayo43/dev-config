@@ -50,7 +50,7 @@ with:
     public.audit log.at
 ```
 
-Once it has booted, `capacity: true` ramps it and publishes what that measured.
+Once it has booted, the job ramps it and publishes what that measured.
 That is a step of this gate rather than a gate of its own, and it has a page:
 [capacity.md](capacity.md).
 
