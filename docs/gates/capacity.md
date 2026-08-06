@@ -175,6 +175,11 @@ jobs:
 | `capacity-report` | The artifact name for the k6 summary. A matrix that ramps more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                                          |
 | `route-allowlist` | Routes the ramp cannot cover, as `METHOD /path -- why` entries matching the app's own route table, comma- or newline-separated. The reason is part of the entry and an entry without one is refused — that is the whole price of the hatch.                                                                               |
 
+All four of these are steps of the database job, so passing one with
+`database: false` fails the run by name rather than being ignored — a repo that
+has written out the routes it wants ramped, or the reasons a route cannot be,
+has said plainly that it expects a ramp.
+
 A repo whose only route is a health check measures its own health check, and the
 floor passes on it — which is the true statement about a repo that serves
 nothing yet. It stops being a formality the moment a real route is added, since
