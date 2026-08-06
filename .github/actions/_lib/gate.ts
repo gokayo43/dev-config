@@ -164,9 +164,22 @@ export function allowlistFrom(value: string, input: string): Allowlist {
   };
 }
 
-async function git(cwd: string, args: readonly string[]): Promise<number> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "ignore" });
-  return await proc.exited;
+/** A git invocation's exit status and what it wrote. */
+export interface Ran {
+  readonly ok: boolean;
+  readonly stdout: string;
+}
+
+/**
+ * git, for every gate that reads a tree or a history. Failure comes back rather
+ * than thrown, because to most of what is asked here "no" is the answer — a
+ * path that is not tracked, a lineage the base ref did not carry — and the one
+ * caller that cannot go on without an answer says so itself.
+ */
+export async function git(cwd: string, args: readonly string[]): Promise<Ran> {
+  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
+  const stdout = await new Response(proc.stdout).text();
+  return { ok: (await proc.exited) === 0, stdout };
 }
 
 /**
@@ -189,23 +202,18 @@ const NEVER = ":(exclude,glob)**/node_modules/**";
  * itself leaves behind.
  */
 export async function repoFiles(root: string, pathspecs: readonly string[]): Promise<string[]> {
-  const proc = Bun.spawn(
-    [
-      "git",
-      "ls-files",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-      "--",
-      ...pathspecs,
-      NEVER,
-    ],
-    { cwd: root, stdout: "pipe", stderr: "ignore" },
-  );
-  const stdout = await new Response(proc.stdout).text();
-  if ((await proc.exited) !== 0) throw new Error(`git ls-files failed in ${root}`);
-  const listed = stdout.split("\0").filter((path) => path !== "");
+  const listing = await git(root, [
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "-z",
+    "--",
+    ...pathspecs,
+    NEVER,
+  ]);
+  if (!listing.ok) throw new Error(`git ls-files failed in ${root}`);
+  const listed = listing.stdout.split("\0").filter((path) => path !== "");
   const present = await Promise.all(listed.map((path) => Bun.file(`${root}/${path}`).exists()));
   return listed.filter((_, index) => present[index] === true);
 }
@@ -284,7 +292,7 @@ export async function manifests(root: string): Promise<Batch<Record<string, unkn
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {
-  return (await git(root, ["ls-files", "--error-unmatch", "--", path])) === 0;
+  return (await git(root, ["ls-files", "--error-unmatch", "--", path])).ok;
 }
 
 /**
@@ -294,5 +302,5 @@ export async function isTracked(root: string, path: string): Promise<boolean> {
  * wrong until the day it is untracked.
  */
 export async function isIgnored(root: string, path: string): Promise<boolean> {
-  return (await git(root, ["check-ignore", "--no-index", "-q", "--", path])) === 0;
+  return (await git(root, ["check-ignore", "--no-index", "-q", "--", path])).ok;
 }

@@ -91,17 +91,21 @@ jobs:
           # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
-      # Both of these are steps of the database job, so asking for one without
-      # it is a request that would otherwise be ignored in silence — and a gate
-      # nobody notices is off is the worst kind.
-      - if: ${{ inputs.capacity && !inputs.database }}
+      # Every one of these is a step of the database job, so asking for one
+      # without it is a request that would otherwise be ignored in silence — and
+      # a gate nobody notices is off is the worst kind.
+      - if: ${{ !inputs.database && (inputs.capacity || inputs.upgrade-gate) }}
+        env:
+          CAPACITY: ${{ inputs.capacity }}
+          UPGRADE_GATE: ${{ inputs.upgrade-gate }}
         run: |
-          echo "::error::capacity: true needs database: true — the ramp runs against the app the database job boots"
-          exit 1
-
-      - if: ${{ inputs.upgrade-gate && !inputs.database }}
-        run: |
-          echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
+          set -euo pipefail
+          if [ "$CAPACITY" = true ]; then
+            echo "::error::capacity: true needs database: true — the ramp runs against the app the database job boots"
+          fi
+          if [ "$UPGRADE_GATE" = true ]; then
+            echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
+          fi
           exit 1
 
       - uses: gokayo43/dev-config/.github/actions/secret-scan@c712c11967463422daee40c2aeaa1fbce57794d5 # v0.23.0

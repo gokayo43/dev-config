@@ -6,6 +6,10 @@
  * what the real migrator does with a migration it has already applied — see
  * docs/gates/upgrade-path.md — and a hand-written stand-in would only be able
  * to answer what its author already believed.
+ *
+ * The lineage directories are arguments, the way a real migrator has them from
+ * its own source: a fixture that relocates or drops a lineage relocates or
+ * drops this too, and a monorepo root script naming two of them looks like this.
  */
 import { SQL } from "bun";
 import { drizzle } from "drizzle-orm/bun-sql";
@@ -14,6 +18,10 @@ import { migrate } from "drizzle-orm/bun-sql/migrator";
 const url = Bun.env["DATABASE_URL"];
 if (url === undefined || url === "") throw new Error("DATABASE_URL is not set");
 
+const folders = Bun.argv.slice(2);
+if (folders.length === 0) throw new Error("usage: journalled-migrator.ts <migrations folder>...");
+
 const client = new SQL(url);
-await migrate(drizzle({ client }), { migrationsFolder: "./drizzle" });
+const db = drizzle({ client });
+for (const migrationsFolder of folders) await migrate(db, { migrationsFolder });
 await client.close();

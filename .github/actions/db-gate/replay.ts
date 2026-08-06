@@ -1,10 +1,10 @@
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import { type Problem, repoFiles } from "../_lib/gate.ts";
+import { git, type Problem } from "../_lib/gate.ts";
 
 /**
  * What a repo's migration history is asked to prove, and the two questions are
@@ -26,14 +26,21 @@ import { type Problem, repoFiles } from "../_lib/gate.ts";
  *    editing one changes what a fresh database gets and nothing else. The two
  *    schemas part company, silently, and stay parted forever.
  *
- * Both are decided by the same comparison, which is why they are one module:
- * `pg_dump --schema-only`, minus the tokens that differ per invocation. Two
- * spellings of that normalisation would be two answers to "is this the same
- * schema", and the day they disagreed nobody would know which was right.
+ * Both are decided by one function, `compare`, over `pg_dump --schema-only`
+ * minus the tokens that differ per invocation. Two derivations of "the same
+ * schema" would be two answers to the question this whole module exists to
+ * answer, and the day they disagreed nobody would know which was right.
  */
 
 /** The database the upgrade path is replayed into, beside the one the caller declared. */
-const UPGRADE_DATABASE = "upgrade_path";
+export const UPGRADE_DATABASE = "upgrade_path";
+
+/**
+ * The file a drizzle migrator refuses to run without, and therefore the only
+ * honest way to ask where a lineage is: a directory holding one is a lineage,
+ * and one without is not.
+ */
+const JOURNAL = "meta/_journal.json";
 
 /**
  * pg_dump wraps its output in `\restrict`/`\unrestrict` tokens that are random
@@ -59,32 +66,17 @@ export interface Replay {
 }
 
 export interface Verdict {
-  /** One line for the log, so a step that passed still says what it replayed. */
-  readonly summary: string;
-  /** Every line the two schemas do not share, when they do not — a diagnostic that says "they differ" is not one. */
+  /** What a replay that held proved, for the log. Absent when it did not hold: the problems are the report then. */
+  readonly summary: string | undefined;
+  /** What the two schemas do not share — a diagnostic that only says "they differ" is not one. */
   readonly divergence: string[];
   readonly problems: Problem[];
 }
 
 /** A schema dump, named the way the diagnostic has to name it. */
-interface Schema {
+export interface Schema {
   readonly of: string;
   readonly text: string;
-}
-
-interface Ran {
-  readonly ok: boolean;
-  readonly stdout: string;
-}
-
-/**
- * git, for the questions whose "no" is an answer rather than a failure: a
- * lineage that did not exist at the base ref, a branch that has no parent.
- */
-async function git(cwd: string, args: readonly string[]): Promise<Ran> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
-  const stdout = await new Response(proc.stdout).text();
-  return { ok: (await proc.exited) === 0, stdout };
 }
 
 /**
@@ -111,7 +103,8 @@ function databaseIn(url: string): string {
   return new URL(url).pathname.replace(/^\//, "");
 }
 
-function beside(url: string, database: string): string {
+/** The same server, pointing at a different database. */
+export function beside(url: string, database: string): string {
   const swapped = new URL(url);
   swapped.pathname = `/${database}`;
   return swapped.href;
@@ -139,7 +132,11 @@ function tally(text: string): Map<string, number> {
   return counts;
 }
 
-/** The lines `schema` carries that `other` does not, in the order the dump had them. */
+/**
+ * The lines `schema` carries that `other` does not, grouped by line and ordered
+ * by where each first appeared in the dump. A line carried twice on one side
+ * and once on the other is listed once, for the copy that has no partner.
+ */
 function only(schema: string, other: string): string[] {
   const theirs = tally(other);
   const lines: string[] = [];
@@ -149,54 +146,137 @@ function only(schema: string, other: string): string[] {
   return lines;
 }
 
-/** Everything the two dumps disagree about, addressed to whichever one has it. */
-function divergence(left: Schema, right: Schema): string[] {
-  return [
-    ...only(left.text, right.text).map((line) => `only in ${left.of}: ${line}`),
-    ...only(right.text, left.text).map((line) => `only in ${right.of}: ${line}`),
-  ];
-}
-
-/** The shortest true sentence about the difference, for an annotation that cannot carry the listing. */
-function headline(left: Schema, right: Schema): string {
-  const sides = [
-    { schema: left, lines: only(left.text, right.text) },
-    { schema: right, lines: only(right.text, left.text) },
-  ];
-  return sides
-    .filter(({ lines }) => lines.length > 0)
-    .map(
-      ({ schema, lines }) =>
-        `${schema.of} alone has ${lines.length} line(s), first \`${lines[0]}\``,
-    )
-    .join(", ");
+/** How two schema dumps differ. There is no such thing as an empty one. */
+export interface Difference {
+  /** What the log gets: every line the two do not share, addressed to whichever has it. */
+  readonly lines: string[];
+  /** What the annotation gets: the shortest true sentence about it. */
+  readonly headline: string;
 }
 
 /**
- * Every drizzle migration lineage in the tree, as the directory the migrator is
- * pointed at. A lineage is identified by the journal rather than by a
- * configured path: the journal is the file the migrator refuses to run without,
- * so a directory holding one is a lineage and a directory without one is not —
- * and a repo that moved its migrations does not also have to remember to tell
- * this gate. Listed through git, so a lineage a scaffolder has just generated
- * and not yet committed counts.
+ * The single derivation of "the same schema". `undefined` is the only way two
+ * dumps are equal, and every other answer carries both a headline and something
+ * to print — so a refusal with nothing to say for itself cannot be built. Two
+ * dumps holding the same statements in a different order are not equal, and
+ * that difference names itself rather than coming out blank.
  */
-async function lineagesIn(root: string): Promise<string[]> {
-  const journals = await repoFiles(root, ["meta/_journal.json", "*/meta/_journal.json"]);
-  return journals.map((journal) => dirname(dirname(journal)));
+export function compare(left: Schema, right: Schema): Difference | undefined {
+  if (left.text === right.text) return undefined;
+
+  const sides = [
+    { schema: left, lines: only(left.text, right.text) },
+    { schema: right, lines: only(right.text, left.text) },
+  ].filter(({ lines }) => lines.length > 0);
+
+  if (sides.length === 0) {
+    const ordered = `${left.of} and ${right.of} hold the same statements in a different order`;
+    return { lines: [ordered], headline: ordered };
+  }
+
+  return {
+    lines: sides.flatMap(({ schema, lines }) =>
+      lines.map((line) => `only in ${schema.of}: ${line}`),
+    ),
+    headline: sides
+      .map(
+        ({ schema, lines }) =>
+          `${schema.of} alone has ${lines.length} line${lines.length === 1 ? "" : "s"}, first \`${lines[0]}\``,
+      )
+      .join(", "),
+  };
 }
 
-/** A migration lineage as the base ref had it, or nothing where the base ref had none. */
+/** A migration lineage as the base ref had it: the directory, and every file in it. */
 interface BaseLineage {
   readonly dir: string;
   readonly files: readonly { readonly path: string; readonly text: string }[];
 }
 
-async function baseLineage(
+/** The lineage directories a listing names, as the journals in it place them. */
+function lineageDirs(paths: readonly string[]): string[] {
+  return paths
+    .filter((path) => path === JOURNAL || path.endsWith(`/${JOURNAL}`))
+    .map((path) => path.slice(0, Math.max(0, path.length - JOURNAL.length - 1)));
+}
+
+/**
+ * The shapes this gate will not replay, refused rather than worked around. Both
+ * would otherwise be handled by a `rm -rf` deciding what a directory means: a
+ * lineage at the root of the project is the project, and a lineage inside
+ * another is two swaps of one tree. Refusing keeps "a lineage directory" a
+ * thing that can be moved aside on its own.
+ */
+function unreplayable(dirs: readonly string[]): Problem[] {
+  const problems: Problem[] = [];
+  for (const dir of dirs) {
+    if (dir === "") {
+      problems.push({
+        file: JOURNAL,
+        message: `the project root is itself a migration lineage — put the migrations in a directory of their own, since the upgrade path replays a lineage by replacing that directory`,
+      });
+      continue;
+    }
+    const inside = dirs.find((other) => other !== dir && dir.startsWith(`${other}/`));
+    if (inside !== undefined) {
+      problems.push({
+        file: `${dir}/${JOURNAL}`,
+        message: `the migration lineage ${dir} is inside the lineage ${inside} — give each one a directory the other does not contain, since the upgrade path replays a lineage by replacing its directory`,
+      });
+    }
+  }
+  return problems;
+}
+
+/**
+ * Every lineage the base ref carried, read out of the base ref rather than out
+ * of this branch's tree. A deployed database's journal is keyed to the lineage
+ * that built it, so the branch's own directories cannot say what has to be
+ * replayed: moving or deleting one would then be a lineage this gate never
+ * looked for, and the run would pass by not having asked.
+ *
+ * A lineage the base ref did not carry is left where it is: there was none of
+ * it on a database at that ref, so replaying this branch's copy from empty is
+ * exactly what a deploy does with it.
+ */
+async function baseLineages(
   root: string,
   rev: string,
-  dir: string,
-): Promise<BaseLineage | undefined> {
+): Promise<{ lineages: BaseLineage[]; problems: Problem[] }> {
+  const listing = await git(root, [
+    "ls-tree",
+    "-r",
+    "--full-tree",
+    "--name-only",
+    "-z",
+    `${rev}:./`,
+  ]);
+  // Nothing of this project existed at the base ref — a directory this branch
+  // added, or a repository whose first commit is the one being gated.
+  if (!listing.ok) return { lineages: [], problems: [] };
+
+  const dirs = lineageDirs(listing.stdout.split("\0").filter((path) => path !== ""));
+  const problems = unreplayable(dirs);
+  if (problems.length > 0) return { lineages: [], problems };
+
+  const stranded = await Promise.all(
+    dirs.map(async (dir) => ({
+      dir,
+      there: await Bun.file(join(root, dir, JOURNAL)).exists(),
+    })),
+  );
+  const moved = stranded
+    .filter(({ there }) => !there)
+    .map(({ dir }) => ({
+      message: `${rev.slice(0, 7)} carries the migration lineage ${dir} and this tree does not — a deployed database's journal names the migrations that built it, so moving or deleting a lineage strands every database that has one; leave it where it is and add to it`,
+    }));
+  if (moved.length > 0) return { lineages: [], problems: moved };
+
+  const lineages = await Promise.all(dirs.map((dir) => filesAt(root, rev, dir)));
+  return { lineages, problems: [] };
+}
+
+async function filesAt(root: string, rev: string, dir: string): Promise<BaseLineage> {
   const listed = await git(root, [
     "ls-tree",
     "-r",
@@ -205,10 +285,7 @@ async function baseLineage(
     "-z",
     `${rev}:./${dir}`,
   ]);
-  // The lineage did not exist at the base ref: whatever it holds now is what a
-  // database at that ref had of it, which is nothing, and replaying this
-  // branch's copy of it from empty is exactly that.
-  if (!listed.ok) return undefined;
+  if (!listed.ok) throw new Error(`could not read ${dir} at ${rev}`);
 
   const names = listed.stdout.split("\0").filter((name) => name !== "");
   const files = await Promise.all(
@@ -228,6 +305,9 @@ async function baseLineage(
  * the files are what moves; the alternative is a second checkout, and the
  * commands a repo wraps its migrator in (a worktree's own database, a compose
  * stack) would all be answering about that other tree instead of this one.
+ *
+ * Every directory here is a lineage directory that contains no other — see
+ * `unreplayable`, which is what makes replacing one a local act.
  */
 async function onTheBaseLineage<T>(
   root: string,
@@ -296,7 +376,8 @@ async function baseRevision(root: string, event: Event): Promise<string | undefi
 /**
  * The schema a deployed database reaches: the base ref's lineage first, then
  * this branch's onto the result — the same two commands, in the same order, a
- * deploy runs.
+ * deploy runs. The database it is built in is this gate's own, made beside the
+ * one the caller declared and dropped again whichever way the comparison goes.
  */
 async function upgradedSchema(
   root: string,
@@ -308,11 +389,14 @@ async function upgradedSchema(
   // A second database on the caller's own service, rather than a second
   // service: the schema the app boots against has to survive this untouched.
   await server.unsafe(`create database "${UPGRADE_DATABASE}"`);
-  await server.close();
-
-  await onTheBaseLineage(root, lineages, () => migrate(root, upgrade));
-  await migrate(root, upgrade);
-  return await schemaOf(upgrade);
+  try {
+    await onTheBaseLineage(root, lineages, () => migrate(root, upgrade));
+    await migrate(root, upgrade);
+    return await schemaOf(upgrade);
+  } finally {
+    await server.unsafe(`drop database if exists "${UPGRADE_DATABASE}" with (force)`);
+    await server.close();
+  }
 }
 
 /** A verdict with nothing to report, which is every passing one. */
@@ -320,8 +404,9 @@ function passed(summary: string): Verdict {
   return { summary, divergence: [], problems: [] };
 }
 
-function refused(summary: string, message: string, divergence: string[]): Verdict {
-  return { summary, divergence, problems: [{ message }] };
+/** A verdict that fails the step. There is no summary: what happened is the problem. */
+function refused(problems: Problem[], divergence: string[] = []): Verdict {
+  return { summary: undefined, divergence, problems };
 }
 
 const REPLAYED =
@@ -333,11 +418,15 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
   await migrate(root, url);
   const again: Schema = { of: "the schema after a second replay", text: await schemaOf(url) };
 
-  if (fresh.text !== again.text) {
+  const repeated = compare(fresh, again);
+  if (repeated !== undefined) {
     return refused(
-      "replay: the history does not replay onto itself",
-      `replaying the migrations a second time changed the schema — ${headline(fresh, again)} — a schema must not depend on how many times it was migrated; make the statements that ran again re-runnable, or have the runner skip what it has already applied`,
-      divergence(fresh, again),
+      [
+        {
+          message: `replaying the migrations a second time changed the schema — ${repeated.headline} — a schema must not depend on how many times it was migrated; make the statements that ran again re-runnable, or have the runner skip what it has already applied`,
+        },
+      ],
+      repeated.lines,
     );
   }
 
@@ -351,9 +440,8 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
   }
   const from = rev.slice(0, 7);
 
-  const lineages = (
-    await Promise.all((await lineagesIn(root)).map((dir) => baseLineage(root, rev, dir)))
-  ).filter((lineage): lineage is BaseLineage => lineage !== undefined);
+  const { lineages, problems } = await baseLineages(root, rev);
+  if (problems.length > 0) return refused(problems);
   if (lineages.length === 0) {
     return passed(
       `${REPLAYED}; ${from} carries no migration lineage, so the upgrade path is not proved for this run`,
@@ -364,13 +452,19 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
     of: `the schema upgraded from ${from}`,
     text: await upgradedSchema(root, url, lineages),
   };
-  if (upgraded.text === fresh.text) {
-    return passed(`${REPLAYED}; upgrading a database built from ${from} reaches the same schema`);
+  const diverged = compare(fresh, upgraded);
+  if (diverged === undefined) {
+    return passed(
+      `${REPLAYED}; upgrading a database built from ${from} (${lineages.map(({ dir }) => dir).join(", ")}) reaches the same schema`,
+    );
   }
 
   return refused(
-    `replay: the upgrade path from ${from} does not reach the schema a fresh database gets`,
-    `upgrading a database built from ${from} does not reach the schema this branch builds from empty — ${headline(fresh, upgraded)} — the lineage ${from} had already applied has changed under it: a migration was rewritten, or a new one was ordered behind one already applied. An applied migration is never re-read, so no deployed database will ever reach this schema; put the change in a new migration, ordered after every one that has shipped.`,
-    divergence(fresh, upgraded),
+    [
+      {
+        message: `upgrading a database built from ${from} does not reach the schema this branch builds from empty — ${diverged.headline} — the lineage ${from} had already applied has changed under it: a migration was rewritten, or a new one was ordered behind one already applied. An applied migration is never re-read, so no deployed database will ever reach this schema; put the change in a new migration, ordered after every one that has shipped.`,
+      },
+    ],
+    diverged.lines,
   );
 }

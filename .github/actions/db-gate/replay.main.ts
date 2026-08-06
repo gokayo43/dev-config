@@ -25,6 +25,8 @@ await entry(async () => {
   });
 
   detail(divergence);
-  notice(summary);
+  // A run that failed says so through its annotations. A summary beside them
+  // would be the step paraphrasing its own error back at the reader.
+  if (summary !== undefined) notice(summary);
   report(problems);
 });

@@ -70,25 +70,41 @@ would be guessing at this; replaying it is the only way to be told.
 
 ## How the replay is built
 
-The base ref's migrations, and nothing else, are rolled back into place: for
-every lineage in the tree — a directory holding `meta/_journal.json` — the files
-the base ref had are written over it, the repo's own `bun run db:migrate` runs
-against the second database, and the branch's own files go back before it runs
-again. The tree is exactly as it was found afterwards, including when the run
-fails partway.
+**The lineages come from the base ref, not from this branch.** A lineage is a
+directory holding `meta/_journal.json`, and the set that has to be replayed is
+the set that commit carried — read out of it with `git ls-tree`. Reading the
+branch's own directories instead would mean a branch that moved its migrations
+elsewhere had no lineage to match, and the gate would pass by not having looked
+for one, with whatever was rewritten inside it.
+
+A lineage the base ref carried that this tree no longer has — moved or deleted —
+is therefore a **refusal** naming it. A deployed database's journal names the
+migrations that built it; relocating or dropping a lineage strands every
+database that has one, and no schema comparison can un-strand it.
+
+A lineage the base ref never had is left where it is. There was nothing of it on
+a database at that ref, so replaying this branch's copy of it from empty is
+precisely what a deploy would do with it.
+
+For every lineage the base ref did carry, its files are written over the
+directory, the repo's own `bun run db:migrate` runs against the second database,
+and the branch's own files go back before it runs again. The tree is exactly as
+it was found afterwards, including when the run fails partway.
 
 The repo's own migrator, rather than a second checkout: `db:migrate` is often
 wrapped in something that derives its own world — a worktree's database, a
 compose stack — and run from another checkout every one of those would be
 answering about that tree instead of this one.
 
-A lineage the base ref did not have is left alone. There was nothing of it on a
-database at that ref, so replaying this branch's copy of it from empty is
-precisely what a deploy would do.
+Two lineage shapes are refused rather than replayed, because replacing a
+directory is only a local act when the directory is one: a lineage at the
+project root (the project would be what got replaced) and a lineage inside
+another (two swaps of one tree). Both are refused where the lineages are read,
+before anything moves.
 
 The second database is `upgrade_path`, created on the service the calling job
-declared. The database the app boots against is the fresh one and is never
-touched by any of this.
+declared and dropped again whichever way the comparison goes. The database the
+app boots against is the fresh one and is never touched by any of this.
 
 ## Which commit counts as the base
 
@@ -118,9 +134,13 @@ migrations existed — is a notice and a pass. There is no schema to upgrade fro
 The step prints every line the two dumps do not share, addressed to whichever
 schema has it, and fails with a one-line annotation naming the count and the
 first of them. The comparison is `pg_dump --schema-only` minus the `\restrict`
-tokens pg_dump randomises per invocation — the same normalisation the replay
-from empty uses, because there is one answer to "is this the same schema" and it
-lives in one place.
+tokens pg_dump randomises per invocation.
+
+One function decides it, for both replays. It answers "identical" or a
+difference that always carries both a headline and a listing — including for two
+dumps holding the same statements in a different order, which is the one shape
+a line-by-line reading would call a difference and have nothing to say about. A
+red step with an empty explanation is not something this gate can produce.
 
 There is no allowlist. Both paths run the same DDL in the same order, differing
 only in where they started, so a legitimate divergence would have to come from a
