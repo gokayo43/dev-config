@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 
-import { allowlistFrom, inputs, notice, report } from "../.github/actions/_lib/gate.ts";
+import { allowlistFrom, inputs, notice, report, required } from "../.github/actions/_lib/gate.ts";
 
 function captureLog(): { lines: string[]; restore: () => void } {
   const lines: string[] = [];
@@ -105,6 +105,24 @@ describe("action inputs", () => {
   test("an input the action forgot to pass fails loudly", () => {
     delete process.env["INPUT_NEVER_SET"];
     expect(() => inputs("never-set")).toThrow("INPUT_NEVER_SET is not set");
+  });
+
+  test("a variable the calling job owns is read from the environment", () => {
+    process.env["DATABASE_URL"] = "postgres://localhost/db";
+    expect(required("DATABASE_URL", "why")).toBe("postgres://localhost/db");
+  });
+
+  // Two gates read this one variable, and the run that is left holding nothing
+  // is not always the same one — so the reason travels with the call.
+  test("a missing variable fails carrying the reason its caller gave", () => {
+    delete process.env["DATABASE_URL"];
+    expect(() => required("DATABASE_URL", "the replay needs a database")).toThrow(
+      "DATABASE_URL is not set — the replay needs a database",
+    );
+    process.env["DATABASE_URL"] = "";
+    expect(() => required("DATABASE_URL", "the replay needs a database")).toThrow(
+      "DATABASE_URL is not set",
+    );
   });
 });
 
