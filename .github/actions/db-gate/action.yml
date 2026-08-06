@@ -36,7 +36,9 @@ inputs:
     description: >-
       The artifact name for the k6 summary. A matrix that ramps more than one
       leg gives each its own, since an artifact name may only be claimed once.
-    default: capacity-report
+      Empty takes the name below, so a caller can pass this straight through
+      without having to know how "unset" is spelled.
+    default: ""
   route-allowlist:
     description: >-
       Routes the ramp is not expected to reach, as `METHOD /path -- why`
@@ -194,6 +196,8 @@ runs:
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: ${{ inputs.capacity-report }}
+        # The one place this name is defaulted, so a caller passing an empty
+        # string through is the same as a caller not asking for one.
+        name: ${{ inputs.capacity-report || 'capacity-report' }}
         path: ${{ runner.temp }}/capacity.json
         if-no-files-found: ignore

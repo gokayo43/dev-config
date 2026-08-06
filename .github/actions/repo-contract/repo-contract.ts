@@ -34,16 +34,22 @@ function lifecycleOf(contents: Record<string, unknown>): Lifecycle | undefined {
 /**
  * Whether the repo owns a database, asked of the repo rather than of the
  * caller. `db:migrate` is the entry point every database gate here drives, so
- * a repo that declares one owns migrations and a repo that does not, does not.
+ * a workspace that declares one owns migrations.
  *
- * It matters that this is not the `database` input. That input says which CI
- * job runs, and it lives in the very file the live rules are about — so a live
- * repo could shed its backup script, its rehearsed restore and its upgrade
- * gate by deleting one line from its own workflow, which is the opposite of
- * what a contract is for.
+ * Every manifest, not just the root — a monorepo keeps its migrations in the
+ * workspace that owns the schema, and the root's script is a passthrough to it.
+ * Asking only the root would put two edits between a live repo and no database
+ * rules at all: drop the `database` input, then delete a passthrough that now
+ * looks like dead weight.
+ *
+ * It matters that none of this is the `database` input. That input says which
+ * CI job runs, and it lives in the very file the live rules are about — so
+ * keying off it would let a live repo shed its backup script, its rehearsed
+ * restore and its upgrade gate by deleting one line from its own workflow,
+ * which is the opposite of what a contract is for.
  */
-function ownsDatabase(contents: Record<string, unknown>): boolean {
-  return record(contents["scripts"])["db:migrate"] !== undefined;
+function ownsDatabase(all: readonly Manifest[]): boolean {
+  return all.some(({ value }) => record(value["scripts"])["db:migrate"] !== undefined);
 }
 
 const DEV_CONFIG = "@gokayo43/dev-config";
@@ -660,12 +666,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     exempt("secrets") ? none : checkSecrets(root),
     exempt("docs-spine") ? none : checkDocs(root),
     lifecycle === "live"
-      ? checkLive(
-          root,
-          all.read,
-          { owned: ownsDatabase(rootManifest.value), gated: contract.database },
-          call,
-        )
+      ? checkLive(root, all.read, { owned: ownsDatabase(all.read), gated: contract.database }, call)
       : none,
   ]);
 

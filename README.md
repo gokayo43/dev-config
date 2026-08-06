@@ -597,15 +597,17 @@ jobs:
 | `capacity-report`     | `capacity-report`                  | The artifact name for the k6 summary, for a matrix that ramps more than one leg.                                                                                                                                 |
 | `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries; one without a reason, and one the ramp did reach, are both refused.                                                                              |
 
-The last four are aimed at steps of the database job, so passing any of them
-with `database: false` fails the run and says which — being quietly ignored is
-how a ramp somebody asked for turns out never to have run.
+`upgrade-gate` and the four capacity inputs are aimed at steps of the database
+job, so passing any of the five with `database: false` fails the run and says
+which — being quietly ignored is how a ramp somebody asked for turns out never
+to have run.
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches
 a repo when its pin moves and not before. The example above is deliberately not
 a real SHA: nothing keeps a README snippet current, so the pin worth copying is
-the live one in `project-template`'s `setup/ci.yml`. Renovate's github-actions manager
+the live one in `project-template`'s `setup/ci.single.yml` or
+`setup/ci.monorepo.yml`. Renovate's github-actions manager
 reads a job-level `uses:` exactly as it reads a step's, so the pin moves in a PR
 like any other dependency.
 

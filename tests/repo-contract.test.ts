@@ -599,6 +599,41 @@ describe("a live repo with no database of its own", () => {
   });
 });
 
+// A monorepo keeps its migrations in the workspace that owns the schema, and
+// the root's `db:migrate` is a passthrough to it. Asking only the root means
+// two edits shed every database rule — drop the input, then delete a
+// passthrough that now looks like dead weight — and the second one reads as a
+// tidy-up.
+describe("a live monorepo owns its database wherever the migrations live", () => {
+  const inTheWorkspace: Tree = {
+    ...without(
+      without(
+        manifestWith((contents) => {
+          contents["lifecycle"] = "live";
+          contents["dependencies"] = { "@sentry/bun": "10.24.0" };
+          delete (contents["scripts"] as Record<string, string>)["db:migrate"];
+        }),
+        BACKUP,
+      ),
+      RESTORE_DRILL,
+    ),
+    "apps/api/package.json": JSON.stringify({
+      name: "shop-api",
+      scripts: { "db:migrate": "bun run src/db/migrate.ts" },
+    }),
+    ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
+  };
+
+  test("so every rule holds, with the root carrying no script at all", async () => {
+    expect(await live(inTheWorkspace, { database: false })).toEqual([
+      containing("must pass `database: true`"),
+      containing("must pass `upgrade-gate: true`"),
+      containing("a live repo owns scripts/backup.sh"),
+      containing("a live repo owns scripts/restore-drill.sh"),
+    ]);
+  });
+});
+
 // The `database` input says which CI job runs, and it lives in the very file
 // these rules are about. Keying off it would let a live repo drop its backup
 // script, its rehearsed restore and its upgrade gate by deleting one line of

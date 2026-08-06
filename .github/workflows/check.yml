@@ -56,9 +56,11 @@ on:
         type: string
         default: ""
       capacity-report:
-        description: The artifact name for the k6 summary, for a matrix that ramps more than one leg.
+        description: >-
+          The artifact name for the k6 summary, for a matrix that ramps more than one leg.
+          Empty takes db-gate's own name, which is where that default lives.
         type: string
-        default: capacity-report
+        default: ""
       route-allowlist:
         description: >-
           Routes the capacity ramp cannot cover, as `METHOD /path -- why` entries,
@@ -96,11 +98,13 @@ jobs:
       # cannot be, has said plainly that it expects a ramp.
       - if: >-
           ${{ !inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
-          || inputs.capacity-script != '' || inputs.route-allowlist != '') }}
+          || inputs.capacity-script != '' || inputs.capacity-report != ''
+          || inputs.route-allowlist != '') }}
         env:
           UPGRADE_GATE: ${{ inputs.upgrade-gate }}
           CAPACITY_PATH: ${{ inputs.capacity-path }}
           CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
+          CAPACITY_REPORT: ${{ inputs.capacity-report }}
           ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
         run: |
           set -euo pipefail
@@ -112,6 +116,9 @@ jobs:
           fi
           if [ -n "$CAPACITY_SCRIPT" ]; then
             echo "::error::capacity-script needs database: true — the ramp runs against the app the database job boots"
+          fi
+          if [ -n "$CAPACITY_REPORT" ]; then
+            echo "::error::capacity-report needs database: true — it names the artifact the database job's ramp uploads"
           fi
           if [ -n "$ROUTE_ALLOWLIST" ]; then
             echo "::error::route-allowlist needs database: true — the route floor is measured across the database job's ramp"

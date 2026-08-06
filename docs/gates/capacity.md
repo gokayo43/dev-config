@@ -94,6 +94,11 @@ first fetch, so only what the ramp added counts.
 The endpoint leaves itself out of both lists: it is an instrument, not a route
 the floor is about, and the gate's two fetches are not the scenario's traffic.
 
+The floor covers **the program `start-command` boots**, and only that one. In a
+monorepo that is the API; a web app in the same repo serves its own routes, has
+no instrument, and appears in no route table — so a green notice is a statement
+about the booted program, not about every route in the repository.
+
 What "covered" means precisely, then, is **took traffic between the two reads** —
 not "k6 sent it a request". Anything else talking to the app during the ramp
 counts too: a container `HEALTHCHECK`, an uptime probe, a sidecar. On a runner
@@ -175,10 +180,11 @@ jobs:
 | `capacity-report` | The artifact name for the k6 summary. A matrix that ramps more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                                          |
 | `route-allowlist` | Routes the ramp cannot cover, as `METHOD /path -- why` entries matching the app's own route table, comma- or newline-separated. The reason is part of the entry and an entry without one is refused — that is the whole price of the hatch.                                                                               |
 
-All four of these are steps of the database job, so passing one with
-`database: false` fails the run by name rather than being ignored — a repo that
-has written out the routes it wants ramped, or the reasons a route cannot be,
-has said plainly that it expects a ramp.
+Every one of these, and `upgrade-gate` with them, is aimed at a step of the
+database job — so passing any of the five with `database: false` fails the run
+and says which, rather than being ignored. A repo that has written out the
+routes it wants ramped, or the reasons a route cannot be, has said plainly that
+it expects a ramp.
 
 A repo whose only route is a health check measures its own health check, and the
 floor passes on it — which is the true statement about a repo that serves
