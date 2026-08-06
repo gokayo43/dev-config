@@ -408,7 +408,7 @@ async function checkDocs(root: string): Promise<Problem[]> {
 interface Call {
   /** The `with:` block of the job that calls check.yml, or nothing when no job does. */
   readonly asked: Record<string, unknown> | undefined;
-  readonly problems: readonly Problem[];
+  readonly problems: Problem[];
 }
 
 const CI_WORKFLOW = ".github/workflows/ci.yml";
@@ -612,7 +612,9 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     checkLefthook(root),
     exempt("secrets") ? none : checkSecrets(root),
     exempt("docs-spine") ? none : checkDocs(root),
-    Promise.resolve([...call.problems]),
+    // Already read, and here rather than in the return so that the workflow's
+    // own problems keep their place in the order the diagnostics come out in.
+    Promise.resolve(call.problems),
     lifecycle === "live" ? checkLive(root, all.read, contract, call) : none,
   ]);
 
