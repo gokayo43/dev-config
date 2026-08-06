@@ -25,6 +25,13 @@ no-op rather than a failure.
 declared at the call site. Distinct from an unfinished one: an exemption is a
 property of what the repo _is_, and it is visible in the caller's diff.
 
+**Lifecycle** — whether a repo is carrying real people, declared by the repo in
+one field and inferred by nothing: `dev` or `live`. Distinct from a deployment,
+which is a thing that has happened, and from an exemption, which is about what a
+repo _is_ — this is about who it owes. `live` is what the backups, the rehearsed
+restore, the crash reporting and the upgrade gate are derived from, so that
+going live is one word rather than a checklist somebody does half of.
+
 **Denylist** — the dependencies the house stack has already answered, each with
 the pick it lost to. An entry may carry an **ADR glob**, which unlocks it once
 the deviation is written down.
@@ -38,6 +45,12 @@ that costs nothing is a hole.
 the absence of the work rather than to be aimed at: the coverage threshold, and
 the capacity ramp's route coverage. A floor says a route has been under load
 once; it says nothing about whether that load resembled production.
+
+**Trend line and claim** — the two things a capacity ramp can produce, from one
+script and one reader. On a CI runner the app shares a machine with a Postgres,
+a Redis and a neighbour nobody chose, so the number is only comparable with the
+last run's: a trend line. Against the deployed shape it is the claim testing.md
+asks for. `ran-on` names which happened, because nothing downstream can tell.
 
 **Route table** — the routes an app serves, named by the app itself as its
 router registered them (`/presets/:id`, not `/presets/42`). Only the router
