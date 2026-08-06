@@ -1,0 +1,48 @@
+{
+  "routeTable": [
+    {
+      "method": "OPTIONS",
+      "path": "/"
+    },
+    {
+      "method": "OPTIONS",
+      "path": "/*"
+    },
+    {
+      "method": "ALL",
+      "path": "/api/auth/*"
+    },
+    {
+      "method": "GET",
+      "path": "/health"
+    },
+    {
+      "method": "GET",
+      "path": "/ready"
+    },
+    {
+      "method": "GET",
+      "path": "/presets"
+    },
+    {
+      "method": "POST",
+      "path": "/presets"
+    },
+    {
+      "method": "GET",
+      "path": "/presets/:id"
+    }
+  ],
+  "counts": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "count": 3
+    },
+    {
+      "method": "GET",
+      "path": "/ready",
+      "count": 2
+    }
+  ]
+}

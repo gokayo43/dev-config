@@ -51,49 +51,85 @@ been under load once, not that the app is fast, and not that the scenario is
 realistic. Shipping an endpoint the ramp does not reach is red for the same
 reason shipping code with no test is.
 
-The app names its own routes, in two lines on stdout — which the boot step
-already captures — whenever `ROUTE_LOG` is `true`, which the ramp sets:
+The app counts what its routes take, and serves the tally on one endpoint —
+`GET /__route-log` — whenever `ROUTE_LOG` is `true`, which the ramp sets:
 
 ```json
-{"routeTable":[{"method":"GET","path":"/health"},{"method":"POST","path":"/presets"}]}
-{"routeServed":{"method":"GET","path":"/health"}}
+{
+  "routeTable": [
+    { "method": "GET", "path": "/health" },
+    { "method": "POST", "path": "/presets" }
+  ],
+  "counts": [{ "method": "GET", "path": "/health", "count": 12 }]
+}
 ```
 
-The first is printed once at boot and names every route the app serves. The
-second is printed while a route is answering requests, at most once a second per
-route — not once per request, which would put an access log's worth of I/O on
-the hot path this step is measuring.
+`routeTable` is every route the app serves; `counts` is how many requests each
+of them has taken since the process started. The ramp step fetches this once
+before k6 runs and once after, and **coverage is the difference**: a route whose
+count rose is a route the ramp reached.
 
-Only the lines printed while k6 was running count. The app is already serving by
-then — the boot step polls the health route until it answers — and crediting
-that poll would pass a scenario that never touched health as though it had. The
-two halves are one design: a route announcing itself only once, ever, could
-never appear inside that window if the poll had already reached it.
+That difference is what keeps this action's own traffic out of the floor. The
+app is already serving by the time the ramp starts — the boot step polls the
+health route until it answers — and a route the poll reached shows up in the
+first fetch, so only what the ramp added counts.
 
-Both name the route **as the router registered it**, not as a URL: `/presets/42`
-is reported as `/presets/:id`. That is what keeps the gate out of the matching
-business, and it is not only convenience — where routes overlap, a literal
-`/presets/new` beside `/presets/:id`, only the router knows which one answered,
-and a gate that guessed would credit coverage to a route that served nothing.
+The endpoint leaves itself out of both lists: it is an instrument, not a route
+the floor is about, and the gate's two fetches are not the scenario's traffic.
+
+### Why a counter, and why an endpoint
+
+An app can tell a gate what its routes are doing two ways: announce each hit as
+an event, or keep a count and let the gate read it. The event form is the
+tempting one — it needs no endpoint, and stdout is already being captured — and
+it is the wrong one.
+
+Announcing every request puts an access log's worth of I/O on the hot path the
+same step is measuring, so any real version of it samples: at most one line per
+route per second, say. That sampling is where the race lives. Coverage then
+means "did a line for this route land inside the ramp's window", and whether it
+did depends on when the route last announced itself — a route answering on both
+sides of the ramp boundary inside one sampling interval reads as uncovered,
+having been exercised throughout. The arithmetic is fine; the question is the
+wrong one to have to ask, because it is about _when_ something was said rather
+than about what happened.
+
+A count is a state rather than an event, so two reads of it subtract, sampling
+never enters into it, and timing stops being part of the answer. It costs one
+request per run instead of one line per route per second, needs no log parsing,
+no line shapes and no offset into a file, and leaves stdout as something people
+read rather than a protocol. What it buys with is an endpoint — which is why
+that endpoint is flag-gated, absent entirely from a deployment, and excluded
+from what it reports.
+
+Both lists name the route **as the router registered it**, not as a URL:
+`/presets/42` is reported as `/presets/:id`. That is what keeps the gate out of
+the matching business, and it is not only convenience — where routes overlap, a
+literal `/presets/new` beside `/presets/:id`, only the router knows which one
+answered, and a gate that guessed would credit coverage to a route that served
+nothing.
 
 A route registered for every method (`ALL`) is covered by whichever method
 reached it. A route the ramp cannot cover goes in `route-allowlist` as a
 `METHOD /path -- why` entry: the reason is part of the entry, the same price a
-lint directive pays, and an entry that is not a route, or names a route the app
-does not serve, is refused in its turn — an escape hatch nobody can see rotting
-is how a gate quietly stops covering what it names.
+lint directive pays. An entry is refused in its turn when it is not a route,
+when it names a route the app does not serve, and when it waives a route the
+ramp **did** exercise — an escape hatch nobody can see rotting is how a gate
+quietly stops covering what it names, and a waiver whose reason has stopped
+being true is exactly that.
 
 The usual entries are a CORS plugin's `OPTIONS` handlers, and their reason is
 worth knowing, because it is not "no load generator sends a preflight": a
-handler that answers **before** the response hook runs is invisible to the floor
-whatever reaches it. `@elysiajs/cors` answers every `OPTIONS` that way,
+handler that answers **before** the request reaches a route is invisible to the
+floor whatever reaches it. `@elysiajs/cors` answers every `OPTIONS` that way,
 including one to a route the app registered itself, so such a route can be
 ramped and still never appear. The reason on the entry is what says which of the
 two is true — unreachable by the ramp, or unseeable by the floor.
 
-An app that prints no route table fails the step: a floor that cannot see the
-routes is not a floor, and "the app said nothing" is exactly the never-load-
-tested case this exists to catch.
+An app whose route table comes back empty fails the step: a floor that cannot
+see the routes is not a floor, and "the app named nothing" is exactly the
+never-load-tested case this exists to catch. So does an app that serves no
+`/__route-log` at all, which is the same failure one step earlier.
 
 ## Turning it on
 
@@ -105,7 +141,7 @@ jobs:
       database: true
       capacity: true
       capacity-path: /api/things, /api/things/:id
-      route-allowlist: OPTIONS /* -- the cors plugin answers these before the response hook
+      route-allowlist: OPTIONS /* -- the cors plugin answers these before the request reaches a route
 ```
 
 | Input             | Effect                                                                                                                                                                                                                                                                                                                    |

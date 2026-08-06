@@ -91,6 +91,7 @@ export function isObject(value: unknown): value is Record<string, unknown> {
 
 /** What was there instead, for a diagnostic that has to say what it refused. */
 export function kindOf(value: unknown): string {
+  if (value === undefined) return "absent";
   if (value === null) return "null";
   return Array.isArray(value) ? "an array" : `a ${typeof value}`;
 }
@@ -115,6 +116,11 @@ function entriesIn(value: string): string[] {
     .filter((item) => item !== "");
 }
 
+/**
+ * A gate takes one of these whole rather than its `entries`: the reason on each
+ * entry is enforced by reporting `problems`, and a signature that accepted the
+ * list alone would let a caller typecheck while dropping that half.
+ */
 export interface Allowlist {
   /** Each entry with its reason stripped: the part a gate compares against. */
   readonly entries: string[];

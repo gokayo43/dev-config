@@ -79,8 +79,8 @@ expect((hits.get("/api/health") ?? 0) > 0, "the health route was never rammed");
 expect(hits.size === 1, `only the health route should be hit, saw ${[...hits.keys()].join(", ")}`);
 expect(health.exitCode === 0, "a ramp against a server that answers 200 did not exit 0");
 expect(
-  (health.metrics["checks"]?.["fails"] ?? 1) === 0,
-  "a check failed against a server that answers everything",
+  (health.metrics["http_req_failed"]?.["value"] ?? 1) === 0,
+  "a request failed against a server that answers everything",
 );
 
 // The variable is absent when a person runs this by hand, and the branch used
@@ -91,7 +91,7 @@ expect(
   `an absent CAPACITY_PATH must ramp the health route alone, saw ${[...hits.keys()].join(", ")}`,
 );
 expect(
-  (absent.metrics["checks"]?.["fails"] ?? 1) === 0,
+  (absent.metrics["http_req_failed"]?.["value"] ?? 1) === 0,
   "an absent CAPACITY_PATH produced a failing request",
 );
 

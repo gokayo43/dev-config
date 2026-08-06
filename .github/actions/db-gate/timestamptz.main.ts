@@ -26,6 +26,7 @@ await entry(async () => {
   const columns = (await sql.unsafe(WALL_CLOCK_QUERY)) as WallClockColumn[];
   await sql.close();
 
-  const allowlist = allowlistFrom(read["timestamp-allowlist"], "timestamp-allowlist");
-  report([...allowlist.problems, ...timestamptzGate(columns, allowlist.entries)]);
+  report(
+    timestamptzGate(columns, allowlistFrom(read["timestamp-allowlist"], "timestamp-allowlist")),
+  );
 });

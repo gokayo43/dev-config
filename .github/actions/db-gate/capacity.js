@@ -8,16 +8,15 @@
 // held by the step that reads the summary, so that it binds a repo ramping with
 // a script of its own too. See docs/gates/capacity.md.
 import http from "k6/http";
-import { check } from "k6";
 
 const health = __ENV.HEALTH_URL;
 const origin = health.replace(/^(https?:\/\/[^/]+).*$/, "$1");
 
 // The same comma-or-newline list every allowlist input in this repo is written
 // in — split here rather than imported from _lib/gate.ts, because this file is
-// the one k6 runs and k6 resolves neither TypeScript nor Bun. Truthiness, not a
-// comparison against "": the variable is absent when the script is run by hand,
-// and `origin + undefined` is a URL ending "undefined".
+// the one k6 runs and k6 resolves neither TypeScript nor Bun. `__ENV` has no
+// entry at all when nobody set one, which is what a person running this script
+// by hand does.
 const paths = (__ENV.CAPACITY_PATH || "")
   .split(/[,\n]/)
   .map((path) => path.trim())
@@ -38,7 +37,6 @@ export const options = {
 
 export default function () {
   for (const url of urls) {
-    const response = http.get(url);
-    check(response, { "answers 2xx": (r) => r.status >= 200 && r.status < 300 });
+    http.get(url);
   }
 }

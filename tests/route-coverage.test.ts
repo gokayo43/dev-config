@@ -1,187 +1,164 @@
 import { describe, expect, test } from "bun:test";
 
 import { allowlistFrom } from "../.github/actions/_lib/gate.ts";
-import { routeCoverage } from "../.github/actions/db-gate/route-coverage.ts";
+import {
+  type Coverage,
+  parseRouteLog,
+  type RouteLog,
+  routeCoverage,
+} from "../.github/actions/db-gate/route-coverage.ts";
+
 import { containing } from "./matchers.ts";
 
-/** The two line shapes the app under load prints, among everything else it logs. */
-function table(...routes: { method: string; path: string }[]): string {
-  return JSON.stringify({ routeTable: routes });
-}
-
-function served(method: string, path: string): string {
-  return JSON.stringify({ routeServed: { method, path } });
-}
-
-// A boot log as the step actually captures it: the migrate output, Bun's own
-// lines and the app's log records sit around the two the gate reads.
-const NOISE = [
-  "$ bun src/main.ts",
-  '{"message":"listening","logLevel":"INFO"}',
-  "not json at all",
-  "",
-];
-
-function log(...lines: string[]): string {
-  return [...NOISE, ...lines].join("\n");
-}
-
-/** The whole log doubles as the ramp's window unless a case says otherwise. */
-function problems(text: string, allowlist = "", underRamp = text): string[] {
-  const read = allowlistFrom(allowlist, "route-allowlist");
-  return [...read.problems, ...routeCoverage({ all: text, underRamp }, read.entries).problems].map(
-    ({ message }) => message,
+/**
+ * Two real fetches of project-template's route-log endpoint, captured from that
+ * producer under an app carrying the scaffold's own shape — the cors plugin's
+ * two OPTIONS routes, an `.all` auth route, and a few of its own — with traffic
+ * arranged the way a run arranges it:
+ *
+ * - `GET /health` answered the boot poll **and** the ramp. It is the case the
+ *   line-based design read as uncovered whenever the two fell inside one
+ *   throttle window, and the whole reason coverage is now a difference.
+ * - `GET /ready` was touched before the ramp only, and must stay uncovered:
+ *   traffic this action made is not the scenario's.
+ * - `GET /presets`, `GET /presets/:id` and the `ALL /api/auth/*` route were
+ *   reached by the ramp alone.
+ * - `POST /presets` and the two OPTIONS routes were never reached at all.
+ */
+async function fixture(when: string): Promise<RouteLog> {
+  return parseRouteLog(
+    await Bun.file(new URL(`./route-log-${when}.json`, import.meta.url)).text(),
+    `the ${when} fixture`,
   );
 }
+
+const BEFORE = await fixture("before");
+const AFTER = await fixture("after");
+
+function coverage(allowlist = "", before = BEFORE, after = AFTER): Coverage {
+  return routeCoverage(before, after, allowlistFrom(allowlist, "route-allowlist"));
+}
+
+function problems(allowlist = "", before = BEFORE, after = AFTER): string[] {
+  return coverage(allowlist, before, after).problems.map(({ message }) => message);
+}
+
+/** A route log written by hand, for the shapes a working producer cannot be asked to emit. */
+function log(routeTable: RouteLog["routeTable"], counts: RouteLog["counts"] = []): RouteLog {
+  return { routeTable, counts };
+}
+
+const WAIVED = [
+  "OPTIONS / -- answered by the cors plugin before the request reaches a route",
+  "OPTIONS /* -- answered by the cors plugin before the request reaches a route",
+].join("\n");
 
 describe("the route-coverage floor", () => {
-  const ROUTES = table(
-    { method: "GET", path: "/health" },
-    { method: "GET", path: "/presets/:id" },
-    { method: "POST", path: "/presets" },
-  );
-
   test("a route the ramp never reaches is the whole point of the floor", () => {
-    expect(problems(log(ROUTES, served("GET", "/health"), served("GET", "/presets/:id")))).toEqual([
-      "POST /presets is served but no ramp request exercises it — ramp it from capacity-path or the capacity script, or list it in route-allowlist with a reason",
+    expect(problems()).toEqual([
+      containing("OPTIONS / is served but no ramp request exercises it"),
+      containing("OPTIONS /* is served but no ramp request exercises it"),
+      containing("GET /ready is served but no ramp request exercises it"),
+      containing("POST /presets is served but no ramp request exercises it"),
     ]);
   });
 
-  test("a ramp that reaches every route leaves nothing to say", () => {
-    const covered = log(
-      ROUTES,
-      served("GET", "/health"),
-      served("GET", "/presets/:id"),
-      served("POST", "/presets"),
+  // The race the counter exists to kill: the boot step's health poll and the
+  // ramp both reached GET /health, and a design that read announcements could
+  // credit the poll's to the ramp or the ramp's to neither.
+  test("a route the poll reached and the ramp reached again is covered", () => {
+    expect(problems()).not.toContainEqual(containing("GET /health"));
+    expect(coverage().summary).toContain("4 of 8 routes exercised");
+  });
+
+  // ROUTE_LOG is on from boot, so the poll that waits for the app to answer
+  // moves counters of its own. Crediting those would pass a scenario that never
+  // touched the route as though it had.
+  test("a route the boot poll reached and the ramp did not is uncovered", () => {
+    expect(problems()).toContainEqual(
+      containing("GET /ready is served but no ramp request exercises it"),
     );
-    expect(problems(covered)).toEqual([]);
+  });
+
+  test("a method is part of the route: the ramp's GET /presets does not cover POST /presets", () => {
+    expect(problems()).toContainEqual(
+      containing("POST /presets is served but no ramp request exercises it"),
+    );
   });
 
   // The app names the route its router matched, so a concrete path arrives
   // already resolved: /presets/42 is served by /presets/:id and nothing else.
   test("a parameterised route is covered by the concrete path that matched it", () => {
-    const hit = log(table({ method: "GET", path: "/presets/:id" }), served("GET", "/presets/:id"));
-    expect(problems(hit)).toEqual([]);
-  });
-
-  test("a method is part of the route: GET /x does not cover POST /x", () => {
-    const wrongMethod = log(
-      table({ method: "GET", path: "/presets" }, { method: "POST", path: "/presets" }),
-      served("GET", "/presets"),
-    );
-    expect(problems(wrongMethod)).toEqual([containing("POST /presets is served")]);
+    expect(problems()).not.toContainEqual(containing("/presets/:id"));
   });
 
   // A route registered for every method is reached by whichever one the ramp
   // used, which is how `.all("/api/auth/*")` is covered by one GET.
   test("a route serving every method is covered by any one of them", () => {
-    const auth = log(table({ method: "ALL", path: "/api/auth/*" }), served("GET", "/api/auth/*"));
-    expect(problems(auth)).toEqual([]);
+    expect(problems()).not.toContainEqual(containing("/api/auth/*"));
   });
 
   test("an allowlisted route is covered by the reason recorded beside it", () => {
-    const preflight = log(
-      table({ method: "GET", path: "/health" }, { method: "OPTIONS", path: "/*" }),
-      served("GET", "/health"),
+    expect(
+      problems(`${WAIVED}\nGET /ready -- a readiness probe the ramp has no reason to hold`),
+    ).toEqual([containing("POST /presets is served")]);
+  });
+
+  test("the allowlist reads a method in either case", () => {
+    expect(problems(WAIVED.toLowerCase())).toEqual([
+      containing("GET /ready is served"),
+      containing("POST /presets is served"),
+    ]);
+  });
+
+  test("the log carries a line for a green step to show the floor ran", () => {
+    const clean = `${WAIVED}
+      GET /ready -- a readiness probe the ramp has no reason to hold
+      POST /presets -- a write path the read-only ramp has no body for`;
+    expect(problems(clean)).toEqual([]);
+    expect(coverage(clean).summary).toBe(
+      "route coverage: 4 of 8 routes exercised by the ramp, 4 allowlisted",
     );
-    expect(problems(preflight)).toEqual([containing("OPTIONS /* is served")]);
-    expect(problems(preflight, "OPTIONS /* -- answered before the hook runs")).toEqual([]);
-    expect(problems(preflight, "options /* -- answered before the hook runs")).toEqual([]);
+  });
+
+  // Without a table there is no floor at all, and a step that passes on a silent
+  // app is exactly the "never load-tested" case this exists to catch.
+  test("an app that reported no route table fails rather than passing vacuously", () => {
+    expect(problems("", log([]), log([]))).toEqual([containing("reported an empty routeTable")]);
+    expect(coverage("", log([]), log([])).summary).toBe("route coverage: no route table");
+  });
+});
+
+describe("the price of the hatch", () => {
+  // The same price a lint directive pays: an exemption nobody had to justify is
+  // one nobody can review a year later. The gate charges it, rather than each
+  // entry point remembering to.
+  test("an entry that waives a route without saying why is refused", () => {
+    expect(problems("OPTIONS /*")).toContainEqual(
+      containing("route-allowlist waives OPTIONS /* without saying why"),
+    );
   });
 
   // The same rule extra-paths carries in the pin gate: an escape hatch nobody
   // can see rotting is how a gate quietly stops covering what it names.
   test("an allowlist entry the app does not serve is a stale hatch", () => {
-    const gone = log(table({ method: "GET", path: "/health" }), served("GET", "/health"));
-    expect(problems(gone, "POST /retired -- gone in v2")).toEqual([
+    expect(problems("POST /retired -- gone in the rewrite")).toContainEqual(
       containing("route-allowlist names POST /retired, which this app does not serve"),
-    ]);
-  });
-
-  // Without the table there is no floor at all, and a step that passes on a
-  // silent app is exactly the "never load-tested" case this exists to catch.
-  test("an app that printed no route table fails rather than passing vacuously", () => {
-    expect(problems(log(served("GET", "/health")))).toEqual([
-      containing("no route table reached the log"),
-    ]);
-  });
-
-  test("the log carries a line for a green step to show the floor ran", () => {
-    const covered = log(
-      table({ method: "GET", path: "/health" }, { method: "OPTIONS", path: "/*" }),
-      served("GET", "/health"),
     );
-    expect(
-      routeCoverage(
-        { all: covered, underRamp: covered },
-        allowlistFrom("OPTIONS /* -- answered before the hook runs", "route-allowlist").entries,
-      ).summary,
-    ).toBe("route coverage: 1 of 2 routes exercised by the ramp, 1 allowlisted");
-  });
-});
-
-describe("what counts as coverage", () => {
-  const ROUTES = table({ method: "GET", path: "/health" }, { method: "POST", path: "/presets" });
-
-  // ROUTE_LOG is on from boot, so the poll that waits for the app to answer
-  // writes routeServed lines of its own. Crediting those would let a scenario
-  // that never touches the health route pass as if it had.
-  test("a route the boot poll reached and the ramp did not is uncovered", () => {
-    const boot = log(ROUTES, served("GET", "/health"));
-    const underRamp = served("POST", "/presets");
-    expect(problems(`${boot}\n${underRamp}`, "", underRamp)).toEqual([
-      containing("GET /health is served but no ramp request exercises it"),
-    ]);
   });
 
-  test("the table is still read from before the ramp, where the app printed it", () => {
-    const boot = log(ROUTES, served("GET", "/health"));
-    const underRamp = [served("GET", "/health"), served("POST", "/presets")].join("\n");
-    expect(problems(`${boot}\n${underRamp}`, "", underRamp)).toEqual([]);
-  });
-});
-
-describe("a route table that will not read", () => {
-  // Dropping the entry silently would shrink the floor to whatever the app
-  // spelled correctly, and the step would pass while covering less.
-  test("a malformed entry is named rather than dropped", () => {
-    const partial = log(
-      JSON.stringify({ routeTable: [{ method: "GET", path: "/health" }, { path: "/presets" }] }),
-      served("GET", "/health"),
+  // The other way a hatch rots: the route it waives is now ramped, so the reason
+  // written beside it — that the ramp cannot reach this — has stopped being true.
+  test("an entry waiving a route the ramp did exercise is refused", () => {
+    expect(problems("GET /health -- the ramp cannot reach this")).toContainEqual(
+      containing("route-allowlist waives GET /health, which the ramp did exercise"),
     );
-    expect(problems(partial)).toEqual([
-      containing('names {"path":"/presets"}, which is not a {"method","path"} pair'),
-    ]);
   });
 
-  test("an entry that is not an object at all is named too", () => {
-    const junk = log(JSON.stringify({ routeTable: ["GET /health"] }));
-    expect(problems(junk)).toEqual([
-      containing('names "GET /health", which is not a {"method","path"} pair'),
-      containing("no route table reached the log"),
-    ]);
-  });
-});
-
-describe("the price of the hatch", () => {
-  const ROUTES = table({ method: "GET", path: "/health" }, { method: "OPTIONS", path: "/*" });
-  const RAN = log(ROUTES, served("GET", "/health"));
-  // A tree with nothing else wrong, so a malformed entry is the only thing left
-  // to report: it waives no route, since there is no route to read out of it.
-  const COVERED = log(table({ method: "GET", path: "/health" }), served("GET", "/health"));
-
-  // The same price a lint directive pays: an exemption nobody had to justify is
-  // one nobody can review a year later.
-  test("an entry that waives a route without saying why is refused", () => {
-    expect(problems(RAN, "OPTIONS /*")).toEqual([
-      containing("route-allowlist waives OPTIONS /* without saying why"),
-    ]);
-  });
-
-  test("the reason is stripped before the entry is compared", () => {
-    expect(
-      problems(RAN, "OPTIONS /* -- the cors plugin answers these before the hook runs"),
-    ).toEqual([]);
+  test("the same entry against a route the ramp did not exercise is the hatch working", () => {
+    expect(problems("GET /ready -- the ramp cannot reach this")).not.toContainEqual(
+      containing("GET /ready"),
+    );
   });
 
   // Read as a route, `/health` has no method: reporting it as a route the app
@@ -189,9 +166,55 @@ describe("the price of the hatch", () => {
   test.each(["/health -- no method", "GET -- no path", "GET /a /b -- two paths"])(
     "an entry that is not a route (%s) says so",
     (entry) => {
-      expect(problems(COVERED, entry)).toEqual([
-        containing("is not a route — write 'METHOD /path'"),
-      ]);
+      expect(problems(entry)).toContainEqual(containing("is not a route — write 'METHOD /path'"));
     },
   );
+});
+
+const read = (text: string): RouteLog => parseRouteLog(text, "the route log");
+
+describe("a route log that will not read", () => {
+  test("the captured payload is read as the endpoint wrote it", () => {
+    expect(AFTER.routeTable).toContainEqual({ method: "ALL", path: "/api/auth/*" });
+    expect(AFTER.counts).toContainEqual({ method: "GET", path: "/health", count: 50 });
+    // The instrument reports neither its own route nor its own traffic.
+    expect(AFTER.routeTable.some(({ path }) => path === "/__route-log")).toBe(false);
+    expect(AFTER.counts.some(({ path }) => path === "/__route-log")).toBe(false);
+  });
+
+  // Dropping an entry quietly would shrink the floor to whatever the app spelled
+  // correctly, and the step would pass while covering less.
+  test.each([
+    ['{"routeTable":[{"path":"/presets"}],"counts":[]}', 'which is not a {"method","path"} pair'],
+    ['{"routeTable":["GET /health"],"counts":[]}', 'which is not a {"method","path"} pair'],
+    [
+      '{"routeTable":[],"counts":[{"method":"GET","path":"/x"}]}',
+      'which is not a {"method","path","count"} row',
+    ],
+    [
+      '{"routeTable":[],"counts":[{"method":"GET","path":"/x","count":"12"}]}',
+      'which is not a {"method","path","count"} row',
+    ],
+  ])("an entry that will not read is named rather than dropped (%s)", (text, detail) => {
+    expect(() => read(text)).toThrow(detail);
+  });
+
+  // Each of these used to be readable as a floor covering nothing, which is a
+  // diagnostic pointing at the app when the payload is the problem.
+  test.each([
+    ["null", "the top level is null"],
+    ["42", "the top level is a number"],
+    ["[]", "the top level is an array"],
+    ['{"counts":[]}', "routeTable is absent"],
+    ['{"routeTable":{},"counts":[]}', "routeTable is a object"],
+    ['{"routeTable":[]}', "counts is absent"],
+    ['{"routeTable":[],"counts":{}}', "counts is a object"],
+  ])("a payload that is not a route log (%s) says so", (text, detail) => {
+    expect(() => read(text)).toThrow("is not a route log");
+    expect(() => read(text)).toThrow(detail);
+  });
+
+  test("a payload that is not JSON at all throws rather than covering nothing", () => {
+    expect(() => read("not json")).toThrow();
+  });
 });

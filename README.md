@@ -566,7 +566,7 @@ jobs:
 | `capacity-path`       | `""`                               | Paths to ramp alongside the health route, comma- or newline-separated.                                                                                                     |
 | `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                 |
 | `capacity-report`     | `capacity-report`                  | The artifact name for the k6 summary, for a matrix that ramps more than one leg.                                                                                           |
-| `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries; one without a reason is refused.                                                                           |
+| `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries; one without a reason, and one the ramp did reach, are both refused.                                        |
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches

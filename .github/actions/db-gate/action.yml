@@ -93,9 +93,9 @@ runs:
         HEALTH_URL: ${{ inputs.health-url }}
         SITE_URL: http://localhost
         BETTER_AUTH_SECRET: ci-not-a-secret-ci-not-a-secret-ci
-        # The app names the routes it serves, and the ones the ramp reaches, on
-        # the stdout this step is already capturing. Only under the ramp: it is
-        # an instrument for the coverage floor, not an access log.
+        # The app serves a counter endpoint naming every route it has and how
+        # many requests each has taken. Only under the ramp: it is an instrument
+        # for the coverage floor, not a surface.
         ROUTE_LOG: ${{ inputs.capacity }}
       run: |
         set -euo pipefail
@@ -145,13 +145,20 @@ runs:
           "https://github.com/grafana/k6/releases/download/${K6_VERSION}/k6-${K6_VERSION}-linux-amd64.tar.gz" \
           "$K6_SHA256" "k6-${K6_VERSION}-linux-amd64/k6"
         script="${CAPACITY_SCRIPT:-$GITHUB_ACTION_PATH/capacity.js}"
-        # Where the app's log stands before any of the scenario's traffic. The
-        # route floor reads from here on, so the health poll that got the app
-        # this far cannot be mistaken for a route the ramp exercised.
-        echo "RAMP_BEGAN_AT=$(stat -c %s "$RUNNER_TEMP/server.log")" >> "$GITHUB_ENV"
+        # The route floor is the difference between these two reads of the app's
+        # counters, so the health poll that got the app this far sits inside the
+        # first and cannot be mistaken for a route the ramp exercised.
+        route_log="$(echo "$HEALTH_URL" | sed -E 's#^(https?://[^/]+).*#\1#')/__route-log"
+        snapshot() {
+          curl -sSf "$route_log" > "$1" && return 0
+          echo "::error::$route_log did not answer — an app under the capacity ramp serves the route-log endpoint when ROUTE_LOG is set"
+          return 1
+        }
+        snapshot "$RUNNER_TEMP/route-log-before.json"
         "$RUNNER_TEMP/k6" run --quiet \
           --summary-trend-stats='avg,min,med,p(95),p(99),max' \
           --summary-export "$RUNNER_TEMP/capacity.json" "$script"
+        snapshot "$RUNNER_TEMP/route-log-after.json"
         INPUT_SUMMARY_FILE="$RUNNER_TEMP/capacity.json" INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
           bun "$GITHUB_ACTION_PATH/capacity.main.ts"
 
@@ -162,8 +169,8 @@ runs:
       if: ${{ inputs.capacity == 'true' }}
       shell: bash
       env:
-        INPUT_SERVER_LOG: ${{ runner.temp }}/server.log
-        INPUT_RAMP_BEGAN_AT: ${{ env.RAMP_BEGAN_AT }}
+        INPUT_ROUTE_LOG_BEFORE: ${{ runner.temp }}/route-log-before.json
+        INPUT_ROUTE_LOG_AFTER: ${{ runner.temp }}/route-log-after.json
         INPUT_ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
       run: |
         set -euo pipefail

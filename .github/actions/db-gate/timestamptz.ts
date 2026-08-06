@@ -1,4 +1,4 @@
-import type { Problem } from "../_lib/gate.ts";
+import type { Allowlist, Problem } from "../_lib/gate.ts";
 
 /** A wall-clock column, as `information_schema.columns` names it. */
 export interface WallClockColumn {
@@ -19,23 +19,29 @@ export interface WallClockColumn {
  * Keyed by schema as well as table, because `app.events.occurred_at` and
  * `public.events.occurred_at` are two different columns and an allowlist that
  * could not tell them apart would exempt both.
+ *
+ * The allowlist arrives whole rather than as its entries, so that enforcing the
+ * reason on each of them is not something a caller can typecheck without.
  */
 export function timestamptzGate(
   columns: readonly WallClockColumn[],
-  allowlist: readonly string[],
+  allowlist: Allowlist,
 ): Problem[] {
-  const deliberate = new Set(allowlist);
-  return columns
-    .map(({ table_schema, table_name, column_name, udt_name }) => ({
-      column: [table_schema, table_name, column_name].join("."),
-      // The array element type is the fix, not the column type: an array of
-      // wall-clock timestamps becomes timestamptz[], not timestamptz.
-      fix: udt_name === "_timestamp" ? "timestamptz[]" : "timestamptz",
-    }))
-    .filter(({ column }) => !deliberate.has(column))
-    .map(({ column, fix }) => ({
-      message: `${column} is a wall-clock timestamp — store instants as ${fix}, or list it in timestamp-allowlist if it is a deliberate wall-clock value`,
-    }));
+  const deliberate = new Set(allowlist.entries);
+  return [
+    ...allowlist.problems,
+    ...columns
+      .map(({ table_schema, table_name, column_name, udt_name }) => ({
+        column: [table_schema, table_name, column_name].join("."),
+        // The array element type is the fix, not the column type: an array of
+        // wall-clock timestamps becomes timestamptz[], not timestamptz.
+        fix: udt_name === "_timestamp" ? "timestamptz[]" : "timestamptz",
+      }))
+      .filter(({ column }) => !deliberate.has(column))
+      .map(({ column, fix }) => ({
+        message: `${column} is a wall-clock timestamp — store instants as ${fix}, or list it in timestamp-allowlist if it is a deliberate wall-clock value`,
+      })),
+  ];
 }
 
 // Every schema except the catalogue's own, not just `public`: a drizzle
