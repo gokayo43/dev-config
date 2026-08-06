@@ -207,6 +207,27 @@ describe("replay gate", () => {
     expect(verdict.summary).toContain("a second replay leaves it identical");
   });
 
+  // The shape the whole gate leads with: a migration that only applies to a
+  // database that has already been migrated. It succeeded where it was written,
+  // against a table an earlier migration has since dropped, and aborts the
+  // first time the history runs onto nothing.
+  test("a history that cannot rebuild from empty says which replay failed", async () => {
+    const repo = await fixture({
+      ...migratesFrom(JOURNALLED, "drizzle"),
+      ...lineage(
+        "drizzle",
+        CREATES_THING,
+        { ...SLUG, sql: `DROP TABLE "thing" CASCADE;\n` },
+        { ...OTHER, sql: `ALTER TABLE "thing" DROP CONSTRAINT "thing_pkey";\n` },
+      ),
+    });
+
+    const refused = await refusal(replay(repo, undefined));
+
+    expect(refused).toContain("failed replaying the history from empty");
+    expect(refused).toContain("aborts here and nowhere else");
+  });
+
   // A runner with no journal applies every file on every run, and an unnamed
   // ADD CHECK is the shape that neither errors nor lands twice in the same
   // place: the second replay leaves a second constraint. An exit code says
@@ -372,6 +393,26 @@ describe("replay gate", () => {
     expect(await Bun.file(join(repo.root, ".git/HEAD")).exists()).toBe(true);
   });
 
+  // The delete reaches the branch's tree, so the invariant has to be read over
+  // it as well: this lineage is not in the base ref's set, and replacing `db`
+  // would take it with it. Without that read the swap deletes it and the
+  // migrator reports a missing journal for a file the author never touched.
+  test("a lineage this branch nests inside a base one is refused", async () => {
+    const repo = await fixture(
+      { ...migratesFrom(JOURNALLED, "db"), ...lineage("db", CREATES_THING) },
+      {
+        ...migratesFrom(JOURNALLED, "db", "db/note"),
+        ...lineage("db", CREATES_THING),
+        ...lineage("db/note", CREATES_NOTE),
+      },
+    );
+    const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
+
+    expect(messages(verdict)).toEqual([
+      containing("the migration lineage db/note is inside the lineage db"),
+    ]);
+  });
+
   test("a lineage inside another lineage is refused", async () => {
     const repo = await fixture(
       {
@@ -409,6 +450,25 @@ describe("replay gate", () => {
     );
     await replay(diverges, pushedOver(diverges.revs[0] ?? ""));
     expect(await exists(UPGRADE_DATABASE)).toBe(false);
+  });
+
+  // What a run killed between the create and the drop leaves behind. The next
+  // run makes its own room rather than failing with a 42P04 about a database
+  // whose name the author never chose.
+  test("a database left by a killed run does not fail the next one", async () => {
+    const repo = await fixture(
+      { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
+      {
+        ...migratesFrom(JOURNALLED, "drizzle"),
+        ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
+      },
+    );
+    await onServer([`create database "${UPGRADE_DATABASE}"`]);
+
+    const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.summary).toContain("reaches the same schema");
   });
 
   test("a pull request upgrades from where the branch left the base", async () => {
@@ -531,14 +591,28 @@ describe("comparing two schemas", () => {
     expect(compare(left, { of: "the right schema", text: left.text })).toBeUndefined();
   });
 
-  test("the same statements in a different order are not equal, and say so", () => {
+  test("the same statements arranged differently are not equal, and say so", () => {
     const reordered = {
       of: "the right schema",
       text: 'CREATE TABLE "b" ();\nCREATE TABLE "a" ();\n',
     };
     const difference = compare(left, reordered);
 
-    expect(difference?.headline).toContain("in a different order");
+    expect(difference?.headline).toContain("not in which statements they hold");
+    expect(difference?.lines).not.toEqual([]);
+  });
+
+  // The tally is of statements, so a blank line moves nothing in it. Reporting
+  // that as "a different order" was a claim about something never compared.
+  test("a blank-line difference is not reported as a different order", () => {
+    const spaced = {
+      of: "the right schema",
+      text: 'CREATE TABLE "a" ();\n\nCREATE TABLE "b" ();\n',
+    };
+    const difference = compare(left, spaced);
+
+    expect(difference?.headline).toContain("not in which statements they hold");
+    expect(difference?.headline).not.toContain("different order");
     expect(difference?.lines).not.toEqual([]);
   });
 

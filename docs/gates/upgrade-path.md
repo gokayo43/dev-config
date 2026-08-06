@@ -82,6 +82,12 @@ is therefore a **refusal** naming it. A deployed database's journal names the
 migrations that built it; relocating or dropping a lineage strands every
 database that has one, and no schema comparison can un-strand it.
 
+This tree's own lineages are read too, but only as a safety check on what the
+swap would reach — never as the set to replay. A lineage this branch adds
+_inside_ one the base ref carried would otherwise be deleted by a swap that
+never enumerated it, and the author would be handed a missing-journal error
+about a file they had not touched.
+
 A lineage the base ref never had is left where it is. There was nothing of it on
 a database at that ref, so replaying this branch's copy of it from empty is
 precisely what a deploy would do with it.
@@ -97,14 +103,16 @@ compose stack — and run from another checkout every one of those would be
 answering about that tree instead of this one.
 
 Two lineage shapes are refused rather than replayed, because replacing a
-directory is only a local act when the directory is one: a lineage at the
-project root (the project would be what got replaced) and a lineage inside
-another (two swaps of one tree). Both are refused where the lineages are read,
-before anything moves.
+directory is only a local act when that directory holds one lineage and nothing
+else: a lineage at the project root (the project would be what got replaced) and
+a lineage inside another, whichever side of the change put it there. Both are
+refused where the lineages are read, before anything moves.
 
 The second database is `upgrade_path`, created on the service the calling job
-declared and dropped again whichever way the comparison goes. The database the
-app boots against is the fresh one and is never touched by any of this.
+declared and dropped again whichever way the comparison goes — and dropped
+before it is created, so a run killed between the two ends does not leave the
+next one failing over a name its author never chose. The database the app boots
+against is the fresh one and is never touched by any of this.
 
 ## Which commit counts as the base
 
@@ -115,11 +123,15 @@ app boots against is the fresh one and is never touched by any of this.
 | anything else, or no `before` | `HEAD^`                                                  |
 | a first commit                | none: the step passes with a notice                      |
 
-The merge base rather than the base branch's tip: what a pull request has to
-answer for is what it did to the lineage, and migrations the base branch grew
-meanwhile are already in the schema both sides build. `github.event.before` is
-the honest answer for a push because it names the commit whose schema is
-actually running somewhere — a push of five commits is one deploy, not five.
+On a pull request `actions/checkout` checks out GitHub's merge commit by default
+— this branch merged into the base branch's tip — so the merge base with that
+branch _is_ that tip, and the tip is what gets replayed: the commit a deployed
+database was actually built from, with whatever the base branch grew meanwhile
+already in it. A repo that checks out `github.event.pull_request.head.sha`
+instead gets the fork point from the same command, which is the same statement
+about the checkout it has. `github.event.before` is the honest answer for a push
+because it names the commit whose schema is running somewhere — a push of five
+commits is one deploy, not five.
 
 Two ways this could pass by having been handed nothing are refused rather than
 skipped: a shallow checkout, and a base branch that is not in the clone. Both

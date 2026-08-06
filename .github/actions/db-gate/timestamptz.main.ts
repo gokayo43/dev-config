@@ -1,6 +1,6 @@
 import { SQL } from "bun";
 
-import { allowlistFrom, entry, inputs, report } from "../_lib/gate.ts";
+import { allowlistFrom, entry, inputs, report, required } from "../_lib/gate.ts";
 import { timestamptzGate, WALL_CLOCK_QUERY, type WallClockColumn } from "./timestamptz.ts";
 
 await entry(async () => {
@@ -13,12 +13,10 @@ await entry(async () => {
   // The migrate step asserts this first, and says what the caller has to do; this
   // one says which step is left holding nothing, for the case where the steps are
   // ever reordered or run alone.
-  const url = Bun.env["DATABASE_URL"];
-  if (url === undefined || url === "") {
-    throw new Error(
-      "DATABASE_URL is unset — the timestamp check reads the database migrate just used",
-    );
-  }
+  const url = required(
+    "DATABASE_URL",
+    "the timestamp check reads the database the replay just used",
+  );
 
   // Read through Bun's own client: the runner needs no psql, and the rows arrive
   // typed rather than as text to split on a separator an identifier could contain.

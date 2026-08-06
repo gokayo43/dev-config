@@ -78,6 +78,17 @@ export function inputs<const Names extends readonly string[]>(
   return read;
 }
 
+/**
+ * An environment variable the calling job owns, refused rather than defaulted.
+ * The reason travels with the call because two gates reading one variable are
+ * left holding different things when it is missing, and each should say which.
+ */
+export function required(name: string, why: string): string {
+  const value = Bun.env[name];
+  if (value === undefined || value === "") throw new Error(`${name} is not set — ${why}`);
+  return value;
+}
+
 /** Where a manifest may declare a package. */
 export const DEPENDENCY_FIELDS = [
   "dependencies",
