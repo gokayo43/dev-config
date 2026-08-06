@@ -2,14 +2,17 @@ import { describe, expect, test } from "bun:test";
 
 import { containing } from "./matchers.ts";
 
-import { capacity, parseSummary } from "../.github/actions/db-gate/capacity.ts";
+import { capacity, parseSummary, ranOnFrom } from "../.github/actions/db-gate/capacity.ts";
+
+/** The caller CI is; the other one is driven where the caption is the subject. */
+const CI = ranOnFrom("ci-runner");
 
 function tableOf(text: string): string {
-  return capacity(parseSummary(text)).table ?? "";
+  return capacity(parseSummary(text), CI).table ?? "";
 }
 
 function problemsOf(text: string): string[] {
-  return capacity(parseSummary(text)).problems.map(({ message }) => message);
+  return capacity(parseSummary(text), CI).problems.map(({ message }) => message);
 }
 
 /** A ramp that answered everything, as k6 exports it. */
@@ -31,7 +34,7 @@ const SUMMARY = parseSummary(await Bun.file(new URL("./k6-summary.json", import.
 
 describe("capacity table", () => {
   test("a ramp that measured something records the number", () => {
-    const table = capacity(SUMMARY).table ?? "";
+    const table = capacity(SUMMARY, CI).table ?? "";
     expect(table).toContain("22289.8");
     expect(table).toContain("Latency p(95)");
     expect(table).toContain("Latency p(99)");
@@ -41,10 +44,34 @@ describe("capacity table", () => {
   // ramp-down included, so it sits below the plateau a row calling itself
   // "sustained" was read as.
   test("the requests/s row names the number it is", () => {
-    const table = capacity(SUMMARY).table ?? "";
+    const table = capacity(SUMMARY, CI).table ?? "";
     expect(table).toContain("Mean requests/s (whole run incl. ramp)");
     expect(table).not.toContain("Sustained");
   });
+
+  // The same script and the same stages say two different things depending on
+  // the machine under them, and a table that claimed the wrong one is a
+  // capacity claim nobody made.
+  test("a ramp on a CI runner says it is a trend line, not a claim", () => {
+    const table = capacity(SUMMARY, ranOnFrom("ci-runner")).table ?? "";
+    expect(table).toContain("not the deployed shape");
+    expect(table).not.toContain("capacity claim testing.md asks for");
+  });
+
+  test("a ramp against the deployed shape says it is the claim", () => {
+    const table = capacity(SUMMARY, ranOnFrom("deployed-shape")).table ?? "";
+    expect(table).toContain("Measured against the deployed shape");
+    expect(table).not.toContain("Measured on a CI runner");
+  });
+
+  // Nothing else can know where the ramp ran, so a value nobody defined is a
+  // wiring bug rather than something to fall back from.
+  test.each(["", "ci", "production", "CI-RUNNER"])(
+    "a ran-on nobody defined (%s) is refused rather than defaulted",
+    (value) => {
+      expect(() => ranOnFrom(value)).toThrow("it names one of");
+    },
+  );
 
   // The whole point of the gate: it asserts a measurement happened. A latency
   // bound would be measuring the runner, so there is deliberately none.
@@ -68,16 +95,16 @@ describe("capacity table", () => {
     ["a summary with no requests metric", '{"metrics":{}}'],
     ["a run that made no requests", '{"metrics":{"http_reqs":{"count":0,"rate":0}}}'],
   ])("%s has no number to record", (_, text) => {
-    expect(capacity(parseSummary(text)).table).toBeUndefined();
+    expect(capacity(parseSummary(text), CI).table).toBeUndefined();
     expect(problemsOf(text)).toEqual([containing("produced no requests")]);
   });
 
   // The summary is a file this action did not write; a repo may point
   // capacity-script at its own.
   test("a summary missing a stat the table needs says which", () => {
-    expect(() => capacity(parseSummary('{"metrics":{"http_reqs":{"count":10,"rate":1}}}'))).toThrow(
-      "the k6 summary has no vus_max.max",
-    );
+    expect(() =>
+      capacity(parseSummary('{"metrics":{"http_reqs":{"count":10,"rate":1}}}'), CI),
+    ).toThrow("the k6 summary has no vus_max.max");
   });
 
   test("a summary that is not JSON at all throws rather than measuring nothing", () => {

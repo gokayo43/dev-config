@@ -170,8 +170,11 @@ runs:
         # been read and published, and the step then fails carrying both.
         status=0
         snapshot "$RUNNER_TEMP/route-log-after.json" || status=1
+        # Always a runner here: this action only ever runs inside a workflow. A
+        # ramp against the deployed shape is a different caller of the same
+        # reader, and the caption it publishes says which of the two happened.
         INPUT_SUMMARY_FILE="$RUNNER_TEMP/capacity.json" INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
-          bun "$GITHUB_ACTION_PATH/capacity.main.ts" || status=1
+          INPUT_RAN_ON=ci-runner bun "$GITHUB_ACTION_PATH/capacity.main.ts" || status=1
         exit "$status"
 
     # The floor, not a realism claim: a route no request reached has never been

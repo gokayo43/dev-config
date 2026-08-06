@@ -384,10 +384,11 @@ directly above the pair:
   "customType": "regex",
   "managerFilePatterns": [
     "/^\\.github/workflows/[^/]+\\.ya?ml$/",
-    "/^\\.github/actions/[^/]+/action\\.ya?ml$/"
+    "/^\\.github/actions/[^/]+/action\\.ya?ml$/",
+    "/^scripts/[^/]+\\.sh$/"
   ],
   "matchStrings": [
-    "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+_VERSION: (?<currentValue>v\\S+)\\s+\\w+_SHA256: (?<currentDigest>[0-9a-f]{64})"
+    "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+\\w+_VERSION[:=] ?(?<currentValue>v\\S+)\\s+\\w+_SHA256[:=] ?(?<currentDigest>[0-9a-f]{64})"
   ]
 }
 ```
@@ -399,11 +400,22 @@ env:
   TOOL_SHA256: <sha256 of the release archive>
 ```
 
+A `scripts/*.sh` that fetches the same way writes the pair as shell assignments,
+and the one manager reads both — a tool a person runs on the box has the same
+supply-chain story as one a runner does:
+
+```sh
+# renovate: datasource=github-release-attachments depName=owner/tool
+TOOL_VERSION=v1.2.3
+TOOL_SHA256=<sha256 of the release archive>
+```
+
 The shape above is illustrative on purpose: this file is not in the manager's
 patterns, so a real version and checksum written here would be the one pin
-nobody moves. The live ones sit in `.github/actions/secret-scan/action.yml` and
-this repo's own CI, which the patterns do cover, and it covers the next tool
-without touching the preset.
+nobody moves. The live ones sit in `.github/actions/secret-scan/action.yml`,
+this repo's own CI, and `project-template`'s `scripts/preview-capacity.sh` —
+all of which the patterns cover, and they cover the next tool without touching
+the preset.
 
 One pin does live in this README and is managed: the `GITLEAKS_VERSION=` line in
 the local install snippet below, which carries no checksum and has a second,

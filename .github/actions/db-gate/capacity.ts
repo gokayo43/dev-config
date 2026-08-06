@@ -49,10 +49,43 @@ function ms(value: number): string {
 }
 
 /**
- * The measurement, for $GITHUB_STEP_SUMMARY — or nothing, when the ramp made no
- * requests and there is no number to record.
+ * Where the ramp ran, which is the whole of what its number means. The same
+ * script, the same stages and the same summary say two different things
+ * depending on the machine under them, and only the caller knows which it was —
+ * so the fact is an input and the prose stays here, in the one place that knows
+ * what each of them is worth.
  */
-function capacityTable(summary: Summary): string | undefined {
+const RAN_ON = ["ci-runner", "deployed-shape"] as const;
+
+export type RanOn = (typeof RAN_ON)[number];
+
+/** The input as one of those, refused rather than defaulted — a default would publish a claim nobody made. */
+export function ranOnFrom(value: string): RanOn {
+  const found = RAN_ON.find((name) => name === value);
+  if (found === undefined) {
+    throw new Error(`ran-on is '${value}' — it names one of: ${RAN_ON.join(", ")}`);
+  }
+  return found;
+}
+
+const CAPTION: Record<RanOn, string[]> = {
+  "ci-runner": [
+    "Measured on a CI runner, which is not the deployed shape: read it against",
+    "the last run rather than as a capacity claim. The number that answers",
+    '"how much load does this hold" comes from a ramp against the deploy.',
+  ],
+  "deployed-shape": [
+    "Measured against the deployed shape, on the machine that would serve it.",
+    "This is the capacity claim testing.md asks for: record the number and the",
+    "first bottleneck it hit, and take it again after a change to a hot path.",
+  ],
+};
+
+/**
+ * The measurement, for a run summary or a file beside the repo — or nothing,
+ * when the ramp made no requests and there is no number to record.
+ */
+function capacityTable(summary: Summary, ranOn: RanOn): string | undefined {
   const requests = summary.metrics["http_reqs"];
   if (requests === undefined || (requests["count"] ?? 0) === 0) return undefined;
 
@@ -72,23 +105,21 @@ function capacityTable(summary: Summary): string | undefined {
     `| Latency p(99) | ${ms(stat(summary, "http_req_duration", "p(99)"))} |`,
     `| Latency max | ${ms(stat(summary, "http_req_duration", "max"))} |`,
     "",
-    "Measured on a CI runner, which is not the deployed shape: read it against",
-    "the last run rather than as a capacity claim. The number that answers",
-    '"how much load does this hold" comes from a ramp against the deploy.',
+    ...CAPTION[ranOn],
     "",
   ].join("\n");
 }
 
 /**
- * A tenth of the ramp's requests. Latency and throughput belong to the runner
- * GitHub happened to give us, and a gate that fails on those gets disabled
- * within a month — but a request the app refused is refused on any machine, so
- * this one bound says something about the commit.
+ * A tenth of the ramp's requests. Latency and throughput belong to whatever
+ * machine the ramp found, and a gate that fails on those gets disabled within a
+ * month — but a request the app refused is refused on any machine, so this one
+ * bound says something about the app wherever it ran.
  */
 const FAILURE_BOUND = 0.1;
 
 export interface Capacity {
-  /** The table for $GITHUB_STEP_SUMMARY, absent when the ramp measured nothing. */
+  /** The table the caller publishes, absent when the ramp measured nothing. */
   readonly table: string | undefined;
   readonly problems: Problem[];
 }
@@ -101,8 +132,8 @@ export interface Capacity {
  * page, and the rule that decides what counts as a measurement would have two
  * homes that could disagree.
  */
-export function capacity(summary: Summary): Capacity {
-  const table = capacityTable(summary);
+export function capacity(summary: Summary, ranOn: RanOn): Capacity {
+  const table = capacityTable(summary, ranOn);
   if (table === undefined) {
     return {
       table,

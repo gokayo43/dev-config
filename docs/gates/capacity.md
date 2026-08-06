@@ -25,6 +25,16 @@ deployed shape, which testing.md asks for before real users arrive and again
 after hot-path changes. This gate does not replace that and is not evidence for
 it. It catches the regression between those runs.
 
+Both are the same ramp, and the reader that turns k6's summary into a table is
+the same reader — `project-template`'s `scripts/preview-capacity.sh` runs it
+against a preview stack on the box that would serve it. What separates them is
+one input, `ran-on`, naming the machine the ramp found: `ci-runner` or
+`deployed-shape`. It decides nothing about the measurement and everything about
+the sentence printed under it, because the same number means two different
+things depending on what was underneath it — and a table that claimed the wrong
+one would be a capacity claim nobody made. A value outside those two is refused
+rather than defaulted.
+
 ## Why there is no latency threshold
 
 A latency bound on a shared runner fails on a bad neighbour rather than on a bad
