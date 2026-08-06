@@ -36,6 +36,10 @@ bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites, coverage-floored
 ```
 
+`bun test` needs a Postgres: the replay gate's property is what two databases
+end up holding. It looks at `TEST_DATABASE_URL`, or localhost:5432, and creates
+and drops databases there — README's "Gating this repo" has the one-liner.
+
 This repo runs its own gates on itself in CI, from the working tree, with three
 exemptions named in `ci.yml`: it cannot extend itself by package name, its CI
 cannot pin a commit it is making, and it has no runtime environment.

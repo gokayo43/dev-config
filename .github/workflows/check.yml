@@ -19,6 +19,12 @@ on:
         description: Replay the migrations onto an empty Postgres and boot the app against the result.
         type: boolean
         default: false
+      upgrade-gate:
+        description: >-
+          Also prove that upgrading a database built from the base ref's migrations reaches
+          the schema a fresh one gets — for repos whose database is deployed somewhere.
+        type: boolean
+        default: false
       compose:
         description: Hold docker-compose.yml to the deployment shape — for repos this box runs as containers.
         type: boolean
@@ -85,12 +91,17 @@ jobs:
           # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
-      # The ramp runs against the app the database job boots, so asking for one
-      # without the other is a request that would otherwise be ignored in
-      # silence — and a capacity gate nobody notices is off is the worst kind.
+      # Both of these are steps of the database job, so asking for one without
+      # it is a request that would otherwise be ignored in silence — and a gate
+      # nobody notices is off is the worst kind.
       - if: ${{ inputs.capacity && !inputs.database }}
         run: |
           echo "::error::capacity: true needs database: true — the ramp runs against the app the database job boots"
+          exit 1
+
+      - if: ${{ inputs.upgrade-gate && !inputs.database }}
+        run: |
+          echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
           exit 1
 
       - uses: gokayo43/dev-config/.github/actions/secret-scan@746ecdf3231436df8fad1b925d2529e6fd8154a3 # v0.22.0
@@ -167,6 +178,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The upgrade gate replays the base ref's migrations, which are in the
+          # history — and this job cannot fetch them later, because it holds no
+          # credentials and every repo here is private. Unconditional rather
+          # than keyed to the input: an expression that has to produce 0 rides
+          # on how GitHub casts it, and the failure mode of getting that wrong
+          # is a gate that reports nothing rather than one that says so. The
+          # static job already pays for the same history in the same run.
+          fetch-depth: 0
+          # Nothing in this job pushes, and it installs and runs the repo's
+          # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -178,6 +199,7 @@ jobs:
 
       - uses: gokayo43/dev-config/.github/actions/db-gate@746ecdf3231436df8fad1b925d2529e6fd8154a3 # v0.22.0
         with:
+          upgrade-gate: ${{ inputs.upgrade-gate }}
           start-command: ${{ inputs.start-command }}
           health-url: ${{ inputs.health-url }}
           timestamp-allowlist: ${{ inputs.timestamp-allowlist }}

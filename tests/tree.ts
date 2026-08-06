@@ -27,14 +27,14 @@ export async function materialise(tree: Tree, tracked: readonly string[] = []): 
   for (const [path, contents] of Object.entries(tree)) {
     await Bun.write(join(root, path), contents);
   }
-  await run(root, ["init", "--quiet", "--initial-branch=main"]);
-  if (tracked.length > 0) await run(root, ["add", "--force", "--", ...tracked]);
+  await git(root, ["init", "--quiet", "--initial-branch=main"]);
+  if (tracked.length > 0) await git(root, ["add", "--force", "--", ...tracked]);
   return root;
 }
 
 /** Tracks a file and then deletes it, which is what a scaffolder that removes itself leaves behind. */
 export async function trackThenDelete(root: string, path: string): Promise<void> {
-  await run(root, ["add", "--force", "--", path]);
+  await git(root, ["add", "--force", "--", path]);
   await rm(join(root, path), { recursive: true, force: true });
 }
 
@@ -43,9 +43,16 @@ export function without(tree: Tree, path: string): Tree {
   return Object.fromEntries(Object.entries(tree).filter(([each]) => each !== path));
 }
 
-async function run(cwd: string, args: readonly string[]): Promise<void> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "pipe" });
+/**
+ * git against one of these repositories, refusing rather than reporting: a
+ * fixture whose setup half-failed grades the gate against a tree nobody wrote.
+ * Exported because a gate that reads history needs fixtures that have one.
+ */
+export async function git(cwd: string, args: readonly string[]): Promise<string> {
+  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const stdout = await new Response(proc.stdout).text();
   if ((await proc.exited) !== 0) {
     throw new Error(`git ${args.join(" ")}: ${await new Response(proc.stderr).text()}`);
   }
+  return stdout;
 }

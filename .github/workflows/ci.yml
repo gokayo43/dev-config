@@ -16,6 +16,25 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
+    # The replay gate's fixtures are two databases and what each ends up
+    # holding, so the suite drives a real Postgres — see tests/replay.test.ts
+    # for why nothing in-process can stand in. Published on 5432, which is where
+    # the suite looks when TEST_DATABASE_URL says nothing else. Pinned by digest
+    # for the same reason the actions are.
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

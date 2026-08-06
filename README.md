@@ -37,13 +37,13 @@ to override a shared setting, the override carries a comment naming the reason.
 Each gate has a reference page of its own. This file holds the map and the
 settings every repo shares; what a single gate asserts, and why, lives beside it:
 
-| Gate                  | Page                                                                                                              |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `repo-contract`       | [docs/gates/repo-contract.md](docs/gates/repo-contract.md)                                                        |
-| `stack-gate`          | [docs/gates/stack-gate.md](docs/gates/stack-gate.md)                                                              |
-| `suppression-hygiene` | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md)                                            |
-| `compose-lint`        | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)                                                          |
-| `db-gate`             | [docs/gates/db-gate.md](docs/gates/db-gate.md), and [capacity.md](docs/gates/capacity.md) for the ramp it can run |
+| Gate                  | Page                                                                                                                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `repo-contract`       | [docs/gates/repo-contract.md](docs/gates/repo-contract.md)                                                                                                                          |
+| `stack-gate`          | [docs/gates/stack-gate.md](docs/gates/stack-gate.md)                                                                                                                                |
+| `suppression-hygiene` | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md)                                                                                                              |
+| `compose-lint`        | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)                                                                                                                            |
+| `db-gate`             | [docs/gates/db-gate.md](docs/gates/db-gate.md), plus [upgrade-path.md](docs/gates/upgrade-path.md) and [capacity.md](docs/gates/capacity.md) for the replay and the ramp it can add |
 
 ## TypeScript
 
@@ -442,6 +442,17 @@ build a real git repository per case, because the gates ask git what is tracked
 and what is ignored. Every other repo's gate is only as honest as those two
 lanes, which is why they run first.
 
+The replay suite needs a real Postgres, since what it asserts is what two
+databases end up holding. CI publishes one as a service on 5432, which is where
+the suite looks unless `TEST_DATABASE_URL` says otherwise; locally that is
+
+```sh
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine
+```
+
+It creates and drops databases on whatever it is pointed at, so point it at a
+throwaway.
+
 The linting is the `lint-workflows` action — actionlint, pinned by version and
 archive checksum exactly like gitleaks, with shellcheck over every `run:` block.
 It runs here from the working tree, and `check.yml` runs it for every consuming
@@ -558,6 +569,7 @@ jobs:
 | `build`               | `false`                            | Runs `bun run build` before the static gate and before the boot gate.                                                                                                      |
 | `database`            | `false`                            | Adds the database job: an empty Postgres, the migrations replayed onto it twice, and the app booted against the result. Also makes `db:migrate` part of the repo contract. |
 | `compose`             | `false`                            | Holds `docker-compose.yml` to the deployment shape.                                                                                                                        |
+| `upgrade-gate`        | `false`                            | Also proves that a database upgraded from the base ref's migrations reaches the schema a fresh one gets. Needs `database: true`; for repos whose database is deployed.     |
 | `contract-exemptions` | `""`                               | Repo-contract facts this repo is structurally unable to satisfy, space-separated. A marketing site names `docs-spine`.                                                     |
 | `start-command`       | `bun run start`                    | How the boot gate starts the app.                                                                                                                                          |
 | `health-url`          | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200.                                                                                                                             |

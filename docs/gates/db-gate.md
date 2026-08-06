@@ -23,6 +23,11 @@ hand-rolled runner can exit 0 without doing. With a journalled migrator the pass
 is cheap and proves the journal is honest; with anything that re-executes SQL,
 it proves the SQL is re-runnable.
 
+Both replays are one program, `db-gate/replay.ts`, because both are decided by
+the same comparison. `upgrade-gate: true` adds a third replay to it — from the
+base ref's migrations rather than from empty, which is where a deployed database
+starts — and that one has a page: [upgrade-path.md](upgrade-path.md).
+
 The database is then asked directly, through `information_schema.columns`,
 whether any column is `timestamp without time zone`. An ORM's `timestamp` is a
 hint and the catalogue is the fact, and asking it means nothing here has to

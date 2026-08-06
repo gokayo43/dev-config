@@ -32,6 +32,16 @@ export function notice(message: string): void {
 }
 
 /**
+ * Lines the log carries as they are. An annotation is one line and is rendered
+ * on the step, so evidence that runs to hundreds of lines — every line two
+ * schema dumps disagree about — belongs in the log beside it rather than in the
+ * message, which has to stay short enough to read.
+ */
+export function detail(lines: readonly string[]): void {
+  for (const line of lines) console.log(line);
+}
+
+/**
  * The work a `*.main.ts` hands over, so that a gate which throws — an input the
  * action forgot to pass, a database refusing the connection, a file that is not
  * the shape it claims — reaches the log as the annotation GitHub renders on the
