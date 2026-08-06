@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import { git, type Problem, repoFiles } from "../_lib/gate.ts";
+import { git, isObject, type Problem, repoFiles } from "../_lib/gate.ts";
 
 /**
  * What a repo's migration history is asked to prove, and the two questions are
@@ -77,6 +77,27 @@ export interface Verdict {
 export interface Schema {
   readonly of: string;
   readonly text: string;
+}
+
+/**
+ * A git read whose failure is not an answer. Most of what this gate asks git
+ * has a meaningful "no" — a path that is not tracked, a branch with no parent —
+ * but a read that fails because the checkout is not a repository at all, or
+ * because git could not run, answers nothing: taking the empty output as "no"
+ * is how a gate passes by having been handed nothing to look at.
+ */
+async function mustRead(
+  root: string,
+  args: readonly string[],
+  establishing: string,
+): Promise<string> {
+  const ran = await git(root, args);
+  if (!ran.ok) {
+    throw new Error(
+      `could not establish ${establishing}: \`git ${args.join(" ")}\` failed in ${root} — the upgrade gate reads the base ref out of git history, and a checkout it cannot read is refused rather than reported as having nothing to upgrade from`,
+    );
+  }
+  return ran.stdout;
 }
 
 /**
@@ -261,6 +282,9 @@ async function baseLineages(
   root: string,
   rev: string,
 ): Promise<{ lineages: BaseLineage[]; problems: Problem[] }> {
+  // The rev is one git already resolved and the repository is one it has
+  // already read, so the only thing left that this can fail on is the path:
+  // the project was not here at the base ref.
   const listing = await git(root, [
     "ls-tree",
     "-r",
@@ -269,9 +293,7 @@ async function baseLineages(
     "-z",
     `${rev}:./`,
   ]);
-  // Nothing of this project existed at the base ref — a directory this branch
-  // added, or a repository whose first commit is the one being gated.
-  if (!listing.ok) return { lineages: [], problems: [] };
+  if (!listing.ok) return { lineages: [], problems: await absentAt(root, rev) };
 
   const dirs = lineageDirs(listing.stdout.split("\0").filter((path) => path !== ""));
   if (dirs.length === 0) return { lineages: [], problems: [] };
@@ -299,6 +321,48 @@ async function baseLineages(
   return { lineages, problems: [] };
 }
 
+/**
+ * What it means that this project's directory was not at the base ref, which is
+ * two different things and only one of them is safe.
+ *
+ * A project this branch adds has no base lineage, and no database anywhere was
+ * built from one: the honest pass. A project that was somewhere else at the
+ * base ref has exactly the lineage the gate exists to protect, one path over —
+ * and every database built from it is stranded the moment the directory moves,
+ * for the same reason a moved lineage strands one.
+ *
+ * git already knows which it is, so it is asked rather than guessed at: a
+ * rename whose destination is inside this project carries a lineage into it.
+ */
+async function absentAt(root: string, rev: string): Promise<Problem[]> {
+  const prefix = (
+    await mustRead(
+      root,
+      ["rev-parse", "--show-prefix"],
+      "where this project sits in the repository",
+    )
+  ).trim();
+  const renames = await mustRead(
+    root,
+    ["diff", "--find-renames", "--name-status", "--diff-filter=R", rev, "HEAD"],
+    `what moved between ${rev.slice(0, 7)} and this branch`,
+  );
+
+  return renames
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .filter(
+      ([, from, to]) =>
+        from !== undefined &&
+        to !== undefined &&
+        to.startsWith(prefix) &&
+        (from === JOURNAL || from.endsWith(`/${JOURNAL}`)),
+    )
+    .map(([, from, to]) => ({
+      message: `${to} was ${from} at ${rev.slice(0, 7)}, so this project's migration lineage moved with it — a deployed database's journal names the migrations that built it, and moving them strands every database that has one; leave the lineage where it was and add to it`,
+    }));
+}
+
 async function filesAt(root: string, rev: string, dir: string): Promise<BaseLineage> {
   const listed = await git(root, [
     "ls-tree",
@@ -311,14 +375,34 @@ async function filesAt(root: string, rev: string, dir: string): Promise<BaseLine
   if (!listed.ok) throw new Error(`could not read ${dir} at ${rev}`);
 
   const names = listed.stdout.split("\0").filter((name) => name !== "");
-  const files = await Promise.all(
-    names.map(async (path) => {
-      const blob = await git(root, ["show", `${rev}:./${dir}/${path}`]);
-      if (!blob.ok) throw new Error(`could not read ${dir}/${path} at ${rev}`);
-      return { path, text: blob.stdout };
-    }),
-  );
+  const inside = join(root, dir);
+  const files = await inBatches(names, async (path) => {
+    // A tree entry may be named anything a `git mktree` was willing to write,
+    // `..` included — git only warns about one — and these paths are turned
+    // into files. A write that lands outside the directory being replaced is
+    // one the restore below would not put back, so it is refused instead.
+    const target = join(inside, path);
+    if (!target.startsWith(`${inside}/`)) {
+      throw new Error(
+        `${rev.slice(0, 7)} holds a migration file at ${dir}/${path}, which is outside ${dir} — the upgrade path replays a lineage by replacing its directory, and a file that escapes it is not part of one`,
+      );
+    }
+    const blob = await git(root, ["show", `${rev}:./${dir}/${path}`]);
+    if (!blob.ok) throw new Error(`could not read ${dir}/${path} at ${rev}`);
+    return { path, text: blob.stdout };
+  });
   return { dir, files };
+}
+
+/** How many git reads run at once: a long lineage would otherwise be a process per file. */
+const AT_ONCE = 16;
+
+async function inBatches<T, R>(items: readonly T[], each: (item: T) => Promise<R>): Promise<R[]> {
+  const done: R[] = [];
+  for (let start = 0; start < items.length; start += AT_ONCE) {
+    done.push(...(await Promise.all(items.slice(start, start + AT_ONCE).map(each))));
+  }
+  return done;
 }
 
 /**
@@ -338,6 +422,7 @@ async function onTheBaseLineage<T>(
   body: () => Promise<T>,
 ): Promise<T> {
   const saved = await mkdtemp(join(tmpdir(), "head-lineage-"));
+  let keep = false;
   try {
     // Every lineage is saved before any is touched, so that the restore below
     // has what it needs for all of them by the time anything needs restoring.
@@ -347,6 +432,8 @@ async function onTheBaseLineage<T>(
     await Promise.all(
       lineages.map(({ dir }) => cp(join(root, dir), join(saved, dir), { recursive: true })),
     );
+
+    let outcome: { readonly value: T } | { readonly failed: unknown };
     try {
       await Promise.all(
         lineages.map(async ({ dir, files }) => {
@@ -354,17 +441,36 @@ async function onTheBaseLineage<T>(
           for (const file of files) await Bun.write(join(root, dir, file.path), file.text);
         }),
       );
-      return await body();
-    } finally {
-      await Promise.all(
+      outcome = { value: await body() };
+    } catch (failed) {
+      outcome = { failed };
+    }
+
+    // Settled rather than raced, and reported rather than thrown from a
+    // `finally`: a restore that fails while the replay has already failed would
+    // otherwise replace the diagnostic the author needs with an ENOENT, and the
+    // directory it could not put back would be deleted with the copy below.
+    const refused = (
+      await Promise.allSettled(
         lineages.map(async ({ dir }) => {
           await rm(join(root, dir), { recursive: true, force: true });
           await cp(join(saved, dir), join(root, dir), { recursive: true });
         }),
+      )
+    ).flatMap((settled) => (settled.status === "rejected" ? [String(settled.reason)] : []));
+
+    if (refused.length > 0) {
+      keep = true;
+      const first =
+        "failed" in outcome ? ` The replay had already failed: ${String(outcome.failed)}` : "";
+      throw new Error(
+        `this branch's own migration files could not be put back: ${refused.join("; ")} — the only copy is ${saved}, which has been left in place; restore it before doing anything else with this checkout.${first}`,
       );
     }
+    if ("failed" in outcome) throw outcome.failed;
+    return outcome.value;
   } finally {
-    await rm(saved, { recursive: true, force: true });
+    if (!keep) await rm(saved, { recursive: true, force: true });
   }
 }
 
@@ -385,7 +491,15 @@ async function onTheBaseLineage<T>(
  * check would pass by having been given nothing to read.
  */
 async function baseRevision(root: string, event: Event): Promise<string | undefined> {
-  if ((await git(root, ["rev-parse", "--is-shallow-repository"])).stdout.trim() === "true") {
+  // Also what establishes that this is a repository at all: outside one the
+  // command fails, and reading its empty output as "not shallow" would let
+  // every git question below answer "no" and the whole check pass.
+  const shallow = await mustRead(
+    root,
+    ["rev-parse", "--is-shallow-repository"],
+    "whether this checkout has history",
+  );
+  if (shallow.trim() === "true") {
     throw new Error(
       "the checkout is shallow, so the base ref's migrations are not in it — check out with fetch-depth: 0 when the upgrade gate is on",
     );
@@ -410,6 +524,49 @@ async function baseRevision(root: string, event: Event): Promise<string | undefi
 }
 
 /**
+ * The migrations a database records as applied, by the clock drizzle keys them
+ * on. Read from every `__drizzle_migrations` in the database, whichever schema
+ * holds it, because a repo with more than one lineage has to give each its own
+ * journal table or they would share one high-water mark.
+ */
+async function appliedIn(url: string): Promise<Set<number>> {
+  const db = new SQL(url);
+  try {
+    const schemas = (await db.unsafe(
+      `select table_schema from information_schema.tables where table_name = '__drizzle_migrations'`,
+    )) as { table_schema: string }[];
+    const applied = new Set<number>();
+    for (const { table_schema } of schemas) {
+      const rows = (await db.unsafe(
+        `select created_at from "${table_schema.replaceAll('"', '""')}"."__drizzle_migrations"`,
+      )) as { created_at: unknown }[];
+      for (const { created_at } of rows) applied.add(Number(created_at));
+    }
+    return applied;
+  } finally {
+    await db.close();
+  }
+}
+
+/** The clocks a lineage's journal names — what the migrator records when it applies one. */
+function clocksIn({ files }: BaseLineage): number[] {
+  const journal = files.find(({ path }) => path === JOURNAL);
+  if (journal === undefined) return [];
+  const parsed: unknown = JSON.parse(journal.text);
+  const entries = isObject(parsed) ? parsed["entries"] : undefined;
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry: unknown) => {
+    const when = isObject(entry) ? entry["when"] : undefined;
+    return typeof when === "number" ? [when] : [];
+  });
+}
+
+/** What the upgrade path came to, or the lineages that never got there. */
+type Upgraded =
+  | { readonly unapplied: string[] }
+  | { readonly text: string; readonly replayed: string[] };
+
+/**
  * The schema a deployed database reaches: the base ref's lineage first, then
  * this branch's onto the result — the same two commands, in the same order, a
  * deploy runs. The database it is built in is this gate's own, made beside the
@@ -420,7 +577,7 @@ async function upgradedSchema(
   url: string,
   rev: string,
   lineages: readonly BaseLineage[],
-): Promise<string> {
+): Promise<Upgraded> {
   const upgrade = beside(url, UPGRADE_DATABASE);
   const from = rev.slice(0, 7);
   const server = new SQL(url);
@@ -432,19 +589,36 @@ async function upgradedSchema(
     // with an error about a name its author never chose.
     await server.unsafe(`drop database if exists "${UPGRADE_DATABASE}" with (force)`);
     await server.unsafe(`create database "${UPGRADE_DATABASE}"`);
-    await onTheBaseLineage(root, lineages, () =>
-      migrate(
+    // The base phase runs *this branch's* `db:migrate` over the base ref's
+    // files, which is the only migrator there is — so what it applied has to be
+    // read back rather than assumed. A lineage the base ref carried that the
+    // branch's script no longer names would otherwise be missing from both
+    // halves and compare equal, while a deployed database keeps everything it
+    // built from it.
+    const applied = await onTheBaseLineage(root, lineages, async () => {
+      await migrate(
         root,
         upgrade,
         `bun run db:migrate failed replaying ${from}'s migrations into ${databaseIn(upgrade)} — every lineage directory was rolled back to what ${from} carried, so the statement the output above names is that commit's rather than this branch's`,
-      ),
-    );
+      );
+      return await appliedIn(upgrade);
+    });
+
+    const asked = lineages.map((lineage) => ({ dir: lineage.dir, clocks: clocksIn(lineage) }));
+    const unapplied = asked
+      .filter(({ clocks }) => clocks.length > 0 && !clocks.some((clock) => applied.has(clock)))
+      .map(({ dir }) => dir);
+    if (unapplied.length > 0) return { unapplied };
+
     await migrate(
       root,
       upgrade,
       `bun run db:migrate failed applying this branch's migrations onto ${databaseIn(upgrade)}, a database built from ${from} — the output above names the statement; it applies to a database built from empty and not to one ${from} had already migrated`,
     );
-    return await schemaOf(upgrade);
+    return {
+      text: await schemaOf(upgrade),
+      replayed: asked.filter(({ clocks }) => clocks.length > 0).map(({ dir }) => dir),
+    };
   } finally {
     await server.unsafe(`drop database if exists "${UPGRADE_DATABASE}" with (force)`);
     await server.close();
@@ -465,10 +639,17 @@ const REPLAYED =
   "replay: the migrations rebuild the schema from empty, and a second replay leaves it identical";
 
 export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdict> {
-  const fromEmpty = `bun run db:migrate failed replaying the history from empty into ${databaseIn(url)} — the output above names the statement; a migration that only applies to an already-migrated database aborts here and nowhere else`;
-  await migrate(root, url, fromEmpty);
+  await migrate(
+    root,
+    url,
+    `bun run db:migrate failed replaying the history from empty into ${databaseIn(url)} — the output above names the statement; a migration that only applies to an already-migrated database aborts here and nowhere else`,
+  );
   const fresh: Schema = { of: "the schema built from empty", text: await schemaOf(url) };
-  await migrate(root, url, fromEmpty);
+  await migrate(
+    root,
+    url,
+    `bun run db:migrate failed on its second run over ${databaseIn(url)}, having just succeeded on the first — the output above names the statement; it is being executed against a database that already has its effects, so either the runner is not skipping what it has applied or that statement is not re-runnable`,
+  );
   const again: Schema = { of: "the schema after a second replay", text: await schemaOf(url) };
 
   const repeated = compare(fresh, again);
@@ -484,6 +665,14 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
   }
 
   if (upgrade === undefined) return passed(REPLAYED);
+
+  if (databaseIn(url) === UPGRADE_DATABASE) {
+    return refused([
+      {
+        message: `the declared database is called ${UPGRADE_DATABASE}, which is the name the upgrade path is built in and dropped under — declare the app's database under another name, or this check would drop the one it is meant to leave alone`,
+      },
+    ]);
+  }
 
   const rev = await baseRevision(root, upgrade);
   if (rev === undefined) {
@@ -501,14 +690,20 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
     );
   }
 
-  const upgraded: Schema = {
-    of: `the schema upgraded from ${from}`,
-    text: await upgradedSchema(root, url, rev, lineages),
-  };
+  const built = await upgradedSchema(root, url, rev, lineages);
+  if ("unapplied" in built) {
+    return refused(
+      built.unapplied.map((dir) => ({
+        message: `${dir} is in ${from}'s lineage set and this branch's db:migrate never applied it — a database deployed from ${from} keeps everything that lineage built, and a rebuild never makes it; point db:migrate at ${dir} again`,
+      })),
+    );
+  }
+
+  const upgraded: Schema = { of: `the schema upgraded from ${from}`, text: built.text };
   const diverged = compare(fresh, upgraded);
   if (diverged === undefined) {
     return passed(
-      `${REPLAYED}; upgrading a database built from ${from} (${lineages.map(({ dir }) => dir).join(", ")}) reaches the same schema`,
+      `${REPLAYED}; upgrading a database built from ${from} (${built.replayed.join(", ")}) reaches the same schema`,
     );
   }
 

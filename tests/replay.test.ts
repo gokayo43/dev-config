@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { chmod, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { SQL } from "bun";
@@ -99,7 +99,10 @@ function lineage(dir: string, ...migrations: readonly Migration[]): Tree {
 
 /** The repo's declaration of how it migrates, and of where its lineages are. */
 function migratesFrom(migrator: string, ...dirs: readonly string[]): Tree {
-  const script = `bun run ${migrator} ${dirs.map((dir) => `./${dir}`).join(" ")}`;
+  return scripted(`bun run ${migrator} ${dirs.map((dir) => `./${dir}`).join(" ")}`);
+}
+
+function scripted(script: string): Tree {
   return {
     "package.json": `${JSON.stringify(
       { name: "fixture", private: true, type: "module", scripts: { "db:migrate": script } },
@@ -179,7 +182,34 @@ function pushedOver(rev: string): Event {
 }
 
 async function replay(repo: Repo, upgrade: Event | undefined): Promise<Verdict> {
-  return await replayGate({ root: repo.root, url: await emptyDatabase(), upgrade });
+  return await replayIn(repo.root, upgrade);
+}
+
+/** The gate against a root that is not the repository's, which is what working-directory can be. */
+async function replayIn(root: string, upgrade: Event | undefined): Promise<Verdict> {
+  return await replayGate({ root, url: await emptyDatabase(), upgrade });
+}
+
+/** A tree written under a directory, the way a monorepo holds a project. */
+function under(prefix: string, tree: Tree): Tree {
+  return Object.fromEntries(
+    Object.entries(tree).map(([path, contents]) => [`${prefix}/${path}`, contents]),
+  );
+}
+
+/** git with something on stdin, for the plumbing that builds a tree by hand. */
+async function gitFed(cwd: string, args: readonly string[], stdin: string): Promise<string> {
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    stdin: new TextEncoder().encode(stdin),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(proc.stdout).text();
+  if ((await proc.exited) !== 0) {
+    throw new Error(`git ${args.join(" ")}: ${await new Response(proc.stderr).text()}`);
+  }
+  return stdout.trim();
 }
 
 /** What the gate threw, as the text a case can read. A rejection is the diagnostic here. */
@@ -521,6 +551,149 @@ describe("replay gate", () => {
 
     expect(messages(verdict)).toEqual([]);
     expect(verdict.summary).toContain("carries no migration lineage");
+  });
+
+  // A lineage the base ref carried, still on disk, and no longer named by the
+  // script that migrates. Both halves skip it, so the schemas match — while a
+  // database deployed from the base ref keeps everything it built.
+  test("a base lineage this branch stopped migrating is refused", async () => {
+    const repo = await fixture(
+      {
+        ...migratesFrom(JOURNALLED, "db/thing", "db/note"),
+        ...lineage("db/thing", CREATES_THING),
+        ...lineage("db/note", CREATES_NOTE),
+      },
+      {
+        ...migratesFrom(JOURNALLED, "db/thing"),
+        ...lineage("db/thing", CREATES_THING),
+        ...lineage("db/note", CREATES_NOTE),
+      },
+    );
+    const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
+
+    expect(messages(verdict)).toEqual([containing("db/note is in")]);
+    expect(messages(verdict)[0]).toContain("never applied it");
+  });
+
+  // The project itself moved, so the directory the gate was pointed at did not
+  // exist at the base ref. Its lineage is one path over, and every database
+  // built from it is stranded — the same fact a moved lineage carries.
+  test("a project that moved takes its lineage with it, and is refused", async () => {
+    const repo = await fixture(
+      under("apps/api", {
+        ...migratesFrom(JOURNALLED, "drizzle"),
+        ...lineage("drizzle", CREATES_THING),
+      }),
+      under("apps/backend", {
+        ...migratesFrom(JOURNALLED, "drizzle"),
+        ...lineage("drizzle", CREATES_THING_WITH_SLUG),
+      }),
+    );
+    const verdict = await replayIn(join(repo.root, "apps/backend"), pushedOver(repo.revs[0] ?? ""));
+
+    expect(messages(verdict)).toEqual([
+      containing("apps/backend/drizzle/meta/_journal.json was apps/api/drizzle/meta/_journal.json"),
+    ]);
+    expect(messages(verdict)[0]).toContain("strands every database");
+  });
+
+  // The other cell: the directory did not exist at the base ref because the
+  // project is new here. Nothing moved into it, so nothing is stranded.
+  test("a project this branch adds has nothing to upgrade from", async () => {
+    const repo = await fixture(under("apps/web", { "index.ts": "export {};\n" }), {
+      ...under("apps/web", { "index.ts": "export {};\n" }),
+      ...under("apps/api", {
+        ...migratesFrom(JOURNALLED, "drizzle"),
+        ...lineage("drizzle", CREATES_THING),
+      }),
+    });
+    const verdict = await replayIn(join(repo.root, "apps/api"), pushedOver(repo.revs[0] ?? ""));
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.summary).toContain("carries no migration lineage");
+  });
+
+  // Every git read on this path answers or refuses. A checkout that is not a
+  // repository answers nothing, and reading that as "no base ref" is the same
+  // hole a shallow clone would be.
+  test("a root that is not a git repository is refused", async () => {
+    const repo = await fixture({
+      ...migratesFrom(JOURNALLED, "drizzle"),
+      ...lineage("drizzle", CREATES_THING),
+    });
+    await rm(join(repo.root, ".git"), { recursive: true, force: true });
+
+    const refused = await refusal(replay(repo, { baseRef: "", before: "" }));
+
+    expect(refused).toContain("could not establish whether this checkout has history");
+  });
+
+  // A tree entry may be named anything `git mktree` will write — git only warns
+  // about `..` — and these paths become files. One that escapes the lineage
+  // directory is not part of a lineage, and the restore would not put it back.
+  test("a base tree naming a file outside the lineage is refused", async () => {
+    const repo = await fixture({
+      ...migratesFrom(JOURNALLED, "drizzle"),
+      ...lineage("drizzle", CREATES_THING),
+    });
+    const escaped = await gitFed(repo.root, ["hash-object", "-w", "--stdin"], "escaped\n");
+    const journal = await gitFed(
+      repo.root,
+      ["hash-object", "-w", "--stdin"],
+      '{"version":"7","dialect":"postgresql","entries":[]}',
+    );
+    const meta = await gitFed(repo.root, ["mktree"], `100644 blob ${journal}\t_journal.json\n`);
+    const drizzle = await gitFed(
+      repo.root,
+      ["mktree"],
+      `040000 tree ${meta}\tmeta\n100644 blob ${escaped}\t..\n`,
+    );
+    const top = await gitFed(repo.root, ["mktree"], `040000 tree ${drizzle}\tdrizzle\n`);
+    const crafted = await git(repo.root, [...IDENTITY, "commit-tree", top, "-m", "crafted"]);
+
+    const refused = await refusal(replay(repo, pushedOver(crafted.trim())));
+
+    expect(refused).toContain("which is outside drizzle");
+  });
+
+  // The first replay succeeded, so blaming a migration that "only applies to an
+  // already-migrated database" would be the exact inverse of what happened.
+  test("the second replay's failure is not the first replay's diagnosis", async () => {
+    const repo = await fixture({
+      ...migratesFrom(REPLAYING, "drizzle"),
+      ...lineage("drizzle", { ...THING, sql: `CREATE TABLE "thing" ("id" integer);\n` }),
+    });
+
+    const refused = await refusal(replay(repo, undefined));
+
+    expect(refused).toContain("failed on its second run");
+    expect(refused).toContain("having just succeeded on the first");
+    expect(refused).not.toContain("aborts here and nowhere else");
+  });
+
+  // A migrator that leaves the tree unwritable is one shape of a restore that
+  // cannot run. Both the failure and what it was carrying have to survive it,
+  // and the copy of the branch's files has to outlive the run that could not
+  // put them back — it is the only one there is.
+  test("a restore that fails keeps the copy, and says where", async () => {
+    const marked = "drizzle/only-at-base";
+    const locking = scripted(
+      `bun run ${JOURNALLED} ./drizzle; status=$?; [ -f ${marked} ] && chmod 500 .; exit $status`,
+    );
+    const repo = await fixture(
+      { ...locking, ...lineage("drizzle", CREATES_THING), [marked]: "the base ref's copy\n" },
+      { ...locking, ...lineage("drizzle", CREATES_THING, ADDS_SLUG) },
+    );
+
+    const refused = await refusal(replay(repo, pushedOver(repo.revs[0] ?? "")));
+
+    expect(refused).toContain("could not be put back");
+    const copy = /the only copy is (\S+?),/.exec(refused)?.[1];
+    expect(copy).toBeDefined();
+    expect(await Bun.file(join(copy ?? "", `drizzle/${SLUG.tag}.sql`)).text()).toBe(ADDS_SLUG.sql);
+
+    await chmod(repo.root, 0o700);
+    await rm(copy ?? "", { recursive: true, force: true });
   });
 
   // The one way this gate could pass by having been given nothing: a checkout

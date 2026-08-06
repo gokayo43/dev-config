@@ -11,8 +11,15 @@ function captureLog(): { lines: string[]; restore: () => void } {
   return { lines, restore: () => spy.mockRestore() };
 }
 
+const environment = { ...process.env };
+
 afterEach(() => {
   process.exitCode = 0;
+  // Restored rather than reset: these cases set and delete variables the whole
+  // suite runs inside, and a case that changed one for every case after it
+  // would be a fixture nobody could read in isolation.
+  for (const name of Object.keys(process.env)) if (!(name in environment)) delete process.env[name];
+  for (const [name, value] of Object.entries(environment)) process.env[name] = value;
 });
 
 describe("annotations", () => {
