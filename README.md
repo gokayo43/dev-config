@@ -669,6 +669,15 @@ third-party action's bundled `dist/`. `GITLEAKS_SHA256` is the same contract the
 digest pins are — the version string beside it is the label, and the preset's
 pinned-binary manager moves the two in one PR.
 
+The fetch behind it retries, and fetches each pin once per job. A release CDN
+resets a connection now and then — this pipeline has taken one — and that is a
+retry rather than a supply-chain event; the checksum is still what decides
+whether what arrived is the pinned artefact, however many attempts it took. A
+job with two callers for one tool downloads it once: the second finds a receipt
+naming the checksum already verified, and a caller asking for a different pin
+fetches again. A fetch that dies part-way takes the receipt with it, so the next
+caller re-fetches rather than trusting a claim about a tool that is not there.
+
 `fetch-depth: 0` is what makes the scan worth running. `gitleaks git` reads
 history, and the default shallow checkout hands it exactly one commit — a secret
 committed and then deleted further along the same branch would go unreported,
