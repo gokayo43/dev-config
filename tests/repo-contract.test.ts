@@ -889,10 +889,11 @@ describe("a lifecycle-retire that is waiving nothing", () => {
   });
 });
 
-// The one way this rule could pass by having been given nothing: a checkout
-// with no history reads as a repo whose base ref never said `live`. It is
-// refused while the repo is still live — the commit before the one that would
-// violate it — so the rule cannot be disarmed first and broken afterwards.
+// A checkout with no history reads as a repo whose base ref never said `live`.
+// It is refused while the repo is still live — the commit before the one that
+// would violate the rule — which raises the cost of moving the field down to a
+// visible change of the workflow's checkout depth. Not to impossible: see
+// docs/gates/repo-contract.md for the residual a `ci-call` repo keeps.
 describe("a checkout that cannot answer", () => {
   async function shallowClone(value: string): Promise<string> {
     const repo = await history(declaring(value), declaring(value));
