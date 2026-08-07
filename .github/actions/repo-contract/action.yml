@@ -11,8 +11,10 @@ description: >-
   a repo with users owes — crash reporting, and for one that owns migrations a
   backup script, a rehearsed restore and the upgrade gate — from the repo
   itself rather than from this action's inputs, so none of it can be shed by
-  editing the workflow those rules are about. docs/gates/repo-contract.md has
-  the table.
+  editing the workflow those rules are about. It is also read at the base ref,
+  because a field that only ever moves up cannot be tidied back down by a
+  commit nobody reads twice; `lifecycle-retire` is the deliberate way down.
+  docs/gates/repo-contract.md has the table.
 
 inputs:
   working-directory:
@@ -24,18 +26,25 @@ inputs:
   exemptions:
     description: >-
       Facts this repo is structurally unable to satisfy, space-separated:
-      config-lineage, ci-call, docs-spine, secrets. Anything else fails, so a
-      typo cannot quietly waive a check.
+      config-lineage, ci-call, docs-spine, lifecycle-retire, secrets. Anything
+      else fails, so a typo cannot quietly waive a check.
     default: ""
 
 runs:
   using: composite
   steps:
+    # The two facts about the run are read from the `github` context here rather
+    # than threaded through as inputs, for the reason db-gate reads them the
+    # same way: they are the event's own, identical for every caller, and a
+    # caller that had to pass them could pass them wrong. A live repo needs the
+    # base ref in the checkout — fetch-depth: 0 — and is refused without it.
     - shell: bash
       env:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_DATABASE: ${{ inputs.database }}
         INPUT_EXEMPTIONS: ${{ inputs.exemptions }}
+        INPUT_BASE_REF: ${{ github.base_ref }}
+        INPUT_BEFORE: ${{ github.event.before }}
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/repo-contract.main.ts"

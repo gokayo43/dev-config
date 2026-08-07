@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import { git, isObject, type Problem, repoFiles } from "../_lib/gate.ts";
+import { baseRevision, type Event, git, isObject, type Problem, repoFiles } from "../_lib/gate.ts";
 
 /**
  * What a repo's migration history is asked to prove, and the two questions are
@@ -48,13 +48,9 @@ const JOURNAL = "meta/_journal.json";
  */
 const PER_INVOCATION = /^\\(un)?restrict /;
 
-/** What the run knows about where it came from, which is all a base ref can be derived from. */
-export interface Event {
-  /** `github.base_ref`: the branch a pull request targets, empty off one. */
-  readonly baseRef: string;
-  /** `github.event.before`: the tip the branch had before this push, empty or all-zero otherwise. */
-  readonly before: string;
-}
+/** What this gate wanted the history for, on every refusal that says it could not have it. */
+const READS_THE_BASE_REF =
+  "the upgrade gate replays the base ref's migrations to prove a deployed database reaches this schema";
 
 export interface Replay {
   /** Where `bun run db:migrate` runs — the project the caller declared. */
@@ -475,55 +471,6 @@ async function onTheBaseLineage<T>(
 }
 
 /**
- * The commit a deployed database's schema would have been built from.
- *
- * On a pull request the checkout is GitHub's merge commit by default — this
- * branch merged into the base branch's tip — so the merge base with that branch
- * is the tip itself: the commit a deployed database was actually built from,
- * with whatever the base branch grew meanwhile already in it. A repo that
- * checks out the pull request's head instead gets the fork point from the same
- * command, which is the same statement about the checkout it has. On a push it
- * is the tip the branch had before, again the commit whose schema is running
- * somewhere; where the event names none — a branch's first push, a merge queue
- * — the parent commit is the same statement.
- *
- * A shallow checkout is refused rather than treated as "no history": the whole
- * check would pass by having been given nothing to read.
- */
-async function baseRevision(root: string, event: Event): Promise<string | undefined> {
-  // Also what establishes that this is a repository at all: outside one the
-  // command fails, and reading its empty output as "not shallow" would let
-  // every git question below answer "no" and the whole check pass.
-  const shallow = await mustRead(
-    root,
-    ["rev-parse", "--is-shallow-repository"],
-    "whether this checkout has history",
-  );
-  if (shallow.trim() === "true") {
-    throw new Error(
-      "the checkout is shallow, so the base ref's migrations are not in it — check out with fetch-depth: 0 when the upgrade gate is on",
-    );
-  }
-
-  if (event.baseRef !== "") {
-    const base = `refs/remotes/origin/${event.baseRef}`;
-    const merged = await git(root, ["merge-base", base, "HEAD"]);
-    if (!merged.ok) {
-      throw new Error(
-        `${base} is not in this checkout, so there is nothing to take the merge base with — check out with fetch-depth: 0 when the upgrade gate is on`,
-      );
-    }
-    return merged.stdout.trim();
-  }
-
-  if (event.before !== "" && (await git(root, ["cat-file", "-e", `${event.before}^{commit}`])).ok) {
-    return event.before;
-  }
-  const parent = await git(root, ["rev-parse", "--verify", "--quiet", "HEAD^"]);
-  return parent.ok ? parent.stdout.trim() : undefined;
-}
-
-/**
  * The migrations a database records as applied, by the clock drizzle keys them
  * on. Read from every `__drizzle_migrations` in the database, whichever schema
  * holds it, because a repo with more than one lineage has to give each its own
@@ -674,7 +621,13 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
     ]);
   }
 
-  const rev = await baseRevision(root, upgrade);
+  // A checkout that cannot say where it came from is refused rather than
+  // reported as having nothing to upgrade from: the whole check would pass by
+  // having been given nothing to read.
+  const base = await baseRevision(root, upgrade, READS_THE_BASE_REF);
+  if ("refused" in base) throw new Error(base.refused);
+
+  const rev = base.rev;
   if (rev === undefined) {
     return passed(
       `${REPLAYED}; there is no earlier commit to upgrade from, so the upgrade path is not proved for this run`,

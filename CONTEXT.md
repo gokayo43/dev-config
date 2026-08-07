@@ -33,7 +33,16 @@ reporting is derived from, and — for a repo that owns migrations — the backu
 the rehearsed restore and the upgrade gate as well. All of it read from the repo
 rather than from a workflow input, so that going live is one word rather than a
 checklist somebody does half of, and cannot be undone by editing the workflow
-those rules govern.
+those rules govern. It only moves up: `dev` says nothing about anyone, `live`
+says people are on the other end, and a repo that is genuinely being wound down
+says so with an exemption rather than with a deleted line.
+
+**Base ref** — the commit a tree is compared against: the merge base with the
+branch a pull request targets, or the tip a push had before it. One derivation,
+shared by every gate that asks — the upgrade path, which replays its migrations,
+and the repo contract, which reads its `lifecycle`. Distinct from a checkout
+that cannot say: no earlier commit is an answer, a shallow clone is not, and
+each gate decides for itself what the second one costs.
 
 **Denylist** — the dependencies the house stack has already answered, each with
 the pick it lost to. An entry may carry an **ADR glob**, which unlocks it once

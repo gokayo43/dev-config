@@ -34,7 +34,8 @@ on:
       contract-exemptions:
         description: >-
           Repo-contract facts this repo is structurally unable to satisfy, space-separated
-          (config-lineage, ci-call, docs-spine, secrets). A marketing site names docs-spine.
+          (config-lineage, ci-call, docs-spine, lifecycle-retire, secrets). A marketing site
+          names docs-spine; a repo being wound down names lifecycle-retire.
         type: string
         default: ""
       start-command:
@@ -83,9 +84,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # gitleaks reads history; the default shallow checkout hands it one
-          # commit, so a secret committed and later deleted on the same branch
-          # would go unreported even though pushing it had already burned the key.
+          # Two steps here read history. gitleaks: the default shallow checkout
+          # hands it one commit, so a secret committed and later deleted on the
+          # same branch would go unreported even though pushing it had already
+          # burned the key. repo-contract: a live repo's `lifecycle` is compared
+          # with the base ref's, and a checkout that cannot answer is refused
+          # rather than passed.
           fetch-depth: 0
           # Nothing in this job pushes, and it installs and runs the repo's
           # dependencies in the same workspace the token would sit in.

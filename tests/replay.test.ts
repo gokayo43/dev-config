@@ -4,17 +4,17 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
+import type { Event } from "../.github/actions/_lib/gate.ts";
 import {
   beside,
   compare,
-  type Event,
   replayGate,
   UPGRADE_DATABASE,
   type Verdict,
 } from "../.github/actions/db-gate/replay.ts";
 
 import { containing } from "./matchers.ts";
-import { git, materialise, type Tree } from "./tree.ts";
+import { git, history, IDENTITY, type Repo, type Tree, under } from "./tree.ts";
 
 /**
  * A real Postgres, because the property under test is what a database ends up
@@ -141,41 +141,6 @@ const CREATES_NOTE: Migration = {
   sql: `CREATE TABLE "note" (\n\t"id" integer PRIMARY KEY NOT NULL\n);\n`,
 };
 
-interface Repo {
-  readonly root: string;
-  /** Every commit in order, so a case can name the one it expects to be upgraded from. */
-  readonly revs: string[];
-}
-
-const IDENTITY = ["-c", "user.email=gate@example.com", "-c", "user.name=gate"];
-
-/**
- * A repository whose history is the trees given, one commit each. A tree
- * replaces the one before it, so a commit that moves or drops a lineage is
- * written the way it reads: by not mentioning it.
- */
-async function fixture(...trees: readonly Tree[]): Promise<Repo> {
-  const [first = {}, ...rest] = trees;
-  const root = await materialise(first);
-  const revs: string[] = [];
-  let previous: Tree = first;
-  for (const tree of [first, ...rest]) {
-    if (tree !== first) {
-      for (const path of Object.keys(previous)) {
-        if (!(path in tree)) await rm(join(root, path), { force: true });
-      }
-      for (const [path, contents] of Object.entries(tree)) {
-        await Bun.write(join(root, path), contents);
-      }
-      previous = tree;
-    }
-    await git(root, ["add", "--all"]);
-    await git(root, [...IDENTITY, "commit", "--quiet", "--message", `commit ${revs.length}`]);
-    revs.push((await git(root, ["rev-parse", "HEAD"])).trim());
-  }
-  return { root, revs };
-}
-
 /** What a push of this branch tells the gate: the tip it had before. */
 function pushedOver(rev: string): Event {
   return { baseRef: "", before: rev };
@@ -188,13 +153,6 @@ async function replay(repo: Repo, upgrade: Event | undefined): Promise<Verdict> 
 /** The gate against a root that is not the repository's, which is what working-directory can be. */
 async function replayIn(root: string, upgrade: Event | undefined): Promise<Verdict> {
   return await replayGate({ root, url: await emptyDatabase(), upgrade });
-}
-
-/** A tree written under a directory, the way a monorepo holds a project. */
-function under(prefix: string, tree: Tree): Tree {
-  return Object.fromEntries(
-    Object.entries(tree).map(([path, contents]) => [`${prefix}/${path}`, contents]),
-  );
 }
 
 /** git with something on stdin, for the plumbing that builds a tree by hand. */
@@ -226,7 +184,7 @@ function messages({ problems }: Verdict): string[] {
 
 describe("replay gate", () => {
   test("a history that rebuilds the schema from empty, twice, passes", async () => {
-    const repo = await fixture({
+    const repo = await history({
       ...migratesFrom(JOURNALLED, "drizzle"),
       ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
     });
@@ -242,7 +200,7 @@ describe("replay gate", () => {
   // against a table an earlier migration has since dropped, and aborts the
   // first time the history runs onto nothing.
   test("a history that cannot rebuild from empty says which replay failed", async () => {
-    const repo = await fixture({
+    const repo = await history({
       ...migratesFrom(JOURNALLED, "drizzle"),
       ...lineage(
         "drizzle",
@@ -263,7 +221,7 @@ describe("replay gate", () => {
   // place: the second replay leaves a second constraint. An exit code says
   // nothing about it, which is the whole reason the dump is what is compared.
   test("a second replay that changes the schema is refused", async () => {
-    const repo = await fixture({
+    const repo = await history({
       ...migratesFrom(REPLAYING, "drizzle"),
       ...lineage("drizzle", {
         ...THING,
@@ -283,7 +241,7 @@ describe("replay gate", () => {
   // what this asserts is that the upgrade path did not run — which no query
   // could tell afterwards, since the gate drops the database it builds.
   test("the upgrade path is not replayed unless it is asked for", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING_WITH_SLUG) },
     );
@@ -296,7 +254,7 @@ describe("replay gate", () => {
   });
 
   test("a forward migration reaches the schema a fresh database gets", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -315,7 +273,7 @@ describe("replay gate", () => {
   // applied. The migrator recognises an applied migration by the journal's
   // clock alone, so a deployed database never sees the edit.
   test("rewriting an applied migration is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING_WITH_SLUG) },
     );
@@ -334,7 +292,7 @@ describe("replay gate", () => {
   // produces. Nothing errors: it is simply never applied anywhere but on a
   // fresh database.
   test("a migration inserted behind an applied one is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
         ...lineage("drizzle", CREATES_THING, CREATES_OTHER),
@@ -357,7 +315,7 @@ describe("replay gate", () => {
   // against anything at the base ref, and pass on the strength of a lineage
   // nobody looked for — with the rewritten migration inside it.
   test("relocating a lineage is refused, rewrite and all", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "migrations"),
@@ -373,7 +331,7 @@ describe("replay gate", () => {
   });
 
   test("deleting one of two lineages is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       {
         ...migratesFrom(JOURNALLED, "db/thing", "db/note"),
         ...lineage("db/thing", CREATES_THING),
@@ -392,7 +350,7 @@ describe("replay gate", () => {
   // branch's own, and replaying it from empty is exactly what a deploy does
   // with it. Nothing is swapped, and the gate still holds the pair.
   test("a lineage the base ref never had is replayed from empty", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "db/thing"), ...lineage("db/thing", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "db/thing", "db/note"),
@@ -410,7 +368,7 @@ describe("replay gate", () => {
   // one would mean replacing the checkout. Refused where it is read, before
   // anything is moved: the tree is still the branch's afterwards.
   test("a lineage at the project root is refused rather than replaced", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "."), ...lineage(".", CREATES_THING) },
       { ...migratesFrom(JOURNALLED, "."), ...lineage(".", CREATES_THING, ADDS_SLUG) },
     );
@@ -428,7 +386,7 @@ describe("replay gate", () => {
   // would take it with it. Without that read the swap deletes it and the
   // migrator reports a missing journal for a file the author never touched.
   test("a lineage this branch nests inside a base one is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "db"), ...lineage("db", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "db", "db/note"),
@@ -444,7 +402,7 @@ describe("replay gate", () => {
   });
 
   test("a lineage inside another lineage is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       {
         ...migratesFrom(JOURNALLED, "db", "db/note"),
         ...lineage("db", CREATES_THING),
@@ -464,7 +422,7 @@ describe("replay gate", () => {
   });
 
   test("the database the gate builds is gone whichever way it went", async () => {
-    const converges = await fixture(
+    const converges = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -474,7 +432,7 @@ describe("replay gate", () => {
     await replay(converges, pushedOver(converges.revs[0] ?? ""));
     expect(await exists(UPGRADE_DATABASE)).toBe(false);
 
-    const diverges = await fixture(
+    const diverges = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING_WITH_SLUG) },
     );
@@ -486,7 +444,7 @@ describe("replay gate", () => {
   // run makes its own room rather than failing with a 42P04 about a database
   // whose name the author never chose.
   test("a database left by a killed run does not fail the next one", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -502,7 +460,7 @@ describe("replay gate", () => {
   });
 
   test("a pull request upgrades from where the branch left the base", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -520,7 +478,7 @@ describe("replay gate", () => {
   // No `before` and no base ref is a merge queue or a workflow_dispatch: the
   // parent commit is the same statement about what is deployed.
   test("with no event to read, the parent commit is the base", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING_WITH_SLUG) },
     );
@@ -532,7 +490,7 @@ describe("replay gate", () => {
   });
 
   test("a first commit has nothing to upgrade from", async () => {
-    const repo = await fixture({
+    const repo = await history({
       ...migratesFrom(JOURNALLED, "drizzle"),
       ...lineage("drizzle", CREATES_THING),
     });
@@ -543,7 +501,7 @@ describe("replay gate", () => {
   });
 
   test("a base ref that carries no lineage has nothing to upgrade from", async () => {
-    const repo = await fixture(migratesFrom(JOURNALLED, "drizzle"), {
+    const repo = await history(migratesFrom(JOURNALLED, "drizzle"), {
       ...migratesFrom(JOURNALLED, "drizzle"),
       ...lineage("drizzle", CREATES_THING),
     });
@@ -557,7 +515,7 @@ describe("replay gate", () => {
   // script that migrates. Both halves skip it, so the schemas match — while a
   // database deployed from the base ref keeps everything it built.
   test("a base lineage this branch stopped migrating is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       {
         ...migratesFrom(JOURNALLED, "db/thing", "db/note"),
         ...lineage("db/thing", CREATES_THING),
@@ -579,7 +537,7 @@ describe("replay gate", () => {
   // exist at the base ref. Its lineage is one path over, and every database
   // built from it is stranded — the same fact a moved lineage carries.
   test("a project that moved takes its lineage with it, and is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       under("apps/api", {
         ...migratesFrom(JOURNALLED, "drizzle"),
         ...lineage("drizzle", CREATES_THING),
@@ -600,7 +558,7 @@ describe("replay gate", () => {
   // The other cell: the directory did not exist at the base ref because the
   // project is new here. Nothing moved into it, so nothing is stranded.
   test("a project this branch adds has nothing to upgrade from", async () => {
-    const repo = await fixture(under("apps/web", { "index.ts": "export {};\n" }), {
+    const repo = await history(under("apps/web", { "index.ts": "export {};\n" }), {
       ...under("apps/web", { "index.ts": "export {};\n" }),
       ...under("apps/api", {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -617,7 +575,7 @@ describe("replay gate", () => {
   // repository answers nothing, and reading that as "no base ref" is the same
   // hole a shallow clone would be.
   test("a root that is not a git repository is refused", async () => {
-    const repo = await fixture({
+    const repo = await history({
       ...migratesFrom(JOURNALLED, "drizzle"),
       ...lineage("drizzle", CREATES_THING),
     });
@@ -632,7 +590,7 @@ describe("replay gate", () => {
   // about `..` — and these paths become files. One that escapes the lineage
   // directory is not part of a lineage, and the restore would not put it back.
   test("a base tree naming a file outside the lineage is refused", async () => {
-    const repo = await fixture({
+    const repo = await history({
       ...migratesFrom(JOURNALLED, "drizzle"),
       ...lineage("drizzle", CREATES_THING),
     });
@@ -659,7 +617,7 @@ describe("replay gate", () => {
   // The first replay succeeded, so blaming a migration that "only applies to an
   // already-migrated database" would be the exact inverse of what happened.
   test("the second replay's failure is not the first replay's diagnosis", async () => {
-    const repo = await fixture({
+    const repo = await history({
       ...migratesFrom(REPLAYING, "drizzle"),
       ...lineage("drizzle", { ...THING, sql: `CREATE TABLE "thing" ("id" integer);\n` }),
     });
@@ -680,7 +638,7 @@ describe("replay gate", () => {
     const locking = scripted(
       `bun run ${JOURNALLED} ./drizzle; status=$?; [ -f ${marked} ] && chmod 500 .; exit $status`,
     );
-    const repo = await fixture(
+    const repo = await history(
       { ...locking, ...lineage("drizzle", CREATES_THING), [marked]: "the base ref's copy\n" },
       { ...locking, ...lineage("drizzle", CREATES_THING, ADDS_SLUG) },
     );
@@ -701,7 +659,7 @@ describe("replay gate", () => {
   // there would send the author looking through migrations they just wrote.
   test("a failure in the base replay says whose migration it was", async () => {
     const broken = { ...SLUG, sql: `ALTER TABLE "missing" ADD COLUMN "x" text;\n` };
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING, broken) },
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -719,7 +677,7 @@ describe("replay gate", () => {
   // The gate drops this database. A caller that declared it as its own would be
   // asking the check to destroy the one the app boots against.
   test("a caller that declares the gate's own database is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -743,7 +701,7 @@ describe("replay gate", () => {
   // The one way this gate could pass by having been given nothing: a checkout
   // with no history reads as a repo with no base ref.
   test("a shallow checkout is refused rather than skipped", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -765,7 +723,7 @@ describe("replay gate", () => {
   });
 
   test("a base ref that is not in the checkout is refused", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       {
         ...migratesFrom(JOURNALLED, "drizzle"),
@@ -781,7 +739,7 @@ describe("replay gate", () => {
   // The tree the later steps of the gate — the boot, the ramp — run against has
   // to be the one the branch committed, whichever way the comparison went.
   test("the working tree is the branch's own again afterwards", async () => {
-    const repo = await fixture(
+    const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING_WITH_SLUG) },
     );

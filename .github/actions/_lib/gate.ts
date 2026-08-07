@@ -207,6 +207,81 @@ export async function git(cwd: string, args: readonly string[]): Promise<Ran> {
   return { ok: (await proc.exited) === 0, stdout };
 }
 
+/** What the run knows about where it came from, which is all a base ref can be derived from. */
+export interface Event {
+  /** `github.base_ref`: the branch a pull request targets, empty off one. */
+  readonly baseRef: string;
+  /** `github.event.before`: the tip the branch had before this push, empty or all-zero otherwise. */
+  readonly before: string;
+}
+
+/**
+ * The commit a gate compares this tree against, or why this checkout cannot
+ * name one.
+ *
+ * The two are kept apart because "there is no earlier commit" and "this
+ * checkout was not given the history to say" look identical from inside and
+ * mean opposite things — the first is an honest pass, the second is a gate that
+ * would pass by having been handed nothing. Which of them is fatal is the
+ * caller's to decide: a gate that reads the base ref for a fact only some repos
+ * carry has no business failing every other repo's shallow checkout.
+ */
+export type Base =
+  /** The commit; `undefined` where the run genuinely has none before it. */
+  | { readonly rev: string | undefined }
+  /** The whole diagnostic, ready to be thrown or reported by whoever asked. */
+  | { readonly refused: string };
+
+/**
+ * The commit this tree's state is compared against.
+ *
+ * On a pull request the checkout is GitHub's merge commit by default — this
+ * branch merged into the base branch's tip — so the merge base with that branch
+ * is the tip itself, with whatever the base branch grew meanwhile already in
+ * it. A repo that checks out the pull request's head instead gets the fork
+ * point from the same command, which is the same statement about the checkout
+ * it has. On a push it is the tip the branch had before; where the event names
+ * none — a branch's first push, a merge queue — the parent commit is the same
+ * statement.
+ *
+ * `why` travels with the call, for the reason it does on `required`: two gates
+ * reading one history are left holding different things when it is missing, and
+ * each should say what it wanted it for.
+ */
+export async function baseRevision(root: string, event: Event, why: string): Promise<Base> {
+  // Also what establishes that this is a repository at all: outside one the
+  // command fails, and reading its empty output as "not shallow" would let
+  // every git question below answer "no" and the whole check pass.
+  const shallow = await git(root, ["rev-parse", "--is-shallow-repository"]);
+  if (!shallow.ok) {
+    return {
+      refused: `could not establish whether this checkout has history: \`git rev-parse --is-shallow-repository\` failed in ${root} — ${why}, and a checkout it cannot read is refused rather than read as having none`,
+    };
+  }
+  if (shallow.stdout.trim() === "true") {
+    return {
+      refused: `the checkout is shallow, so the base ref is not in it — ${why}; check out with fetch-depth: 0`,
+    };
+  }
+
+  if (event.baseRef !== "") {
+    const base = `refs/remotes/origin/${event.baseRef}`;
+    const merged = await git(root, ["merge-base", base, "HEAD"]);
+    if (!merged.ok) {
+      return {
+        refused: `${base} is not in this checkout, so there is nothing to take the merge base with — ${why}; check out with fetch-depth: 0`,
+      };
+    }
+    return { rev: merged.stdout.trim() };
+  }
+
+  if (event.before !== "" && (await git(root, ["cat-file", "-e", `${event.before}^{commit}`])).ok) {
+    return { rev: event.before };
+  }
+  const parent = await git(root, ["rev-parse", "--verify", "--quiet", "HEAD^"]);
+  return { rev: parent.ok ? parent.stdout.trim() : undefined };
+}
+
 /**
  * Never a repo's own code, whatever its .gitignore says. `--others` lists
  * anything git would keep, so a repo whose .gitignore forgets node_modules

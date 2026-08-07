@@ -163,6 +163,14 @@ skipped: a shallow checkout, and a base branch that is not in the clone. Both
 say to check out with `fetch-depth: 0`, which is what `check.yml` does for the
 database job.
 
+The table above is one function in `_lib`, not this gate's own: the repo
+contract reads the base ref too, for the `lifecycle` field it holds to only
+moving up ([repo-contract.md](repo-contract.md)). Two derivations of "the commit
+this tree is compared against" would be two answers to the question, and the day
+they disagreed nobody would know which was right. Each caller decides for itself
+what a checkout with no history costs — here, the whole step; there, only a repo
+that is live.
+
 A base ref that carries no migration lineage at all — the commit before
 migrations existed — is a notice and a pass. There is no schema to upgrade from.
 

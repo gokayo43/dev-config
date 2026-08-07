@@ -43,6 +43,53 @@ export function without(tree: Tree, path: string): Tree {
   return Object.fromEntries(Object.entries(tree).filter(([each]) => each !== path));
 }
 
+/** A tree written under a directory, the way a monorepo holds a project. */
+export function under(prefix: string, tree: Tree): Tree {
+  return Object.fromEntries(
+    Object.entries(tree).map(([path, contents]) => [`${prefix}/${path}`, contents]),
+  );
+}
+
+export interface Repo {
+  readonly root: string;
+  /** Every commit in order, so a case can name the one it expects to be compared against. */
+  readonly revs: string[];
+}
+
+/** Committer identity, so a fixture does not depend on whatever the machine running it has configured. */
+export const IDENTITY = ["-c", "user.email=gate@example.com", "-c", "user.name=gate"];
+
+/**
+ * A repository whose history is the trees given, one commit each. A tree
+ * replaces the one before it, so a commit that moves or drops a file is written
+ * the way it reads: by not mentioning it.
+ *
+ * `git add --all` stages what .gitignore does not describe, which is the same
+ * set the gates read — so a fixture's ignored files stay ignored across the
+ * history instead of being committed by the setup.
+ */
+export async function history(...trees: readonly Tree[]): Promise<Repo> {
+  const [first = {}, ...rest] = trees;
+  const root = await materialise(first);
+  const revs: string[] = [];
+  let previous: Tree = first;
+  for (const tree of [first, ...rest]) {
+    if (tree !== first) {
+      for (const path of Object.keys(previous)) {
+        if (!(path in tree)) await rm(join(root, path), { force: true });
+      }
+      for (const [path, contents] of Object.entries(tree)) {
+        await Bun.write(join(root, path), contents);
+      }
+      previous = tree;
+    }
+    await git(root, ["add", "--all"]);
+    await git(root, [...IDENTITY, "commit", "--quiet", "--message", `commit ${revs.length}`]);
+    revs.push((await git(root, ["rev-parse", "HEAD"])).trim());
+  }
+  return { root, revs };
+}
+
 /**
  * git against one of these repositories, refusing rather than reporting: a
  * fixture whose setup half-failed grades the gate against a tree nobody wrote.

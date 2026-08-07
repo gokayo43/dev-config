@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { Event } from "../.github/actions/_lib/gate.ts";
 import { type Contract, repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
-import { materialise, type Tree, without } from "./tree.ts";
+import { git, history, materialise, type Tree, under, without } from "./tree.ts";
 import { containing } from "./matchers.ts";
 
 const PIN = "f1a8afef270d30bf25f2f30275ecf988123d9fb3";
@@ -41,7 +42,10 @@ const CLEAN: Tree = {
   ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: true\n`,
 };
 
-const DEFAULTS: Contract = { database: true, exemptions: [] };
+/** No pull request and no previous tip: what a workflow_dispatch or a first push tells the gate. */
+const NO_EVENT: Event = { baseRef: "", before: "" };
+
+const DEFAULTS: Contract = { database: true, exemptions: [], event: NO_EVENT };
 
 async function contract(tree: Tree, overrides: Partial<Contract> = {}): Promise<string[]> {
   const root = await materialise(tree, [".env.example"]);
@@ -368,7 +372,7 @@ describe("contract exemptions", () => {
     const stripped = without(without(CLEAN, ".github/workflows/ci.yml"), ".env.example");
     const root = await materialise(stripped);
     expect(
-      (await repoContract(root, { database: true, exemptions: ["ci-call", "secrets"] })).map(
+      (await repoContract(root, { ...DEFAULTS, exemptions: ["ci-call", "secrets"] })).map(
         ({ message }) => message,
       ),
     ).toEqual([]);
@@ -665,5 +669,183 @@ describe("ci-call waives the upgrade-gate rule with the call it is about", () =>
     };
     expect(await live(own, { exemptions: ["ci-call"] })).toEqual([]);
     expect(await live(own)).toEqual([containing("check.yml")]);
+  });
+});
+
+/**
+ * The live site with that one word moved and nothing else. A tree with no
+ * database of its own is the smallest thing "live" can be, so every case below
+ * differs from its neighbour by the field and never by a backup script.
+ */
+function declaring(value: string | undefined): Tree {
+  const contents = JSON.parse(LIVE_STATIC["package.json"] ?? "") as Record<string, unknown>;
+  if (value === undefined) delete contents["lifecycle"];
+  else contents["lifecycle"] = value;
+  return { ...LIVE_STATIC, "package.json": JSON.stringify(contents) };
+}
+
+/** A commit that touches something the contract has no opinion about, so two trees can agree on the field. */
+function alsoEdited(tree: Tree): Tree {
+  return { ...tree, "CLAUDE.md": "# Repo\n\nA sentence the gate does not read.\n" };
+}
+
+/** What a push of this branch tells the gate: the tip it had before. */
+function pushedOver(rev: string | undefined): Event {
+  return { baseRef: "", before: rev ?? "" };
+}
+
+/** The gate against a repository with history, and against the project rather than the checkout. */
+async function graded(root: string, overrides: Partial<Contract> = {}): Promise<string[]> {
+  const asked: Contract = { ...DEFAULTS, database: false, ...overrides };
+  return (await repoContract(root, asked)).map(({ message }) => message);
+}
+
+// The field only ever moves up. `dev` says nothing about anyone and everything
+// is reachable from it; `live` says people are on the other end, and that does
+// not stop being true because a line was tidied out of a manifest. So the tree
+// in front of the gate is not the only witness — the base ref is read too, and
+// these are real repositories with real commits because that is the whole
+// mechanism under test.
+describe("the lifecycle field only moves up", () => {
+  test("dev to live is the commit the field exists for", async () => {
+    const repo = await history(declaring("dev"), declaring("live"));
+    expect(await graded(repo.root, { event: pushedOver(repo.revs[0]) })).toEqual([]);
+  });
+
+  test("live to live is every other commit a live repo makes", async () => {
+    const repo = await history(declaring("live"), alsoEdited(declaring("live")));
+    expect(await graded(repo.root, { event: pushedOver(repo.revs[0]) })).toEqual([]);
+  });
+
+  test("live to dev is refused, and says which commit said live", async () => {
+    const repo = await history(declaring("live"), declaring("dev"));
+    const problems = await graded(repo.root, { event: pushedOver(repo.revs[0]) });
+
+    expect(problems).toEqual([
+      containing(`lifecycle was "live" at ${(repo.revs[0] ?? "").slice(0, 7)}`),
+    ]);
+    expect(problems[0]).toContain('now reads "dev"');
+    expect(problems[0]).toContain("lifecycle-retire");
+  });
+
+  // Deleting the field is the same act as writing `dev` over it, and it is the
+  // one a reviewer is least likely to notice — so it gets the diagnostic about
+  // what was lost rather than the one about a repo that never said.
+  test("live to absent is refused as the deletion it is, not as a repo that never declared", async () => {
+    const repo = await history(declaring("live"), declaring(undefined));
+    const problems = await graded(repo.root, { event: pushedOver(repo.revs[0]) });
+
+    expect(problems).toEqual([containing('lifecycle was "live" at')]);
+    expect(problems[0]).toContain("and now is absent");
+  });
+
+  // Deleting the manifest outright is already the end of the contract: there is
+  // nothing left to read a field out of, and the gate says so first.
+  test("live to no manifest at all is refused by the contract it takes with it", async () => {
+    const repo = await history(declaring("live"), without(declaring("live"), "package.json"));
+    expect(await graded(repo.root, { event: pushedOver(repo.revs[0]) })).toEqual([
+      containing("the repo has no package.json"),
+    ]);
+  });
+
+  // The far side of the comparison is arbitrary historical content. A commit
+  // whose manifest will not parse declared nothing readable — and this gate
+  // refuses that commit on its own terms — so it is an answer here rather than
+  // a crash inside a check about a different field entirely.
+  test("a base commit whose manifest will not parse declared nothing", async () => {
+    const repo = await history({ ...declaring("dev"), "package.json": "{ oops" }, declaring("dev"));
+    expect(await graded(repo.root, { event: pushedOver(repo.revs[0]) })).toEqual([]);
+  });
+
+  test("a pull request is held to it too, from the merge base", async () => {
+    const repo = await history(declaring("live"), declaring("dev"));
+    await git(repo.root, ["update-ref", "refs/remotes/origin/main", repo.revs[0] ?? ""]);
+
+    expect(await graded(repo.root, { event: { baseRef: "main", before: "" } })).toEqual([
+      containing('lifecycle was "live" at'),
+    ]);
+  });
+});
+
+// A monorepo's project is not at the repository root, and the base ref is read
+// relative to the project rather than to the checkout — otherwise every
+// workspace would be graded against whatever the root manifest happened to say.
+describe("the base ref is read where the project is", () => {
+  const PROJECT = "apps/api";
+
+  test("so a workspace that went back to dev is caught inside the monorepo", async () => {
+    const repo = await history(under(PROJECT, declaring("live")), under(PROJECT, declaring("dev")));
+    expect(await graded(join(repo.root, PROJECT), { event: pushedOver(repo.revs[0]) })).toEqual([
+      containing('lifecycle was "live" at'),
+    ]);
+  });
+
+  // The other cell, and the one that proves the read above is a real read: a
+  // project this branch adds has no manifest at the base ref, so there is no
+  // earlier declaration to hold it to.
+  test("and a workspace this branch adds has nothing to be held to", async () => {
+    const repo = await history(under("apps/web", { "index.ts": "export {};\n" }), {
+      ...under("apps/web", { "index.ts": "export {};\n" }),
+      ...under(PROJECT, declaring("dev")),
+    });
+    expect(await graded(join(repo.root, PROJECT), { event: pushedOver(repo.revs[0]) })).toEqual([]);
+  });
+});
+
+// A repo really is wound down sometimes, and that is a decision rather than a
+// diff. The exemption is where it gets written down — and it waives the
+// comparison with the base ref, nothing else.
+describe("lifecycle-retire", () => {
+  test("lets a retired repo say dev again", async () => {
+    const repo = await history(declaring("live"), declaring("dev"));
+    const event = pushedOver(repo.revs[0]);
+
+    expect(await graded(repo.root, { event })).toEqual([containing('lifecycle was "live" at')]);
+    expect(await graded(repo.root, { event, exemptions: ["lifecycle-retire"] })).toEqual([]);
+  });
+
+  // Retiring is moving the field down, not deleting it: a repo still has to say
+  // which of the two it is, and that rule is nobody's to waive here.
+  test("does not waive having to declare one at all", async () => {
+    const repo = await history(declaring("live"), declaring(undefined));
+    expect(
+      await graded(repo.root, {
+        event: pushedOver(repo.revs[0]),
+        exemptions: ["lifecycle-retire"],
+      }),
+    ).toEqual([containing("lifecycle is absent")]);
+  });
+});
+
+// The one way this rule could pass by having been given nothing: a checkout
+// with no history reads as a repo whose base ref never said `live`. It is
+// refused while the repo is still live — the commit before the one that would
+// violate it — so the rule cannot be disarmed first and broken afterwards.
+describe("a checkout that cannot answer", () => {
+  async function shallowClone(value: string): Promise<string> {
+    const repo = await history(declaring(value), alsoEdited(declaring(value)));
+    const shallow = join(repo.root, "shallow");
+    await git(repo.root, ["clone", "--quiet", "--depth", "1", `file://${repo.root}`, shallow]);
+    return shallow;
+  }
+
+  test("is refused while the repo is live", async () => {
+    expect(await graded(await shallowClone("live"))).toEqual([
+      containing("the checkout is shallow"),
+    ]);
+  });
+
+  // A dev repo never needed history for this, and would otherwise start failing
+  // on the shallow checkouts it has always been gated on.
+  test("costs a dev repo nothing", async () => {
+    expect(await graded(await shallowClone("dev"))).toEqual([]);
+  });
+
+  // A retirement reads no history at all, so a repo being wound down does not
+  // also have to explain its checkout depth.
+  test("costs a retiring repo nothing either", async () => {
+    expect(await graded(await shallowClone("live"), { exemptions: ["lifecycle-retire"] })).toEqual(
+      [],
+    );
   });
 });

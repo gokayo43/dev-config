@@ -19,7 +19,7 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `CONTEXT.md` (or `CONTEXT-MAP.md`), `docs/adr/`, `CLAUDE.md`                                                    | the docs spine                                                                                    |
 | `db:migrate` exists, when `database: true`                                                                      | the database gate replays migrations through it                                                   |
 | a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                           | a tag is a name someone else can repoint                                                          |
-| `lifecycle` reads `"dev"` or `"live"`                                                                           | it is what every rule under "Going live" below reconfigures off                                   |
+| `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                | it is what every rule under "Going live" below reconfigures off                                   |
 
 The knip case is the one that reads as arbitrary and is not: knip resolves
 `knip.json` before `knip.ts`, and a JSON config cannot import anything. A repo
@@ -94,6 +94,57 @@ problem and the only one reported — a repo that has not said which it is gets
 graded against neither set of rules, because choosing for it is exactly what the
 field exists to prevent.
 
+## It only moves up
+
+`dev` is where every repo starts and says nothing about anyone, so anything is
+reachable from it. `live` says people are on the other end, and that does not
+stop being true because a line was tidied out of a manifest — so the tree in
+front of the gate is not the only witness. The field is read at the **base ref**
+as well, and the two are compared:
+
+| Base ref | This tree | Verdict                                    |
+| -------- | --------- | ------------------------------------------ |
+| `dev`    | `live`    | the commit the field exists for            |
+| `live`   | `live`    | every other commit a live repo makes       |
+| `live`   | `dev`     | refused — name `lifecycle-retire` if meant |
+| `live`   | absent    | refused — the same edit, less visible      |
+
+Writing `dev` over `live`, or deleting the field, sheds backups, a rehearsed
+restore, crash reporting and the upgrade gate in one edit that reviews as a
+whitespace change. Deleting the manifest outright is refused a line earlier, by
+the rule that a repo has a `package.json` at all.
+
+The base ref is the merge base with the branch a pull request targets, or the
+tip a push had before — the same resolution [the upgrade
+gate](upgrade-path.md) uses, out of one module. It is read **relative to the
+working directory**, so a monorepo's workspace is compared with its own earlier
+manifest rather than with whatever the repository root happened to say. A
+project the base ref did not carry has no earlier declaration to be held to, and
+neither does a first commit: both pass.
+
+A checkout with no history — a shallow clone, or a directory that is not a
+repository — can answer none of this. It is refused **while the repo is live**,
+which is the commit before the one that could violate the rule: a live repo
+proves its checkout carries the history this reads, so the rule cannot be
+quietly disarmed first and broken afterwards. A `dev` repo never needed history
+for it and is not made to start; `check.yml` checks out with `fetch-depth: 0`
+regardless, for gitleaks.
+
+## Retiring one
+
+A repo really is wound down sometimes, and that is a decision rather than a
+diff. `lifecycle-retire` at the call site is where it gets written down:
+
+```yaml
+with:
+  contract-exemptions: lifecycle-retire
+```
+
+It waives the comparison with the base ref and nothing else — the repo still has
+to say which of the two words it is, because retiring is moving the field down
+rather than deleting it. It also reads no history at all, so a repo being wound
+down is not additionally asked to explain its checkout depth.
+
 # Exemptions
 
 Some facts a repo cannot satisfy because of what it is, not because nobody got
@@ -105,12 +156,13 @@ with:
   contract-exemptions: config-lineage ci-call secrets
 ```
 
-| Exemption        | Waives                                                                                                                                      |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config-lineage` | _where_ the configs inherit from — not whether they exist                                                                                   |
-| `ci-call`        | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to |
-| `docs-spine`     | the glossary, `docs/adr/` and `CLAUDE.md`                                                                                                   |
-| `secrets`        | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                   |
+| Exemption          | Waives                                                                                                                                      |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config-lineage`   | _where_ the configs inherit from — not whether they exist                                                                                   |
+| `ci-call`          | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to |
+| `docs-spine`       | the glossary, `docs/adr/` and `CLAUDE.md`                                                                                                   |
+| `lifecycle-retire` | the comparison with the base ref's `lifecycle`, for a repo being deliberately wound down — not the field itself                             |
+| `secrets`          | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                   |
 
 Every exemption is echoed as a `::notice` in the run, and a name outside the
 table fails rather than waiving anything — a typo cannot quietly turn a check
