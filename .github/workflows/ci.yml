@@ -38,7 +38,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # gitleaks reads history, and a shallow clone has none.
+          # gitleaks reads history, and so does the repo contract this repo runs
+          # on itself: `lifecycle` is compared with the base ref's. A shallow
+          # clone has neither.
           fetch-depth: 0
           # Nothing here pushes, and the job runs third-party code (an
           # unpinned npx, a scaffolded tree's dependencies) in this workspace.
