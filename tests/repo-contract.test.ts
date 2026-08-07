@@ -684,11 +684,6 @@ function declaring(value: string | undefined): Tree {
   return { ...LIVE_STATIC, "package.json": JSON.stringify(contents) };
 }
 
-/** A commit that touches something the contract has no opinion about, so two trees can agree on the field. */
-function alsoEdited(tree: Tree): Tree {
-  return { ...tree, "CLAUDE.md": "# Repo\n\nA sentence the gate does not read.\n" };
-}
-
 /** What a push of this branch tells the gate: the tip it had before. */
 function pushedOver(rev: string | undefined): Event {
   return { baseRef: "", before: rev ?? "" };
@@ -712,8 +707,13 @@ describe("the lifecycle field only moves up", () => {
     expect(await graded(repo.root, { event: pushedOver(repo.revs[0]) })).toEqual([]);
   });
 
+  test("a first commit has nothing to be held to", async () => {
+    const repo = await history(declaring("dev"));
+    expect(await graded(repo.root, { event: pushedOver(undefined) })).toEqual([]);
+  });
+
   test("live to live is every other commit a live repo makes", async () => {
-    const repo = await history(declaring("live"), alsoEdited(declaring("live")));
+    const repo = await history(declaring("live"), declaring("live"));
     expect(await graded(repo.root, { event: pushedOver(repo.revs[0]) })).toEqual([]);
   });
 
@@ -817,13 +817,85 @@ describe("lifecycle-retire", () => {
   });
 });
 
+// A base branch this run names and this checkout does not carry is a broken
+// run, not a repo that has nothing to be compared against — so it is refused
+// whoever is asking, `dev` repos included. Reading it as "no base ref" is the
+// hole the shallow case would be, with the history sitting right there.
+describe("a base ref the checkout does not carry", () => {
+  async function withoutTheRef(value: string): Promise<string> {
+    const repo = await history(declaring("live"), declaring(value));
+    // Not shallow: the whole history is here. Only the ref is not.
+    expect((await git(repo.root, ["rev-parse", "--is-shallow-repository"])).trim()).toBe("false");
+    return repo.root;
+  }
+
+  const asked = { event: { baseRef: "main", before: "" } };
+
+  test("is refused even though the tree reads dev", async () => {
+    expect(await graded(await withoutTheRef("dev"), asked)).toEqual([
+      containing("refs/remotes/origin/main is not in this checkout"),
+    ]);
+  });
+
+  test("and refused for a live tree the same way", async () => {
+    expect(await graded(await withoutTheRef("live"), asked)).toEqual([
+      containing("refs/remotes/origin/main is not in this checkout"),
+    ]);
+  });
+
+  // Retiring excuses a lifecycle that moved down. It says nothing about
+  // whether this run was pointed at a branch that exists.
+  test("and lifecycle-retire does not excuse it", async () => {
+    expect(
+      await graded(await withoutTheRef("dev"), { ...asked, exemptions: ["lifecycle-retire"] }),
+    ).toEqual([containing("refs/remotes/origin/main is not in this checkout")]);
+  });
+});
+
+// Every other exemption states something permanent about what a repo is. This
+// one states that a repo is mid-retirement, which stops being true — so left
+// behind it is a standing licence to move the field back down, granted once and
+// never looked at again.
+describe("a lifecycle-retire that is waiving nothing", () => {
+  const retiring = { exemptions: ["lifecycle-retire"] };
+
+  test("is refused once the retirement has landed", async () => {
+    const repo = await history(declaring("dev"), declaring("dev"));
+    const problems = await graded(repo.root, { ...retiring, event: pushedOver(repo.revs[0]) });
+
+    expect(problems).toEqual([containing("lifecycle-retire is waiving nothing")]);
+    expect(problems[0]).toContain("the base ref does not declare this repo live");
+  });
+
+  test("is refused on a repo that never came down at all", async () => {
+    const repo = await history(declaring("live"), declaring("live"));
+    const problems = await graded(repo.root, { ...retiring, event: pushedOver(repo.revs[0]) });
+
+    expect(problems).toEqual([containing("lifecycle-retire is waiving nothing")]);
+    expect(problems[0]).toContain('this tree both read "live"');
+  });
+
+  // The rule above is only as good as its weakest checkout. An exemption nobody
+  // can check would be a standing waiver again, one `fetch-depth: 1` away — so
+  // naming it is what obliges the run to be able to show it is doing something.
+  test("is refused when the checkout cannot show it is waiving anything", async () => {
+    const repo = await history(declaring("live"), declaring("live"));
+    const shallow = join(repo.root, "shallow");
+    await git(repo.root, ["clone", "--quiet", "--depth", "1", `file://${repo.root}`, shallow]);
+
+    expect(await graded(shallow, retiring)).toEqual([
+      containing("lifecycle-retire cannot be checked here"),
+    ]);
+  });
+});
+
 // The one way this rule could pass by having been given nothing: a checkout
 // with no history reads as a repo whose base ref never said `live`. It is
 // refused while the repo is still live — the commit before the one that would
 // violate it — so the rule cannot be disarmed first and broken afterwards.
 describe("a checkout that cannot answer", () => {
   async function shallowClone(value: string): Promise<string> {
-    const repo = await history(declaring(value), alsoEdited(declaring(value)));
+    const repo = await history(declaring(value), declaring(value));
     const shallow = join(repo.root, "shallow");
     await git(repo.root, ["clone", "--quiet", "--depth", "1", `file://${repo.root}`, shallow]);
     return shallow;
@@ -839,13 +911,5 @@ describe("a checkout that cannot answer", () => {
   // on the shallow checkouts it has always been gated on.
   test("costs a dev repo nothing", async () => {
     expect(await graded(await shallowClone("dev"))).toEqual([]);
-  });
-
-  // A retirement reads no history at all, so a repo being wound down does not
-  // also have to explain its checkout depth.
-  test("costs a retiring repo nothing either", async () => {
-    expect(await graded(await shallowClone("live"), { exemptions: ["lifecycle-retire"] })).toEqual(
-      [],
-    );
   });
 });

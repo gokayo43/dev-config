@@ -168,8 +168,9 @@ contract reads the base ref too, for the `lifecycle` field it holds to only
 moving up ([repo-contract.md](repo-contract.md)). Two derivations of "the commit
 this tree is compared against" would be two answers to the question, and the day
 they disagreed nobody would know which was right. Each caller decides for itself
-what a checkout with no history costs — here, the whole step; there, only a repo
-that is live.
+what a checkout that cannot answer costs. A base branch missing from the clone
+is fatal in both. A checkout with no history at all is fatal here, and there
+only for a repo that is `live` or naming the retirement exemption.
 
 A base ref that carries no migration lineage at all — the commit before
 migrations existed — is a notice and a pass. There is no schema to upgrade from.

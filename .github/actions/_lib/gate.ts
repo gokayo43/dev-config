@@ -216,21 +216,34 @@ export interface Event {
 }
 
 /**
+ * What a checkout could not supply, because the two are not the same kind of
+ * problem and callers scope their refusals differently.
+ *
+ * `history` is what a shallow clone — or a directory that is no repository —
+ * does not have. It is a property of how the run checked the repo out, and a
+ * gate may reasonably decide that some repos never needed it.
+ *
+ * `ref` is a commit this run itself names and this checkout does not carry.
+ * That is a broken run rather than a fact about the repo, so reading it as
+ * "nothing to compare against" is reading a misconfiguration as a verdict.
+ */
+export type Missing = "history" | "ref";
+
+/**
  * The commit a gate compares this tree against, or why this checkout cannot
  * name one.
  *
  * The two are kept apart because "there is no earlier commit" and "this
- * checkout was not given the history to say" look identical from inside and
- * mean opposite things — the first is an honest pass, the second is a gate that
- * would pass by having been handed nothing. Which of them is fatal is the
- * caller's to decide: a gate that reads the base ref for a fact only some repos
- * carry has no business failing every other repo's shallow checkout.
+ * checkout cannot say" look identical from inside and mean opposite things —
+ * the first is an honest pass, the second is a gate that would pass by having
+ * been handed nothing. How fatal the second is belongs to the caller, which is
+ * what `missing` is for.
  */
 export type Base =
   /** The commit; `undefined` where the run genuinely has none before it. */
   | { readonly rev: string | undefined }
-  /** The whole diagnostic, ready to be thrown or reported by whoever asked. */
-  | { readonly refused: string };
+  /** The whole diagnostic, and what was missing, for a caller that scopes its refusals. */
+  | { readonly refused: string; readonly missing: Missing };
 
 /**
  * The commit this tree's state is compared against.
@@ -256,11 +269,13 @@ export async function baseRevision(root: string, event: Event, why: string): Pro
   if (!shallow.ok) {
     return {
       refused: `could not establish whether this checkout has history: \`git rev-parse --is-shallow-repository\` failed in ${root} — ${why}, and a checkout it cannot read is refused rather than read as having none`,
+      missing: "history",
     };
   }
   if (shallow.stdout.trim() === "true") {
     return {
       refused: `the checkout is shallow, so the base ref is not in it — ${why}; check out with fetch-depth: 0`,
+      missing: "history",
     };
   }
 
@@ -270,6 +285,7 @@ export async function baseRevision(root: string, event: Event, why: string): Pro
     if (!merged.ok) {
       return {
         refused: `${base} is not in this checkout, so there is nothing to take the merge base with — ${why}; check out with fetch-depth: 0`,
+        missing: "ref",
       };
     }
     return { rev: merged.stdout.trim() };

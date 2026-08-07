@@ -87,9 +87,9 @@ jobs:
           # Two steps here read history. gitleaks: the default shallow checkout
           # hands it one commit, so a secret committed and later deleted on the
           # same branch would go unreported even though pushing it had already
-          # burned the key. repo-contract: a live repo's `lifecycle` is compared
-          # with the base ref's, and a checkout that cannot answer is refused
-          # rather than passed.
+          # burned the key. repo-contract: `lifecycle` is compared with the base
+          # ref's, and on a pull request the base branch has to be in the clone
+          # — a ref this run names and the checkout lacks is refused outright.
           fetch-depth: 0
           # Nothing in this job pushes, and it installs and runs the repo's
           # dependencies in the same workspace the token would sit in.

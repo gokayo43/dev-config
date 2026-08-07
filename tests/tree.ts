@@ -67,6 +67,11 @@ export const IDENTITY = ["-c", "user.email=gate@example.com", "-c", "user.name=g
  * `git add --all` stages what .gitignore does not describe, which is the same
  * set the gates read — so a fixture's ignored files stay ignored across the
  * history instead of being committed by the setup.
+ *
+ * `--allow-empty` because a commit that changes nothing is a real thing to grade
+ * against: a case about a field that did not move wants two commits that agree,
+ * and making them differ somewhere irrelevant would be the fixture inventing a
+ * second variable to get past its own setup.
  */
 export async function history(...trees: readonly Tree[]): Promise<Repo> {
   const [first = {}, ...rest] = trees;
@@ -84,7 +89,14 @@ export async function history(...trees: readonly Tree[]): Promise<Repo> {
       previous = tree;
     }
     await git(root, ["add", "--all"]);
-    await git(root, [...IDENTITY, "commit", "--quiet", "--message", `commit ${revs.length}`]);
+    await git(root, [
+      ...IDENTITY,
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "--message",
+      `commit ${revs.length}`,
+    ]);
     revs.push((await git(root, ["rev-parse", "HEAD"])).trim());
   }
   return { root, revs };

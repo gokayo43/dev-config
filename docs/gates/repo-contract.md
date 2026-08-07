@@ -122,13 +122,32 @@ manifest rather than with whatever the repository root happened to say. A
 project the base ref did not carry has no earlier declaration to be held to, and
 neither does a first commit: both pass.
 
-A checkout with no history — a shallow clone, or a directory that is not a
-repository — can answer none of this. It is refused **while the repo is live**,
-which is the commit before the one that could violate the rule: a live repo
-proves its checkout carries the history this reads, so the rule cannot be
-quietly disarmed first and broken afterwards. A `dev` repo never needed history
-for it and is not made to start; `check.yml` checks out with `fetch-depth: 0`
-regardless, for gitleaks.
+Two things can stop the base ref being readable, and they are not the same
+problem:
+
+- **The base branch is not in the clone.** The run named a ref and the checkout
+  does not carry it. That is a broken run, not a repo with nothing to be
+  compared against, so it is **refused whoever is asking** — `dev` repos
+  included. It is the same answer [the upgrade gate](upgrade-path.md) gives the
+  identical condition.
+- **The checkout has no history at all** — a shallow clone. Refused **while the
+  repo is `live`**, which is the commit before the one that could violate the
+  rule. A `dev` repo never needed history here and is not made to start failing
+  on a depth it has always been gated on.
+
+What that second rule does **not** do is make the check undefeatable, and it is
+worth being plain about the residual. A repo whose CI is a call into `check.yml`
+cannot reach it: `fetch-depth: 0` is set there, not by the caller. A repo
+holding the `ci-call` exemption owns its own workflow, and can put
+`fetch-depth: 1` and the flip to `"dev"` in the same pull request — the shallow
+checkout silences the comparison in the very commit that needs silencing. The
+rule raises the cost of moving the field down from an invisible diff to a
+visible change of the workflow's checkout depth. It does not make it impossible,
+and nothing in this gate can: a repo that owns its own CI can always decline to
+run the gate at all.
+
+A directory that is not a repository never reaches any of this. `manifests`
+cannot list a tree git will not read, so the contract has already refused it.
 
 ## Retiring one
 
@@ -140,10 +159,30 @@ with:
   contract-exemptions: lifecycle-retire
 ```
 
-It waives the comparison with the base ref and nothing else — the repo still has
+It waives the comparison with the base ref and nothing else. The repo still has
 to say which of the two words it is, because retiring is moving the field down
-rather than deleting it. It also reads no history at all, so a repo being wound
-down is not additionally asked to explain its checkout depth.
+rather than deleting it — and once it reads `"dev"`, the rules under "Going
+live" stop applying because the repo is a `dev` repo, which is correct: a `dev`
+repo owes none of them. The exemption did not excuse the backups; the lifecycle
+did.
+
+**It is refused the moment it is waiving nothing.** Every other exemption here
+states something permanent about what a repo _is_. This one states that a repo
+is in the middle of being wound down, which stops being true — and left behind
+it becomes a standing licence to move the field back down, granted once and
+never looked at again. So it is satisfied by exactly one state, base `live` and
+this tree not `live`, and reported otherwise:
+
+| The state                                      | What the gate says                        |
+| ---------------------------------------------- | ----------------------------------------- |
+| base `live`, tree `dev`                        | nothing — this is what it excuses         |
+| base `dev`, tree `dev` (the retirement landed) | `lifecycle-retire is waiving nothing`     |
+| base `live`, tree `live` (never came down)     | `lifecycle-retire is waiving nothing`     |
+| the checkout cannot say                        | `lifecycle-retire cannot be checked here` |
+
+That last row is the same door the shallow case would otherwise leave open:
+naming the exemption is what obliges the run to be able to show it is still
+doing something, so a waiver cannot be parked behind a `fetch-depth: 1` forever.
 
 # Exemptions
 
@@ -156,13 +195,13 @@ with:
   contract-exemptions: config-lineage ci-call secrets
 ```
 
-| Exemption          | Waives                                                                                                                                      |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config-lineage`   | _where_ the configs inherit from — not whether they exist                                                                                   |
-| `ci-call`          | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to |
-| `docs-spine`       | the glossary, `docs/adr/` and `CLAUDE.md`                                                                                                   |
-| `lifecycle-retire` | the comparison with the base ref's `lifecycle`, for a repo being deliberately wound down — not the field itself                             |
-| `secrets`          | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                   |
+| Exemption          | Waives                                                                                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config-lineage`   | _where_ the configs inherit from — not whether they exist                                                                                               |
+| `ci-call`          | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to             |
+| `docs-spine`       | the glossary, `docs/adr/` and `CLAUDE.md`                                                                                                               |
+| `lifecycle-retire` | the comparison with the base ref's `lifecycle`, for a repo being deliberately wound down — not the field itself, and refused once it is waiving nothing |
+| `secrets`          | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                               |
 
 Every exemption is echoed as a `::notice` in the run, and a name outside the
 table fails rather than waiving anything — a typo cannot quietly turn a check

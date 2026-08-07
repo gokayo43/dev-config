@@ -12,6 +12,7 @@ import {
   jsonObjects,
   type Manifest,
   manifests,
+  type Missing,
   oneOf,
   type Problem,
   record,
@@ -30,9 +31,24 @@ const LIFECYCLES = ["dev", "live"] as const;
 
 type Lifecycle = (typeof LIFECYCLES)[number];
 
-/** The field as one of those, or nothing — which is its own problem and never a default. */
-function lifecycleOf(contents: Record<string, unknown>): Lifecycle | undefined {
-  return oneOf(LIFECYCLES, contents["lifecycle"]);
+/**
+ * The field as written and as read, derived once. Two readings of one manifest
+ * key are two places for it to mean different things, and the diagnostics need
+ * the raw value as much as the graded one.
+ */
+interface Declared {
+  /** What the manifest holds, phrased the way a diagnostic has to say it. */
+  readonly found: string;
+  /** That value as one of the two words, or nothing — its own problem, never a default. */
+  readonly is: Lifecycle | undefined;
+}
+
+function declaredIn(contents: Record<string, unknown>): Declared {
+  const value = contents["lifecycle"];
+  return {
+    found: value === undefined ? "is absent" : `reads ${JSON.stringify(value)}`,
+    is: oneOf(LIFECYCLES, value),
+  };
 }
 
 /**
@@ -48,18 +64,23 @@ function lifecycleOf(contents: Record<string, unknown>): Lifecycle | undefined {
  * diff: `lifecycle-retire` is where it gets written down.
  */
 const READS_THE_BASE_REF =
-  "a live repo's lifecycle is compared with the base ref's, so that it cannot move back down as part of a tidy-up";
+  "the lifecycle field is compared with the base ref's, so that it cannot move back down as part of a tidy-up";
 
 /** What the base ref says about the lifecycle, or why this checkout cannot say. */
-type Base =
+type BaseLifecycle =
   /**
    * The commit that declared this repo `live`, abbreviated the way the
    * diagnostic names it — and nothing where the base said anything else, since
    * `dev` and an undeclared base both constrain nothing.
    */
   | { readonly liveAt: string | undefined }
-  /** The whole diagnostic: a shallow checkout, or one that is not a repository. */
-  | { readonly refused: string };
+  /**
+   * The whole diagnostic, and what the checkout was missing. Only a shallow
+   * clone and an absent ref reach here: a directory that is no repository has
+   * already been refused by `manifests`, which cannot list a tree git will not
+   * read.
+   */
+  | { readonly refused: string; readonly missing: Missing };
 
 /**
  * The root manifest as the base ref carried it. A manifest that is not there,
@@ -67,17 +88,17 @@ type Base =
  * went through this same gate, which refuses both — so "no" is the honest
  * answer rather than a state to refuse a second time from the far side.
  */
-function declaredIn(text: string): Lifecycle | undefined {
+function lifecycleIn(text: string): Lifecycle | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     return undefined;
   }
-  return isObject(parsed) ? lifecycleOf(parsed) : undefined;
+  return isObject(parsed) ? declaredIn(parsed).is : undefined;
 }
 
-async function baseLifecycle(root: string, event: Event): Promise<Base> {
+async function lifecycleAtBase(root: string, event: Event): Promise<BaseLifecycle> {
   const base = await baseRevision(root, event, READS_THE_BASE_REF);
   if ("refused" in base) return base;
   if (base.rev === undefined) return { liveAt: undefined };
@@ -87,37 +108,71 @@ async function baseLifecycle(root: string, event: Event): Promise<Base> {
   // the base ref did not carry fails here, which is a project this branch adds:
   // there is no earlier declaration to hold it to.
   const shown = await git(root, ["show", `${base.rev}:./package.json`]);
-  const was = shown.ok ? declaredIn(shown.stdout) : undefined;
+  const was = shown.ok ? lifecycleIn(shown.stdout) : undefined;
   return { liveAt: was === "live" ? base.rev.slice(0, 7) : undefined };
 }
 
 /**
- * The one place the field is graded, against the vocabulary and against the
- * base ref at once. Two producers would put two annotations on one deleted
- * line, and the reader would have to work out that they are the same edit.
+ * The one place the field is graded — against the vocabulary, against the base
+ * ref, and against the exemption that excuses the comparison. Two producers
+ * would put two annotations on one deleted line, and the reader would have to
+ * work out that they are the same edit.
  */
-function checkLifecycle(contents: Record<string, unknown>, base: Base): Problem[] {
-  const declared = contents["lifecycle"];
-  const found = declared === undefined ? "is absent" : `reads ${JSON.stringify(declared)}`;
-  const here = lifecycleOf(contents);
+function checkLifecycle(declared: Declared, base: BaseLifecycle, retiring: boolean): Problem[] {
+  if ("refused" in base) {
+    // An exemption is honoured only where it can be shown to be waiving
+    // something. One nobody can check is the standing waiver the rule below
+    // exists to make unrepresentable — and a checkout that cannot answer would
+    // be the door it walks back in through.
+    if (retiring) {
+      return [
+        { message: `lifecycle-retire cannot be checked here: ${base.refused}` },
+        ...notDeclared(declared),
+      ];
+    }
 
-  // Refused only while the repo is live, which is the commit before the one
-  // that would violate this: a live repo proves its checkout carries the
-  // history this reads, so the rule cannot be quietly disarmed first and broken
-  // afterwards. A dev repo never needed history and must not start failing on
-  // the shallow checkouts it has always been gated on.
-  if ("refused" in base)
-    return here === "live" ? [{ message: base.refused }] : notDeclared(found, here);
-
-  if (base.liveAt !== undefined && here !== "live") {
-    return [
-      {
-        file: "package.json",
-        message: `lifecycle was "live" at ${base.liveAt} and now ${found} — a repo does not stop carrying people because a field was tidied away, and everything "live" derives goes with it: backups, a rehearsed restore, crash reporting and the upgrade gate. Put it back, or name the lifecycle-retire exemption at the call site, which is what a deliberate retirement looks like.`,
-      },
-    ];
+    // A ref this run itself names and this checkout does not carry is a broken
+    // run rather than a fact about the repo — the same answer the upgrade gate
+    // gives the identical condition — so it is refused whoever is asking.
+    // History is the other half and is not the same: a `dev` repo never needed
+    // it here, and must not start failing on a checkout depth it has always
+    // been gated on.
+    const refuse = base.missing === "ref" || declared.is === "live";
+    return [...(refuse ? [{ message: base.refused }] : []), ...notDeclared(declared)];
   }
-  return notDeclared(found, here);
+
+  // The one state the exemption exists for. Waived, it is silent; unwaived, it
+  // is the whole point of reading the base ref at all.
+  if (base.liveAt !== undefined && declared.is !== "live") {
+    return retiring
+      ? notDeclared(declared)
+      : [
+          {
+            file: "package.json",
+            message: `lifecycle was "live" at ${base.liveAt} and now ${declared.found} — a repo does not stop carrying people because a field was tidied away, and everything "live" derives goes with it: backups, a rehearsed restore, crash reporting and the upgrade gate. Put it back, or name the lifecycle-retire exemption at the call site, which is what a deliberate retirement looks like.`,
+          },
+        ];
+  }
+
+  return [...(retiring ? [waivingNothing(base.liveAt)] : []), ...notDeclared(declared)];
+}
+
+/**
+ * A `lifecycle-retire` left behind once the retirement it excused has landed.
+ * Every other exemption here states something permanent about what a repo is;
+ * this one states that a repo is in the middle of being wound down, which is a
+ * thing that stops being true. Left in place it is a standing licence to move
+ * the field back down, granted once and never reviewed again — so it has to
+ * fail the moment it is waiving nothing.
+ */
+function waivingNothing(liveAt: string | undefined): Problem {
+  const why =
+    liveAt === undefined
+      ? "the base ref does not declare this repo live"
+      : `${liveAt} and this tree both read "live"`;
+  return {
+    message: `lifecycle-retire is waiving nothing — it excuses a lifecycle that has moved down from "live", and ${why}. Take it out of the call site's exemptions: a waiver that outlives what it waived is one nobody has to justify again, which is the one thing every exemption here is written not to be.`,
+  };
 }
 
 /**
@@ -125,8 +180,8 @@ function checkLifecycle(contents: Record<string, unknown>, base: Base): Problem[
  * set of rules: choosing for it is the choice the field exists to take away
  * from us.
  */
-function notDeclared(found: string, here: Lifecycle | undefined): Problem[] {
-  if (here !== undefined) return [];
+function notDeclared({ found, is }: Declared): Problem[] {
+  if (is !== undefined) return [];
   return [
     {
       file: "package.json",
@@ -688,7 +743,17 @@ export interface Contract {
   readonly event: Event;
 }
 
-function checkRoot(contents: Record<string, unknown>, contract: Contract, base: Base): Problem[] {
+/**
+ * `lifecycle` arrives already graded rather than read here: grading it needs
+ * git, and everything else on this manifest is a read of the object in hand.
+ * It is spliced in at the position it is reported from, which is what the
+ * fixtures assert.
+ */
+function checkRoot(
+  contents: Record<string, unknown>,
+  contract: Contract,
+  lifecycle: readonly Problem[],
+): Problem[] {
   const problems: Problem[] = [];
 
   const packageManager = contents["packageManager"];
@@ -713,7 +778,7 @@ function checkRoot(contents: Record<string, unknown>, contract: Contract, base: 
     });
   }
 
-  problems.push(...checkLifecycle(contents, base));
+  problems.push(...lifecycle);
 
   if (contract.database && record(contents["scripts"])["db:migrate"] === undefined) {
     problems.push({
@@ -746,14 +811,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
       : [{ file: "package.json", message: "the repo has no package.json" }];
   }
 
-  const lifecycle = lifecycleOf(rootManifest.value);
-
-  // A retirement is deliberate, so it reads no history at all: the exemption is
-  // the answer, and a repo being wound down must not also have to explain its
-  // checkout depth to get past the rule it has already been excused from.
-  const base: Base = exempt("lifecycle-retire")
-    ? { liveAt: undefined }
-    : await baseLifecycle(root, contract.event);
+  const declared = declaredIn(rootManifest.value);
 
   // One read of the workflow, two subjects asking about it — and `ci-call`
   // waives both, which is a thing to be able to see rather than to discover.
@@ -762,14 +820,18 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   const call = exempt("ci-call") ? { asked: undefined, problems: [] } : await checkCall(root);
 
   const none = Promise.resolve<Problem[]>([]);
-  const [lockfiles, lineage, bunfig, lefthook, secrets, docs, live] = await Promise.all([
+  const [base, lockfiles, lineage, bunfig, lefthook, secrets, docs, live] = await Promise.all([
+    // Nothing else in this batch reads the base ref, and it is the one entry
+    // that spawns a process per question — so it runs beside them rather than
+    // ahead of them.
+    lifecycleAtBase(root, contract.event),
     checkLockfiles(root),
     checkLineage(root, rootManifest.value, exempt("config-lineage")),
     checkBunfig(root),
     checkLefthook(root),
     exempt("secrets") ? none : checkSecrets(root),
     exempt("docs-spine") ? none : checkDocs(root),
-    lifecycle === "live"
+    declared.is === "live"
       ? checkLive(root, all.read, { owned: ownsDatabase(all.read), gated: contract.database }, call)
       : none,
   ]);
@@ -779,7 +841,11 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   // what the fixtures assert. `call.problems` was read before the batch and
   // takes its place in that order like anything else.
   return [
-    ...checkRoot(rootManifest.value, contract, base),
+    ...checkRoot(
+      rootManifest.value,
+      contract,
+      checkLifecycle(declared, base, exempt("lifecycle-retire")),
+    ),
     ...all.problems,
     ...checkPins(all.read),
     ...lockfiles,
