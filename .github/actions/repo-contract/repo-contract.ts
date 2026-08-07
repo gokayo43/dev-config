@@ -137,11 +137,15 @@ function checkLifecycle(declared: Declared, base: BaseLifecycle, retiring: boole
     const refuse = retiring || base.missing === "ref" || declared.is === "live";
     if (!refuse) return notDeclared(declared);
 
-    // Retiring names the exemption, because what cannot be checked is the
-    // exemption rather than the field.
-    const message = retiring
-      ? `lifecycle-retire cannot be checked here: ${base.refused}`
-      : base.refused;
+    // The exemption is named only where it is the thing that cannot be shown:
+    // no history means nobody can say whether it is still waiving anything. A
+    // ref this run named and this checkout lacks refuses the same run whether
+    // the exemption is there or not, so blaming the exemption for it would
+    // point the reader at the wrong subject entirely.
+    const message =
+      retiring && base.missing === "history"
+        ? `lifecycle-retire cannot be checked here: ${base.refused}`
+        : base.refused;
     return [{ message }, ...notDeclared(declared)];
   }
 

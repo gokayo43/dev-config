@@ -23,6 +23,21 @@ runs:
         GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
       run: |
         set -euo pipefail
+        # `gitleaks git` over a directory that is no repository, or one with no
+        # commits yet, logs its complaint and exits 0 having scanned nothing —
+        # so a secret sitting in the tree passes. Neither is caught by the
+        # shallow test below either: a failed `git rev-parse` substitutes empty,
+        # which is not "true", and the check walks straight past. So both are
+        # asserted first, and loudly: a scan of nothing must never read as a
+        # clean scan.
+        if ! git rev-parse --git-dir > /dev/null 2>&1; then
+          echo "::error::there is no git repository here — gitleaks reads history, and it would report a clean scan of nothing"
+          exit 1
+        fi
+        if ! git rev-parse --verify HEAD > /dev/null 2>&1; then
+          echo "::error::this repository has no commits — gitleaks reads history, and it would report a clean scan of nothing"
+          exit 1
+        fi
         if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
           echo "::error::checkout with fetch-depth: 0 — gitleaks reads history, and a shallow clone has none"
           exit 1

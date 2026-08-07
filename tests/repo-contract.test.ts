@@ -843,12 +843,18 @@ describe("a base ref the checkout does not carry", () => {
     ]);
   });
 
-  // Retiring excuses a lifecycle that moved down. It says nothing about
-  // whether this run was pointed at a branch that exists.
-  test("and lifecycle-retire does not excuse it", async () => {
-    expect(
-      await graded(await withoutTheRef("dev"), { ...asked, exemptions: ["lifecycle-retire"] }),
-    ).toEqual([containing("refs/remotes/origin/main is not in this checkout")]);
+  // Retiring excuses a lifecycle that moved down. It says nothing about whether
+  // this run was pointed at a branch that exists — so it neither waives this
+  // nor gets named by it: the same run refuses identically without it, and a
+  // diagnostic that blamed the exemption would point at the wrong subject.
+  test("and lifecycle-retire neither excuses it nor is blamed for it", async () => {
+    const withExemption = await graded(await withoutTheRef("dev"), {
+      ...asked,
+      exemptions: ["lifecycle-retire"],
+    });
+
+    expect(withExemption).toEqual([containing("refs/remotes/origin/main is not in this checkout")]);
+    expect(withExemption[0]).not.toContain("lifecycle-retire");
   });
 });
 

@@ -45,6 +45,12 @@ bun test        # the gate suites, coverage-floored
 end up holding. It looks at `TEST_DATABASE_URL`, or localhost:5432, and creates
 and drops databases there — README's "Gating this repo" has the one-liner.
 
+Run one suite at a time against a given Postgres. `replay.test.ts` builds the
+upgrade path in a database whose name is fixed — `upgrade_path`, because that is
+the name the gate itself uses — and drops it at both ends, so two runs sharing a
+server delete each other's database mid-migration and report failures neither
+tree has. Give a second run its own `TEST_DATABASE_URL`.
+
 This repo runs its own gates on itself in CI, from the working tree, with three
 exemptions named in `ci.yml`: it cannot extend itself by package name, its CI
 cannot pin a commit it is making, and it has no runtime environment.
