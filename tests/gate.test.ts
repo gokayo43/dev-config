@@ -2,6 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 
 import { allowlistFrom, inputs, notice, report, required } from "../.github/actions/_lib/gate.ts";
+import { git, history, type Tree } from "./tree.ts";
 
 function captureLog(): { lines: string[]; restore: () => void } {
   const lines: string[] = [];
@@ -169,5 +170,43 @@ describe("allowlist entries", () => {
 
   test("nothing allowlisted is nothing to report", () => {
     expect(allowlistFrom("", "route-allowlist")).toEqual({ entries: [], problems: [] });
+  });
+});
+
+// The shared fixture builder every history-reading suite goes through. Its one
+// inviolable property is that the last tree given is the tree at HEAD — a
+// builder that quietly commits something else grades every gate above it
+// against a repository nobody wrote.
+describe("a repository built from a list of trees", () => {
+  const A: Tree = { "a.txt": "A\n" };
+  const B: Tree = { "b.txt": "B\n" };
+
+  async function treeAt(root: string, rev: string): Promise<string[]> {
+    return (await git(root, ["ls-tree", "-r", "--name-only", rev])).split("\n").filter(Boolean);
+  }
+
+  test("ends at the last tree given", async () => {
+    const repo = await history(A, B);
+    expect(await treeAt(repo.root, "HEAD")).toEqual(["b.txt"]);
+  });
+
+  // A tree that comes round again is what a revert looks like, and it is the
+  // one the builder used to skip: it recognised "the first tree" by identity,
+  // so the third argument here wrote nothing and committed B's tree a second
+  // time. Every case built on it would have been grading the wrong tree.
+  test("including a tree it has already been given", async () => {
+    const repo = await history(A, B, A);
+
+    expect(await treeAt(repo.root, "HEAD")).toEqual(["a.txt"]);
+    expect(await treeAt(repo.root, repo.revs[1] ?? "")).toEqual(["b.txt"]);
+    expect(repo.revs).toHaveLength(3);
+  });
+
+  test("and a commit that changes nothing is still a commit", async () => {
+    const repo = await history(A, A);
+
+    expect(repo.revs).toHaveLength(2);
+    expect(repo.revs[0]).not.toBe(repo.revs[1]);
+    expect(await treeAt(repo.root, "HEAD")).toEqual(["a.txt"]);
   });
 });

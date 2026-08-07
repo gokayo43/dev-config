@@ -4,10 +4,19 @@ description: >-
   checkout has to set fetch-depth: 0 — a shallow clone hides a secret that was
   committed and later deleted on the same branch — and this fails if it did not.
 
+inputs:
+  working-directory:
+    description: >-
+      Which repository to scan. The default is the checkout; a caller that
+      generates a tree of its own points this at that tree, since a secret a
+      scaffolder writes is one no scan of the checkout will ever see.
+    default: .
+
 runs:
   using: composite
   steps:
     - shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
         # renovate: datasource=github-release-attachments depName=gitleaks/gitleaks
         GITLEAKS_VERSION: v8.30.1

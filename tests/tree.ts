@@ -78,8 +78,12 @@ export async function history(...trees: readonly Tree[]): Promise<Repo> {
   const root = await materialise(first);
   const revs: string[] = [];
   let previous: Tree = first;
-  for (const tree of [first, ...rest]) {
-    if (tree !== first) {
+  // By position, not by identity. `materialise` has already written the first
+  // tree, and only the first — so asking "is this the first tree?" with `!==`
+  // makes a later commit that repeats an earlier tree silently commit whatever
+  // was on disk instead, which is the shape a revert is written in.
+  for (const [index, tree] of [first, ...rest].entries()) {
+    if (index > 0) {
       for (const path of Object.keys(previous)) {
         if (!(path in tree)) await rm(join(root, path), { force: true });
       }

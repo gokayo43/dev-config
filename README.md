@@ -677,6 +677,12 @@ about a second on repos this size. Since the checkout belongs to the caller and
 the scan does not, the action asks git whether the clone is shallow and fails
 with that instruction rather than scanning one commit and reporting nothing.
 
+`working-directory` defaults to the checkout, which is the whole story for a
+repo gating itself. A caller that generates a tree and then gates it — the
+template's scaffolder is the one here — points this at that tree as well: a
+secret written by a generator is in no commit the checkout's scan will ever
+read.
+
 `setup-bun` is given no version input on purpose: with none it reads the repo's
 `packageManager` field from `package.json`, so CI and the dev machine never
 drift.

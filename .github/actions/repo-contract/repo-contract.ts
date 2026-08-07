@@ -43,11 +43,16 @@ interface Declared {
   readonly is: Lifecycle | undefined;
 }
 
+/** The field as one of those, or nothing — which is its own problem and never a default. */
+function lifecycleOf(value: unknown): Lifecycle | undefined {
+  return oneOf(LIFECYCLES, value);
+}
+
 function declaredIn(contents: Record<string, unknown>): Declared {
   const value = contents["lifecycle"];
   return {
     found: value === undefined ? "is absent" : `reads ${JSON.stringify(value)}`,
-    is: oneOf(LIFECYCLES, value),
+    is: lifecycleOf(value),
   };
 }
 
@@ -95,7 +100,7 @@ function lifecycleIn(text: string): Lifecycle | undefined {
   } catch {
     return undefined;
   }
-  return isObject(parsed) ? declaredIn(parsed).is : undefined;
+  return isObject(parsed) ? lifecycleOf(parsed["lifecycle"]) : undefined;
 }
 
 async function lifecycleAtBase(root: string, event: Event): Promise<BaseLifecycle> {
@@ -120,25 +125,24 @@ async function lifecycleAtBase(root: string, event: Event): Promise<BaseLifecycl
  */
 function checkLifecycle(declared: Declared, base: BaseLifecycle, retiring: boolean): Problem[] {
   if ("refused" in base) {
-    // An exemption is honoured only where it can be shown to be waiving
-    // something. One nobody can check is the standing waiver the rule below
-    // exists to make unrepresentable — and a checkout that cannot answer would
-    // be the door it walks back in through.
-    if (retiring) {
-      return [
-        { message: `lifecycle-retire cannot be checked here: ${base.refused}` },
-        ...notDeclared(declared),
-      ];
-    }
-
-    // A ref this run itself names and this checkout does not carry is a broken
-    // run rather than a fact about the repo — the same answer the upgrade gate
-    // gives the identical condition — so it is refused whoever is asking.
-    // History is the other half and is not the same: a `dev` repo never needed
-    // it here, and must not start failing on a checkout depth it has always
+    // Who cannot let this pass. A repo mid-retirement: the exemption is
+    // honoured only where it can be shown to still be waiving something, and a
+    // checkout that cannot answer is the door a standing waiver walks back in
+    // through. A ref this run itself named: that is a broken run rather than a
+    // fact about the repo, the same answer the upgrade gate gives the identical
+    // condition. A `live` tree: the commit before the one that could violate
+    // the rule. What is left is a `dev` repo on a shallow checkout, which never
+    // needed history here and must not start failing on a depth it has always
     // been gated on.
-    const refuse = base.missing === "ref" || declared.is === "live";
-    return [...(refuse ? [{ message: base.refused }] : []), ...notDeclared(declared)];
+    const refuse = retiring || base.missing === "ref" || declared.is === "live";
+    if (!refuse) return notDeclared(declared);
+
+    // Retiring names the exemption, because what cannot be checked is the
+    // exemption rather than the field.
+    const message = retiring
+      ? `lifecycle-retire cannot be checked here: ${base.refused}`
+      : base.refused;
+    return [{ message }, ...notDeclared(declared)];
   }
 
   // The one state the exemption exists for. Waived, it is silent; unwaived, it
@@ -743,17 +747,7 @@ export interface Contract {
   readonly event: Event;
 }
 
-/**
- * `lifecycle` arrives already graded rather than read here: grading it needs
- * git, and everything else on this manifest is a read of the object in hand.
- * It is spliced in at the position it is reported from, which is what the
- * fixtures assert.
- */
-function checkRoot(
-  contents: Record<string, unknown>,
-  contract: Contract,
-  lifecycle: readonly Problem[],
-): Problem[] {
+function checkRoot(contents: Record<string, unknown>, contract: Contract): Problem[] {
   const problems: Problem[] = [];
 
   const packageManager = contents["packageManager"];
@@ -778,8 +772,6 @@ function checkRoot(
     });
   }
 
-  problems.push(...lifecycle);
-
   if (contract.database && record(contents["scripts"])["db:migrate"] === undefined) {
     problems.push({
       file: "package.json",
@@ -795,7 +787,11 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   const unknown = contract.exemptions.filter((name) => !(name in EXEMPTIONS));
   if (unknown.length > 0) {
     return unknown.map((name) => ({
-      message: `'${name}' is not a contract fact — exemptions are one of: ${Object.keys(EXEMPTIONS).join(", ")}`,
+      message: `'${name}' is not a contract fact — the facts a repo can be excused are: ${Object.entries(
+        EXEMPTIONS,
+      )
+        .map(([fact, waived]) => `${fact} (${waived})`)
+        .join(", ")}`,
     }));
   }
   const exempt = (name: Exemption): boolean => contract.exemptions.includes(name);
@@ -841,11 +837,8 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   // what the fixtures assert. `call.problems` was read before the batch and
   // takes its place in that order like anything else.
   return [
-    ...checkRoot(
-      rootManifest.value,
-      contract,
-      checkLifecycle(declared, base, exempt("lifecycle-retire")),
-    ),
+    ...checkRoot(rootManifest.value, contract),
+    ...checkLifecycle(declared, base, exempt("lifecycle-retire")),
     ...all.problems,
     ...checkPins(all.read),
     ...lockfiles,
