@@ -71,26 +71,30 @@ inputs:
     default: ""
 
 # One action rather than several, and not because everything here is about the
-# database — "Replay the migrations" and "Every instant carries its zone" are,
-# while "Boot against that database", "Capacity ramp" and "Every route the ramp
-# reaches" are about the app the schema has to be able to run. The directory is
-# named for what `database: true` buys.
+# database — "Replay the migrations", "Every instant carries its zone" and "A
+# backfill that can be run twice" are, while "Boot against that database",
+# "Capacity ramp" and "Every route the ramp reaches" are about the app the
+# schema has to be able to run. The directory is named for what
+# `database: true` buys.
 #
 # What holds them together is the migrated database itself: every step below is
 # rooted in the replay, and the app steps are ordered among themselves — nothing
 # can read a column type before the migrations ran, boot before there is a
-# schema, ramp before the app answers, or count routes before the ramp. Only
-# "Every instant carries its zone" is free of the rest, which makes it a partial
-# order rather than a chain, and one composite's step list is the strongest form
-# that ordering takes: split across actions it becomes prose in two descriptions
-# and an order a caller can get wrong.
+# schema, ramp before the app answers, or count routes before the ramp. The two
+# database steps beside the replay are free of each other and of the rest —
+# reading a column type says nothing about rows, and the backfill check works in
+# a database of its own — which makes this a partial order rather than a chain,
+# and one composite's step list is the strongest form that ordering takes: split
+# across actions it becomes prose in two descriptions and an order a caller can
+# get wrong.
 #
 # "Publish what the ramp measured and what it read" is what settles it. The k6
-# summary and both route-log snapshots come from "Capacity ramp", the app's own
-# output from "Boot against that database", and db-gate-evidence above says why
-# they leave as one artifact — so one job's evidence is one upload, and an
-# upload belongs to whatever runs the whole job. Which is to say the boundary
-# cannot be drawn between the database and the app either.
+# summary and both route-log snapshots come from "Capacity ramp", the three data
+# dumps from the backfill check, the app's own output from "Boot against that
+# database", and db-gate-evidence above says why they leave as one artifact — so
+# one job's evidence is one upload, and an upload belongs to whatever runs the
+# whole job. Which is to say the boundary cannot be drawn between the database
+# and the app either.
 runs:
   using: composite
   steps:
