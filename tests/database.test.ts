@@ -4,6 +4,7 @@ import {
   beside,
   compare,
   databaseIn,
+  type Dump,
   scratchDatabase,
 } from "../.github/actions/db-gate/database.ts";
 
@@ -48,18 +49,22 @@ describe("a database beside the one the caller declared", () => {
  * answer of "these differ" comes with nothing to say about how.
  */
 describe("comparing two dumps", () => {
-  const left = { of: "the left schema", text: 'CREATE TABLE "a" ();\nCREATE TABLE "b" ();\n' };
+  /** A schema dump's units, which is how the replay gate cuts one: its lines. */
+  const lines = (of: string, text: string): Dump => ({ of, each: "line", units: text.split("\n") });
+
+  const left = lines("the left schema", 'CREATE TABLE "a" ();\nCREATE TABLE "b" ();\n');
 
   test("identical text is the only way two schemas are equal", () => {
-    expect(compare(left, { of: "the right schema", text: left.text })).toBeUndefined();
+    expect(
+      compare(left, lines("the right schema", 'CREATE TABLE "a" ();\nCREATE TABLE "b" ();\n')),
+    ).toBeUndefined();
   });
 
   test("the same statements arranged differently are not equal, and say so", () => {
-    const reordered = {
-      of: "the right schema",
-      text: 'CREATE TABLE "b" ();\nCREATE TABLE "a" ();\n',
-    };
-    const difference = compare(left, reordered);
+    const difference = compare(
+      left,
+      lines("the right schema", 'CREATE TABLE "b" ();\nCREATE TABLE "a" ();\n'),
+    );
 
     expect(difference?.headline).toContain("not in which statements they hold");
     expect(difference?.lines).not.toEqual([]);
@@ -68,11 +73,10 @@ describe("comparing two dumps", () => {
   // The tally is of statements, so a blank line moves nothing in it. Reporting
   // that as "a different order" was a claim about something never compared.
   test("a blank-line difference is not reported as a different order", () => {
-    const spaced = {
-      of: "the right schema",
-      text: 'CREATE TABLE "a" ();\n\nCREATE TABLE "b" ();\n',
-    };
-    const difference = compare(left, spaced);
+    const difference = compare(
+      left,
+      lines("the right schema", 'CREATE TABLE "a" ();\n\nCREATE TABLE "b" ();\n'),
+    );
 
     expect(difference?.headline).toContain("not in which statements they hold");
     expect(difference?.headline).not.toContain("different order");
@@ -80,9 +84,26 @@ describe("comparing two dumps", () => {
   });
 
   test("a line one schema does not have is named, on the side that has it", () => {
-    const difference = compare(left, { of: "the right schema", text: 'CREATE TABLE "a" ();\n' });
+    const difference = compare(left, lines("the right schema", 'CREATE TABLE "a" ();\n'));
 
     expect(difference?.lines).toEqual(['only in the left schema: CREATE TABLE "b" ();']);
     expect(difference?.headline).toContain("the left schema alone has 1 line");
+  });
+
+  // The producer says what a unit is called, because the two halves of a
+  // database are not compared in the same thing. A count of "lines" over rows
+  // that each span several would be the diagnostic repeating the mistake the
+  // unit exists to prevent.
+  test("the count is of whatever the producer cut the dump into", () => {
+    const rows = (of: string, ...units: string[]): Dump => ({ of, each: "row", units });
+    const difference = compare(
+      rows("the data before", "INSERT INTO t VALUES (1, 'A\nB');"),
+      rows("the data after"),
+    );
+
+    expect(difference?.headline).toContain("the data before alone has 1 row");
+    expect(difference?.lines).toEqual([
+      "only in the data before: INSERT INTO t VALUES (1, 'A\nB');",
+    ]);
   });
 });

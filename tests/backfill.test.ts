@@ -10,7 +10,7 @@ import {
   backfillGate,
   type Evidence,
 } from "../.github/actions/db-gate/backfill.ts";
-import type { Verdict } from "../.github/actions/_lib/gate.ts";
+import type { Verdict } from "../.github/actions/db-gate/verdict.ts";
 
 import { containing } from "./matchers.ts";
 import { lineage, type Migration, migratesFrom } from "./lineage.ts";
@@ -34,7 +34,7 @@ const MIGRATOR = new URL("./journalled-migrator.ts", import.meta.url).pathname;
 const CREATES_THING: Migration = {
   tag: "0000_thing",
   when: 1_000,
-  sql: `CREATE TABLE "thing" (\n\t"id" integer PRIMARY KEY NOT NULL,\n\t"name" text NOT NULL,\n\t"slug" text\n);\nCREATE TABLE "audit" (\n\t"id" serial PRIMARY KEY NOT NULL,\n\t"what" text NOT NULL\n);\n`,
+  sql: `CREATE TABLE "thing" (\n\t"id" integer PRIMARY KEY NOT NULL,\n\t"name" text NOT NULL,\n\t"slug" text,\n\t"note" text\n);\nCREATE TABLE "audit" (\n\t"id" serial PRIMARY KEY NOT NULL,\n\t"what" text NOT NULL\n);\n`,
 };
 
 /** A script the fixture tree carries, run through `bun` against DATABASE_URL. */
@@ -73,9 +73,9 @@ async function evidenceDir(): Promise<Evidence> {
   const dir = await mkdtemp(join(tmpdir(), "backfill-evidence-"));
   temps.push(dir);
   return {
-    seeded: join(dir, "backfill-seeded.sql"),
-    first: join(dir, "backfill-first.sql"),
-    second: join(dir, "backfill-second.sql"),
+    seeded: join(dir, "backfill-seeded.rows"),
+    first: join(dir, "backfill-first.rows"),
+    second: join(dir, "backfill-second.rows"),
   };
 }
 
@@ -85,13 +85,10 @@ interface Ran {
   readonly database: string;
 }
 
-/**
- * The gate against a repo whose migrations build the tables above, with the two
- * commands the caller would have written. Nothing here creates the database the
- * gate works in: making its own is what the gate does, and a suite that made
- * one for it would be the reason nobody noticed it had stopped.
- */
-async function ran(backfill: string, seed: string = SEEDS): Promise<Ran> {
+async function running(
+  backfill: string,
+  seed: string = SEEDS,
+): Promise<{ verdict: Promise<Verdict>; evidence: Evidence; database: string }> {
   const repo = await history({
     ...migratesFrom(MIGRATOR, "drizzle"),
     ...lineage("drizzle", CREATES_THING),
@@ -102,7 +99,7 @@ async function ran(backfill: string, seed: string = SEEDS): Promise<Ran> {
   const database = backfillDatabase(repo.root);
   databases.push(database);
   return {
-    verdict: await backfillGate({
+    verdict: backfillGate({
       root: repo.root,
       url: SERVER,
       seed: SEEDING,
@@ -112,6 +109,19 @@ async function ran(backfill: string, seed: string = SEEDS): Promise<Ran> {
     evidence,
     database,
   };
+}
+
+/**
+ * The gate against a repo whose migrations build the tables above, with the two
+ * commands the caller would have written. Nothing here creates the database the
+ * gate works in: making its own is what the gate does, and a suite that made
+ * one for it would be the reason nobody noticed it had stopped. `running` is
+ * the same thing for the cases that need the evidence paths of a run that
+ * throws, which cannot come back through a return.
+ */
+async function ran(backfill: string, seed: string = SEEDS): Promise<Ran> {
+  const started = await running(backfill, seed);
+  return { verdict: await started.verdict, evidence: started.evidence, database: started.database };
 }
 
 const SEEDING = "bun ./seed.ts";
@@ -166,6 +176,40 @@ describe("the backfill check", () => {
     expect(verdict.summary).toContain("leaves the same data");
   });
 
+  // `--inserts` puts raw newlines inside string literals, so a comparison cut
+  // into lines holds fragments rather than rows — and sorting is then free to
+  // rearrange one row's fragments into another's. This backfill writes one pair
+  // of values on a row it has not touched and the other pair on one it has, so
+  // the second run swaps the two tails: different rows, identical multiset of
+  // line fragments, and a line-wise comparison calls it a pass.
+  test("rows that share their fragments with each other are not the same rows", async () => {
+    const { verdict } = await ran(
+      `update "thing" set "note" = case when "note" is null` +
+        ` then (case "id" when 1 then 'A\nB' else 'C\nD' end)` +
+        ` else (case "id" when 1 then 'A\nD' else 'C\nB' end) end`,
+    );
+
+    expect(messages(verdict)).toEqual([
+      containing("running the backfill a second time changed the data"),
+    ]);
+    expect(verdict.divergence.join("\n")).toContain("A\nD");
+  });
+
+  // The same class from the other side: the second run drops a blank line from
+  // *inside* a value. A comparison that filters blank lines before it knows
+  // what a statement is drops that one too, and reads two different paragraphs
+  // as one.
+  test("a blank line inside a value is part of the value", async () => {
+    const { verdict } = await ran(
+      `update "thing" set "note" = case when "note" is null` +
+        ` then 'para one\n\npara two' else 'para one\npara two' end`,
+    );
+
+    expect(messages(verdict)).toEqual([
+      containing("running the backfill a second time changed the data"),
+    ]);
+  });
+
   // A backfill against a database the migrations have just built has nothing to
   // find, so it is trivially idempotent — which is exactly the pass that would
   // certify nothing at all.
@@ -185,13 +229,25 @@ describe("the backfill check", () => {
     expect(await Bun.file(evidence.second).text()).toBe(await Bun.file(evidence.first).text());
   });
 
-  // The evidence is worth most on the run that failed, which is the one that
-  // stopped before writing all of it.
+  // A refused run read all three and is refused on what they say, so all three
+  // are there: failing is not a reason to discard the evidence for it.
   test("a refused run still leaves what it had read", async () => {
     const { evidence } = await ran(APPENDS);
 
     expect(await Bun.file(evidence.seeded).text()).toContain(`'One Thing'`);
     expect(await Bun.file(evidence.first).text()).not.toBe(await Bun.file(evidence.second).text());
+  });
+
+  // The run that stopped partway is the other half, and the one the evidence is
+  // worth most on: the backfill died on its first run, so the state it was
+  // handed is on disk and the two dumps the comparison would have made are not.
+  test("a run that stopped partway leaves what it had already read", async () => {
+    const started = await running(`select * from "nothing_here"`);
+    expect(await refusal(started.verdict)).toContain("backfill-command");
+
+    expect(await Bun.file(started.evidence.seeded).text()).toContain(`'One Thing'`);
+    expect(await Bun.file(started.evidence.first).exists()).toBe(false);
+    expect(await Bun.file(started.evidence.second).exists()).toBe(false);
   });
 
   test("the database it builds is gone whichever way it went", async () => {
@@ -272,8 +328,8 @@ async function tables(): Promise<string[]> {
 }
 
 /** What the gate threw, as the text a case can read. A rejection is the diagnostic here. */
-async function refusal(running: Promise<Ran>): Promise<string> {
-  return await running.then(
+async function refusal(verdict: Promise<unknown>): Promise<string> {
+  return await verdict.then(
     () => "the gate returned a verdict instead of refusing",
     (error: unknown) => String(error),
   );

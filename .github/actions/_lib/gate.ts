@@ -32,51 +32,6 @@ export function notice(message: string): void {
 }
 
 /**
- * What a gate that proves a property reports, rather than a bare `Problem[]`:
- * the claim it established, or the evidence behind one it could not.
- *
- * The two are exclusive by construction — `passed` and `refused` below are the
- * only ways to build one — because a step that failed has already said so in
- * its annotations, and a summary beside them would be the step paraphrasing its
- * own error back at the reader.
- */
-export interface Verdict {
-  /** What holding proved, for the log. Absent when it did not hold: the problems are the report. */
-  readonly summary: string | undefined;
-  /** What the two sides do not share — a diagnostic that only says "they differ" is not one. */
-  readonly divergence: string[];
-  readonly problems: Problem[];
-}
-
-/** A verdict with nothing to report, which is every passing one. */
-export function passed(summary: string): Verdict {
-  return { summary, divergence: [], problems: [] };
-}
-
-/** A verdict that fails the step. There is no summary: what happened is the problem. */
-export function refused(problems: Problem[], divergence: string[] = []): Verdict {
-  return { summary: undefined, divergence, problems };
-}
-
-/**
- * The whole of what a `*.main.ts` does with one. Here rather than copied into
- * each entry point because it is the same three writes every time and their
- * order is load-bearing: the divergence goes to the log as it stands, before
- * the annotation summarising it, so a reader who scrolls to the error finds
- * what it was about above rather than somewhere below.
- *
- * The divergence is log lines rather than annotations because an annotation is
- * one line rendered on the step, and evidence that runs to hundreds — every
- * line two dumps disagree about — has to go somewhere a message that stays
- * short enough to read cannot.
- */
-export function reportVerdict({ summary, divergence, problems }: Verdict): void {
-  for (const line of divergence) console.log(line);
-  if (summary !== undefined) notice(summary);
-  report(problems);
-}
-
-/**
  * The work a `*.main.ts` hands over, so that a gate which throws — an input the
  * action forgot to pass, a database refusing the connection, a file that is not
  * the shape it claims — reaches the log as the annotation GitHub renders on the
@@ -203,26 +158,15 @@ function entriesIn(value: string): string[] {
  * entry is enforced by reporting `problems`, and a signature that accepted the
  * list alone would let a caller typecheck while dropping that half.
  *
- * What is *not* here is the other rule every allowlist in this repo keeps —
- * that an entry standing for nothing under grade is refused, naming it. It
- * reads like one member taking the universe and handing back what matched and
- * what did not, and for two of the three it would be: stack-gate and the
- * timestamptz gate both compare the entry text against a set of names.
- * route-coverage cannot. Its entries are parsed into a method and a path first,
- * with a diagnostic of its own for one that is not a route at all; what it
- * compares is a normalised key rather than the entry, so `options /*` and
+ * The rule that an entry standing for nothing is refused belongs to every
+ * allowlist here, but only two of them can be handed the subjects whole:
+ * `deadEntries` below is those two. route-coverage stays out because its
+ * entries are not the thing it compares — they are parsed into a method and a
+ * path first, with a diagnostic of its own for one that is not a route at all,
+ * and the comparison is against a normalised key, so `options /*` and
  * `OPTIONS /*` are one route and neither is a member of any set of entry
- * spellings; and it asks a second question of the ones that do match — did the
- * ramp reach this route after all. Serving that would take a key function and
- * three kinds of answer back, a larger interface than the `filter` it would
- * replace in the two that fit. Two of a one-line set difference is duplication,
- * and the diagnostics are each gate's own either way.
- *
- * `unreasoned` below is the piece all three do share, which is why it is a set
- * here rather than one each of them builds for itself: an entry already refused
- * for saying nothing about why is asked none of the questions above, since its
- * author is going back to that line regardless and one mistake earns one
- * diagnostic.
+ * spellings. Its classifier is in route-coverage.ts, which is where the parse
+ * that makes it different lives.
  */
 export interface Allowlist {
   /** Each entry with its reason stripped: the part a gate compares against. */
@@ -264,6 +208,35 @@ export function allowlistFrom(value: string, input: string): Allowlist {
       message: `${input} waives ${subject} without saying why — write '${subject}${REASON}<reason>', the same price a lint directive pays`,
     })),
   };
+}
+
+/**
+ * The waivers standing for nobody, and which of the two ways each got there.
+ *
+ * Two gates ask exactly this and in the same order: stack-gate, of a package
+ * the denylist has stopped answering for, and the timestamptz gate, of a column
+ * that is no longer a wall-clock one. Subtract what the gate still grades,
+ * subtract the entries already refused for carrying no reason, then pick
+ * between two messages. One decision, so one place.
+ *
+ * `live` is what the gate still grades: a subject in it is a waiver doing its
+ * job. `known` is everything the gate can see at all, and the difference
+ * between the two is the difference between an entry to drop and a name to fix
+ * — sending the first case name-hunting is how a retired rule costs every
+ * consumer an afternoon.
+ *
+ * An entry with no reason is asked none of this: its author is going back to
+ * that line regardless, and one mistake earns one diagnostic.
+ */
+export function deadEntries(
+  allowlist: Allowlist,
+  live: ReadonlySet<string>,
+  known: ReadonlySet<string>,
+  message: (subject: string, stillKnown: boolean) => string,
+): Problem[] {
+  return [...new Set(allowlist.entries)]
+    .filter((subject) => !live.has(subject) && !allowlist.unreasoned.has(subject))
+    .map((subject) => ({ message: message(subject, known.has(subject)) }));
 }
 
 /** A git invocation's exit status and what it wrote. */

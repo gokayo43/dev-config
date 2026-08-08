@@ -1,4 +1,4 @@
-import type { Allowlist, Problem } from "../_lib/gate.ts";
+import { type Allowlist, deadEntries, type Problem } from "../_lib/gate.ts";
 
 /** A column, as `information_schema.columns` names it. */
 export interface Column {
@@ -85,16 +85,11 @@ export function timestamptzGate(columns: readonly Column[], allowlist: Allowlist
       message: `${column} is a wall-clock timestamp — store instants as ${fix}, or list it in timestamp-allowlist if it is a deliberate wall-clock value`,
     }));
 
-  // An entry already refused for saying nothing about why is not asked this
-  // second question: its author is going back to that line regardless, and one
-  // mistake earns one diagnostic.
-  const fossils = [...deliberate]
-    .filter((column) => !wallClock.has(column) && !allowlist.unreasoned.has(column))
-    .map((column) => ({
-      message: present.has(column)
-        ? `timestamp-allowlist waives ${column}, which is not a wall-clock column — the migration this entry was written against has been made, so drop the entry`
-        : `timestamp-allowlist waives ${column}, which this schema has no column called — drop the entry, or fix the name to match the column it was written for`,
-    }));
+  const fossils = deadEntries(allowlist, new Set(wallClock.keys()), present, (column, here) =>
+    here
+      ? `timestamp-allowlist waives ${column}, which is not a wall-clock column — the migration this entry was written against has been made, so drop the entry`
+      : `timestamp-allowlist waives ${column}, which this schema has no column called — drop the entry, or fix the name to match the column it was written for`,
+  );
 
   return [...allowlist.problems, ...refusals, ...fossils];
 }

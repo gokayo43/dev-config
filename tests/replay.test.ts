@@ -4,9 +4,10 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import type { Event, Verdict } from "../.github/actions/_lib/gate.ts";
+import type { Event } from "../.github/actions/_lib/gate.ts";
 import { beside } from "../.github/actions/db-gate/database.ts";
 import { replayGate, upgradeDatabase } from "../.github/actions/db-gate/replay.ts";
+import type { Verdict } from "../.github/actions/db-gate/verdict.ts";
 
 import { containing } from "./matchers.ts";
 import { lineage, type Migration, migratesFrom, scripted } from "./lineage.ts";

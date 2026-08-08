@@ -24,6 +24,10 @@ await entry(async () => {
     allowlistFrom(read["route-allowlist"], "route-allowlist"),
   );
 
+  // Not `reportVerdict`: a verdict's summary is the claim a gate established
+  // and is absent when it could not, while this one is a measurement of the
+  // floor that earns its line of log either way — most of all on the run that
+  // failed. route-coverage.ts says the same beside `Coverage`.
   notice(summary);
   report(problems);
 });

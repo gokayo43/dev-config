@@ -1,5 +1,6 @@
-import { entry, inputs, reportVerdict, required } from "../_lib/gate.ts";
+import { entry, inputs, required } from "../_lib/gate.ts";
 import { backfillGate } from "./backfill.ts";
+import { reportVerdict } from "./verdict.ts";
 
 await entry(async () => {
   const read = inputs(

@@ -69,6 +69,17 @@ with:
     public.audit log.at -- the shift board's wall time, not an instant
 ```
 
+Once it has booted, the job ramps it and publishes what that measured.
+That is a step of this gate rather than a gate of its own, and it has a page:
+[capacity.md](capacity.md).
+
+Booting is the half that migrations succeeding does not prove. Health answers
+200 only after the process has started against that schema and a query has
+round-tripped, so a migration that applies but leaves the app unable to run
+fails here. The server environment the job sets is the house contract with
+dummy secrets — a real secret in a workflow file is a leaked secret — and a repo
+whose contract needs more than that extends the workflow rather than the call.
+
 ## Backfills
 
 `backfill-seed` and `backfill-command` add one property: **running the
@@ -91,28 +102,37 @@ clause, an `update` guarded on nothing, a counter incremented rather than set �
 does not error. It doubles rows, and it looks like a backfill that worked until
 somebody counts them.
 
-So the step builds a database of its own on the declared service, migrates it
-with the repo's own `db:migrate`, runs `backfill-seed` once and
-`backfill-command` twice, and compares `pg_dump --data-only --inserts` either
-side of the second run. Its own database rather than the declared one because
+So the step builds a database of its own on the declared service —
+`backfill_<digest>`, derived from the project directory for the reason
+[upgrade-path.md](upgrade-path.md) gives for its own — migrates it with the
+repo's own `db:migrate`, runs `backfill-seed` once and `backfill-command` twice,
+and compares `pg_dump --data-only --inserts` either side of the second run. Its own database rather than the declared one because
 the seed writes rows, and the boot step below claims the app comes up against
 a database its migrations built.
 
-The comparison is of rows: the dump is sorted, since heap order is a fact about
-when autovacuum last woke rather than about the data, and `--inserts` is what
-keeps each line naming its own table once that order is gone. A sequence's
-position is dropped for the same reason — an `on conflict do nothing` consumes
-one whether or not the row lands, and refusing that would be refusing the guard
-rather than the backfill.
+The comparison is of rows, and a row is a whole `INSERT` statement rather than a
+line of one. The dump is sorted, since heap order is a fact about when
+autovacuum last woke rather than about the data — and sorting is exactly why the
+unit matters: `--inserts` writes a value's own newlines raw, so two databases
+holding `(1, 'A⏎B'), (2, 'C⏎D')` and `(1, 'A⏎D'), (2, 'C⏎B')` are one multiset
+of _lines_ and different rows. Everything pg_dump writes that is not an `INSERT`
+is dropped by what a whole statement starts with, which is also why no filter
+here can reach inside a value: the `SET`s, the comments, the `\restrict` token
+randomised per invocation, and the `setval` that moves a sequence whether or not
+a row landed — an `on conflict do nothing` consumes one either way, and refusing
+that would be refusing the guard rather than the backfill.
 
 A seed that leaves no rows behind is refused rather than passed. A backfill
 against a database the migrations have just built has nothing to find, so
 running it twice would compare two empty databases and certify whatever the
 backfill does.
 
-All three dumps — the state the seed wrote, and the data after each run —
-leave the run in the evidence artifact, whichever of them the step got as far as
-writing.
+All three dumps — the state the seed wrote, and the data after each run — leave
+the run in the evidence artifact, whichever of them the step got as far as
+writing. They are named `.rows` rather than `.sql` because that is what they
+are: the `INSERT`s sorted, with everything that is not a row taken out. It is
+what the step compared, not a script that would rebuild anything if you fed it
+back.
 
 ### What this cannot catch
 
@@ -132,16 +152,7 @@ gets trusted for things it never checked.
   backfills is exercised.
 - **Effects outside this database.** Files written, jobs queued, third-party
   calls made. A backfill that emails every user twice passes.
-- **Sequence positions**, dropped from the comparison above, and anything else
-  `pg_dump --data-only` does not carry.
-
-Once it has booted, the job ramps it and publishes what that measured.
-That is a step of this gate rather than a gate of its own, and it has a page:
-[capacity.md](capacity.md).
-
-Booting is the half that migrations succeeding does not prove. Health answers
-200 only after the process has started against that schema and a query has
-round-tripped, so a migration that applies but leaves the app unable to run
-fails here. The server environment the job sets is the house contract with
-dummy secrets — a real secret in a workflow file is a leaked secret — and a repo
-whose contract needs more than that extends the workflow rather than the call.
+- **Anything that is not a row.** Sequence positions, dropped above, and large
+  objects, which `pg_dump --data-only` writes as `lo_*` calls rather than as
+  rows. A value's own newlines and blank lines are _not_ on this list: a row is
+  compared as a whole statement, which is what makes that true.

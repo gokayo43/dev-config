@@ -142,9 +142,9 @@ runs:
       env:
         INPUT_BACKFILL_SEED: ${{ inputs.backfill-seed }}
         INPUT_BACKFILL_COMMAND: ${{ inputs.backfill-command }}
-        INPUT_SEEDED_DATA: ${{ runner.temp }}/backfill-seeded.sql
-        INPUT_FIRST_DATA: ${{ runner.temp }}/backfill-first.sql
-        INPUT_SECOND_DATA: ${{ runner.temp }}/backfill-second.sql
+        INPUT_SEEDED_DATA: ${{ runner.temp }}/backfill-seeded.rows
+        INPUT_FIRST_DATA: ${{ runner.temp }}/backfill-first.rows
+        INPUT_SECOND_DATA: ${{ runner.temp }}/backfill-second.rows
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/backfill.main.ts"
@@ -293,9 +293,9 @@ runs:
         # simply absent. The boot step's own annotation, not this file, is what
         # says an app failed to start.
         path: |
-          ${{ runner.temp }}/backfill-seeded.sql
-          ${{ runner.temp }}/backfill-first.sql
-          ${{ runner.temp }}/backfill-second.sql
+          ${{ runner.temp }}/backfill-seeded.rows
+          ${{ runner.temp }}/backfill-first.rows
+          ${{ runner.temp }}/backfill-second.rows
           ${{ runner.temp }}/capacity.json
           ${{ runner.temp }}/route-log-before.json
           ${{ runner.temp }}/route-log-after.json

@@ -1,7 +1,7 @@
 import { SQL } from "bun";
 
-import { passed, refused, type Verdict } from "../_lib/gate.ts";
 import { beside, compare, type Dump, dumpOf, migrate, scratchDatabase, shell } from "./database.ts";
+import { passed, refused, type Verdict } from "./verdict.ts";
 
 /**
  * What a backfill is asked to prove: **running it a second time leaves what the
@@ -61,46 +61,103 @@ const ROW = /^INSERT INTO /;
  * The migrator's own bookkeeping, which every migrated database has and no seed
  * wrote. It is left in the comparison — a backfill that writes to the journal
  * has done something worth a diagnostic — and taken out of the question "did the
- * seed leave anything behind", which would otherwise answer yes on
- * a database whose only rows are the journal's: the empty one this refuses to
- * grade. The name is drizzle's default, the same one the replay reads the
- * applied migrations out of.
+ * seed leave anything behind", which would otherwise answer yes on a database
+ * whose only rows are the journal's: the empty one this refuses to grade. The
+ * name is drizzle's default, the same one the replay reads the applied
+ * migrations out of.
  */
 const JOURNAL_ROW = /^INSERT INTO \S*__drizzle_migrations\b/;
 
 /**
- * A sequence's position, which is not data. An `insert ... on conflict do
- * nothing` consumes a value on every run whether or not the row lands, so two
- * runs of a correctly guarded backfill leave the same rows behind a different
- * high-water mark — and refusing that would be refusing the guard rather than
- * the backfill. The rows are what this compares; docs/gates/db-gate.md names it
- * among the things this cannot see.
+ * A chunk of the dump as the statement it is, once the comment lines above it
+ * are dropped. Only the head of a chunk can be one: a `--` further in has
+ * either already been read as a comment or is inside a string literal, and
+ * either way it is not this statement's beginning.
  */
-const SEQUENCE = /^SELECT pg_catalog\.setval\(/;
+function statementIn(chunk: string): string {
+  const lines = chunk.split("\n");
+  let first = 0;
+  while (first < lines.length) {
+    const line = (lines[first] ?? "").trim();
+    if (line !== "" && !line.startsWith("--")) break;
+    first++;
+  }
+  return lines.slice(first).join("\n").trim();
+}
 
 /**
- * The data as a set of statements rather than as a file: sorted, because the
- * order rows come back in is not a fact about them. pg_dump reads a table in
- * heap order, and an UPDATE writes a new tuple wherever there is room for one —
- * so a run that rewrote rows can hand back the same rows in another order once
- * the space its own dead tuples freed becomes reusable. That is a fact about
- * when autovacuum last woke up, and a gate whose verdict turns on it would be
- * one nobody could reproduce. No fixture in the suite demonstrates it, which is
- * the point: the comparison is of rows, and this is what makes that true rather
- * than usually true.
+ * The dump cut into statements — the unit the data half is compared in, and the
+ * whole reason this reads the text rather than splitting it.
  *
- * `--inserts` rather than the default COPY, because each line has to name its
- * own table once the order is gone: a bare tab-separated row in a diagnostic
- * belongs to no table its reader can find.
+ * A statement ends at the first `;` that is neither inside a string literal nor
+ * inside a `--` comment, which is the entire grammar `pg_dump --data-only
+ * --inserts` emits. Both exceptions are load-bearing against real output: a
+ * value may contain `;`, and pg_dump's own `-- Data for Name: t; Type: TABLE
+ * DATA; Schema: public` header would otherwise cut the statement under it into
+ * four. A doubled `''` needs no case of its own — it closes the literal and
+ * reopens it, which leaves the scanner exactly where it was.
+ *
+ * Everything after the last `;` is not a statement: the `\unrestrict` line
+ * pg_dump signs off with, and nothing else.
+ */
+function statementsIn(dump: string): string[] {
+  const statements: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let commented = false;
+  for (let at = 0; at < dump.length; at++) {
+    if (commented) {
+      if (dump[at] === "\n") commented = false;
+      continue;
+    }
+    if (quoted) {
+      if (dump[at] === "'") quoted = false;
+      continue;
+    }
+    if (dump[at] === "'") quoted = true;
+    else if (dump[at] === "-" && dump[at + 1] === "-") commented = true;
+    else if (dump[at] === ";") {
+      statements.push(statementIn(dump.slice(start, at + 1)));
+      start = at + 1;
+    }
+  }
+  return statements;
+}
+
+/**
+ * The rows, as whole statements, sorted — because the order rows come back in
+ * is not a fact about them. pg_dump reads a table in heap order, and an UPDATE
+ * writes a new tuple wherever there is room for one, so a run that rewrote rows
+ * can hand back the same rows in another order once the space its own dead
+ * tuples freed becomes reusable. That is a fact about when autovacuum last woke
+ * up, and a gate whose verdict turned on it would be one nobody could
+ * reproduce.
+ *
+ * Sorting is also why the unit has to be the statement. Cut into lines, two
+ * databases holding `(1, 'A⏎B'), (2, 'C⏎D')` and `(1, 'A⏎D'), (2, 'C⏎B')` are
+ * one multiset of fragments and compare equal — a false pass over rows that
+ * differ. A statement carries its own newlines and has no fragments to trade.
+ *
+ * Keeping only the `INSERT`s is what makes that safe to say. Everything else
+ * pg_dump writes — the `SET`s, its comments, the `\restrict` token it
+ * randomises per invocation, and the `setval` that moves a sequence whether or
+ * not a row landed — is not a row, and dropping it by what a whole statement
+ * starts with can never reach inside a value the way a line filter can.
+ *
+ * `--inserts` rather than the default COPY for the same reason the sort needs:
+ * once order is gone each unit has to name its own table, and a bare
+ * tab-separated row in a diagnostic belongs to no table its reader can find.
  */
 async function dataOf(url: string, of: string, where: string): Promise<Dump> {
   const dumped = await dumpOf(url, ["--data-only", "--inserts"]);
-  const lines = dumped.split("\n").filter((line) => line.trim() !== "" && !SEQUENCE.test(line));
-  const dump = { of, text: lines.toSorted().join("\n") };
+  const rows = statementsIn(dumped).filter((statement) => ROW.test(statement));
+  const dump = { of, each: "row", units: rows.toSorted() };
   // Written where it was read rather than by the caller, so that every read
   // this gate makes is one the run can publish: a dump the step compared and
-  // did not leave behind is a verdict nobody can check.
-  await Bun.write(where, `${dump.text}\n`);
+  // did not leave behind is a verdict nobody can check. What lands is what was
+  // compared — sorted, and the rows alone — which is why the file is `.rows`
+  // and not a `.sql` anyone could feed back to a database.
+  await Bun.write(where, `${dump.units.join("\n")}\n`);
   return dump;
 }
 
@@ -156,7 +213,7 @@ export async function backfillGate({
       `backfill-seed (\`${seed}\`) failed against ${database} — its own output is above; it writes the state the backfill was written for, and nothing here can be graded without it`,
     );
     const seeded = await dataOf(own, "the state the seed wrote", evidence.seeded);
-    const wrote = seeded.text.split("\n").some((line) => ROW.test(line) && !JOURNAL_ROW.test(line));
+    const wrote = seeded.units.some((row) => !JOURNAL_ROW.test(row));
     if (!wrote) {
       return refused([
         {

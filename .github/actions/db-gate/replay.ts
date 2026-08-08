@@ -4,17 +4,7 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import {
-  baseRevision,
-  type Event,
-  git,
-  isObject,
-  passed,
-  type Problem,
-  refused,
-  repoFiles,
-  type Verdict,
-} from "../_lib/gate.ts";
+import { baseRevision, type Event, git, isObject, type Problem, repoFiles } from "../_lib/gate.ts";
 import {
   beside,
   compare,
@@ -24,6 +14,7 @@ import {
   migrate,
   scratchDatabase,
 } from "./database.ts";
+import { passed, refused, type Verdict } from "./verdict.ts";
 
 /**
  * What a repo's migration history is asked to prove, and the two questions are
@@ -103,13 +94,27 @@ async function mustRead(
 }
 
 /**
- * The schema as pg_dump reports it, named the way a diagnostic about it has to
- * name it. Order is left alone — pg_dump is deterministic, so two schemas
- * holding the same statements in a different order really are two schemas,
- * which is where this parts company with the data half's `dataOf`.
+ * pg_dump wraps its output in `\restrict`/`\unrestrict` tokens that are random
+ * per invocation, so two dumps of one schema never compare equal as-is.
+ */
+const PER_INVOCATION = /^\\(un)?restrict /;
+
+/**
+ * The schema as pg_dump reports it, in lines, named the way a diagnostic about
+ * it has to name it. Order is left alone — pg_dump is deterministic, so two
+ * schemas holding the same statements in a different order really are two
+ * schemas, which is where this parts company with the data half's `dataOf`.
+ * Lines are the unit for the same reason: nothing here is reordered, so a
+ * statement that spans several of them cannot have its fragments traded with
+ * another statement's.
  */
 async function schemaOf(url: string, of: string): Promise<Dump> {
-  return { of, text: await dumpOf(url, ["--schema-only"]) };
+  const dumped = await dumpOf(url, ["--schema-only"]);
+  return {
+    of,
+    each: "line",
+    units: dumped.split("\n").filter((line) => !PER_INVOCATION.test(line)),
+  };
 }
 
 /** A migration lineage as the base ref had it: the directory, and every file in it. */

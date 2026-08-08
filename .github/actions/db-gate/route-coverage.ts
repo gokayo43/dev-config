@@ -156,48 +156,45 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
       .map(([name]) => name),
   );
 
-  const waived = new Set<string>();
-  const hatch: Problem[] = [];
-
-  // An entry already refused for saying nothing about why is asked none of the
-  // questions below: its author is going back to that line regardless, and one
-  // mistake earns one diagnostic. stack-gate and the timestamptz gate charge
-  // the hatch the same way. The other half of that rule is the end of the loop
-  // — a reasonless entry still waives its route, so the floor does not report
-  // the route as uncovered on top of it.
-  const rotted = (entry: string, message: string): void => {
-    if (!allowlist.unreasoned.has(entry)) hatch.push({ message });
-  };
-
-  for (const entry of allowlist.entries) {
+  // Every entry is one of these: the route it waives, or what is wrong with it.
+  // A classifier rather than three pushes inside the loop, so that the rule
+  // about which of them the reader is told stays in one place below.
+  const read = (entry: string): { readonly waives: string } | { readonly rotten: string } => {
     const route = routeFrom(entry);
     if (route === undefined) {
-      rotted(
-        entry,
-        `route-allowlist entry '${entry}' is not a route — write 'METHOD /path', matching a line of the app's own route table`,
-      );
-      continue;
+      return {
+        rotten: `route-allowlist entry '${entry}' is not a route — write 'METHOD /path', matching a line of the app's own route table`,
+      };
     }
     const name = key(route);
     if (!table.has(name)) {
-      rotted(
-        entry,
-        `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
-      );
-      continue;
+      return {
+        rotten: `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
+      };
     }
     if (covered.has(name)) {
       // The reason written beside it says the ramp cannot reach the route. The
       // ramp reached it, so the reason is no longer true, and an exemption
       // nobody can see rotting is how a gate quietly stops covering what it
       // names.
-      rotted(
-        entry,
-        `route-allowlist waives ${entry}, which the ramp did exercise — drop the entry and let the floor hold the route`,
-      );
-      continue;
+      return {
+        rotten: `route-allowlist waives ${entry}, which the ramp did exercise — drop the entry and let the floor hold the route`,
+      };
     }
-    waived.add(name);
+    return { waives: name };
+  };
+
+  const waived = new Set<string>();
+  const hatch: Problem[] = [];
+  for (const entry of allowlist.entries) {
+    const verdict = read(entry);
+    if ("waives" in verdict) waived.add(verdict.waives);
+    // An entry already refused for saying nothing about why is asked none of
+    // those questions: its author is going back to that line regardless, and
+    // one mistake earns one diagnostic. stack-gate and the timestamptz gate
+    // charge the hatch the same way. It still waives its route in the branch
+    // above, so the floor does not report the route on top of it either.
+    else if (!allowlist.unreasoned.has(entry)) hatch.push({ message: verdict.rotten });
   }
 
   const uncovered = [...table.keys()].filter((name) => !covered.has(name) && !waived.has(name));

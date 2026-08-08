@@ -1,5 +1,6 @@
 import {
   type Allowlist,
+  deadEntries,
   DEPENDENCY_FIELDS,
   isObject,
   kindOf,
@@ -265,19 +266,12 @@ export async function stackGate(
   // to get there. The package is still declared and the denylist has stopped
   // answering for it — the pick it deviated from is gone — or nothing here
   // declares it at all, which is a dependency dropped or a name never spelled
-  // the way the entry spells it. Sending the first case name-hunting is how a
-  // retired denylist entry costs every consumer an afternoon.
-  //
-  // An entry already refused for saying nothing about why is not asked this
-  // second question: its author is going back to that line regardless, and one
-  // mistake earns one diagnostic.
-  const fossils = [...waived]
-    .filter((subject) => !deniedNames.has(subject) && !allowlist.unreasoned.has(subject))
-    .map((subject) => ({
-      message: declaredNames.has(subject)
-        ? `stack-allowlist waives ${subject}, which the denylist no longer answers for — the pick it was written against is gone, so drop the entry`
-        : `stack-allowlist waives ${subject}, which nothing here declares — drop the entry, or fix the name to match the dependency it was written for`,
-    }));
+  // the way the entry spells it.
+  const fossils = deadEntries(allowlist, deniedNames, declaredNames, (subject, declared) =>
+    declared
+      ? `stack-allowlist waives ${subject}, which the denylist no longer answers for — the pick it was written against is gone, so drop the entry`
+      : `stack-allowlist waives ${subject}, which nothing here declares — drop the entry, or fix the name to match the dependency it was written for`,
+  );
 
   // A fossil is only visible against a complete reading of the tree, and a
   // manifest that will not parse leaves the walk short of whatever that file

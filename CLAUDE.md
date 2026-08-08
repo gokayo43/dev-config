@@ -19,13 +19,15 @@ a change to a rule usually lands here too.
 - `.github/workflows/check.yml` — the gate every repo calls.
 - `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
   module the suite drives, and a `*.main.ts` that GitHub runs. What more than
-  one gate reads lives in `_lib/`: `gate.ts`, and `dependency-specs.ts` — the
-  version grammar the repo contract grades every spec by and the stack denylist
-  asks which package a spec installs. `_lib/` is for what more than one
-  **action** reads; what two gates of one action share stays in that action's
-  directory, which is what `db-gate/database.ts` is — the database those gates
-  build for themselves, and the one derivation of "these two dumps came out the
-  same". The shell helpers beside them are `pinned-tool.sh` — the verified fetch
+  one **action** reads lives in `_lib/`: `gate.ts`, and `dependency-specs.ts` —
+  the version grammar the repo contract grades every spec by and the stack
+  denylist asks which package a spec installs. What two gates of one action
+  share stays in that action's directory instead — `db-gate/database.ts`, the
+  database those gates build for themselves and the one derivation of "these
+  two dumps came out the same", and `db-gate/verdict.ts`, what they report and
+  how their entry points say it. Either moves to `_lib/` when a second action
+  reads it, and not on the argument that one might.
+  The shell helpers beside them are `pinned-tool.sh` — the verified fetch
   every pinned binary goes through — and `k6.sh`, which is that fetch plus the
   one k6 pin, so the three ramps in this house run one binary.
   Actions, rather than scripts run out of the package every repo already
@@ -62,8 +64,9 @@ and drops databases there — README's "Gating this repo" has the one-liner.
 
 Two runs may share one server, which is what two worktrees under review are.
 Every database either end makes is named for what tells the runs apart: the
-suite's own carry the process that created them, and the one the gate builds the
-upgrade path in carries the checkout it is replaying.
+suite's own carry the process that created them, and the two the gates build for
+themselves — `upgrade_path_<digest>` and `backfill_<digest>` — carry the
+checkout they are working on.
 
 This repo runs its own gates on itself in CI, from the working tree, with three
 exemptions named in `ci.yml`: it cannot extend itself by package name, its CI
