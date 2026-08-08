@@ -165,7 +165,7 @@ describe("the backfill check", () => {
   // A backfill against a database the migrations have just built has nothing to
   // find, so it is trivially idempotent — which is exactly the pass that would
   // certify nothing at all.
-  test("a fixture that writes no rows is refused rather than passed", async () => {
+  test("a seed that writes no rows is refused rather than passed", async () => {
     const { verdict } = await ran(GUARDED, `select 1`);
 
     expect(messages(verdict)).toEqual([containing("left no rows behind")]);
@@ -199,7 +199,7 @@ describe("the backfill check", () => {
   });
 
   // The declared database is what the app boots against a few steps later, and
-  // the fixture's rows have no business being in it.
+  // the seed's rows have no business being in it.
   test("the database the caller declared is untouched", async () => {
     const before = await tables();
     await ran(GUARDED);
@@ -208,7 +208,7 @@ describe("the backfill check", () => {
 
   // Half a pair is a caller who asked for this and would not get it. Silence is
   // the failure mode every input guard in check.yml exists to prevent.
-  test("a fixture with no backfill beside it is refused", async () => {
+  test("a seed with no backfill beside it is refused", async () => {
     const verdict = await backfillGate({
       root: ".",
       url: SERVER,
@@ -222,7 +222,7 @@ describe("the backfill check", () => {
     ]);
   });
 
-  test("a backfill with no fixture beside it is refused", async () => {
+  test("a backfill with no seed beside it is refused", async () => {
     const verdict = await backfillGate({
       root: ".",
       url: SERVER,
@@ -240,7 +240,7 @@ describe("the backfill check", () => {
   // A command that dies is the repo's own error, so its output goes to the log
   // and the diagnostic says which of the three runs it was — the second one
   // having succeeded on the first is a different bug from the first failing.
-  test("a fixture that fails says so, naming what it was for", async () => {
+  test("a seed that fails says so, naming what it was for", async () => {
     const failing = ran(GUARDED, `select * from "nothing_here"`);
 
     expect(await refusal(failing)).toContain("backfill-seed (`bun ./seed.ts`) failed");
