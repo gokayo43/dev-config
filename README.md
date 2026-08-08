@@ -601,15 +601,19 @@ jobs:
 Both evidence names default to a constant, and an artifact name may be claimed
 once per run — so a caller that runs `check.yml` as a **matrix** has to give each
 leg its own `db-gate-evidence` and `test-suite-evidence`, or the second leg to
-upload fails on the duplicate. The defaults are constants deliberately: the
+upload fails on the duplicate. The two have to differ from each other as well as
+between legs: one value used for both hands a single leg's static and database
+jobs the same artifact name, which is the same collision one job later. Prefix
+with the input's own name — `db-gate-evidence-<leg>` — and both are covered. The defaults are constants deliberately: the
 alternative is deriving them from the matrix index, which GitHub does not
 document as reachable from inside a composite action, and a context that is not
 reachable evaluates to an empty string rather than to an error — so the derived
 name would collide exactly as quietly as the constant, with a trailing dash.
 
-`upgrade-gate` and every input aimed at a step of the database job — the four
-capacity ones and both allowlists — fail the run when passed with
-`database: false`, and say which: being quietly ignored is how a ramp somebody
+Six inputs are aimed at steps of the database job — `upgrade-gate`,
+`capacity-path`, `capacity-script`, `db-gate-evidence`, `route-allowlist` and
+`timestamp-allowlist` — and each fails the run when passed with
+`database: false`, saying which: being quietly ignored is how a ramp somebody
 asked for turns out never to have run.
 
 The call is pinned by commit SHA with the release as the trailing comment — the
