@@ -371,6 +371,18 @@ function extendsList(value: unknown): string[] {
 }
 
 /**
+ * What is wrong with a spec for the field it sits in, phrased to follow
+ * `${field}.${name}` — or nothing, when it is fine.
+ */
+type Rule = (spec: unknown) => string | undefined;
+
+/** What this repo installs names one tree, so that a lockfile refresh cannot change it. */
+const installed: Rule = (spec) =>
+  typeof spec === "string" && isExact(spec)
+    ? undefined
+    : `is declared as '${String(spec)}' — a dependency names one exact version, or a protocol that resolves to one tree`;
+
+/**
  * Whether a peer range says which versions it will take. Any spec that resolves
  * to one tree does, and so does any range naming a version — `>=6`, `1.x`,
  * `^1 || ^2`. `""`, `*` and `latest` name none, resolve to every version there
@@ -382,32 +394,34 @@ function extendsList(value: unknown): string[] {
  * devDependency (bun 1.3.11). It is a one-character diff in a field the pin
  * check deliberately does not read, which is how it survives review.
  */
-function namesVersions(spec: string): boolean {
-  return isExact(spec) || /\d/.test(spec);
-}
+const namesVersions: Rule = (spec) =>
+  typeof spec === "string" && (isExact(spec) || /\d/.test(spec))
+    ? undefined
+    : `is declared as '${String(spec)}' — a peer range names the versions a consumer may bring, and 'bun add' blanks the range of a package already listed here rather than adding it, so write this one by hand`;
+
+/**
+ * One rule per field a manifest may declare a package in, keyed by the list
+ * itself: a field added to `DEPENDENCY_FIELDS` and not graded here is a
+ * compile error rather than a silent hole.
+ */
+const PIN_RULES: Record<(typeof DEPENDENCY_FIELDS)[number], Rule> = {
+  dependencies: installed,
+  devDependencies: installed,
+  optionalDependencies: installed,
+  // peerDependencies are the one place a range is the point: they declare what
+  // a consumer may bring, not what this repo installs.
+  peerDependencies: namesVersions,
+};
 
 function checkPins(all: readonly Manifest[]): Problem[] {
-  return all.flatMap(({ file, value }) => [
-    // What this repo installs names one tree, so that a lockfile refresh cannot
-    // change what it installed.
-    ...(["dependencies", "devDependencies", "optionalDependencies"] as const).flatMap((field) =>
-      Object.entries(record(value[field]))
-        .filter(([, spec]) => typeof spec !== "string" || !isExact(spec))
-        .map(([name, spec]) => ({
-          file,
-          message: `${field}.${name} is declared as '${String(spec)}' — a dependency names one exact version, or a protocol that resolves to one tree`,
-        })),
+  return all.flatMap(({ file, value }) =>
+    DEPENDENCY_FIELDS.flatMap((field) =>
+      Object.entries(record(value[field])).flatMap(([name, spec]) => {
+        const fault = PIN_RULES[field](spec);
+        return fault === undefined ? [] : [{ file, message: `${field}.${name} ${fault}` }];
+      }),
     ),
-    // peerDependencies are the one place a range is the point: they declare what
-    // a consumer may bring, not what this repo installs — so what is refused
-    // here is a range that constrains nothing.
-    ...Object.entries(record(value["peerDependencies"]))
-      .filter(([, spec]) => typeof spec !== "string" || !namesVersions(spec))
-      .map(([name, spec]) => ({
-        file,
-        message: `peerDependencies.${name} is declared as '${String(spec)}' — a peer range names the versions a consumer may bring, and 'bun add' blanks the range of a package already listed here rather than adding it, so write this one by hand`,
-      })),
-  ]);
+  );
 }
 
 async function checkLockfiles(root: string): Promise<Problem[]> {
