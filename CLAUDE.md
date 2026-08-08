@@ -1,9 +1,8 @@
 # dev-config
 
 The tooling policy for every Bun repo here, in one place: the shared configs
-repos inherit, and the CI gates they call. `CONTEXT.md` is the vocabulary,
-`docs/adr/` holds the decisions that were hard to reverse, and `README.md` is
-the reference for how each piece is consumed.
+repos inherit, and the CI gates they call. `CONTEXT.md` is the vocabulary and
+`README.md` is the reference for how each piece is consumed.
 
 ## Canon
 
@@ -26,6 +25,13 @@ a change to a rule usually lands here too.
   `pinned-tool.sh` — the
   verified fetch every pinned binary goes through — and `k6.sh`, which is that
   fetch plus the one k6 pin, so the three ramps in this house run one binary.
+  Actions, rather than scripts run out of the package every repo already
+  installs: a gate in `node_modules` runs only if the repo's own workflow
+  remembers to run it, and it moves whenever the lockfile moves — including on
+  a Renovate automerge nobody reads. It costs the release pair under
+  "Releasing", and it is why gate code is not importable by the repos it
+  gates: anything they call directly is a package export instead, which is
+  what `route-log.ts` below is.
 - `route-log.ts` at the root is the protocol between an app and the
   route-coverage floor: the two strings and the three shapes, exported so that
   neither end reproduces them. It is in `files` and `exports` because a
@@ -71,10 +77,13 @@ commit cannot reference its own SHA:
    that.
 
 Consumers pin the actions at (1) and the workflow call at (2). A tag must sit on
-exactly the commit its pins name. After tagging, bump `project-template`'s pins:
-`setup/ci.single.yml` and `setup/ci.monorepo.yml` (one per shape, and both carry
-the workflow call), `.github/workflows/template.yml`, and `DEV_CONFIG` in
-`setup.ts`.
+exactly the commit its pins name. A change here reaches a repo when its pin
+moves and not before, which is the point: a new gate cannot turn the fleet red
+overnight, and the diff that adopts it is one line someone reviewed.
+
+After tagging, bump `project-template`'s pins: `setup/ci.single.yml` and
+`setup/ci.monorepo.yml` (one per shape, and both carry the workflow call),
+`.github/workflows/template.yml`, and `DEV_CONFIG` in `setup.ts`.
 
 ## Adding a gate
 

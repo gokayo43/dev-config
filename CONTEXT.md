@@ -1,7 +1,8 @@
 # Context
 
 The vocabulary this repo is written in. Terms only — how any of it works lives
-in `README.md`, and why the irreversible choices were made lives in `docs/adr/`.
+in `README.md`, and why a choice was made lives at the choke point that made it:
+a comment where the code decides, or a line in `CLAUDE.md`.
 
 **Base** — a configuration file here that a consuming repo inherits rather than
 copies: `tsconfig.base.json`, `oxlint.base.json`, `knip.base.ts`,
