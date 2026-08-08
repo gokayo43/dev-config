@@ -41,7 +41,6 @@ export const CLEAN: Tree = {
   ".env.example": "BETTER_AUTH_SECRET=\n",
   "CONTEXT.md": "# Domain\n",
   "CLAUDE.md": "# Repo\n",
-  "docs/adr/0000-template.md": "# 0. Template\n",
   ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: true\n`,
 };
 

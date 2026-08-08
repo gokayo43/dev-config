@@ -17,7 +17,7 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `bunfig.toml` declares `minimumReleaseAge`, `saveExact`, and a `[test] coverageThreshold`                       | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
 | `lefthook.yml` runs a staged gitleaks scan pre-commit and typecheck + tests pre-push                            | the hooks are the half of the gate that runs before a push                                        |
 | `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern | a blanket `.env.*` rule silently deletes the two files that have to ship                          |
-| `CONTEXT.md` (or `CONTEXT-MAP.md`), `docs/adr/`, `CLAUDE.md`                                                    | the docs spine                                                                                    |
+| `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                 | the docs spine                                                                                    |
 | `db:migrate` exists, when `database: true`                                                                      | the database gate replays migrations through it                                                   |
 | a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                           | a tag is a name someone else can repoint                                                          |
 | `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                | it is what every rule under "Going live" below reconfigures off                                   |
@@ -252,7 +252,7 @@ with:
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `config-lineage`   | _where_ the configs inherit from — not whether they exist                                                                                               |
 | `ci-call`          | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to             |
-| `docs-spine`       | the glossary, `docs/adr/` and `CLAUDE.md`                                                                                                               |
+| `docs-spine`       | the glossary and `CLAUDE.md`                                                                                                                            |
 | `lifecycle-retire` | the comparison with the base ref's `lifecycle`, for a repo being deliberately wound down — not the field itself, and refused once it is waiving nothing |
 | `secrets`          | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                               |
 

@@ -18,7 +18,7 @@ import {
   record,
   repoFiles,
 } from "../_lib/gate.ts";
-import { checkPins, isExactVersion } from "./dependency-specs.ts";
+import { checkPins, isExactVersion } from "../_lib/dependency-specs.ts";
 
 /**
  * Whether the repo is deployed and carrying people, said by the repo about
@@ -262,7 +262,7 @@ const EXECUTABLE = 0o111;
 const EXEMPTIONS = {
   "config-lineage": "the configs inherit from this repo by package name",
   "ci-call": "CI is a call into the shared check.yml",
-  "docs-spine": "the repo has a domain to glossary and decisions to record",
+  "docs-spine": "the repo has a domain worth a glossary and agents worth briefing",
   "lifecycle-retire": "the repo still carries the people its lifecycle says it does",
   secrets: "the repo has an environment to shape",
 } as const;
@@ -530,6 +530,19 @@ async function checkSecrets(root: string): Promise<Problem[]> {
   return problems;
 }
 
+/**
+ * The glossary and the agent brief. A decision log is not part of the spine:
+ * a why lives at the tightest anchor that can hold it — the comment at the
+ * choke point, a CLAUDE.md line, or the issue that carries its trigger — and a
+ * file that collects them is history the tree keeps re-reading.
+ *
+ * A tree that still carries `docs/adr/` passes here rather than being refused
+ * (2026-08-08): the fleet's own folds land per repo under #26, and refusing the
+ * directory before they do would fail every repo's gate on a file this repo has
+ * asked for until today. Once #26 closes, this is the anchor for the tightening
+ * it earns — refusing `docs/adr/` outright, and asking for `CONTEXT.md` by name
+ * rather than accepting the `CONTEXT-MAP.md` the canon no longer recognises.
+ */
 async function checkDocs(root: string): Promise<Problem[]> {
   const problems: Problem[] = [];
   const hasGlossary =
@@ -539,12 +552,6 @@ async function checkDocs(root: string): Promise<Problem[]> {
     problems.push({
       file: "CONTEXT.md",
       message: "the domain glossary is missing (CONTEXT.md or CONTEXT-MAP.md)",
-    });
-  }
-  if ((await statOf(`${root}/docs/adr`))?.isDirectory() !== true) {
-    problems.push({
-      file: "docs/adr",
-      message: "docs/adr/ is missing — decisions are recorded in the repo they bind",
     });
   }
   if (!(await Bun.file(`${root}/CLAUDE.md`).exists())) {

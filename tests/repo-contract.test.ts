@@ -53,10 +53,19 @@ describe("repo contract", () => {
     ["lefthook.yml", "lefthook.yml is missing"],
     ["CONTEXT.md", "domain glossary is missing"],
     ["CLAUDE.md", "CLAUDE.md is missing"],
-    ["docs/adr/0000-template.md", "docs/adr/ is missing"],
     [".github/workflows/ci.yml", "no CI workflow"],
   ])("a repo with no %s is refused", async (path, message) => {
     expect(await contract(without(CLEAN, path))).toEqual([containing(message)]);
+  });
+
+  // CLEAN carries no docs/adr, so the first case above already says a tree
+  // without one passes. This is the other half: the directory is no longer part
+  // of the spine, and it is not a violation either while the fleet still holds
+  // ADRs the per-repo folds under #26 have yet to take out.
+  test("a decision-log directory is neither required nor refused", async () => {
+    expect(await contract({ ...CLEAN, "docs/adr/0001-something.md": "# 1. Something\n" })).toEqual(
+      [],
+    );
   });
 
   test("a JSON knip config cannot reach the shared base, so it is refused outright", async () => {
@@ -231,13 +240,10 @@ describe("a manifest that will not parse", () => {
 });
 
 describe("contract exemptions", () => {
-  test("docs-spine waives the glossary, the ADRs and CLAUDE.md", async () => {
-    const stripped = without(
-      without(without(CLEAN, "CONTEXT.md"), "CLAUDE.md"),
-      "docs/adr/0000-template.md",
-    );
+  test("docs-spine waives the glossary and CLAUDE.md", async () => {
+    const stripped = without(without(CLEAN, "CONTEXT.md"), "CLAUDE.md");
     expect(await contract(stripped, { exemptions: ["docs-spine"] })).toEqual([]);
-    expect(await contract(stripped)).toHaveLength(3);
+    expect(await contract(stripped)).toHaveLength(2);
   });
 
   test("config-lineage waives where the configs inherit from, not whether they exist", async () => {
