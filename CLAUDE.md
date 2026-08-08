@@ -21,7 +21,11 @@ a change to a rule usually lands here too.
   module the suite drives, and a `*.main.ts` that GitHub runs. What more than
   one gate reads lives in `_lib/`: `gate.ts`, and `dependency-specs.ts` — the
   version grammar the repo contract grades every spec by and the stack denylist
-  asks which package a spec installs. The shell helpers beside them are
+  asks which package a spec installs. `_lib/` is for what more than one
+  **action** reads; what two gates of one action share stays in that action's
+  directory, which is what `db-gate/database.ts` is — the database those gates
+  build for themselves, and the one derivation of "these two dumps came out the
+  same". The shell helpers beside them are
   `pinned-tool.sh` — the
   verified fetch every pinned binary goes through — and `k6.sh`, which is that
   fetch plus the one k6 pin, so the three ramps in this house run one binary.

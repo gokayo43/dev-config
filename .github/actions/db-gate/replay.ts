@@ -1,10 +1,19 @@
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { SQL } from "bun";
 
 import { baseRevision, type Event, git, isObject, type Problem, repoFiles } from "../_lib/gate.ts";
+import {
+  beside,
+  compare,
+  databaseIn,
+  type Dump,
+  dumpOf,
+  migrate,
+  scratchDatabase,
+} from "./database.ts";
 
 /**
  * What a repo's migration history is asked to prove, and the two questions are
@@ -26,7 +35,7 @@ import { baseRevision, type Event, git, isObject, type Problem, repoFiles } from
  *    editing one changes what a fresh database gets and nothing else. The two
  *    schemas part company, silently, and stay parted forever.
  *
- * Both are decided by one function, `compare`, over `pg_dump --schema-only`
+ * Both are decided by `compare` in database.ts, over `pg_dump --schema-only`
  * minus the tokens that differ per invocation. Two derivations of "the same
  * schema" would be two answers to the question this whole module exists to
  * answer, and the day they disagreed nobody would know which was right.
@@ -34,26 +43,10 @@ import { baseRevision, type Event, git, isObject, type Problem, repoFiles } from
 
 /**
  * The database the upgrade path is replayed into, beside the one the caller
- * declared — named for the checkout it is replaying, rather than fixed.
- *
- * One Postgres can be answering more than one run of this gate at a time: two
- * worktrees of the same repo under review, this repo's own suite beside a
- * neighbour's. Under a fixed name each of them drops and recreates the database
- * the other is migrating, and both fail over a fault neither tree has — so the
- * name carries what actually distinguishes the runs, which is where each is
- * reading its migrations from.
- *
- * The path rather than a clock or a pid, because the name has to be the same on
- * every run of one checkout: a run killed between the create and the drop
- * leaves a database behind, and reclaiming it is `drop database if exists`
- * finding the name the next run derives. A name nothing derives twice would
- * leave one database per killed run on the server forever.
+ * declared. `database.ts` says why it is derived rather than fixed.
  */
 export function upgradeDatabase(root: string): string {
-  // Resolved, so that the same project reached as `.` and as an absolute path
-  // is one database rather than two.
-  const digest = new Bun.CryptoHasher("sha256").update(resolve(root)).digest("hex");
-  return `upgrade_path_${digest.slice(0, 16)}`;
+  return scratchDatabase(root, "upgrade_path");
 }
 
 /**
@@ -62,12 +55,6 @@ export function upgradeDatabase(root: string): string {
  * and one without is not.
  */
 const JOURNAL = "meta/_journal.json";
-
-/**
- * pg_dump wraps its output in `\restrict`/`\unrestrict` tokens that are random
- * per invocation, so two dumps of one schema never compare equal as-is.
- */
-const PER_INVOCATION = /^\\(un)?restrict /;
 
 /** What this gate wanted the history for, on every refusal that says it could not have it. */
 const READS_THE_BASE_REF =
@@ -88,12 +75,6 @@ export interface Verdict {
   /** What the two schemas do not share — a diagnostic that only says "they differ" is not one. */
   readonly divergence: string[];
   readonly problems: Problem[];
-}
-
-/** A schema dump, named the way the diagnostic has to name it. */
-export interface Schema {
-  readonly of: string;
-  readonly text: string;
 }
 
 /**
@@ -118,115 +99,12 @@ async function mustRead(
 }
 
 /**
- * The repo's own migrator, against the database named. Its output is the
- * developer's — the SQL that would not apply, and the line it was on — so it
- * goes to the log rather than into a diagnostic that would quote a fragment.
- *
- * `failed` is the whole diagnostic rather than a database name, because this
- * runs three times over two databases and one tree that is not always at HEAD:
- * "it failed against the upgrade database" names something the author has never
- * heard of and leaves out the half that would tell them whose migration broke.
+ * The schema as pg_dump reports it. Order is left alone: pg_dump is
+ * deterministic, so two schemas holding the same statements in a different
+ * order really are two schemas.
  */
-async function migrate(root: string, url: string, failed: string): Promise<void> {
-  const proc = Bun.spawn(["bun", "run", "db:migrate"], {
-    cwd: root,
-    env: { ...process.env, DATABASE_URL: url },
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  if ((await proc.exited) !== 0) throw new Error(failed);
-}
-
-/** The database a URL names, for the diagnostics: the URL itself carries a password. */
-function databaseIn(url: string): string {
-  return new URL(url).pathname.replace(/^\//, "");
-}
-
-/** The same server, pointing at a different database. */
-export function beside(url: string, database: string): string {
-  const swapped = new URL(url);
-  swapped.pathname = `/${database}`;
-  return swapped.href;
-}
-
-/** The schema as pg_dump reports it, minus what differs between two runs of pg_dump. */
 async function schemaOf(url: string): Promise<string> {
-  const proc = Bun.spawn(["pg_dump", "--schema-only", url], { stdout: "pipe", stderr: "inherit" });
-  const stdout = await new Response(proc.stdout).text();
-  if ((await proc.exited) !== 0) {
-    throw new Error(`pg_dump could not read ${databaseIn(url)} — its own error is above`);
-  }
-  return stdout
-    .split("\n")
-    .filter((line) => !PER_INVOCATION.test(line))
-    .join("\n");
-}
-
-/** How many times each line occurs, since a dump repeats `SET`s and blank lines. */
-function tally(text: string): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const line of text.split("\n")) {
-    if (line.trim() !== "") counts.set(line, (counts.get(line) ?? 0) + 1);
-  }
-  return counts;
-}
-
-/**
- * The lines `schema` carries that `other` does not, grouped by line and ordered
- * by where each first appeared in the dump. A line carried twice on one side
- * and once on the other is listed once, for the copy that has no partner.
- */
-function only(schema: string, other: string): string[] {
-  const theirs = tally(other);
-  const lines: string[] = [];
-  for (const [line, count] of tally(schema)) {
-    for (let extra = count - (theirs.get(line) ?? 0); extra > 0; extra--) lines.push(line);
-  }
-  return lines;
-}
-
-/** How two schema dumps differ. There is no such thing as an empty one. */
-export interface Difference {
-  /** What the log gets: every line the two do not share, addressed to whichever has it. */
-  readonly lines: string[];
-  /** What the annotation gets: the shortest true sentence about it. */
-  readonly headline: string;
-}
-
-/**
- * The single derivation of "the same schema". `undefined` is the only way two
- * dumps are equal, and every other answer carries both a headline and something
- * to print — so a refusal with nothing to say for itself cannot be built. Two
- * dumps holding the same statements in a different order are not equal, and
- * that difference names itself rather than coming out blank.
- */
-export function compare(left: Schema, right: Schema): Difference | undefined {
-  if (left.text === right.text) return undefined;
-
-  const sides = [
-    { schema: left, lines: only(left.text, right.text) },
-    { schema: right, lines: only(right.text, left.text) },
-  ].filter(({ lines }) => lines.length > 0);
-
-  // Every line one holds, the other holds as often — so what differs is the
-  // arrangement: the order of the statements, or the blank lines between them.
-  // Which of the two it is, this does not know, and saying would be a guess.
-  if (sides.length === 0) {
-    const arranged = `${left.of} and ${right.of} differ, but not in which statements they hold — the same lines are arranged differently`;
-    return { lines: [arranged], headline: arranged };
-  }
-
-  return {
-    lines: sides.flatMap(({ schema, lines }) =>
-      lines.map((line) => `only in ${schema.of}: ${line}`),
-    ),
-    headline: sides
-      .map(
-        ({ schema, lines }) =>
-          `${schema.of} alone has ${lines.length} line${lines.length === 1 ? "" : "s"}, first \`${lines[0]}\``,
-      )
-      .join(", "),
-  };
+  return await dumpOf(url, ["--schema-only"]);
 }
 
 /** A migration lineage as the base ref had it: the directory, and every file in it. */
@@ -613,13 +491,13 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
     url,
     `bun run db:migrate failed replaying the history from empty into ${databaseIn(url)} — the output above names the statement; a migration that only applies to an already-migrated database aborts here and nowhere else`,
   );
-  const fresh: Schema = { of: "the schema built from empty", text: await schemaOf(url) };
+  const fresh: Dump = { of: "the schema built from empty", text: await schemaOf(url) };
   await migrate(
     root,
     url,
     `bun run db:migrate failed on its second run over ${databaseIn(url)}, having just succeeded on the first — the output above names the statement; it is being executed against a database that already has its effects, so either the runner is not skipping what it has applied or that statement is not re-runnable`,
   );
-  const again: Schema = { of: "the schema after a second replay", text: await schemaOf(url) };
+  const again: Dump = { of: "the schema after a second replay", text: await schemaOf(url) };
 
   const repeated = compare(fresh, again);
   if (repeated !== undefined) {
@@ -674,7 +552,7 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
     );
   }
 
-  const upgraded: Schema = { of: `the schema upgraded from ${from}`, text: built.text };
+  const upgraded: Dump = { of: `the schema upgraded from ${from}`, text: built.text };
   const diverged = compare(fresh, upgraded);
   if (diverged === undefined) {
     return passed(
