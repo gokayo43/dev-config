@@ -160,19 +160,22 @@ runs:
         # to say so. The ceiling is generous — this is a small JSON body from a
         # local process — so only a hang can reach it.
         # Landed by rename, because the shell opens the redirect before curl
-        # runs: writing straight to the destination leaves an empty file there
-        # when the fetch fails, and an empty file is not nothing — it is a route
-        # log the gate reads as an app serving no routes, and an artifact whose
-        # 0 bytes look like a snapshot that was taken. Either the destination is
-        # absent or it is a whole answer.
+        # runs: writing straight to the destination leaves an empty file behind
+        # when the fetch fails. The step stops either way, so no gate reads it —
+        # but the evidence artifact would carry 0 bytes that look like a
+        # snapshot somebody took. Either the destination is absent or it is a
+        # whole answer.
+        #
+        # The rename's own status is the function's: a fetch that worked and a
+        # file that could not be moved onto its name is not a snapshot taken,
+        # and mv has already said why on stderr.
         snapshot() {
-          if curl -sSf --connect-timeout 5 --max-time 30 "$route_log" > "$1.part"; then
-            mv "$1.part" "$1"
-            return 0
+          if ! curl -sSf --connect-timeout 5 --max-time 30 "$route_log" > "$1.part"; then
+            rm -f "$1.part"
+            echo "::error::$route_log did not answer — an app under the capacity ramp serves the route-log endpoint when ROUTE_LOG is set"
+            return 1
           fi
-          rm -f "$1.part"
-          echo "::error::$route_log did not answer — an app under the capacity ramp serves the route-log endpoint when ROUTE_LOG is set"
-          return 1
+          mv "$1.part" "$1"
         }
         snapshot "$RUNNER_TEMP/route-log-before.json"
         "$K6" run --quiet \

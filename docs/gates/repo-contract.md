@@ -77,8 +77,11 @@ semver above cannot settle it either, in the one direction that would matter: it
 reads a string it cannot parse as matching everything, so
 `Bun.semver.satisfies("99.0.0", "latest")` is `true` and a tag is
 indistinguishable there from a range that takes anything. That is why the tag
-check runs first — it is the whole of what stands between `latest` and the wrong
-diagnostic — and why a tag with a digit in it draws none at all.
+check runs first, and why it reads every `||` operand: `latest` on its own would
+at least be refused, with the wrong diagnostic, but `latest || 1` answers false
+to both probes — so without the operand check it passes in silence, a range npm
+cannot resolve with nothing said about it. A tag carrying a digit still draws
+nothing.
 
 Nor a range that is absurd rather than open. The probe is two versions, not a
 proof, so something admitting everything under a ceiling nobody will reach —

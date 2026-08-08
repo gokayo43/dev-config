@@ -78,8 +78,8 @@ const installed: Rule = (spec) =>
  * second, `>=19` the second and not the first — each of them constrains, which
  * is what a peer range is for.
  */
-const NOTHING = "0.0.0";
-const EVERYTHING = "999999.0.0";
+const FLOOR = "0.0.0";
+const UNREACHABLE_MAJOR = "999999.0.0";
 
 /**
  * Whether the resolver would take any version at all. Asked of Bun's own semver
@@ -94,16 +94,20 @@ const EVERYTHING = "999999.0.0";
  * of our own.
  */
 function acceptsEveryVersion(range: string): boolean {
-  return Bun.semver.satisfies(NOTHING, range) && Bun.semver.satisfies(EVERYTHING, range);
+  return Bun.semver.satisfies(FLOOR, range) && Bun.semver.satisfies(UNREACHABLE_MAJOR, range);
 }
 
 /**
- * The wildcard spellings — not what decides a refusal, which is the question
- * above, but which of the two diagnostics is the true one. `x` is a range that
- * takes anything; `latest` is a name that is not a range. They look alike to a
- * pattern over letters, and each leaves the author something different to fix.
+ * The wildcard spellings a tag could be mistaken for — not what decides a
+ * refusal, which is the question above, but which of the two diagnostics is the
+ * true one. `x` is a range that takes anything; `latest` is a name that is not a
+ * range; both are a word to a pattern over letters, and each leaves the author
+ * something different to fix.
+ *
+ * Only `x` and `X`, because this is read behind `TAG`, which a spelling with a
+ * `*` in it never matches.
  */
-const WILDCARD = /^[*xX](\.[*xX]){0,2}$/;
+const WILDCARD = /^[xX](\.[xX]){0,2}$/;
 
 /** A tag is a name npm repoints; a version is what a range is written from. */
 const TAG = /^[a-zA-Z][\w.-]*$/;
@@ -113,9 +117,11 @@ const TAG = /^[a-zA-Z][\w.-]*$/;
  * cannot read is a range npm cannot read, and a digit anywhere else in the
  * string would otherwise answer for the whole of it.
  *
- * Runs before `acceptsEveryVersion`, which is what Bun's semver says of a string
- * it cannot parse: true. That is what the resolver does with a tag, but not what
- * the author has to fix.
+ * This is the only thing that catches a union carrying a tag. `latest` alone is
+ * a string Bun's semver cannot parse, which it reads as matching everything, so
+ * the question below would refuse it — with the wrong diagnostic. But
+ * `latest || 1` answers false to both probes, so without this the whole spec
+ * would pass in silence: no diagnostic at all, for a range npm cannot resolve.
  */
 function namesATag(range: string): boolean {
   return range.split("||").some((operand) => {
@@ -128,10 +134,9 @@ function namesATag(range: string): boolean {
  * A peer range, graded on whether it refuses anything. peerDependencies is the
  * one field where a range is the point — it states what a consumer may bring,
  * not what this repo installs — so the rule is the pin check's inverted, and so
- * is its polarity: a denylist here, where `isExact` is an allowlist. The
- * argument inverts with it. There the open-ended set was the spellings of
- * "whatever is newest"; here the open-ended set is the legitimate ranges, and
- * what accepts every version is closed and short.
+ * is its polarity: a denylist here, where `isExact` is an allowlist. Neither
+ * set is enumerable, though, which is why the question goes to a resolver
+ * rather than to a pattern.
  *
  * A range that names no version at all is refused beside those for a different
  * reason, which the diagnostic says: it is a dist tag, npm repoints those, and

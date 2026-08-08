@@ -1,14 +1,15 @@
-import type { Event } from "../.github/actions/_lib/gate.ts";
-import type { Contract } from "../.github/actions/repo-contract/repo-contract.ts";
-import { repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
-import { materialise, type Tree } from "./tree.ts";
-
 /**
  * The clean tree every repo-contract case is a mutation of, and the three ways
  * of mutating it. Shared because the suite is split by what it grades — how a
  * dependency spec is read is its own file — and a fixture each would be two
  * definitions of "a repo that passes", drifting apart on the first new fact.
  */
+import type { Event } from "../.github/actions/_lib/gate.ts";
+import type { Contract } from "../.github/actions/repo-contract/repo-contract.ts";
+import { repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
+import { materialise, type Tree } from "./tree.ts";
+
+/** The commit a fixture's CI call is pinned to; any 40 hex characters would do. */
 export const PIN = "f1a8afef270d30bf25f2f30275ecf988123d9fb3";
 
 const MANIFEST = {
@@ -45,7 +46,7 @@ export const CLEAN: Tree = {
 };
 
 /** No pull request and no previous tip: what a workflow_dispatch or a first push tells the gate. */
-export const NO_EVENT: Event = { baseRef: "", before: "" };
+const NO_EVENT: Event = { baseRef: "", before: "" };
 
 export const DEFAULTS: Contract = { database: true, exemptions: [], event: NO_EVENT };
 

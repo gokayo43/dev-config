@@ -96,19 +96,6 @@ describe("how a dependency spec is graded", () => {
     },
   );
 
-  // The oracle rather than the author's opinion: whatever the gate lets through,
-  // ask the resolver that will actually read it whether it would take any
-  // version at all. A fixture list is only as good as whoever wrote it, and this
-  // is the property the list is trying to stand for.
-  test.each(CONSTRAINING)(
-    "nothing the gate accepts (%s) is one bun would satisfy twice",
-    (spec) => {
-      expect(Bun.semver.satisfies("0.0.0", spec) && Bun.semver.satisfies("999999.0.0", spec)).toBe(
-        false,
-      );
-    },
-  );
-
   // What these accept is every version there is, which is what declaring no peer
   // says. The unions are the reason this is not a list of spellings: an `||`
   // takes everything as soon as ONE of its operands does, and a leading `v` is

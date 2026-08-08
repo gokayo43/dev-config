@@ -145,8 +145,11 @@ export const REASON = " -- ";
  * them carries.
  *
  * A newline is the only separator, here and in `capacity-path` — every input
- * whose entries can hold a space. (`list` above splits on whitespace, for the
- * inputs whose entries cannot: an exemption name, a fixture path.) The reason
+ * whose entries are expected to hold a space. (`list` above splits on
+ * whitespace, and serves the inputs written as single words: contract
+ * exemptions, fixture paths, the pin gate's extra paths. A path with a space in
+ * it cannot be expressed there at all, which is a limit of that form rather
+ * than a fact about paths.) The reason
  * is prose, prose contains commas, and an entry that ended at one would be
  * graded as two: a subject stripped of the reason written for it, and half a
  * sentence read as a subject nobody wrote. Two diagnostics, both true of an
