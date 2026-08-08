@@ -144,13 +144,11 @@ export const REASON = " -- ";
  * quoted SQL identifier, the method and path of a route, and the reason each of
  * them carries.
  *
- * A newline is the only separator. The reason is prose, prose contains commas,
- * and an entry that ended at one would be graded as two: a subject stripped of
- * the reason written for it, and half a sentence read as a subject nobody
- * wrote. Two diagnostics, both true of an input nobody typed.
- *
- * `capacity-path` keeps its commas. It is a list of paths, and a path is not
- * prose.
+ * A newline is the only separator, here and in every list input this repo
+ * takes. The reason is prose, prose contains commas, and an entry that ended at
+ * one would be graded as two: a subject stripped of the reason written for it,
+ * and half a sentence read as a subject nobody wrote. Two diagnostics, both
+ * true of an input nobody typed.
  */
 function entriesIn(value: string): string[] {
   return value

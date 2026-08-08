@@ -52,8 +52,8 @@ on:
         default: ""
       capacity-path:
         description: >-
-          Paths to ramp alongside the health route, e.g. /api/things — comma- or
-          newline-separated, since the route floor asks for every route the app serves.
+          Paths to ramp alongside the health route, e.g. /api/things — one per line,
+          since the route floor asks for every route the app serves.
         type: string
         default: ""
       db-gate-evidence:

@@ -109,11 +109,11 @@ expect(
 
 // Every path the caller named, not just the first: an app serves more than one
 // route, and one ramped route is what the coverage floor refuses.
-const many = await ramp("/api/things,\n/api/presets", "many");
+const many = await ramp("/api/things\n/api/presets\n", "many");
 expect(many.exitCode === 0, `a ramp over a list of paths exited ${many.exitCode}`);
 expect(
   (hits.get("/api/things") ?? 0) > 0 && (hits.get("/api/presets") ?? 0) > 0,
-  `a comma-and-newline list must ramp every path in it, saw ${[...hits.keys()].join(", ")}`,
+  `a list must ramp every path in it, saw ${[...hits.keys()].join(", ")}`,
 );
 expect(
   (hits.get("/api/health") ?? 0) > 0,
