@@ -39,9 +39,8 @@ either side of a DST boundary or a server move, and nothing fails until it does.
 a wall-clock reading is the point — an opening time that is 09:00 wherever the
 shop is. The schema is part of the key because two of them can hold the same
 table, and an allowlist that could not tell `app.events.occurred_at` from
-`public.events.occurred_at` would exempt both. Entries are separated by commas
-or newlines rather than spaces, because a quoted identifier can itself contain
-one:
+`public.events.occurred_at` would exempt both. Entries are one per line rather
+than space-separated, because a quoted identifier can itself contain a space:
 
 ```yaml
 with:

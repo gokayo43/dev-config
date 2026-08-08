@@ -42,14 +42,14 @@ inputs:
   route-allowlist:
     description: >-
       Routes the ramp is not expected to reach, as `METHOD /path -- why`
-      entries matching the app's own route table, comma- or newline-separated.
-      The reason is part of the entry, the price a lint directive pays.
+      entries matching the app's own route table, one per line. The reason is
+      part of the entry, the price a lint directive pays.
     default: ""
   timestamp-allowlist:
     description: >-
       schema.table.column entries whose value really is a wall-clock reading
-      rather than an instant, comma- or newline-separated — an identifier may
-      itself contain a space.
+      rather than an instant, one per line — an identifier may itself contain a
+      space.
     default: ""
 
 runs:

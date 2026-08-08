@@ -140,13 +140,20 @@ export function list(value: string): string[] {
 export const REASON = " -- ";
 
 /**
- * Comma- or newline-separated rather than space-separated, because an entry may
- * contain a space: a quoted SQL identifier, the method and path of a route, and
- * the reason each of them carries.
+ * One entry per line — not space-separated, because an entry contains spaces: a
+ * quoted SQL identifier, the method and path of a route, and the reason each of
+ * them carries. A newline is the only separator, because the reason is the one
+ * part of an entry written in prose and a separator prose can contain ends the
+ * entry mid-sentence: the subject is then graded without the reason it was
+ * written with, and the rest of the sentence is graded as a subject nobody
+ * wrote. Two diagnostics, both true about an input nobody typed.
+ *
+ * `capacity-path` keeps its commas — see `capacity.js`. It is a list of paths,
+ * and a path is not prose.
  */
 function entriesIn(value: string): string[] {
   return value
-    .split(/[,\n]/)
+    .split("\n")
     .map((item) => item.trim())
     .filter((item) => item !== "");
 }

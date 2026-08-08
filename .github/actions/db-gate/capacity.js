@@ -12,11 +12,12 @@ import http from "k6/http";
 const health = __ENV.HEALTH_URL;
 const origin = health.replace(/^(https?:\/\/[^/]+).*$/, "$1");
 
-// The same comma-or-newline list every allowlist input in this repo is written
-// in — split here rather than imported from _lib/gate.ts, because this file is
-// the one k6 runs and k6 resolves neither TypeScript nor Bun. `__ENV` has no
-// entry at all when nobody set one, which is what a person running this script
-// by hand does.
+// Comma- or newline-separated, unlike the allowlist inputs, which are one entry
+// per line: those carry a reason written in prose and prose has commas in it,
+// while a path does not. Split here rather than imported from _lib/gate.ts,
+// because this file is the one k6 runs and k6 resolves neither TypeScript nor
+// Bun. `__ENV` has no entry at all when nobody set one, which is what a person
+// running this script by hand does.
 const paths = (__ENV.CAPACITY_PATH || "")
   .split(/[,\n]/)
   .map((path) => path.trim())

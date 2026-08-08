@@ -162,9 +162,22 @@ describe("allowlist entries", () => {
     expect(read.problems).toEqual([]);
   });
 
-  test("entries are comma- or newline-separated, and blank ones are not entries", () => {
-    const read = allowlistFrom("a -- one,\n b -- two \n\n", "x");
+  test("entries are one per line, and a blank line is not an entry", () => {
+    const read = allowlistFrom("a -- one\n b -- two \n\n", "x");
     expect(read.entries).toEqual(["a", "b"]);
+    expect(read.problems).toEqual([]);
+  });
+
+  // The reason is the one part of an entry written in prose, and prose has
+  // commas in it. A separator a reason can contain ends the entry mid-sentence
+  // and grades both halves: the subject loses the reason it was written with,
+  // and the rest of the sentence is reported as a subject nobody wrote.
+  test("a comma in the reason is part of the reason", () => {
+    const read = allowlistFrom(
+      "POST /api/auth/$ -- the shipped ramp only issues GETs, and a sign-up POST would write a user per request",
+      "route-allowlist",
+    );
+    expect(read.entries).toEqual(["POST /api/auth/$"]);
     expect(read.problems).toEqual([]);
   });
 

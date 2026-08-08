@@ -91,16 +91,15 @@ describe("timestamptz gate", () => {
   });
 
   // A table name can carry a space — information_schema reports it verbatim —
-  // so a space-separated input could not name one.
+  // so a space-separated input could not name one. The reason beside it is
+  // prose, so a comma in there is the author writing a sentence rather than a
+  // second column.
   test("an entry naming a quoted identifier survives the parse", () => {
     expect(
-      parsed("public.audit log.at -- the shift's wall clock, app.events.occurred_at -- ditto")
-        .entries,
+      parsed(
+        "public.audit log.at -- the shift's wall clock, not an instant\napp.events.occurred_at -- ditto\n",
+      ).entries,
     ).toEqual(["public.audit log.at", "app.events.occurred_at"]);
-    expect(parsed("public.audit log.at -- why\napp.events.occurred_at -- why\n").entries).toEqual([
-      "public.audit log.at",
-      "app.events.occurred_at",
-    ]);
     expect(parsed("").entries).toEqual([]);
     expect(
       timestamptzGate(COLUMNS, parsed("public.audit log.at -- the shift's wall clock")),

@@ -191,6 +191,22 @@ describe("the price of the hatch", () => {
     );
   });
 
+  // The reason is the one part of an entry written in prose, and prose has
+  // commas in it. An entry ended by one waives nothing — its subject is left
+  // without the reason it was written with — and the rest of the sentence is
+  // graded as a second entry, which sends the reader to their route table over
+  // a mistake they did not make.
+  test("a reason with a comma in it waives its route and reports nothing else", () => {
+    expect(
+      problems("GET /ready -- a readiness probe, and holding one proves nothing about capacity"),
+    ).toEqual([
+      containing("OPTIONS / is served"),
+      containing("OPTIONS /* is served"),
+      containing("POST /presets is served"),
+      containing("ALL /events is served"),
+    ]);
+  });
+
   // Read as a route, `/health` has no method: reporting it as a route the app
   // does not serve would send the reader looking for the wrong mistake.
   test.each(["/health -- no method", "GET -- no path", "GET /a /b -- two paths"])(
