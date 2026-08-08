@@ -135,30 +135,74 @@ describe("repo contract", () => {
     expect(await contract(withSpec("oxfmt", spec))).toEqual([containing("devDependencies.oxfmt")]);
   });
 
-  test.each([">=19", "^1.2.3 || ^2", "1.x", ">=1.2.3 <2", "19.0.0", "workspace:*"])(
-    "a peer range that names versions (%s) is the one place a range means something",
+  async function peer(spec: unknown): Promise<string[]> {
+    return await contract(
+      manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
+    );
+  }
+
+  // The field where a range is the point, so anything that constrains is fine —
+  // including the two that read like wildcards and are not: `^0` and `0.x` both
+  // exclude 1.x, which is the whole of what a caret on a zero major means. A
+  // protocol names a source rather than a range, and floating is the point of
+  // declaring one as a peer.
+  test.each([
+    ">=19",
+    "^1.2.3 || ^2",
+    "1.x",
+    ">=1.2.3 <2",
+    "19",
+    "19.0.0",
+    "^0",
+    "0.x",
+    "0 - 999",
+    "workspace:*",
+    "github:owner/repo",
+  ])("a peer range that constrains something (%s) passes", async (spec) => {
+    expect(await peer(spec)).toEqual([]);
+  });
+
+  // The closed set: what these accept is every version there is, which is what
+  // declaring no peer says. `>=0.0.0-0` is the spelling that takes prereleases
+  // with it, and it is the far edge of the family.
+  test.each(["*", "x", "X", "x.x", "x.x.x", ">=0", ">= 0", ">=0.0", ">=0.0.0", ">=0.0.0-0"])(
+    "a peer range that accepts every version (%s) is refused",
     async (spec) => {
-      expect(
-        await contract(
-          manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
-        ),
-      ).toEqual([]);
+      expect(await peer(spec)).toEqual([
+        containing(`peerDependencies.react is declared as '${spec}' — a peer range that accepts`),
+      ]);
     },
   );
 
-  // What `bun add <pkg>` writes when the manifest already lists <pkg> as a peer
-  // (bun 1.3.11): the range is blanked and no devDependency is added. An empty
-  // range is not a no-op — it is what a consumer resolves against, and it
-  // resolves to every version there is. `*` and `x` are the same statement
-  // spelled deliberately, and nothing else here reads peerDependencies.
-  test.each(["", " ", "*", "x", "X", "latest"])(
-    "a peer range that names no version (%p) is refused",
+  // What `bun add <pkg>` writes when the manifest already lists <pkg> as an
+  // optional peer (bun 1.3.11): the range is blanked and no devDependency is
+  // added. Its own diagnostic, because it is the one of these with a cause the
+  // author did not choose.
+  test.each(["", " ", "\n"])(
+    "an emptied peer range (%p) says where empty comes from",
     async (spec) => {
-      expect(
-        await contract(
-          manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
-        ),
-      ).toEqual([containing(`peerDependencies.react is declared as '${spec}'`)]);
+      const problems = await peer(spec);
+      expect(problems).toEqual([containing("peerDependencies.react is empty")]);
+      expect(problems[0]).toContain("optional peer");
+    },
+  );
+
+  // Not a range at all: what it points at is not in this manifest, and it moves.
+  test.each(["latest", "next", "beta"])(
+    "a peer range that is a dist tag (%s) is refused",
+    async (spec) => {
+      expect(await peer(spec)).toEqual([
+        containing(`peerDependencies.react is declared as '${spec}' — a peer range names versions`),
+      ]);
+    },
+  );
+
+  // A manifest is JSON and can hold anything. The bun diagnostic would be a lie
+  // here: nothing wrote a number into this field by accident.
+  test.each([19, null, true, { major: 19 }])(
+    "a peer spec that is not a string (%p) says so",
+    async (spec) => {
+      expect(await peer(spec)).toEqual([containing("a peer range is a string")]);
     },
   );
 

@@ -10,7 +10,7 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `packageManager` reads `bun@<version>`                                                                          | `setup-bun` takes the runner's Bun from it; without it CI and the dev machine drift               |
 | No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                         | a second lockfile installs a second dependency tree                                               |
 | Every spec outside `peerDependencies` resolves to one thing                                                     | a lockfile refresh must not be able to change what is installed                                   |
-| Every `peerDependencies` range names versions                                                                   | an emptied range accepts every version, and `bun add` empties one without a word                  |
+| Every `peerDependencies` range refuses some version                                                             | a range that accepts everything says what declaring no peer says, and `bun add` writes one        |
 | `typescript` major ≥ 7                                                                                          | the shared tsconfig is written against TypeScript 7                                               |
 | `oxlint-tsgolint` present, when `.oxlintrc.json` extends the base                                               | without it oxlint runs the base's type-aware rules over nothing and reports clean                 |
 | `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`   | a repo that stopped inheriting stops inheriting silently                                          |
@@ -38,14 +38,32 @@ can be repointed and `#main` moves by design, so `github:owner/repo#v1.2.3` is
 refused exactly as `github:owner/repo` with no ref is — only a 40-character
 commit names one tree for good.
 
-`peerDependencies` is graded by the opposite rule, because it is the one field
+`peerDependencies` is graded by the inverse rule, because it is the one field
 where a range is the point: it states what a consumer may bring rather than what
-this repo installs. What it may not be is a range naming no version — `""`, `*`,
-`latest`. Those resolve to every version there is, which is what declaring no
-peer says, with a line in the manifest claiming otherwise. The empty one is
-reachable without anyone choosing it: `bun add <pkg>` for a package already
-listed as a peer blanks that range and adds no devDependency (bun 1.3.11), so
-the ranges in a manifest that has peers are written by hand.
+this repo installs. The polarity inverts with it — a denylist here, where the pin
+check is an allowlist, and the argument above read backwards. The open-ended set
+is now the legitimate ranges, and what accepts every version there is is closed
+and short: blank, `*` and `x` with their dotted spellings, and the `>=0` family
+down to `>=0.0.0-0`, which is the one that takes prereleases with it. `^0` and
+`0.x` are not in that set and are not meant to be: both stop below 1.0, which is
+the whole of what a zero major means.
+
+A spec naming no version at all is refused beside those, and says why separately
+— it is a dist tag, npm repoints those, and what it points at today is not in
+this manifest. A protocol (`workspace:`, `github:owner/repo`) names a source
+rather than a range and passes, since floating is the point of declaring one as
+a peer.
+
+The empty range is the one nobody chooses, so it carries a diagnostic of its
+own: `bun add <pkg>` for a package the manifest already lists as an **optional**
+peer blanks that range and adds no devDependency (bun 1.3.11).
+
+**What this cannot catch.** For a peer _without_ `peerDependenciesMeta.optional`,
+the same `bun add` rewrites the range to the exact version it installed — `>=3`
+becomes `3.0.1` — and adds no devDependency either. An exact peer range is
+legitimate when someone means it, so one manifest cannot tell that rewrite from
+a deliberate pin, and there is nothing here to check it against. What catches it
+is review, or not running `bun add` for a package the manifest already declares.
 
 # Going live
 

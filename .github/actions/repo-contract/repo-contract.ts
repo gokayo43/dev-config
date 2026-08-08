@@ -10,6 +10,7 @@ import {
   isObject,
   isTracked,
   jsonObjects,
+  kindOf,
   type Manifest,
   manifests,
   type Missing,
@@ -340,9 +341,22 @@ const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
  */
 const NPM_ALIAS = /^npm:(?:@[^/]+\/)?[^@]+@(.+)$/;
 
+/** The protocols whose tree is whatever they point at, which is one tree by construction. */
+const RESOLVED_PROTOCOL = /^(workspace|file|link|catalog|portal):/;
+
 /** A git dependency resolves to one tree only when its ref is a commit. */
 const GIT_PROTOCOL = /^(github|gitlab|bitbucket|git|git\+[a-z]+):/;
 const COMMIT = /^[0-9a-f]{40}$/;
+
+/**
+ * Whether the spec says where the package comes from rather than which versions
+ * of it will do. `isExact` grades these on whether the source they name is one
+ * tree; the peer rule below only has to know that they are not ranges, so that
+ * nothing tries to read `github:owner/repo` as one.
+ */
+function namesSource(spec: string): boolean {
+  return RESOLVED_PROTOCOL.test(spec) || GIT_PROTOCOL.test(spec) || spec.startsWith("npm:");
+}
 
 /**
  * An allowlist, not a blocklist. `18`, `next` and `1.x` float exactly as much
@@ -356,7 +370,7 @@ const COMMIT = /^[0-9a-f]{40}$/;
  */
 function isExact(spec: string): boolean {
   if (EXACT_SEMVER.test(spec)) return true;
-  if (/^(workspace|file|link|catalog|portal):/.test(spec)) return true;
+  if (RESOLVED_PROTOCOL.test(spec)) return true;
   const alias = NPM_ALIAS.exec(spec);
   if (alias !== null) return EXACT_SEMVER.test(alias[1] ?? "");
   // `#main` moves, a tag can be repointed, and `#semver:^1.0.0` is a range
@@ -382,22 +396,59 @@ const installed: Rule = (spec) =>
     ? undefined
     : `is declared as '${String(spec)}' — a dependency names one exact version, or a protocol that resolves to one tree`;
 
+/** Every version there is, spelled as a wildcard: `*`, `x`, `x.x.x`, and the mixtures of those. */
+const EVERY_VERSION = /^[*xX](\.[*xX]){0,2}$/;
+
 /**
- * Whether a peer range says which versions it will take. Any spec that resolves
- * to one tree does, and so does any range naming a version — `>=6`, `1.x`,
- * `^1 || ^2`. `""`, `*` and `latest` name none, resolve to every version there
- * is, and say exactly what declaring no peer at all says, with a line in the
- * manifest claiming otherwise.
+ * The same statement spelled as a lower bound of nothing. `>=0.0.0-0` is the
+ * far edge of the family and the reason it is written out: a range takes
+ * prereleases only when one of its comparators carries one, so that spelling
+ * admits literally everything published, and `>=0` and `>=0.0.0` admit every
+ * release.
  *
- * The empty one is reachable without anyone choosing it: `bun add <pkg>` for a
- * package the manifest already lists as a peer blanks that range and adds no
- * devDependency (bun 1.3.11). It is a one-character diff in a field the pin
- * check deliberately does not read, which is how it survives review.
+ * `^0` and `0.x` are not in here and are not meant to be. Both stop below 1.0,
+ * which is the whole of what a zero major means — they constrain.
  */
-const namesVersions: Rule = (spec) =>
-  typeof spec === "string" && (isExact(spec) || /\d/.test(spec))
-    ? undefined
-    : `is declared as '${String(spec)}' — a peer range names the versions a consumer may bring, and 'bun add' blanks the range of a package already listed here rather than adding it, so write this one by hand`;
+const FROM_NOTHING = /^>=\s*0(\.0){0,2}(-0)?$/;
+
+/**
+ * A peer range, graded on whether it refuses anything. peerDependencies is the
+ * one field where a range is the point — it states what a consumer may bring,
+ * not what this repo installs — so the rule is the pin check's inverted, and so
+ * is its polarity: a denylist here, where `isExact` is an allowlist. The
+ * argument inverts with it. There the open-ended set was the spellings of
+ * "whatever is newest"; here the open-ended set is the legitimate ranges, and
+ * what accepts every version is closed and short.
+ *
+ * A range that names no version at all is refused beside those for a different
+ * reason, which the diagnostic says: it is a dist tag, npm repoints those, and
+ * what it points at today is not in this manifest.
+ *
+ * `bun add <pkg>` for a package the manifest already lists as a peer writes one
+ * of these rather than adding a devDependency (bun 1.3.11), and which one
+ * depends on the peer. With `peerDependenciesMeta.optional` the range is
+ * blanked — that is the case this catches, and the empty range has its own
+ * diagnostic because it is the one nobody chose. Without the optional meta the
+ * range is overwritten with the exact version bun installed, `>=3` becoming
+ * `3.0.1`, and nothing here can catch that: an exact peer range is legitimate
+ * when someone means it, and one manifest cannot tell the two apart.
+ */
+const peerRange: Rule = (spec) => {
+  if (typeof spec !== "string") {
+    return `is declared as ${JSON.stringify(spec)} — a peer range is a string naming the versions a consumer may bring, and this is ${kindOf(spec)}`;
+  }
+  const range = spec.trim();
+  if (range === "") {
+    return "is empty — write the versions a consumer may bring, e.g. '>=1.2.3'. 'bun add' empties the range of an optional peer it is asked to add rather than adding a devDependency, so a manifest with peers writes them by hand";
+  }
+  if (EVERY_VERSION.test(range) || FROM_NOTHING.test(range)) {
+    return `is declared as '${spec}' — a peer range that accepts every version says what declaring no peer says; name the versions this package works against`;
+  }
+  if (!namesSource(range) && !/\d/.test(range)) {
+    return `is declared as '${spec}' — a peer range names versions, and a dist tag names whatever it points at today; write the range it stands for`;
+  }
+  return undefined;
+};
 
 /**
  * One rule per field a manifest may declare a package in, keyed by the list
@@ -410,7 +461,7 @@ const PIN_RULES: Record<(typeof DEPENDENCY_FIELDS)[number], Rule> = {
   optionalDependencies: installed,
   // peerDependencies are the one place a range is the point: they declare what
   // a consumer may bring, not what this repo installs.
-  peerDependencies: namesVersions,
+  peerDependencies: peerRange,
 };
 
 function checkPins(all: readonly Manifest[]): Problem[] {
