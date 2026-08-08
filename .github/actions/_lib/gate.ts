@@ -171,6 +171,12 @@ function entriesIn(value: string): string[] {
 export interface Allowlist {
   /** Each entry with its reason stripped: the part a gate compares against. */
   readonly entries: string[];
+  /**
+   * The subjects behind `problems`, so that a gate with a second rule about an
+   * entry can leave the ones already refused alone: an entry the reader is
+   * being sent back to anyway earns one diagnostic, not two.
+   */
+  readonly unreasoned: string[];
   /** One per entry that waives something and says nothing about why. */
   readonly problems: Problem[];
 }
@@ -191,13 +197,14 @@ export function allowlistFrom(value: string, input: string): Allowlist {
     return { subject: subject.trim(), reasoned: reason.join(REASON).trim() !== "" };
   });
 
+  const unreasoned = read.filter(({ reasoned }) => !reasoned).map(({ subject }) => subject);
+
   return {
     entries: read.map(({ subject }) => subject),
-    problems: read
-      .filter(({ reasoned }) => !reasoned)
-      .map(({ subject }) => ({
-        message: `${input} waives ${subject} without saying why — write '${subject}${REASON}<reason>', the same price a lint directive pays`,
-      })),
+    unreasoned,
+    problems: unreasoned.map((subject) => ({
+      message: `${input} waives ${subject} without saying why — write '${subject}${REASON}<reason>', the same price a lint directive pays`,
+    })),
   };
 }
 

@@ -43,8 +43,7 @@
     },
     {
       "names": ["zustand", "redux", "@reduxjs/toolkit", "jotai", "recoil", "valtio", "mobx"],
-      "reason": "server state is TanStack Query and client state is React's own built-ins",
-      "adr": "docs/adr/*state-management*.md"
+      "reason": "server state is TanStack Query and client state is React's own built-ins"
     },
     {
       "names": ["moment", "dayjs", "luxon", "date-fns-tz"],

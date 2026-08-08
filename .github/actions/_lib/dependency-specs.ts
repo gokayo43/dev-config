@@ -18,11 +18,14 @@ const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
 
 /**
  * `npm:` aliases another package, so the alias's own spec is the one that has
- * to be exact. The version is part of the match rather than something sliced
- * off afterwards: `npm:bar` names no version at all, and a slice-then-recurse
- * reading of it recurses on its own input forever.
+ * to be exact. Both halves are part of the one match rather than sliced off
+ * afterwards, and the version is optional because `npm:bar` names none: a
+ * slice-then-recurse reading of that spelling recurses on its own input
+ * forever, and a match that required a version would not see the package
+ * either — which is a package installed under a name no rule reading keys can
+ * see.
  */
-const NPM_ALIAS = /^npm:((?:@[^/]+\/)?[^@]+)@(.+)$/;
+const NPM_ALIAS = /^npm:((?:@[^/]+\/)?[^@]+)(?:@(.+))?$/;
 
 /**
  * The package an `npm:` spec installs, which is not the key it is installed

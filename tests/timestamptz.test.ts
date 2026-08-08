@@ -8,7 +8,11 @@ import { containing } from "./matchers.ts";
 const parsed = (value: string): Allowlist => allowlistFrom(value, "timestamp-allowlist");
 
 /** The gate takes the parsed input whole; these cases are about the columns rather than the reasons. */
-const waiving = (...columns: string[]): Allowlist => ({ entries: columns, problems: [] });
+const waiving = (...columns: string[]): Allowlist => ({
+  entries: columns,
+  unreasoned: [],
+  problems: [],
+});
 
 // Captured from information_schema on a real Postgres 16 carrying one of each
 // escape: a table in a non-public schema, an array of wall-clock timestamps

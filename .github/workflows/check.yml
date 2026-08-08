@@ -38,6 +38,14 @@ on:
           names docs-spine; a repo being wound down names lifecycle-retire.
         type: string
         default: ""
+      stack-allowlist:
+        description: >-
+          Packages this repo keeps against the stack denylist, as `<package> -- why`
+          entries, one per line. The reason is part of the entry. An entry is refused
+          when it has no reason, when nothing here declares the package any more, or
+          when the denylist has stopped denying it.
+        type: string
+        default: ""
       start-command:
         description: How the boot gate starts the app.
         type: string
@@ -157,6 +165,8 @@ jobs:
           exemptions: ${{ inputs.contract-exemptions }}
 
       - uses: gokayo43/dev-config/.github/actions/stack-gate@8f3d9b68cd16b8530e3e0067a956267817444ef0 # v0.42.0
+        with:
+          stack-allowlist: ${{ inputs.stack-allowlist }}
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.

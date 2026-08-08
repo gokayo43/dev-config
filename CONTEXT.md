@@ -45,13 +45,13 @@ that cannot say: no earlier commit is an answer, a shallow clone is not, and
 each gate decides for itself what the second one costs.
 
 **Denylist** — the dependencies the house stack has already answered, each with
-the pick it lost to. An entry may carry an **ADR glob**, which unlocks it once
-the deviation is written down.
+the pick it lost to. A repo that keeps one anyway names it in the gate's
+allowlist, with the reason, at the call site the rest of its exemptions live in.
 
 **Escape hatch** — a way to proceed past a gate that costs the same work as
-recording the decision: an ADR file, a healthcheck opt-out carrying its reason,
-a lint directive or an allowlist entry carrying its reason after `--`. A hatch
-that costs nothing is a hole.
+saying why: a healthcheck opt-out carrying its reason, a lint directive or an
+allowlist entry carrying its reason after `--`. A hatch that costs nothing is a
+hole.
 
 **Floor** — a bound set below what honest work already produces, there to catch
 the absence of the work rather than to be aimed at: the coverage threshold, and

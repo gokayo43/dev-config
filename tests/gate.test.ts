@@ -180,7 +180,19 @@ describe("allowlist entries", () => {
   });
 
   test("nothing allowlisted is nothing to report", () => {
-    expect(allowlistFrom("", "route-allowlist")).toEqual({ entries: [], problems: [] });
+    expect(allowlistFrom("", "route-allowlist")).toEqual({
+      entries: [],
+      unreasoned: [],
+      problems: [],
+    });
+  });
+
+  test("the subjects of the reasonless entries travel with their problems", () => {
+    // A gate with a second rule about an entry reads these rather than the
+    // sentences: one refusal per mistake means knowing which entry it was.
+    const read = allowlistFrom("GET /a -- why\nGET /b\nGET /c", "route-allowlist");
+    expect(read.unreasoned).toEqual(["GET /b", "GET /c"]);
+    expect(read.problems).toHaveLength(read.unreasoned.length);
   });
 });
 

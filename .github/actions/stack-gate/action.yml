@@ -3,12 +3,21 @@ description: >-
   Fails on a dependency the house stack has already answered. One denylist
   covers every repo and every entry names the pick it lost to, so the
   diagnostic teaches the rule instead of only refusing the package. Where a
-  deviation is legitimate the entry unlocks once its ADR exists.
+  deviation is legitimate the caller names the package in stack-allowlist, with
+  the reason beside it.
 
 inputs:
   working-directory:
     description: Where the repository root is.
     default: .
+  stack-allowlist:
+    description: >-
+      Packages this repo keeps against the denylist, as `<package> -- why`
+      entries, one per line. The reason is part of the entry, the price a lint
+      directive pays. An entry is refused when it has no reason, when nothing
+      here declares the package any more, or when the denylist has stopped
+      denying it.
+    default: ""
 
 runs:
   using: composite
@@ -16,6 +25,7 @@ runs:
     - shell: bash
       env:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_STACK_ALLOWLIST: ${{ inputs.stack-allowlist }}
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/stack-gate.main.ts"
