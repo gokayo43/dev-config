@@ -56,7 +56,9 @@ An operand naming no version at all is refused beside those, and says why separa
 — it is a dist tag, npm repoints those, and what it points at today is not in
 this manifest. A protocol (`workspace:`, `github:owner/repo`) names a source
 rather than a range and passes, since floating is the point of declaring one as
-a peer.
+a peer — when it is the whole spec. A source is one place and cannot be one
+alternative among versions, so `workspace:* || latest` is a union like any
+other, graded operand by operand.
 
 The empty range is the one nobody chooses, so it carries a diagnostic of its
 own: `bun add <pkg>` for a package the manifest already lists as an **optional**
