@@ -10,7 +10,7 @@ const parsed = (value: string): Allowlist => allowlistFrom(value, "timestamp-all
 /** The gate takes the parsed input whole; these cases are about the columns rather than the reasons. */
 const waiving = (...columns: string[]): Allowlist => ({
   entries: columns,
-  unreasoned: [],
+  unreasoned: new Set(),
   problems: [],
 });
 

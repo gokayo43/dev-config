@@ -218,11 +218,11 @@ function entriesIn(value: string): string[] {
  * replace in the two that fit. Two of a one-line set difference is duplication,
  * and the diagnostics are each gate's own either way.
  *
- * `unreasoned` below is the piece all three do share, which is why it is a
- * field here rather than a set each of them derives its own way: an entry
- * already refused for saying nothing about why is asked none of the questions
- * above, since its author is going back to that line regardless and one mistake
- * earns one diagnostic.
+ * `unreasoned` below is the piece all three do share, which is why it is a set
+ * here rather than one each of them builds for itself: an entry already refused
+ * for saying nothing about why is asked none of the questions above, since its
+ * author is going back to that line regardless and one mistake earns one
+ * diagnostic.
  */
 export interface Allowlist {
   /** Each entry with its reason stripped: the part a gate compares against. */
@@ -230,9 +230,11 @@ export interface Allowlist {
   /**
    * The subjects behind `problems`, so that a gate with a second rule about an
    * entry can leave the ones already refused alone: an entry the reader is
-   * being sent back to anyway earns one diagnostic, not two.
+   * being sent back to anyway earns one diagnostic, not two. A set, because
+   * every one of those gates asks it the same question — is this entry one of
+   * them — and three copies of `new Set(...)` is three chances to forget.
    */
-  readonly unreasoned: string[];
+  readonly unreasoned: ReadonlySet<string>;
   /** One per entry that waives something and says nothing about why. */
   readonly problems: Problem[];
 }
@@ -257,7 +259,7 @@ export function allowlistFrom(value: string, input: string): Allowlist {
 
   return {
     entries: read.map(({ subject }) => subject),
-    unreasoned,
+    unreasoned: new Set(unreasoned),
     problems: unreasoned.map((subject) => ({
       message: `${input} waives ${subject} without saying why — write '${subject}${REASON}<reason>', the same price a lint directive pays`,
     })),

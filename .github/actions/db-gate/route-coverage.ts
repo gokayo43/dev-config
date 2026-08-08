@@ -165,9 +165,8 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
   // the hatch the same way. The other half of that rule is the end of the loop
   // — a reasonless entry still waives its route, so the floor does not report
   // the route as uncovered on top of it.
-  const unreasoned = new Set(allowlist.unreasoned);
   const rotted = (entry: string, message: string): void => {
-    if (!unreasoned.has(entry)) hatch.push({ message });
+    if (!allowlist.unreasoned.has(entry)) hatch.push({ message });
   };
 
   for (const entry of allowlist.entries) {

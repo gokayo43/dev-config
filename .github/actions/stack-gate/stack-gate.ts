@@ -271,9 +271,8 @@ export async function stackGate(
   // An entry already refused for saying nothing about why is not asked this
   // second question: its author is going back to that line regardless, and one
   // mistake earns one diagnostic.
-  const unreasoned = new Set(allowlist.unreasoned);
   const fossils = [...waived]
-    .filter((subject) => !deniedNames.has(subject) && !unreasoned.has(subject))
+    .filter((subject) => !deniedNames.has(subject) && !allowlist.unreasoned.has(subject))
     .map((subject) => ({
       message: declaredNames.has(subject)
         ? `stack-allowlist waives ${subject}, which the denylist no longer answers for — the pick it was written against is gone, so drop the entry`

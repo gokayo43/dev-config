@@ -88,9 +88,8 @@ export function timestamptzGate(columns: readonly Column[], allowlist: Allowlist
   // An entry already refused for saying nothing about why is not asked this
   // second question: its author is going back to that line regardless, and one
   // mistake earns one diagnostic.
-  const unreasoned = new Set(allowlist.unreasoned);
   const fossils = [...deliberate]
-    .filter((column) => !wallClock.has(column) && !unreasoned.has(column))
+    .filter((column) => !wallClock.has(column) && !allowlist.unreasoned.has(column))
     .map((column) => ({
       message: present.has(column)
         ? `timestamp-allowlist waives ${column}, which is not a wall-clock column — the migration this entry was written against has been made, so drop the entry`
