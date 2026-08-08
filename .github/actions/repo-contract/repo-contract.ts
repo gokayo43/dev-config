@@ -10,7 +10,6 @@ import {
   isObject,
   isTracked,
   jsonObjects,
-  kindOf,
   type Manifest,
   manifests,
   type Missing,
@@ -19,6 +18,7 @@ import {
   record,
   repoFiles,
 } from "../_lib/gate.ts";
+import { checkPins, isExactVersion } from "./dependency-specs.ts";
 
 /**
  * Whether the repo is deployed and carrying people, said by the repo about
@@ -331,189 +331,9 @@ function hasSentry(contents: Record<string, unknown>): boolean {
   );
 }
 
-const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
-
-/**
- * `npm:` aliases another package, so the alias's own spec is the one that has
- * to be exact. The version is part of the match rather than something sliced
- * off afterwards: `npm:bar` names no version at all, and a slice-then-recurse
- * reading of it recurses on its own input forever.
- */
-const NPM_ALIAS = /^npm:(?:@[^/]+\/)?[^@]+@(.+)$/;
-
-/** The protocols whose tree is whatever they point at, which is one tree by construction. */
-const RESOLVED_PROTOCOL = /^(workspace|file|link|catalog|portal):/;
-
-/** A git dependency resolves to one tree only when its ref is a commit. */
-const GIT_PROTOCOL = /^(github|gitlab|bitbucket|git|git\+[a-z]+):/;
-const COMMIT = /^[0-9a-f]{40}$/;
-
-/**
- * Whether the spec says where the package comes from rather than which versions
- * of it will do. `isExact` grades these on whether the source they name is one
- * tree; the peer rule below only has to know that they are not ranges, so that
- * nothing tries to read `github:owner/repo` as one.
- */
-function namesSource(spec: string): boolean {
-  return RESOLVED_PROTOCOL.test(spec) || GIT_PROTOCOL.test(spec) || spec.startsWith("npm:");
-}
-
-/**
- * An allowlist, not a blocklist. `18`, `next` and `1.x` float exactly as much
- * as `^1.2.3` does, and the ways npm spells "whatever is newest" are
- * open-ended — so a spec has to prove it resolves to one thing rather than fail
- * to match a list of the spellings someone thought of.
- *
- * The protocols below are exact by construction: a workspace member is whatever
- * the workspace holds, a path names one tree, a git dependency names one when it
- * carries a ref, and `npm:` is an alias whose own spec is checked.
- */
-function isExact(spec: string): boolean {
-  if (EXACT_SEMVER.test(spec)) return true;
-  if (RESOLVED_PROTOCOL.test(spec)) return true;
-  const alias = NPM_ALIAS.exec(spec);
-  if (alias !== null) return EXACT_SEMVER.test(alias[1] ?? "");
-  // `#main` moves, a tag can be repointed, and `#semver:^1.0.0` is a range
-  // wearing a fragment. Only a commit names one tree for good.
-  if (GIT_PROTOCOL.test(spec)) return COMMIT.test(spec.slice(spec.indexOf("#") + 1));
-  return false;
-}
-
 function extendsList(value: unknown): string[] {
   if (typeof value === "string") return [value];
   return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
-}
-
-/**
- * What is wrong with a spec for the field it sits in, phrased to follow
- * `${field}.${name}` — or nothing, when it is fine.
- */
-type Rule = (spec: unknown) => string | undefined;
-
-/** What this repo installs names one tree, so that a lockfile refresh cannot change it. */
-const installed: Rule = (spec) =>
-  typeof spec === "string" && isExact(spec)
-    ? undefined
-    : `is declared as '${String(spec)}' — a dependency names one exact version, or a protocol that resolves to one tree`;
-
-/**
- * Two versions no constraining range holds both of: the floor of the release
- * line, and a major nobody reaches. `^0` and `0.x` hold the first and not the
- * second, `>=19` the second and not the first — each of them constrains, which
- * is what a peer range is for.
- */
-const NOTHING = "0.0.0";
-const EVERYTHING = "999999.0.0";
-
-/**
- * Whether the resolver would take any version at all. Asked of Bun's own semver
- * rather than matched against a list of the spellings, because the spellings are
- * not a list: `*` and `x`, `>=0`, `>=v0` — a leading `v` is legal grammar —
- * `>0.0.0-0`, and every union built out of them, since an `||` takes whatever
- * any one of its operands takes. The engine that will read this range at install
- * time is the one asked about it.
- *
- * Two probes rather than a proof. A range admitting everything under some absurd
- * ceiling would pass; nobody writes one, and the alternative is a semver solver
- * of our own.
- */
-function acceptsEveryVersion(range: string): boolean {
-  return Bun.semver.satisfies(NOTHING, range) && Bun.semver.satisfies(EVERYTHING, range);
-}
-
-/**
- * The wildcard spellings — not what decides a refusal, which is the question
- * above, but which of the two diagnostics is the true one. `x` is a range that
- * takes anything; `latest` is a name that is not a range. They look alike to a
- * pattern over letters, and each leaves the author something different to fix.
- */
-const WILDCARD = /^[*xX](\.[*xX]){0,2}$/;
-
-/** A tag is a name npm repoints; a version is what a range is written from. */
-const TAG = /^[a-zA-Z][\w.-]*$/;
-
-/**
- * Whether any `||` operand is a dist tag. Per operand, because one operand npm
- * cannot read is a range npm cannot read, and a digit anywhere else in the
- * string would otherwise answer for the whole of it.
- *
- * Runs before `acceptsEveryVersion`, which is what Bun's semver says of a string
- * it cannot parse: true. That is what the resolver does with a tag, but not what
- * the author has to fix.
- */
-function namesATag(range: string): boolean {
-  return range.split("||").some((operand) => {
-    const part = operand.trim();
-    return TAG.test(part) && !WILDCARD.test(part) && !/\d/.test(part);
-  });
-}
-
-/**
- * A peer range, graded on whether it refuses anything. peerDependencies is the
- * one field where a range is the point — it states what a consumer may bring,
- * not what this repo installs — so the rule is the pin check's inverted, and so
- * is its polarity: a denylist here, where `isExact` is an allowlist. The
- * argument inverts with it. There the open-ended set was the spellings of
- * "whatever is newest"; here the open-ended set is the legitimate ranges, and
- * what accepts every version is closed and short.
- *
- * A range that names no version at all is refused beside those for a different
- * reason, which the diagnostic says: it is a dist tag, npm repoints those, and
- * what it points at today is not in this manifest. That catches the tags people
- * type — `latest`, `next` — and not the ones carrying a digit; the gate page
- * says why nothing here can do better.
- *
- * `bun add <pkg>` for a package the manifest already lists as a peer writes one
- * of these rather than adding a devDependency (bun 1.3.11), and which one
- * depends on the peer. With `peerDependenciesMeta.optional` the range is
- * blanked — that is the case this catches, and the empty range has its own
- * diagnostic because it is the one nobody chose. Without the optional meta the
- * range is overwritten with the exact version bun installed, `>=3` becoming
- * `3.0.1`, and nothing here can catch that: an exact peer range is legitimate
- * when someone means it, and one manifest cannot tell the two apart.
- */
-const peerRange: Rule = (spec) => {
-  if (typeof spec !== "string") {
-    return `is declared as ${JSON.stringify(spec)} — a peer range is a string naming the versions a consumer may bring, and this is ${kindOf(spec)}`;
-  }
-  const range = spec.trim();
-  if (range === "") {
-    return "is empty — write the versions a consumer may bring, e.g. '>=1.2.3'. 'bun add' empties the range of an optional peer it is asked to add rather than adding a devDependency, so a manifest with peers writes them by hand";
-  }
-  // A protocol says where the package comes from rather than which versions do,
-  // and the semver below would read it as a string it cannot parse — which is to
-  // say, as a range that takes anything.
-  if (namesSource(range)) return undefined;
-  if (namesATag(range)) {
-    return `is declared as '${spec}' — a peer range names versions, and a dist tag names whatever it points at today; write the range it stands for`;
-  }
-  if (acceptsEveryVersion(range)) {
-    return `is declared as '${spec}' — a peer range that accepts every version says what declaring no peer says; name the versions this package works against`;
-  }
-  return undefined;
-};
-
-/**
- * One rule per field a manifest may declare a package in, keyed by the list
- * itself: a field added to `DEPENDENCY_FIELDS` and not graded here is a
- * compile error rather than a silent hole.
- */
-const PIN_RULES: Record<(typeof DEPENDENCY_FIELDS)[number], Rule> = {
-  dependencies: installed,
-  devDependencies: installed,
-  optionalDependencies: installed,
-  peerDependencies: peerRange,
-};
-
-function checkPins(all: readonly Manifest[]): Problem[] {
-  return all.flatMap(({ file, value }) =>
-    DEPENDENCY_FIELDS.flatMap((field) =>
-      Object.entries(record(value[field])).flatMap(([name, spec]) => {
-        const fault = PIN_RULES[field](spec);
-        return fault === undefined ? [] : [{ file, message: `${field}.${name} ${fault}` }];
-      }),
-    ),
-  );
 }
 
 async function checkLockfiles(root: string): Promise<Problem[]> {
@@ -900,7 +720,7 @@ function checkRoot(contents: Record<string, unknown>, contract: Contract): Probl
   const typescript = specOf(contents, "typescript");
   if (typescript === undefined) {
     problems.push({ file: "package.json", message: "typescript is not declared" });
-  } else if (EXACT_SEMVER.test(typescript) && Number.parseInt(typescript, 10) < 7) {
+  } else if (isExactVersion(typescript) && Number.parseInt(typescript, 10) < 7) {
     problems.push({
       file: "package.json",
       message: `typescript is pinned at ${typescript} — the shared tsconfig is written against TypeScript 7`,
