@@ -168,10 +168,8 @@ describe("allowlist entries", () => {
     expect(read.problems).toEqual([]);
   });
 
-  // The reason is the one part of an entry written in prose, and prose has
-  // commas in it. A separator a reason can contain ends the entry mid-sentence
-  // and grades both halves: the subject loses the reason it was written with,
-  // and the rest of the sentence is reported as a subject nobody wrote.
+  // Why a newline is the only separator is in entriesIn. This is the input
+  // that found it.
   test("a comma in the reason is part of the reason", () => {
     const read = allowlistFrom(
       "POST /api/auth/$ -- the shipped ramp only issues GETs, and a sign-up POST would write a user per request",

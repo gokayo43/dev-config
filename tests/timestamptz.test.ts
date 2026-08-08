@@ -91,9 +91,8 @@ describe("timestamptz gate", () => {
   });
 
   // A table name can carry a space — information_schema reports it verbatim —
-  // so a space-separated input could not name one. The reason beside it is
-  // prose, so a comma in there is the author writing a sentence rather than a
-  // second column.
+  // so a space-separated input could not name one. The comma in the reason is
+  // the other half of the same rule, which entriesIn states.
   test("an entry naming a quoted identifier survives the parse", () => {
     expect(
       parsed(
