@@ -201,12 +201,12 @@ rate, p(95)/p(99)/max latency — and everything the steps wrote into the runner
 is uploaded as the `db-gate-evidence` artifact, so a run's evidence survives past
 the runner that produced it:
 
-| File                    | What it answers                                                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------- |
-| `capacity.json`         | the raw k6 summary, which the table is read from and another run's can be diffed against |
-| `route-log-before.json` | what the app declared it serves, and what the boot poll had already reached              |
-| `route-log-after.json`  | the same, after the ramp — the floor's verdict is the difference between the two         |
-| `server.log`            | what the app said while all of that happened                                             |
+| File                    | What it answers                                                                                                      |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `capacity.json`         | the raw k6 summary, which the table is read from and another run's can be diffed against                             |
+| `route-log-before.json` | what the app declared it serves, and what the boot poll had already reached                                          |
+| `route-log-after.json`  | the same, after the ramp — the floor's verdict is the difference between the two                                     |
+| `server.log`            | what the app said while all of that happened — copied while the process still holds it open, so the tail may be torn |
 
 The upload runs whatever the steps before it did, so a floor that failed, a ramp
 that died on the way to a number, and an app that never answered its health poll

@@ -31,7 +31,10 @@ a change to a rule usually lands here too.
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
-  clean one. A gate without one is a claim.
+  clean one. A gate without one is a claim. `action-evidence.test.ts` is the one
+  suite that is not a gate's: it holds every action publishing an artifact to
+  keeping the runner-temp paths its own YAML names. `repo-contract-fixture.ts`
+  is the clean tree that gate's two suites share.
 - `docs/gates/*.md` — a reference page per gate. README holds the map.
 
 ## Commands
