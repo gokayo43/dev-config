@@ -14,10 +14,23 @@ import { record } from "../.github/actions/_lib/gate.ts";
  *
  * Which actions are held to that is decided by the actions themselves rather
  * than by a list here: an action that uploads anything has said it has
- * something worth keeping, so it keeps all of it. The ones that fetch a pinned
- * binary into the same directory — actionlint, gitleaks — publish nothing and
- * are not selected, and no exception names them. The day one of them starts
- * publishing, it is held to the same rule without an edit here.
+ * something worth keeping, so it keeps all of it. The actions that only fetch a
+ * pinned binary into the same directory publish nothing, so they are not
+ * selected and no exception names them — and the day one of them starts
+ * publishing, it is held to the same rule with no edit here.
+ *
+ * What the rule covers is the paths an action names **in its own YAML**. That
+ * is not the same as the paths it writes, and it misses in both directions:
+ *
+ * - a path a *sourced script* introduces is invisible to it. db-gate is
+ *   selected and does exactly this — `_lib/k6.sh` lands the k6 binary at
+ *   `$RUNNER_TEMP/k6` — and the equality below holds only because nothing here
+ *   reads `.sh` files. That is the boundary rather than an oversight: a binary
+ *   is not evidence, and parsing shell to sort one from the other would be a
+ *   second language to be wrong in.
+ * - a path an action only reads or prints counts as named, so the rule can ask
+ *   for the upload of a file no step ever creates. `if-no-files-found: ignore`
+ *   is what keeps that harmless.
  */
 const ACTIONS = new URL("../.github/actions/", import.meta.url).pathname;
 
