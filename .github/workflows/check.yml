@@ -58,15 +58,16 @@ on:
         default: ""
       db-gate-evidence:
         description: >-
-          The artifact name for everything the database gate leaves behind, for a matrix
-          that runs more than one leg. Empty takes db-gate's own name, which is where that
-          default lives.
+          The artifact name for everything the database gate leaves behind. A matrix
+          that runs more than one leg must give each its own or the run fails on the
+          duplicate. Empty takes db-gate's own name, which is where that default lives.
         type: string
         default: ""
       test-suite-evidence:
         description: >-
-          The artifact name for the junit report, for a matrix that runs more than one leg.
-          Empty takes test-suite's own name, which is where that default lives.
+          The artifact name for the junit report. A matrix that runs more than one leg
+          must give each its own or the run fails on the duplicate. Empty takes
+          test-suite's own name, which is where that default lives.
         type: string
         default: ""
       route-allowlist:
