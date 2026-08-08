@@ -469,7 +469,9 @@ docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine
 ```
 
 It creates and drops databases on whatever it is pointed at, so point it at a
-throwaway.
+throwaway. Two runs may share one: every name either the suite or the gate puts
+on that server carries what tells the runs apart — the process for the suite's
+own databases, the checkout being replayed for the gate's.
 
 The linting is the `lint-workflows` action — actionlint, pinned by version and
 archive checksum exactly like gitleaks, with shellcheck over every `run:` block.

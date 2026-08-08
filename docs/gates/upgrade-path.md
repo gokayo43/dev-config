@@ -133,11 +133,21 @@ else: a lineage at the project root (the project would be what got replaced) and
 a lineage inside another, whichever side of the change put it there. Both are
 refused where the lineages are read, before anything moves.
 
-The second database is `upgrade_path`, created on the service the calling job
-declared and dropped again whichever way the comparison goes — and dropped
-before it is created, so a run killed between the two ends does not leave the
-next one failing over a name its author never chose. The database the app boots
-against is the fresh one and is never touched by any of this.
+The second database is created on the service the calling job declared and
+dropped again whichever way the comparison goes — and dropped before it is
+created, so a run killed between the two ends does not leave the next one
+failing over a name its author never chose. The database the app boots against
+is the fresh one and is never touched by any of this.
+
+Its name is `upgrade_path_<digest>`, the digest being of the project directory
+being replayed. In the shape this ships in — a service container per job — a
+fixed name would do; against a server two runs share, deriving it is what keeps
+each run dropping and recreating its own database rather than the one the other
+is midway through migrating. Of the path and not of a clock, so that one
+checkout derives one name on every run: reclaiming what a killed run left behind
+is the next run arriving at the same name. A caller that declares that name as
+its _own_ database is refused, since dropping it would take the one the app
+boots against.
 
 ## Which commit counts as the base
 
@@ -208,13 +218,6 @@ Seeing that would take the base ref's own migrator, which means a second
 checkout with its own dependencies, and that is a bigger machine than this gate
 is. The same blind spot hides the "never applied" refusal from a repo that
 renames its journal table: that check reads the tables drizzle names by default.
-
-**Two runs sharing one Postgres.** The upgrade path is built in a database
-called `upgrade_path` on the service the calling job declared, and two runs
-against one server would clobber each other's. In the shape this ships in — a
-service container per job — that cannot happen; against a shared server, give
-each run a server of its own. A caller that declares `upgrade_path` as its _own_
-database is refused, since dropping it would take the one the app boots against.
 
 **Anything about data.** This is a schema comparison. A migration that backfills
 a column wrongly passes it.

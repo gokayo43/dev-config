@@ -9,7 +9,7 @@ import {
   beside,
   compare,
   replayGate,
-  UPGRADE_DATABASE,
+  upgradeDatabase,
   type Verdict,
 } from "../.github/actions/db-gate/replay.ts";
 
@@ -25,9 +25,14 @@ import { git, history, IDENTITY, type Repo, type Tree, under } from "./tree.ts";
  *
  * Every repo in the suite is a real git repository with a real migrator, so
  * what the gate reads is a history and a lineage rather than a description of
- * one. Nothing here clears `upgrade_path` between cases: the gate drops the
- * database it makes, and a suite that tidied up after it would be the reason
- * nobody noticed it had stopped.
+ * one. Nothing here clears the database the gate builds between cases: the gate
+ * drops it, and a suite that tidied up after it would be the reason nobody
+ * noticed it had stopped.
+ *
+ * Every name this suite puts on the server carries the process it came from, and
+ * the gate's own carries the checkout it is replaying — so a second run of this
+ * suite against the same Postgres, which is what two worktrees under review
+ * produce, shares nothing with the first.
  */
 const SERVER =
   Bun.env["TEST_DATABASE_URL"] ?? "postgres://postgres:postgres@localhost:5432/postgres";
@@ -49,10 +54,24 @@ afterEach(async () => {
   );
 });
 
-/** An empty database of this case's own. */
+/**
+ * How many this suite has asked for. Counted rather than read off `databases`,
+ * whose length is only true until the first `await` below: two cases running at
+ * once both see the same length and ask for the same name, and the second is a
+ * 23505 on `pg_database` rather than a database.
+ */
+let asked = 0;
+
+/**
+ * An empty database of this case's own — and of this process's, so that two
+ * runs of the suite against one server never name the same database. Dropped
+ * before it is created for the reason the gate drops its own first: a run killed
+ * mid-case leaves databases behind, and a pid the kernel has since handed out
+ * again would otherwise meet them as a name it cannot use.
+ */
 async function emptyDatabase(): Promise<string> {
-  const name = `replay_${databases.length}_${Date.now()}`;
-  await onServer([`create database "${name}"`]);
+  const name = `replay_${process.pid}_${asked++}`;
+  await onServer([`drop database if exists "${name}" with (force)`, `create database "${name}"`]);
   databases.push(name);
   return beside(SERVER, name);
 }
@@ -430,19 +449,42 @@ describe("replay gate", () => {
       },
     );
     await replay(converges, pushedOver(converges.revs[0] ?? ""));
-    expect(await exists(UPGRADE_DATABASE)).toBe(false);
+    expect(await exists(upgradeDatabase(converges.root))).toBe(false);
 
     const diverges = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING_WITH_SLUG) },
     );
     await replay(diverges, pushedOver(diverges.revs[0] ?? ""));
-    expect(await exists(UPGRADE_DATABASE)).toBe(false);
+    expect(await exists(upgradeDatabase(diverges.root))).toBe(false);
+  });
+
+  // Two worktrees of one repo under review is two runs of this gate against one
+  // Postgres, which is what a review pipeline produces. Driven at once rather
+  // than in sequence, because the collision is one run's `drop ... with (force)`
+  // landing while the other is migrating into that database: a sequential pair
+  // shares the name and never notices.
+  test("two checkouts replaying at once do not drop each other's database", async () => {
+    const tree = [
+      { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
+      { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING, ADDS_SLUG) },
+    ];
+    const [one, other] = await Promise.all([history(...tree), history(...tree)]);
+
+    const verdicts = await Promise.all(
+      [one, other].map(async (repo) => await replay(repo, pushedOver(repo.revs[0] ?? ""))),
+    );
+
+    expect(verdicts.map(messages)).toEqual([[], []]);
+    for (const verdict of verdicts) expect(verdict.summary).toContain("reaches the same schema");
+    expect(upgradeDatabase(one.root)).not.toBe(upgradeDatabase(other.root));
   });
 
   // What a run killed between the create and the drop leaves behind. The next
   // run makes its own room rather than failing with a 42P04 about a database
-  // whose name the author never chose.
+  // whose name the author never chose — which is also what the name being
+  // derived from the checkout rather than from a clock is for: this is the same
+  // checkout, so this is the same name.
   test("a database left by a killed run does not fail the next one", async () => {
     const repo = await history(
       { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
@@ -451,7 +493,7 @@ describe("replay gate", () => {
         ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
       },
     );
-    await onServer([`create database "${UPGRADE_DATABASE}"`]);
+    await onServer([`create database "${upgradeDatabase(repo.root)}"`]);
 
     const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
 
@@ -684,18 +726,17 @@ describe("replay gate", () => {
         ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
       },
     );
-    await onServer([`create database "${UPGRADE_DATABASE}"`]);
-    databases.push(UPGRADE_DATABASE);
+    const name = upgradeDatabase(repo.root);
+    await onServer([`create database "${name}"`]);
+    databases.push(name);
 
     const verdict = await replayGate({
       root: repo.root,
-      url: beside(SERVER, UPGRADE_DATABASE),
+      url: beside(SERVER, name),
       upgrade: pushedOver(repo.revs[0] ?? ""),
     });
 
-    expect(messages(verdict)).toEqual([
-      containing(`the declared database is called ${UPGRADE_DATABASE}`),
-    ]);
+    expect(messages(verdict)).toEqual([containing(`the declared database is called ${name}`)]);
   });
 
   // The one way this gate could pass by having been given nothing: a checkout

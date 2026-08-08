@@ -1,6 +1,6 @@
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { SQL } from "bun";
 
@@ -32,8 +32,29 @@ import { baseRevision, type Event, git, isObject, type Problem, repoFiles } from
  * answer, and the day they disagreed nobody would know which was right.
  */
 
-/** The database the upgrade path is replayed into, beside the one the caller declared. */
-export const UPGRADE_DATABASE = "upgrade_path";
+/**
+ * The database the upgrade path is replayed into, beside the one the caller
+ * declared — named for the checkout it is replaying, rather than fixed.
+ *
+ * One Postgres can be answering more than one run of this gate at a time: two
+ * worktrees of the same repo under review, this repo's own suite beside a
+ * neighbour's. Under a fixed name each of them drops and recreates the database
+ * the other is migrating, and both fail over a fault neither tree has — so the
+ * name carries what actually distinguishes the runs, which is where each is
+ * reading its migrations from.
+ *
+ * The path rather than a clock or a pid, because the name has to be the same on
+ * every run of one checkout: a run killed between the create and the drop
+ * leaves a database behind, and reclaiming it is `drop database if exists`
+ * finding the name the next run derives. A name nothing derives twice would
+ * leave one database per killed run on the server forever.
+ */
+export function upgradeDatabase(root: string): string {
+  // Resolved, so that the same project reached as `.` and as an absolute path
+  // is one database rather than two.
+  const digest = new Bun.CryptoHasher("sha256").update(resolve(root)).digest("hex");
+  return `upgrade_path_${digest.slice(0, 16)}`;
+}
 
 /**
  * The file a drizzle migrator refuses to run without, and therefore the only
@@ -103,8 +124,8 @@ async function mustRead(
  *
  * `failed` is the whole diagnostic rather than a database name, because this
  * runs three times over two databases and one tree that is not always at HEAD:
- * "it failed against upgrade_path" names something the author has never heard
- * of and leaves out the half that would tell them whose migration broke.
+ * "it failed against the upgrade database" names something the author has never
+ * heard of and leaves out the half that would tell them whose migration broke.
  */
 async function migrate(root: string, url: string, failed: string): Promise<void> {
   const proc = Bun.spawn(["bun", "run", "db:migrate"], {
@@ -525,7 +546,8 @@ async function upgradedSchema(
   rev: string,
   lineages: readonly BaseLineage[],
 ): Promise<Upgraded> {
-  const upgrade = beside(url, UPGRADE_DATABASE);
+  const database = upgradeDatabase(root);
+  const upgrade = beside(url, database);
   const from = rev.slice(0, 7);
   const server = new SQL(url);
   try {
@@ -534,8 +556,8 @@ async function upgradedSchema(
     // Dropped first as well as last, because a run killed between the two ends
     // otherwise leaves a database whose only effect is to fail the next run
     // with an error about a name its author never chose.
-    await server.unsafe(`drop database if exists "${UPGRADE_DATABASE}" with (force)`);
-    await server.unsafe(`create database "${UPGRADE_DATABASE}"`);
+    await server.unsafe(`drop database if exists "${database}" with (force)`);
+    await server.unsafe(`create database "${database}"`);
     // The base phase runs *this branch's* `db:migrate` over the base ref's
     // files, which is the only migrator there is — so what it applied has to be
     // read back rather than assumed. A lineage the base ref carried that the
@@ -567,7 +589,7 @@ async function upgradedSchema(
       replayed: asked.filter(({ clocks }) => clocks.length > 0).map(({ dir }) => dir),
     };
   } finally {
-    await server.unsafe(`drop database if exists "${UPGRADE_DATABASE}" with (force)`);
+    await server.unsafe(`drop database if exists "${database}" with (force)`);
     await server.close();
   }
 }
@@ -613,10 +635,10 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
 
   if (upgrade === undefined) return passed(REPLAYED);
 
-  if (databaseIn(url) === UPGRADE_DATABASE) {
+  if (databaseIn(url) === upgradeDatabase(root)) {
     return refused([
       {
-        message: `the declared database is called ${UPGRADE_DATABASE}, which is the name the upgrade path is built in and dropped under — declare the app's database under another name, or this check would drop the one it is meant to leave alone`,
+        message: `the declared database is called ${upgradeDatabase(root)}, which is the name the upgrade path is built in and dropped under for this checkout — declare the app's database under another name, or this check would drop the one it is meant to leave alone`,
       },
     ]);
   }

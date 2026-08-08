@@ -5,7 +5,7 @@
 // A CI step rather than a bun test, because it needs the pinned k6 binary — CI
 // fetches it through the same helper the gates use, and a developer runs this
 // with K6 pointing at one.
-import { rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,15 +22,18 @@ function requireEnv(name: string): string {
 const k6 = requireEnv("K6");
 
 const RAMP = new URL("../.github/actions/db-gate/capacity.js", import.meta.url).pathname;
-const PORT = 58231;
 const hits = new Map<string, number>();
 
 const ANSWERS = new Set(["/api/health", "/api/things", "/api/presets"]);
 
 // Everything else 404s, which is what a mistyped capacity-path meets — and what
 // the failure bound in capacity.ts refuses once the summary reaches it.
+// Port 0, and a directory of this run's own below: the box this runs on may be
+// running a second checkout of this repo at the same time, and a stub server on
+// a chosen port is one of them failing to bind while the other measures a ramp
+// against a neighbour's stub.
 const server = Bun.serve({
-  port: PORT,
+  port: 0,
   fetch(request) {
     const { pathname } = new URL(request.url);
     hits.set(pathname, (hits.get(pathname) ?? 0) + 1);
@@ -50,13 +53,15 @@ interface Ramp {
   readonly metrics: Record<string, Record<string, number>>;
 }
 
+const summaries = await mkdtemp(join(tmpdir(), "capacity-"));
+
 async function ramp(capacityPath: string | undefined, name: string): Promise<Ramp> {
   hits.clear();
-  const out = join(tmpdir(), `capacity-${name}.json`);
+  const out = join(summaries, `${name}.json`);
   const proc = Bun.spawn([k6, "run", "--quiet", STAGE, "--summary-export", out, RAMP], {
     env: {
       PATH: requireEnv("PATH"),
-      HEALTH_URL: `http://localhost:${PORT}/api/health`,
+      HEALTH_URL: `http://localhost:${server.port}/api/health`,
       ...(capacityPath === undefined ? {} : { CAPACITY_PATH: capacityPath }),
     },
     stdout: "pipe",
@@ -66,7 +71,6 @@ async function ramp(capacityPath: string | undefined, name: string): Promise<Ram
   const summary = (await Bun.file(out).json()) as {
     metrics: Record<string, Record<string, number>>;
   };
-  await rm(out, { force: true });
   return { exitCode, metrics: summary.metrics };
 }
 
@@ -136,6 +140,7 @@ expect(
 );
 
 await server.stop(true);
+await rm(summaries, { recursive: true, force: true });
 console.log(
   `capacity.js: health-only, one-path and list branches all executed (${hits.size} routes seen)`,
 );
