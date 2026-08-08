@@ -41,14 +41,18 @@ commit names one tree for good.
 `peerDependencies` is graded by the inverse rule, because it is the one field
 where a range is the point: it states what a consumer may bring rather than what
 this repo installs. The polarity inverts with it — a denylist here, where the pin
-check is an allowlist, and the argument above read backwards. The open-ended set
-is now the legitimate ranges, and what accepts every version there is is closed
-and short: blank, `*` and `x` with their dotted spellings, and the `>=0` family
-down to `>=0.0.0-0`, which is the one that takes prereleases with it. `^0` and
-`0.x` are not in that set and are not meant to be: both stop below 1.0, which is
-the whole of what a zero major means.
+check is an allowlist, and the argument above read backwards.
 
-A spec naming no version at all is refused beside those, and says why separately
+It is not a list of spellings, though, because that set does not close. `*` and
+`x` are two of them; so are `>=0`, `>=v0` — a leading `v` is legal range grammar
+— `>0.0.0-0`, and every `||` union built out of any of those, since an `||`
+takes whatever any one of its operands takes. So the question goes to Bun's own
+semver, the engine that reads the range at install time, probed with two
+versions no constraining range holds both of: `0.0.0` and `999999.0.0`. `^0` and
+`0.x` hold the first and not the second; `>=19` holds the second and not the
+first. Each of them constrains, and each passes.
+
+An operand naming no version at all is refused beside those, and says why separately
 — it is a dist tag, npm repoints those, and what it points at today is not in
 this manifest. A protocol (`workspace:`, `github:owner/repo`) names a source
 rather than a range and passes, since floating is the point of declaring one as
@@ -65,15 +69,21 @@ legitimate when someone means it, so one manifest cannot tell that rewrite from
 a deliberate pin, and there is nothing here to check it against. What catches it
 is review, or not running `bun add` for a package the manifest already declares.
 
-Nor most dist tags. What is refused is a spec naming no version at all, which
-catches the two people type — `latest` and `next`. A tag carrying a digit reads
-as a range and passes: `next-13`, `beta2`. Nothing cheap tells them apart, and
-`v2` is genuinely both — a tag someone publishes and the range for 2.x. Bun's
-semver cannot be borrowed as the oracle either: it treats a string it cannot
-parse as matching everything, so `Bun.semver.satisfies("99.0.0", "latest")` is
-`true`, and "is this a range" and "does this accept everything" come back with
-the same answer. The rule catches the spellings that actually get typed and
-claims nothing more.
+Nor most dist tags. What is refused is an operand naming no version at all,
+which catches the two people type — `latest` and `next`. A tag carrying a digit
+reads as a range and passes: `next-13`, `beta2`. Nothing cheap tells them apart,
+and `v2` is genuinely both — a tag someone publishes and the range for 2.x. The
+semver above cannot settle it either, in the one direction that would matter: it
+reads a string it cannot parse as matching everything, so
+`Bun.semver.satisfies("99.0.0", "latest")` is `true` and a tag is
+indistinguishable there from a range that takes anything. That is why the tag
+check runs first — it is the whole of what stands between `latest` and the wrong
+diagnostic — and why a tag with a digit in it draws none at all.
+
+Nor a range that is absurd rather than open. The probe is two versions, not a
+proof, so something admitting everything under a ceiling nobody will reach —
+`>=0.0.0 <999998` — passes it. Writing a semver solver of this repo's own is the
+only thing that would close that, and no manifest has ever contained one.
 
 # Going live
 

@@ -396,20 +396,57 @@ const installed: Rule = (spec) =>
     ? undefined
     : `is declared as '${String(spec)}' — a dependency names one exact version, or a protocol that resolves to one tree`;
 
-/** Every version there is, spelled as a wildcard: `*`, `x`, `x.x.x`, and the mixtures of those. */
-const EVERY_VERSION = /^[*xX](\.[*xX]){0,2}$/;
+/**
+ * Two versions no constraining range holds both of: the floor of the release
+ * line, and a major nobody reaches. `^0` and `0.x` hold the first and not the
+ * second, `>=19` the second and not the first — each of them constrains, which
+ * is what a peer range is for.
+ */
+const NOTHING = "0.0.0";
+const EVERYTHING = "999999.0.0";
 
 /**
- * The same statement spelled as a lower bound of nothing. `>=0.0.0-0` is the
- * far edge of the family and the reason it is written out: a range takes
- * prereleases only when one of its comparators carries one, so that spelling
- * admits literally everything published, and `>=0` and `>=0.0.0` admit every
- * release.
+ * Whether the resolver would take any version at all. Asked of Bun's own semver
+ * rather than matched against a list of the spellings, because the spellings are
+ * not a list: `*` and `x`, `>=0`, `>=v0` — a leading `v` is legal grammar —
+ * `>0.0.0-0`, and every union built out of them, since an `||` takes whatever
+ * any one of its operands takes. The engine that will read this range at install
+ * time is the one asked about it.
  *
- * `^0` and `0.x` are not in here and are not meant to be. Both stop below 1.0,
- * which is the whole of what a zero major means — they constrain.
+ * Two probes rather than a proof. A range admitting everything under some absurd
+ * ceiling would pass; nobody writes one, and the alternative is a semver solver
+ * of our own.
  */
-const FROM_NOTHING = /^>=\s*0(\.0){0,2}(-0)?$/;
+function acceptsEveryVersion(range: string): boolean {
+  return Bun.semver.satisfies(NOTHING, range) && Bun.semver.satisfies(EVERYTHING, range);
+}
+
+/**
+ * The wildcard spellings — not what decides a refusal, which is the question
+ * above, but which of the two diagnostics is the true one. `x` is a range that
+ * takes anything; `latest` is a name that is not a range. They look alike to a
+ * pattern over letters, and each leaves the author something different to fix.
+ */
+const WILDCARD = /^[*xX](\.[*xX]){0,2}$/;
+
+/** A tag is a name npm repoints; a version is what a range is written from. */
+const TAG = /^[a-zA-Z][\w.-]*$/;
+
+/**
+ * Whether any `||` operand is a dist tag. Per operand, because one operand npm
+ * cannot read is a range npm cannot read, and a digit anywhere else in the
+ * string would otherwise answer for the whole of it.
+ *
+ * Runs before `acceptsEveryVersion`, which is what Bun's semver says of a string
+ * it cannot parse: true. That is what the resolver does with a tag, but not what
+ * the author has to fix.
+ */
+function namesATag(range: string): boolean {
+  return range.split("||").some((operand) => {
+    const part = operand.trim();
+    return TAG.test(part) && !WILDCARD.test(part) && !/\d/.test(part);
+  });
+}
 
 /**
  * A peer range, graded on whether it refuses anything. peerDependencies is the
@@ -443,11 +480,15 @@ const peerRange: Rule = (spec) => {
   if (range === "") {
     return "is empty — write the versions a consumer may bring, e.g. '>=1.2.3'. 'bun add' empties the range of an optional peer it is asked to add rather than adding a devDependency, so a manifest with peers writes them by hand";
   }
-  if (EVERY_VERSION.test(range) || FROM_NOTHING.test(range)) {
-    return `is declared as '${spec}' — a peer range that accepts every version says what declaring no peer says; name the versions this package works against`;
-  }
-  if (!namesSource(range) && !/\d/.test(range)) {
+  // A protocol says where the package comes from rather than which versions do,
+  // and the semver below would read it as a string it cannot parse — which is to
+  // say, as a range that takes anything.
+  if (namesSource(range)) return undefined;
+  if (namesATag(range)) {
     return `is declared as '${spec}' — a peer range names versions, and a dist tag names whatever it points at today; write the range it stands for`;
+  }
+  if (acceptsEveryVersion(range)) {
+    return `is declared as '${spec}' — a peer range that accepts every version says what declaring no peer says; name the versions this package works against`;
   }
   return undefined;
 };
