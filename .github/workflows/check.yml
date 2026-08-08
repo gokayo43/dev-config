@@ -58,8 +58,8 @@ on:
         default: ""
       capacity-report:
         description: >-
-          The artifact name for the k6 summary, for a matrix that ramps more than one leg.
-          Empty takes db-gate's own name, which is where that default lives.
+          The artifact name for what the ramp measured and read, for a matrix that ramps
+          more than one leg. Empty takes db-gate's own name, which is where that default lives.
         type: string
         default: ""
       route-allowlist:

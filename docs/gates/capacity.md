@@ -178,7 +178,7 @@ jobs:
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `capacity-path`   | Paths ramped alongside the health route, comma- or newline-separated. A health route measures the socket and one round trip; point these at the endpoints doing the work the project is for, and prefer ones that read or write. Every route the app serves belongs here or in `route-allowlist`.                         |
 | `capacity-script` | A k6 script of the repo's own, when the default ramp is the wrong shape — a write path needing a body, an authenticated route. It replaces the shipped script entirely; `HEALTH_URL` and `CAPACITY_PATH` are in its environment, and the failure bound and the route floor hold it exactly as they hold the shipped ramp. |
-| `capacity-report` | The artifact name for the k6 summary. A matrix that ramps more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                                          |
+| `capacity-report` | The artifact name for what the ramp measured and read. A matrix that ramps more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                         |
 | `route-allowlist` | Routes the ramp cannot cover, as `METHOD /path -- why` entries matching the app's own route table, one per line — the reason is prose and prose has commas in it. The reason is part of the entry and an entry without one is refused — that is the whole price of the hatch.                                             |
 
 Every one of these, and `upgrade-gate` with them, is aimed at a step of the
@@ -195,9 +195,22 @@ that route has to be ramped or reasoned about by name.
 ## What is published
 
 The run summary gets a table — mean requests/s, request count, peak VUs, failure
-rate, p(95)/p(99)/max latency — and the raw k6 summary is uploaded as the
-`capacity-report` artifact, so a run's numbers survive past the log retention
-and can be diffed against another run's.
+rate, p(95)/p(99)/max latency — and everything the steps wrote into the runner
+is uploaded as the `capacity-report` artifact, so a run's evidence survives past
+the runner that produced it:
+
+| File                    | What it answers                                                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------- |
+| `capacity.json`         | the raw k6 summary, which the table is read from and another run's can be diffed against |
+| `route-log-before.json` | what the app declared it serves, and what the boot poll had already reached              |
+| `route-log-after.json`  | the same, after the ramp — the floor's verdict is the difference between the two         |
+| `server.log`            | what the app said while all of that happened                                             |
+
+The upload runs whatever the steps before it did, so a floor that failed, a ramp
+that died on the way to a number, and an app that never answered its health poll
+all leave the same evidence behind. The boot step still prints `server.log` into
+its own output when it gives up, because a failure you can read without
+downloading anything is one fewer round trip.
 
 The requests/s row is the whole run divided by its whole duration, ramp-up and
 ramp-down included, because that is the only rate k6's summary carries. For an

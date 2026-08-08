@@ -34,10 +34,11 @@ inputs:
     default: ""
   capacity-report:
     description: >-
-      The artifact name for the k6 summary. A matrix that ramps more than one
-      leg gives each its own, since an artifact name may only be claimed once.
-      Empty takes the name below, so a caller can pass this straight through
-      without having to know how "unset" is spelled.
+      The artifact name for what the ramp measured and read — the k6 summary,
+      both route-log snapshots and the app's own output. A matrix that ramps
+      more than one leg gives each its own, since an artifact name may only be
+      claimed once. Empty takes the name below, so a caller can pass this
+      straight through without having to know how "unset" is spelled.
     default: ""
   route-allowlist:
     description: >-
@@ -190,14 +191,28 @@ runs:
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/route-coverage.main.ts"
 
-    # A ramp that failed on the way to a number is exactly when the partial
-    # summary is worth having; a cancelled run has nothing to say.
-    - name: Publish the capacity report
+    # Everything the steps above wrote into the runner, which is deleted with
+    # the runner. A step that failed on the way to a number is exactly when its
+    # partial evidence is worth having — the summary of a ramp that died, the
+    # two snapshots behind a floor's verdict, the output of an app that never
+    # answered — and a cancelled run has nothing to say. Reproducing any of
+    # them by re-running with more printing is the shape of debugging every
+    # diagnostic here exists to avoid, so the files leave the run whatever
+    # happened to it.
+    - name: Publish what the ramp measured and what it read
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         # The one place this name is defaulted, so a caller passing an empty
-        # string through is the same as a caller not asking for one.
+        # string through is the same as a caller not asking for one. One
+        # artifact rather than one per file: a name may be claimed once per run,
+        # and a matrix leg that gave this input its own name would still collide
+        # on any second name written out here.
         name: ${{ inputs.capacity-report || 'capacity-report' }}
-        path: ${{ runner.temp }}/capacity.json
+        path: |
+          ${{ runner.temp }}/capacity.json
+          ${{ runner.temp }}/route-log-before.json
+          ${{ runner.temp }}/route-log-after.json
+          ${{ runner.temp }}/server.log
+        # Each of these is written by a step that may not have been reached.
         if-no-files-found: ignore
