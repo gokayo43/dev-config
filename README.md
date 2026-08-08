@@ -598,10 +598,10 @@ jobs:
 | `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                |
 | `test-suite-evidence` | `test-suite-evidence`              | The artifact name for the junit report, for a matrix that runs more than one leg.                                                                                                                                |
 
-`upgrade-gate` and the four capacity inputs are aimed at steps of the database
-job, so passing any of the five with `database: false` fails the run and says
-which — being quietly ignored is how a ramp somebody asked for turns out never
-to have run.
+`upgrade-gate` and every input aimed at a step of the database job — the four
+capacity ones and both allowlists — fail the run when passed with
+`database: false`, and say which: being quietly ignored is how a ramp somebody
+asked for turns out never to have run.
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches

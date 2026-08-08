@@ -110,13 +110,14 @@ jobs:
       - if: >-
           ${{ !inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
           || inputs.capacity-script != '' || inputs['db-gate-evidence'] != ''
-          || inputs.route-allowlist != '') }}
+          || inputs.route-allowlist != '' || inputs.timestamp-allowlist != '') }}
         env:
           UPGRADE_GATE: ${{ inputs.upgrade-gate }}
           CAPACITY_PATH: ${{ inputs.capacity-path }}
           CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
           DB_GATE_EVIDENCE: ${{ inputs['db-gate-evidence'] }}
           ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
+          TIMESTAMP_ALLOWLIST: ${{ inputs.timestamp-allowlist }}
         run: |
           set -euo pipefail
           if [ "$UPGRADE_GATE" = true ]; then
@@ -133,6 +134,9 @@ jobs:
           fi
           if [ -n "$ROUTE_ALLOWLIST" ]; then
             echo "::error::route-allowlist needs database: true — the route floor is measured across the database job's ramp"
+          fi
+          if [ -n "$TIMESTAMP_ALLOWLIST" ]; then
+            echo "::error::timestamp-allowlist needs database: true — the column types are read from the database that job migrates"
           fi
           exit 1
 

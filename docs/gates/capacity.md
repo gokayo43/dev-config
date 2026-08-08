@@ -181,9 +181,9 @@ jobs:
 | `db-gate-evidence` | The artifact name for everything the gate leaves behind. A matrix that runs more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                        |
 | `route-allowlist`  | Routes the ramp cannot cover, as `METHOD /path -- why` entries matching the app's own route table, one per line. The reason is part of the entry and an entry without one is refused — that is the whole price of the hatch.                                                                                              |
 
-Every one of these, and `upgrade-gate` with them, is aimed at a step of the
-database job — so passing any of the five with `database: false` fails the run
-and says which, rather than being ignored. A repo that has written out the
+Every one of these, and `upgrade-gate` and `timestamp-allowlist` with them, is
+aimed at a step of the database job — so passing any of them with
+`database: false` fails the run and says which, rather than being ignored. A repo that has written out the
 routes it wants ramped, or the reasons a route cannot be, has said plainly that
 it expects a ramp.
 
