@@ -9,11 +9,19 @@ inputs:
   working-directory:
     description: Where the suite lives.
     default: .
+  test-suite-evidence:
+    description: >-
+      The artifact name for the junit report. A matrix that runs more than one
+      leg gives each its own, since an artifact name may only be claimed once.
+      Empty takes the name below, so a caller can pass this straight through
+      without having to know how "unset" is spelled.
+    default: ""
 
 runs:
   using: composite
   steps:
-    - shell: bash
+    - name: Run the suite
+      shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
@@ -25,3 +33,18 @@ runs:
           || { echo "::error::skipped tests: a suite whose infrastructure is absent must fail, never skip"; exit 1; }
         ! grep -o '<testcase name="[^"]*"[^>]*assertions="0"' "$RUNNER_TEMP/junit.xml" \
           || { echo "::error::the tests listed above asserted nothing — assert with expect, properties included; an assertion-free pass is indistinguishable from a test that never ran"; exit 1; }
+
+    # The report the two checks above read, which is written into the runner and
+    # deleted with it. A failing suite is exactly when the per-test detail is
+    # worth having — which case skipped, what the timings were, the failure
+    # message bun truncated in the log — so it leaves the run whatever happened
+    # to it, and a cancelled run has nothing to say.
+    - name: Publish the junit report
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs['test-suite-evidence'] || 'test-suite-evidence' }}
+        path: ${{ runner.temp }}/junit.xml
+        # bun writes it before either check reads it, but a run that died on the
+        # command itself never got that far.
+        if-no-files-found: ignore

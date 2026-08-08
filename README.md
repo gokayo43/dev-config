@@ -596,6 +596,7 @@ jobs:
 | `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                                                       |
 | `db-gate-evidence`    | `db-gate-evidence`                 | The artifact name for the k6 summary, the two route-log snapshots and the app's output, for a matrix that runs more than one leg.                                                                                |
 | `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                |
+| `test-suite-evidence` | `test-suite-evidence`              | The artifact name for the junit report, for a matrix that runs more than one leg.                                                                                                                                |
 
 `upgrade-gate` and the four capacity inputs are aimed at steps of the database
 job, so passing any of the five with `database: false` fails the run and says

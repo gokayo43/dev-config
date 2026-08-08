@@ -63,6 +63,12 @@ on:
           default lives.
         type: string
         default: ""
+      test-suite-evidence:
+        description: >-
+          The artifact name for the junit report, for a matrix that runs more than one leg.
+          Empty takes test-suite's own name, which is where that default lives.
+        type: string
+        default: ""
       route-allowlist:
         description: >-
           Routes the capacity ramp cannot cover, as `METHOD /path -- why` entries,
@@ -164,6 +170,8 @@ jobs:
       - run: bun run knip
 
       - uses: gokayo43/dev-config/.github/actions/test-suite@8f3d9b68cd16b8530e3e0067a956267817444ef0 # v0.42.0
+        with:
+          test-suite-evidence: ${{ inputs['test-suite-evidence'] }}
 
   database:
     if: inputs.database
