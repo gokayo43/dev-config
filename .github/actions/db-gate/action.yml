@@ -56,6 +56,27 @@ inputs:
       directive pays.
     default: ""
 
+# One action rather than several, and not because everything here is about the
+# database — "Replay the migrations" and "Every instant carries its zone" are,
+# while "Boot against that database", "Capacity ramp" and "Every route the ramp
+# reaches" are about the app the schema has to be able to run. The directory is
+# named for what `database: true` buys.
+#
+# What holds them together is the migrated database itself: every step below is
+# rooted in the replay, and the app steps are ordered among themselves — nothing
+# can read a column type before the migrations ran, boot before there is a
+# schema, ramp before the app answers, or count routes before the ramp. Only
+# "Every instant carries its zone" is free of the rest, which makes it a partial
+# order rather than a chain, and one composite's step list is the strongest form
+# that ordering takes: split across actions it becomes prose in two descriptions
+# and an order a caller can get wrong.
+#
+# "Publish what the ramp measured and what it read" is what settles it. The k6
+# summary and both route-log snapshots come from "Capacity ramp", the app's own
+# output from "Boot against that database", and db-gate-evidence above says why
+# they leave as one artifact — so one job's evidence is one upload, and an
+# upload belongs to whatever runs the whole job. Which is to say the boundary
+# cannot be drawn between the database and the app either.
 runs:
   using: composite
   steps:
@@ -221,9 +242,9 @@ runs:
       with:
         # The one place this name is defaulted, so a caller passing an empty
         # string through is the same as a caller not asking for one. One
-        # artifact rather than one per file: a name may be claimed once per run,
-        # and a matrix leg that gave this input its own name would still collide
-        # on any second name written out here.
+        # artifact rather than one per file, for the reason the input above
+        # gives: a matrix leg that gave this input its own name would still
+        # collide on any second name written out here.
         name: ${{ inputs['db-gate-evidence'] || 'db-gate-evidence' }}
         # server.log is copied while the app still holds it open, which is not a
         # race to fix: the ramp needs the process alive, so there is no moment
