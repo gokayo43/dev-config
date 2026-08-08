@@ -1,12 +1,18 @@
 import { describe, expect, test } from "bun:test";
 
+import { SQL } from "bun";
+
 import {
   beside,
   compare,
   databaseIn,
+  discard,
   type Dump,
   scratchDatabase,
 } from "../.github/actions/db-gate/database.ts";
+
+const SERVER =
+  Bun.env["TEST_DATABASE_URL"] ?? "postgres://postgres:postgres@localhost:5432/postgres";
 
 describe("a database beside the one the caller declared", () => {
   const declared = "postgres://postgres:hunter2@localhost:5432/app";
@@ -105,5 +111,63 @@ describe("comparing two dumps", () => {
     expect(difference?.lines).toEqual([
       "only in the data before: INSERT INTO t VALUES (1, 'A\nB');",
     ]);
+  });
+});
+
+/**
+ * The cleanup a gate does on its way out, driven against a connection that
+ * cannot carry it. A closed client is the deterministic form of the thing that
+ * happens for real — the server going away mid-run, the backend terminated,
+ * the container stopped — because a killed connection is reconnected under us
+ * often enough that a test built on one grades the reconnect instead.
+ */
+describe("giving up the database a gate built", () => {
+  async function unusable(): Promise<SQL> {
+    const server = new SQL(SERVER);
+    await server.unsafe("select 1");
+    await server.close();
+    return server;
+  }
+
+  function logged(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const wrote = console.log;
+    console.log = (line: unknown) => void lines.push(String(line));
+    return { lines, restore: () => void (console.log = wrote) };
+  }
+
+  test("a drop that cannot run does not become the error the run reports", async () => {
+    const server = await unusable();
+    const captured = logged();
+
+    // The shape the gates use it in. `boom` is the failure the author has to
+    // read; a `finally` that throws would replace it with one about cleanup.
+    const surfaced = await (async () => {
+      try {
+        throw new Error("boom: the migration that would not apply");
+      } finally {
+        await discard(server, "backfill_0123456789abcdef");
+      }
+    })().then(
+      () => "no error at all",
+      (thrown: unknown) => (thrown instanceof Error ? thrown.message : String(thrown)),
+    );
+    captured.restore();
+
+    expect(surfaced).toBe("boom: the migration that would not apply");
+    expect(captured.lines.length).toBe(1);
+    expect(captured.lines[0]).toContain("::notice::could not drop backfill_0123456789abcdef");
+  });
+
+  test("the database it could not drop is named as reclaimed, not lost", async () => {
+    const server = await unusable();
+    const captured = logged();
+
+    await discard(server, "upgrade_path_fedcba9876543210");
+    captured.restore();
+
+    expect(captured.lines.join("\n")).toContain(
+      "drops it by the same derived name before it creates one",
+    );
   });
 });

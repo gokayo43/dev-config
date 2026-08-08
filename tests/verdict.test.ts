@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import { passed, refused, reportVerdict } from "../.github/actions/db-gate/verdict.ts";
 
@@ -12,16 +12,23 @@ import { passed, refused, reportVerdict } from "../.github/actions/db-gate/verdi
 function logged(run: () => void): string[] {
   const lines: string[] = [];
   const wrote = console.log;
-  const code = process.exitCode;
   console.log = (line: unknown) => void lines.push(String(line));
   try {
     run();
   } finally {
     console.log = wrote;
-    process.exitCode = code;
   }
   return lines;
 }
+
+// A refusal sets the exit code, which is the process the suite is running in.
+// Reset rather than saved and restored around each case: restoring what was
+// captured writes `undefined` back, which Bun reads as no change at all, so the
+// file leaves a failing exit code behind and the run is only green while some
+// later file happens to clear it.
+afterEach(() => {
+  process.exitCode = 0;
+});
 
 describe("what a verdict puts in the log", () => {
   test("a verdict that held is one notice and no failure", () => {

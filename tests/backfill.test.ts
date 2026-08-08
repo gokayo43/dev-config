@@ -49,13 +49,63 @@ function runs(statements: readonly string[]): string {
 }
 
 /** Two rows for the backfill to find: the state a phased rollout's expand step leaves. */
-const SEEDS = `insert into "thing" ("id", "name") values (1, 'One Thing'), (2, 'Two Thing')`;
+function SEEDS_FOR(table: string): string {
+  return `insert into "${table}" ("id", "name") values (1, 'One Thing'), (2, 'Two Thing')`;
+}
+
+const SEEDS = SEEDS_FOR("thing");
 
 /** The guarded shape: the second run finds nothing left to do. */
 const GUARDED = `update "thing" set "slug" = lower("name") where "slug" is null`;
 
 /** The shape this gate exists to catch: no guard, so every run appends again. */
 const APPENDS = `insert into "audit" ("what") select 'backfilled ' || "id" from "thing"`;
+
+/**
+ * Tables whose names have to be quoted in the dump, and the two ways a scanner
+ * that walks past a quoted name without knowing it is one gets the answer
+ * wrong. `aaa_thing` sorts first and `zzz_audit` last, because pg_dump writes
+ * tables in name order and each fixture needs the quoted name in a particular
+ * place relative to the rows that matter.
+ */
+function CREATES_APOSTROPHE(): Migration {
+  return {
+    tag: "0000_quoted",
+    when: 1_000,
+    sql:
+      `CREATE TABLE "aaa_thing" (\n\t"id" integer PRIMARY KEY NOT NULL,\n\t"name" text NOT NULL\n);\n` +
+      `CREATE TABLE "it's" (\n\t"id" integer PRIMARY KEY NOT NULL\n);\n` +
+      `CREATE TABLE "zzz_audit" (\n\t"id" serial PRIMARY KEY NOT NULL,\n\t"what" text NOT NULL\n);\n`,
+  };
+}
+
+function CREATES_DOUBLE_DASH(): Migration {
+  return {
+    tag: "0000_quoted",
+    when: 1_000,
+    sql:
+      `CREATE TABLE "aaa_thing" (\n\t"id" integer PRIMARY KEY NOT NULL,\n\t"name" text NOT NULL\n);\n` +
+      `CREATE TABLE "zzz--audit" (\n\t"id" serial PRIMARY KEY NOT NULL,\n\t"what" text NOT NULL UNIQUE\n);\n`,
+  };
+}
+
+/** Rows in `it's` too, so that the quoted name reaches the dump the gate reads. */
+const APOSTROPHE_SEEDS = `${SEEDS_FOR("aaa_thing")}; insert into "it's" ("id") values (1)`;
+
+const DOUBLE_DASH_SEEDS = SEEDS_FOR("aaa_thing");
+
+/** Unguarded, into the table that sorts after the quoted name. */
+const APPENDS_PAST_QUOTE = `insert into "zzz_audit" ("what") select 'backfilled ' || "id" from "aaa_thing"`;
+
+/**
+ * Guarded, into the quoted-name table itself — and guarded by a conflict clause
+ * rather than a `where`, so the second run writes no row but still draws from
+ * the sequence. That is what makes the `setval` pg_dump writes after the rows
+ * differ between the two runs while the rows themselves do not.
+ */
+const GUARDED_PAST_DASH =
+  `insert into "zzz--audit" ("what") select 'backfilled ' || "id" from "aaa_thing"` +
+  ` on conflict ("what") do nothing`;
 
 const temps: string[] = [];
 const databases: string[] = [];
@@ -88,10 +138,11 @@ interface Ran {
 async function running(
   backfill: string,
   seed: string = SEEDS,
+  creates: Migration = CREATES_THING,
 ): Promise<{ verdict: Promise<Verdict>; evidence: Evidence; database: string }> {
   const repo = await history({
     ...migratesFrom(MIGRATOR, "drizzle"),
-    ...lineage("drizzle", CREATES_THING),
+    ...lineage("drizzle", creates),
     "seed.ts": runs([seed]),
     "backfill.ts": runs([backfill]),
   });
@@ -119,8 +170,12 @@ async function running(
  * the same thing for the cases that need the evidence paths of a run that
  * throws, which cannot come back through a return.
  */
-async function ran(backfill: string, seed: string = SEEDS): Promise<Ran> {
-  const started = await running(backfill, seed);
+async function ran(
+  backfill: string,
+  seed: string = SEEDS,
+  creates: Migration = CREATES_THING,
+): Promise<Ran> {
+  const started = await running(backfill, seed, creates);
   return { verdict: await started.verdict, evidence: started.evidence, database: started.database };
 }
 
@@ -210,6 +265,59 @@ describe("the backfill check", () => {
     ]);
   });
 
+  // A table whose name needs quoting is written back quoted, and the quoted name
+  // is data the scanner walks through. Both cases below are the same root — the
+  // cutter loses its place on a quoted name — and they are two tests because
+  // the two characters break it in opposite directions, so a fix for one does
+  // not demonstrate the other.
+  //
+  // Not a hypothetical pairing: `dataOf` compares whole sorted statements
+  // *because* a line-wise reading traded fragments between rows, and a cutter
+  // wrong about where a statement ends is that same false verdict by another
+  // route.
+  //
+  // The apostrophe is the dangerous one. It opens a literal that runs to the
+  // next `'` in the dump, so the `;` terminators after it stop cutting and the
+  // rows of every table sorting after the quoted name fall out of the
+  // comparison — out of *both* runs' dumps equally, which is what makes it a
+  // pass rather than a crash. The `.rows` evidence is written from the same
+  // reading, so it corroborates the wrong answer: a reader checking the gate's
+  // work sees two files that agree and no sign of the rows that went missing.
+  test("an apostrophe in a table name does not hide what a second run changed", async () => {
+    const { verdict } = await ran(APPENDS_PAST_QUOTE, APOSTROPHE_SEEDS, CREATES_APOSTROPHE());
+
+    expect(messages(verdict)).toEqual([
+      containing("running the backfill a second time changed the data"),
+    ]);
+  });
+
+  // The double dash breaks it the other way. It opens a comment that ends at
+  // the newline, so nothing is lost — but the `;` that ended the row goes with
+  // it, and the row merges with whatever pg_dump wrote next into a single unit
+  // that still begins `INSERT INTO ` and so still passes the row filter. What
+  // rides in with it is whatever follows: here the `setval` for a sequence,
+  // which is exactly what that filter exists to keep out of a comparison, and
+  // in general anything at all.
+  //
+  // The assertion is on the evidence rather than the verdict, because whether a
+  // merged unit changes the verdict depends on what happens to sit after the
+  // quoted name in the dump — which makes it a bad oracle, not a safe one. What
+  // is true either way is that the file the step publishes as the rows it
+  // compared has to be rows: one `INSERT` per line, nothing else. With the
+  // scanner reading `--` inside a name as a comment, this file carries a
+  // `SELECT pg_catalog.setval(...)` and the comment block above it.
+  test("a double dash in a table name leaves the comparison rows and nothing else", async () => {
+    const { verdict, evidence } = await ran(
+      GUARDED_PAST_DASH,
+      DOUBLE_DASH_SEEDS,
+      CREATES_DOUBLE_DASH(),
+    );
+
+    expect(messages(verdict)).toEqual([]);
+    const compared = (await Bun.file(evidence.first).text()).trimEnd().split("\n");
+    expect(compared.filter((line) => !line.startsWith("INSERT INTO "))).toEqual([]);
+  });
+
   // A backfill against a database the migrations have just built has nothing to
   // find, so it is trivially idempotent — which is exactly the pass that would
   // certify nothing at all.
@@ -250,13 +358,17 @@ describe("the backfill check", () => {
     expect(await Bun.file(started.evidence.second).exists()).toBe(false);
   });
 
+  // Two full gate runs in one case, where every other case here is one, so this
+  // is the case that trips the default per-test timeout when the suite shares a
+  // machine with another run — which review does routinely. The timeout is what
+  // it takes for that to stop being a signal about the machine.
   test("the database it builds is gone whichever way it went", async () => {
     const clean = await ran(GUARDED);
     expect(await exists(clean.database)).toBe(false);
 
     const dirty = await ran(APPENDS);
     expect(await exists(dirty.database)).toBe(false);
-  });
+  }, 30_000);
 
   // The declared database is what the app boots against a few steps later, and
   // the seed's rows have no business being in it.

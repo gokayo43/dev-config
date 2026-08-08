@@ -1,6 +1,15 @@
 import { SQL } from "bun";
 
-import { beside, compare, type Dump, dumpOf, migrate, scratchDatabase, shell } from "./database.ts";
+import {
+  beside,
+  compare,
+  discard,
+  type Dump,
+  dumpOf,
+  migrate,
+  scratchDatabase,
+  shell,
+} from "./database.ts";
 import { passed, refused, type Verdict } from "./verdict.ts";
 
 /**
@@ -71,8 +80,8 @@ const JOURNAL_ROW = /^INSERT INTO \S*__drizzle_migrations\b/;
 /**
  * A chunk of the dump as the statement it is, once the comment lines above it
  * are dropped. Only the head of a chunk can be one: a `--` further in has
- * either already been read as a comment or is inside a string literal, and
- * either way it is not this statement's beginning.
+ * already been read as a comment, or sits inside a string literal or a quoted
+ * identifier, and in none of those cases is it this statement's beginning.
  */
 function statementIn(chunk: string): string {
   const lines = chunk.split("\n");
@@ -89,13 +98,24 @@ function statementIn(chunk: string): string {
  * The dump cut into statements — the unit the data half is compared in, and the
  * whole reason this reads the text rather than splitting it.
  *
- * A statement ends at the first `;` that is neither inside a string literal nor
- * inside a `--` comment, which is the entire grammar `pg_dump --data-only
- * --inserts` emits. Both exceptions are load-bearing against real output: a
- * value may contain `;`, and pg_dump's own `-- Data for Name: t; Type: TABLE
- * DATA; Schema: public` header would otherwise cut the statement under it into
- * four. A doubled `''` needs no case of its own — it closes the literal and
- * reopens it, which leaves the scanner exactly where it was.
+ * A statement ends at the first `;` that is outside all three things a `;` can
+ * hide inside of: a `'` string literal, a `"` quoted identifier, and a `--`
+ * comment. Each is load-bearing against real output. A value may contain `;`.
+ * pg_dump's own `-- Data for Name: t; Type: TABLE DATA; Schema: public` header
+ * would otherwise cut the statement under it into four. And a table whose name
+ * needs quoting is written back quoted — `INSERT INTO public."it's"` and
+ * `public."da--sh"` are both real dumps of real tables, and a scanner that
+ * reads that `'` as a literal or that `--` as a comment runs on past the `;`
+ * and swallows the rows after it.
+ *
+ * Neither doubled form needs a case of its own: `''` and `""` each close and
+ * reopen, which leaves the scanner exactly where it was.
+ *
+ * Nothing else in this dialect hides a `;`. Dollar quoting reaches data-only
+ * output only inside a function body, which `--data-only` does not write, and
+ * the `E'…'` escape string — where a backslash would escape the closing quote —
+ * is not emitted under the `standard_conforming_strings = on` that the dump
+ * sets in its own header two lines above the first row.
  *
  * Everything after the last `;` is not a statement: the `\unrestrict` line
  * pg_dump signs off with, and nothing else.
@@ -103,19 +123,25 @@ function statementIn(chunk: string): string {
 function statementsIn(dump: string): string[] {
   const statements: string[] = [];
   let start = 0;
-  let quoted = false;
-  let commented = false;
+  let inLiteral = false;
+  let inIdentifier = false;
+  let inComment = false;
   for (let at = 0; at < dump.length; at++) {
-    if (commented) {
-      if (dump[at] === "\n") commented = false;
+    if (inComment) {
+      if (dump[at] === "\n") inComment = false;
       continue;
     }
-    if (quoted) {
-      if (dump[at] === "'") quoted = false;
+    if (inLiteral) {
+      if (dump[at] === "'") inLiteral = false;
       continue;
     }
-    if (dump[at] === "'") quoted = true;
-    else if (dump[at] === "-" && dump[at + 1] === "-") commented = true;
+    if (inIdentifier) {
+      if (dump[at] === '"') inIdentifier = false;
+      continue;
+    }
+    if (dump[at] === "'") inLiteral = true;
+    else if (dump[at] === '"') inIdentifier = true;
+    else if (dump[at] === "-" && dump[at + 1] === "-") inComment = true;
     else if (dump[at] === ";") {
       statements.push(statementIn(dump.slice(start, at + 1)));
       start = at + 1;
@@ -254,7 +280,6 @@ export async function backfillGate({
       `backfill: \`${command}\` leaves the same data when it runs a second time over the state \`${seed}\` writes`,
     );
   } finally {
-    await server.unsafe(`drop database if exists "${database}" with (force)`);
-    await server.close();
+    await discard(server, database);
   }
 }

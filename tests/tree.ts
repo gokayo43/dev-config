@@ -1,12 +1,38 @@
 import { afterEach } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /** A repository as a map of path to contents. Absent means the file is not there. */
 export type Tree = Record<string, string>;
 
 const live: string[] = [];
+
+/**
+ * Where a fixture repository goes, and deliberately not `mkdtemp`.
+ *
+ * The gates under test name the database they build after the checkout they
+ * were pointed at, so that a run killed outright leaves a name the next run
+ * derives again and drops before it creates. A fixture root that is new on
+ * every run defeats exactly that: every case invents a database name nothing
+ * will ever derive a second time, and a suite that dies to a `kill -9` leaves
+ * one behind on the server forever. Deriving the root instead — from this
+ * worktree, and from the order the fixtures are made in — puts the next run of
+ * this suite on the same names, where `drop database if exists` reclaims them.
+ *
+ * The worktree is in the name for the reason `scratchDatabase` has it: two
+ * checkouts under review at once must not share fixture roots. Two runs of one
+ * checkout at once is not a thing to protect here, because the gates these
+ * fixtures drive would already be building one another's databases.
+ */
+const WORKTREE = dirname(import.meta.dir);
+const FIXTURES = join(
+  tmpdir(),
+  `gate-fixtures-${new Bun.CryptoHasher("sha256").update(WORKTREE).digest("hex").slice(0, 16)}`,
+);
+
+/** The fixture's position in the run, which is the half of its name that varies. */
+let made = 0;
 
 // Registered once, here, rather than copied into every suite: a new case cannot
 // forget the cleanup, and a forgotten one leaves a git repository per test
@@ -22,7 +48,12 @@ afterEach(async () => {
  * has just written exactly those.
  */
 export async function materialise(tree: Tree, tracked: readonly string[] = []): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "gate-"));
+  const root = join(FIXTURES, `${made++}`);
+  // Whatever a killed run left at this exact path, rather than a sweep of the
+  // directory: a sweep is how two runs sharing a server delete each other's
+  // work, and this reclaims only the name it is about to write.
+  await rm(root, { recursive: true, force: true });
+  await mkdir(root, { recursive: true });
   live.push(root);
   for (const [path, contents] of Object.entries(tree)) {
     await Bun.write(join(root, path), contents);

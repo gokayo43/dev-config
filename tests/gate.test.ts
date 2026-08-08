@@ -233,3 +233,29 @@ describe("a repository built from a list of trees", () => {
     expect(await treeAt(repo.root, "HEAD")).toEqual(["a.txt"]);
   });
 });
+
+describe("a message that is not the gate author's to trust", () => {
+  // Every diagnostic these gates write quotes something they read — a row out
+  // of a dump, an allowlist entry, a path. GitHub parses one workflow command
+  // per line, so an unescaped newline in any of that ends the annotation and
+  // offers the rest to the parser: `::add-mask::` in a row value would be a
+  // command the runner obeys, and the half of the message after it would never
+  // be rendered on the step at all.
+  test("a newline in a message does not start a second command", () => {
+    const { lines, restore } = captureLog();
+
+    report([{ message: "row differs: 'para one\n::add-mask::secret\npara two'" }]);
+    restore();
+
+    expect(lines).toEqual(["::error::row differs: 'para one%0A::add-mask::secret%0Apara two'"]);
+  });
+
+  test("a percent is escaped before what the escaping introduces", () => {
+    const { lines, restore } = captureLog();
+
+    notice("coverage fell to 80% \r\nof the floor");
+    restore();
+
+    expect(lines).toEqual(["::notice::coverage fell to 80%25 %0D%0Aof the floor"]);
+  });
+});

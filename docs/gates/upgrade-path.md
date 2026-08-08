@@ -136,8 +136,12 @@ refused where the lineages are read, before anything moves.
 The second database is created on the service the calling job declared and
 dropped again whichever way the comparison goes — and dropped before it is
 created, so a run killed between the two ends does not leave the next one
-failing over a name its author never chose. The database the app boots against
-is the fresh one and is never touched by any of this.
+failing over a name its author never chose. A drop that cannot run at all —
+the server having gone away under the step — is reported as a notice rather
+than raised: the error the step is ending on is the one its author has to read,
+and cleanup that replaced it would cost them the reason. What that leaves is
+reclaimed the way a killed run's is. The database the app boots against is the
+fresh one and is never touched by any of this.
 
 Its name is `upgrade_path_<digest>`, the digest being of the project directory
 being replayed. In the shape this ships in — a service container per job — a

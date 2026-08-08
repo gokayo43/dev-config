@@ -1,4 +1,7 @@
+import type { SQL } from "bun";
 import { resolve } from "node:path";
+
+import { notice } from "../_lib/gate.ts";
 
 /**
  * Not a gate. What the gates in this directory that build a database of their
@@ -47,6 +50,34 @@ export function scratchDatabase(root: string, purpose: string): string {
   // is one database rather than two.
   const digest = new Bun.CryptoHasher("sha256").update(resolve(root)).digest("hex");
   return `${purpose}_${digest.slice(0, 16)}`;
+}
+
+/**
+ * The end of a gate that built a database of its own: the database goes, the
+ * connection goes, and neither of them takes the reason the gate is ending.
+ *
+ * This is what a `finally` is for and where a throw is pure loss. The error on
+ * its way out is the one the author has to read; an error raised here would
+ * replace it, and the replacement is always about cleanup — so the run that
+ * failed because the server went away reports `terminating connection due to
+ * administrator command` and never mentions the migration that would not
+ * apply. Worse, the throw skips the close under it, which is how a gate that
+ * already lost its server also leaks the client.
+ *
+ * So the drop's failure is a notice and the close always runs. Leaving the
+ * database behind is the cheap half of that trade: `scratchDatabase` derives
+ * the name from the checkout, so the next run of this gate drops it before it
+ * creates it, which is the same reclaiming that covers a run killed outright.
+ */
+export async function discard(server: SQL, database: string): Promise<void> {
+  try {
+    await server.unsafe(`drop database if exists "${database}" with (force)`);
+  } catch (failure) {
+    notice(
+      `could not drop ${database}, the database this gate built for itself — ${failure instanceof Error ? failure.message : String(failure)}. The next run from this checkout drops it by the same derived name before it creates one, so it is reclaimed rather than leaked.`,
+    );
+  }
+  await server.close();
 }
 
 /**
@@ -131,7 +162,17 @@ export interface Dump {
   readonly units: readonly string[];
 }
 
-/** The text two dumps are equal by, which is their units and their order. */
+/**
+ * The text two dumps are equal by, which is their units and their order.
+ *
+ * Joining on a separator a unit may itself contain looks like it could equate
+ * two different partitions, and cannot. Both sides are cut by one scanner from
+ * one grammar, so the boundaries are a function of the text: two unit lists
+ * that join to the same string were cut from the same string, and are the same
+ * list. Reading the units back out of the join — a length prefix, a separator
+ * no unit can hold — would be machinery against an ambiguity that needs two
+ * different cutters to exist.
+ */
 function joined({ units }: Dump): string {
   return units.join("\n");
 }

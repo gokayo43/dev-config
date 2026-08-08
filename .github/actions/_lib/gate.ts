@@ -11,6 +11,23 @@ export interface Problem {
 }
 
 /**
+ * A message as a workflow command carries it.
+ *
+ * GitHub reads one command per line, so a newline inside a message ends the
+ * annotation and offers whatever follows to the parser as a command in its own
+ * right. The messages here quote what the gates read — a row out of a dump, a
+ * line of a config, a path — so the text is not the gate author's to trust, and
+ * a value holding `\n::add-mask::` would be obeyed rather than shown.
+ *
+ * Percent first, or the escapes the other two introduce would be escaped again
+ * and arrive as `%250A`. Only the three characters GitHub decodes: this is its
+ * encoding, and anything else escaped here arrives visibly wrong.
+ */
+function commanded(message: string): string {
+  return message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+}
+
+/**
  * Annotates every problem and fails the step once. A gate that exits at the
  * first violation costs a full CI round-trip per fix, and a bare non-zero exit
  * points at the workflow rather than at the line that has to change.
@@ -19,8 +36,8 @@ export function report(problems: readonly Problem[]): void {
   for (const problem of problems) {
     console.log(
       problem.file === undefined
-        ? `::error::${problem.message}`
-        : `::error file=${problem.file}::${problem.message}`,
+        ? `::error::${commanded(problem.message)}`
+        : `::error file=${problem.file}::${commanded(problem.message)}`,
     );
   }
   if (problems.length > 0) process.exitCode = 1;
@@ -28,7 +45,7 @@ export function report(problems: readonly Problem[]): void {
 
 /** Says something the log should carry but no build should fail over. */
 export function notice(message: string): void {
-  console.log(`::notice::${message}`);
+  console.log(`::notice::${commanded(message)}`);
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   beside,
   compare,
   databaseIn,
+  discard,
   type Dump,
   dumpOf,
   migrate,
@@ -477,8 +478,7 @@ async function upgradedSchema(
       replayed: asked.filter(({ clocks }) => clocks.length > 0).map(({ dir }) => dir),
     };
   } finally {
-    await server.unsafe(`drop database if exists "${database}" with (force)`);
-    await server.close();
+    await discard(server, database);
   }
 }
 
