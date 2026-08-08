@@ -65,6 +65,16 @@ legitimate when someone means it, so one manifest cannot tell that rewrite from
 a deliberate pin, and there is nothing here to check it against. What catches it
 is review, or not running `bun add` for a package the manifest already declares.
 
+Nor most dist tags. What is refused is a spec naming no version at all, which
+catches the two people type — `latest` and `next`. A tag carrying a digit reads
+as a range and passes: `next-13`, `beta2`. Nothing cheap tells them apart, and
+`v2` is genuinely both — a tag someone publishes and the range for 2.x. Bun's
+semver cannot be borrowed as the oracle either: it treats a string it cannot
+parse as matching everything, so `Bun.semver.satisfies("99.0.0", "latest")` is
+`true`, and "is this a range" and "does this accept everything" come back with
+the same answer. The rule catches the spellings that actually get typed and
+claims nothing more.
+
 # Going live
 
 Nothing can derive whether a repo is carrying real people. A repo with a

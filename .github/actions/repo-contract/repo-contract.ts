@@ -422,7 +422,9 @@ const FROM_NOTHING = /^>=\s*0(\.0){0,2}(-0)?$/;
  *
  * A range that names no version at all is refused beside those for a different
  * reason, which the diagnostic says: it is a dist tag, npm repoints those, and
- * what it points at today is not in this manifest.
+ * what it points at today is not in this manifest. That catches the tags people
+ * type — `latest`, `next` — and not the ones carrying a digit; the gate page
+ * says why nothing here can do better.
  *
  * `bun add <pkg>` for a package the manifest already lists as a peer writes one
  * of these rather than adding a devDependency (bun 1.3.11), and which one
@@ -459,8 +461,6 @@ const PIN_RULES: Record<(typeof DEPENDENCY_FIELDS)[number], Rule> = {
   dependencies: installed,
   devDependencies: installed,
   optionalDependencies: installed,
-  // peerDependencies are the one place a range is the point: they declare what
-  // a consumer may bring, not what this repo installs.
   peerDependencies: peerRange,
 };
 
