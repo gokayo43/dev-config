@@ -78,7 +78,10 @@ on:
         type: string
         default: ""
       timestamp-allowlist:
-        description: schema.table.column entries whose value is a wall-clock reading rather than an instant, one per line.
+        description: >-
+          schema.table.column entries whose value is a wall-clock reading rather than an
+          instant, as `schema.table.column -- why` entries, one per line. The reason is
+          part of the entry, and an entry without one is refused.
         type: string
         default: ""
 

@@ -40,13 +40,18 @@ a wall-clock reading is the point — an opening time that is 09:00 wherever the
 shop is. The schema is part of the key because two of them can hold the same
 table, and an allowlist that could not tell `app.events.occurred_at` from
 `public.events.occurred_at` would exempt both. Entries are one per line rather
-than space-separated, because a quoted identifier can itself contain a space:
+than space-separated, because a quoted identifier can itself contain a space.
+
+Each entry carries `-- why`, the same price `route-allowlist` pays and the same
+one a lint directive pays: an exemption nobody had to justify is one nobody can
+review a year later, so an entry without a reason is refused and still exempts
+nothing.
 
 ```yaml
 with:
   timestamp-allowlist: |
-    public.opening_hours.opens_at
-    public.audit log.at
+    public.opening_hours.opens_at -- the shop's own clock, 09:00 wherever it is
+    public.audit log.at -- the shift board's wall time, not an instant
 ```
 
 Once it has booted, the job ramps it and publishes what that measured.

@@ -50,9 +50,10 @@ inputs:
     default: ""
   timestamp-allowlist:
     description: >-
-      schema.table.column entries whose value really is a wall-clock reading
-      rather than an instant, one per line — an identifier may itself contain a
-      space.
+      Columns whose value really is a wall-clock reading rather than an instant,
+      as `schema.table.column -- why` entries, one per line — an identifier may
+      itself contain a space. The reason is part of the entry, the price a lint
+      directive pays.
     default: ""
 
 runs:
