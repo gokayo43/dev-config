@@ -150,6 +150,22 @@ describe("how a dependency spec is graded", () => {
   );
 
   // Not a range at all: what it points at is not in this manifest, and it moves.
+  // A protocol spec is one source, never an operand: a union names versions, and
+  // a source is not a version. Read whole, `workspace:* || latest` was a
+  // protocol spec with something after it and passed, while the same pair
+  // written the other way round was refused — one verdict for two spellings of
+  // one thing.
+  test.each([
+    "workspace:* || latest",
+    "latest || workspace:*",
+    "file:../x || latest",
+    "latest || file:../x",
+    "npm:react@1 || latest",
+    "latest || npm:react@1",
+  ])("a union with a dist tag in it (%s) is refused whichever side it sits", async (spec) => {
+    expect(await peer(spec)).toEqual([containing("peerDependencies.react is declared as")]);
+  });
+
   test.each(["latest", "next", "beta", "latest || 1"])(
     "a peer range with a dist tag in it (%s) is refused",
     async (spec) => {

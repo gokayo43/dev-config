@@ -159,7 +159,14 @@ const peerRange: Rule = (spec) => {
   // A protocol says where the package comes from rather than which versions do,
   // and the semver below would read it as a string it cannot parse — which is to
   // say, as a range that takes anything.
-  if (namesSource(range)) return undefined;
+  //
+  // Only when it is the whole spec. A source is one place and cannot be one
+  // alternative among versions, so a `||` here means the string is a union
+  // whatever its first operand looks like — and read whole, `workspace:* ||
+  // latest` passed while `latest || workspace:*` was refused, which is one
+  // verdict for two spellings of the same thing. Unions fall through to the
+  // grading below, which reads every operand.
+  if (!range.includes("||") && namesSource(range)) return undefined;
   if (namesATag(range)) {
     return `is declared as '${spec}' — a peer range names versions, and a dist tag names whatever it points at today; write the range it stands for`;
   }
