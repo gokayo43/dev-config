@@ -135,13 +135,32 @@ describe("repo contract", () => {
     expect(await contract(withSpec("oxfmt", spec))).toEqual([containing("devDependencies.oxfmt")]);
   });
 
-  test("a peer range is the one place a range means something", async () => {
-    expect(
-      await contract(
-        manifestWith((contents) => (contents["peerDependencies"] = { react: ">=19" })),
-      ),
-    ).toEqual([]);
-  });
+  test.each([">=19", "^1.2.3 || ^2", "1.x", ">=1.2.3 <2", "19.0.0", "workspace:*"])(
+    "a peer range that names versions (%s) is the one place a range means something",
+    async (spec) => {
+      expect(
+        await contract(
+          manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  // What `bun add <pkg>` writes when the manifest already lists <pkg> as a peer
+  // (bun 1.3.11): the range is blanked and no devDependency is added. An empty
+  // range is not a no-op — it is what a consumer resolves against, and it
+  // resolves to every version there is. `*` and `x` are the same statement
+  // spelled deliberately, and nothing else here reads peerDependencies.
+  test.each(["", " ", "*", "x", "X", "latest"])(
+    "a peer range that names no version (%p) is refused",
+    async (spec) => {
+      expect(
+        await contract(
+          manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
+        ),
+      ).toEqual([containing(`peerDependencies.react is declared as '${spec}'`)]);
+    },
+  );
 
   test("typescript below 7 is refused", async () => {
     expect(await contract(withSpec("typescript", "5.9.3"))).toEqual([

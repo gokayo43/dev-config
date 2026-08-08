@@ -370,11 +370,27 @@ function extendsList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
 }
 
+/**
+ * Whether a peer range says which versions it will take. Any spec that resolves
+ * to one tree does, and so does any range naming a version — `>=6`, `1.x`,
+ * `^1 || ^2`. `""`, `*` and `latest` name none, resolve to every version there
+ * is, and say exactly what declaring no peer at all says, with a line in the
+ * manifest claiming otherwise.
+ *
+ * The empty one is reachable without anyone choosing it: `bun add <pkg>` for a
+ * package the manifest already lists as a peer blanks that range and adds no
+ * devDependency (bun 1.3.11). It is a one-character diff in a field the pin
+ * check deliberately does not read, which is how it survives review.
+ */
+function namesVersions(spec: string): boolean {
+  return isExact(spec) || /\d/.test(spec);
+}
+
 function checkPins(all: readonly Manifest[]): Problem[] {
-  // peerDependencies are the one place a range is the point: they declare what
-  // a consumer may bring, not what this repo installs.
-  return all.flatMap(({ file, value }) =>
-    (["dependencies", "devDependencies", "optionalDependencies"] as const).flatMap((field) =>
+  return all.flatMap(({ file, value }) => [
+    // What this repo installs names one tree, so that a lockfile refresh cannot
+    // change what it installed.
+    ...(["dependencies", "devDependencies", "optionalDependencies"] as const).flatMap((field) =>
       Object.entries(record(value[field]))
         .filter(([, spec]) => typeof spec !== "string" || !isExact(spec))
         .map(([name, spec]) => ({
@@ -382,7 +398,16 @@ function checkPins(all: readonly Manifest[]): Problem[] {
           message: `${field}.${name} is declared as '${String(spec)}' — a dependency names one exact version, or a protocol that resolves to one tree`,
         })),
     ),
-  );
+    // peerDependencies are the one place a range is the point: they declare what
+    // a consumer may bring, not what this repo installs — so what is refused
+    // here is a range that constrains nothing.
+    ...Object.entries(record(value["peerDependencies"]))
+      .filter(([, spec]) => typeof spec !== "string" || !namesVersions(spec))
+      .map(([name, spec]) => ({
+        file,
+        message: `peerDependencies.${name} is declared as '${String(spec)}' — a peer range names the versions a consumer may bring, and 'bun add' blanks the range of a package already listed here rather than adding it, so write this one by hand`,
+      })),
+  ]);
 }
 
 async function checkLockfiles(root: string): Promise<Problem[]> {

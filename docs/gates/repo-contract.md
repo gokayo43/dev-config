@@ -10,6 +10,7 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `packageManager` reads `bun@<version>`                                                                          | `setup-bun` takes the runner's Bun from it; without it CI and the dev machine drift               |
 | No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                         | a second lockfile installs a second dependency tree                                               |
 | Every spec outside `peerDependencies` resolves to one thing                                                     | a lockfile refresh must not be able to change what is installed                                   |
+| Every `peerDependencies` range names versions                                                                   | an emptied range accepts every version, and `bun add` empties one without a word                  |
 | `typescript` major ≥ 7                                                                                          | the shared tsconfig is written against TypeScript 7                                               |
 | `oxlint-tsgolint` present, when `.oxlintrc.json` extends the base                                               | without it oxlint runs the base's type-aware rules over nothing and reports clean                 |
 | `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`   | a repo that stopped inheriting stops inheriting silently                                          |
@@ -36,6 +37,15 @@ whose own spec is exact, or a git dependency **whose ref is a commit**. A tag
 can be repointed and `#main` moves by design, so `github:owner/repo#v1.2.3` is
 refused exactly as `github:owner/repo` with no ref is — only a 40-character
 commit names one tree for good.
+
+`peerDependencies` is graded by the opposite rule, because it is the one field
+where a range is the point: it states what a consumer may bring rather than what
+this repo installs. What it may not be is a range naming no version — `""`, `*`,
+`latest`. Those resolve to every version there is, which is what declaring no
+peer says, with a line in the manifest claiming otherwise. The empty one is
+reachable without anyone choosing it: `bun add <pkg>` for a package already
+listed as a peer blanks that range and adds no devDependency (bun 1.3.11), so
+the ranges in a manifest that has peers are written by hand.
 
 # Going live
 
