@@ -1,4 +1,4 @@
-import { DEPENDENCY_FIELDS, kindOf, type Manifest, type Problem, record } from "../_lib/gate.ts";
+import { DEPENDENCY_FIELDS, kindOf, type Manifest, type Problem, record } from "./gate.ts";
 
 /**
  * The version grammar: how a dependency spec is read, and what each field a
@@ -8,8 +8,10 @@ import { DEPENDENCY_FIELDS, kindOf, type Manifest, type Problem, record } from "
  * the vocabulary they argue over sits in one place rather than beside the
  * checks about files.
  *
- * The interface out is `checkPins`, plus the one predicate the contract's own
- * typescript-version rule needs.
+ * It sits beside `gate.ts` rather than inside a gate because two of them read
+ * it: the repo contract grades every spec through `checkPins` and reads a major
+ * off one through `isExactVersion`, and the stack denylist asks `aliasedPackage`
+ * which package a manifest actually installs.
  */
 
 const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
@@ -20,7 +22,18 @@ const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
  * off afterwards: `npm:bar` names no version at all, and a slice-then-recurse
  * reading of it recurses on its own input forever.
  */
-const NPM_ALIAS = /^npm:(?:@[^/]+\/)?[^@]+@(.+)$/;
+const NPM_ALIAS = /^npm:((?:@[^/]+\/)?[^@]+)@(.+)$/;
+
+/**
+ * The package an `npm:` spec installs, which is not the key it is installed
+ * under. Every rule that grades the package rather than the version reads it
+ * through here: the alias is the one form in which a manifest names a package
+ * somewhere other than in its key, and a check that only reads keys grades a
+ * tree the repo does not have.
+ */
+export function aliasedPackage(spec: unknown): string | undefined {
+  return typeof spec === "string" ? NPM_ALIAS.exec(spec)?.[1] : undefined;
+}
 
 /** The protocols whose tree is whatever they point at, which is one tree by construction. */
 const RESOLVED_PROTOCOL = /^(workspace|file|link|catalog|portal):/;
@@ -53,7 +66,7 @@ function isExact(spec: string): boolean {
   if (EXACT_SEMVER.test(spec)) return true;
   if (RESOLVED_PROTOCOL.test(spec)) return true;
   const alias = NPM_ALIAS.exec(spec);
-  if (alias !== null) return EXACT_SEMVER.test(alias[1] ?? "");
+  if (alias !== null) return EXACT_SEMVER.test(alias[2] ?? "");
   // `#main` moves, a tag can be repointed, and `#semver:^1.0.0` is a range
   // wearing a fragment. Only a commit names one tree for good.
   if (GIT_PROTOCOL.test(spec)) return COMMIT.test(spec.slice(spec.indexOf("#") + 1));

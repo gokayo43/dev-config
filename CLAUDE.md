@@ -19,8 +19,11 @@ a change to a rule usually lands here too.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
 - `.github/workflows/check.yml` — the gate every repo calls.
 - `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
-  module the suite drives, and a `*.main.ts` that GitHub runs. `_lib/gate.ts` is
-  what they share. The shell helpers beside it are `pinned-tool.sh` — the
+  module the suite drives, and a `*.main.ts` that GitHub runs. What more than
+  one gate reads lives in `_lib/`: `gate.ts`, and `dependency-specs.ts` — the
+  version grammar the repo contract grades every spec by and the stack denylist
+  asks which package a spec installs. The shell helpers beside them are
+  `pinned-tool.sh` — the
   verified fetch every pinned binary goes through — and `k6.sh`, which is that
   fetch plus the one k6 pin, so the three ramps in this house run one binary.
 - `route-log.ts` at the root is the protocol between an app and the
