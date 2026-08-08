@@ -28,12 +28,12 @@ the same comparison. `upgrade-gate: true` adds a third replay to it — from the
 base ref's migrations rather than from empty, which is where a deployed database
 starts — and that one has a page: [upgrade-path.md](upgrade-path.md).
 
-The database is then asked directly, through `information_schema.columns`,
-whether any column is `timestamp without time zone`. An ORM's `timestamp` is a
-hint and the catalogue is the fact, and asking it means nothing here has to
-parse a schema dump. A wall-clock column stores the digits someone typed and
-forgets which clock produced them, so one row means two different instants
-either side of a DST boundary or a server move, and nothing fails until it does.
+The database is then asked directly, through `information_schema.columns`, which
+of its columns are `timestamp without time zone`. An ORM's `timestamp` is a hint
+and the catalogue is the fact, and asking it means nothing here has to parse a
+schema dump. A wall-clock column stores the digits someone typed and forgets
+which clock produced them, so one row means two different instants either side
+of a DST boundary or a server move, and nothing fails until it does.
 
 `timestamp-allowlist` takes `schema.table.column` entries for the columns where
 a wall-clock reading is the point — an opening time that is 09:00 wherever the
@@ -44,8 +44,23 @@ than space-separated, because a quoted identifier can itself contain a space.
 
 Each entry carries `-- why`, the same price `route-allowlist` pays and the same
 one a lint directive pays: an exemption nobody had to justify is one nobody can
-review a year later, so an entry without a reason is refused and still exempts
-nothing.
+review a year later. An entry without a reason fails the step — and still
+exempts its column, because reporting the column as well would be two
+diagnostics for one mistake.
+
+An entry is refused when nothing under grade answers to it, which is the other
+half of the same rule. The step reads every column in the schema, not only the
+wall-clock ones, so it can say which of the two ways an entry died:
+
+- the column is still here and is no longer a wall-clock one — the conversion
+  the entry exempted it from has been made, so the entry goes;
+- the schema has no column of that name at all — dropped, renamed, or never
+  spelled the way the entry spells it, so the entry goes or the name does.
+
+Nothing suppresses that check the way `stack-allowlist`'s is suppressed while a
+manifest will not parse. That rule exists because a walk that came up short
+reports every waiver written for the part it could not read; here the catalogue
+is one query, which either answered in full or failed the step outright.
 
 ```yaml
 with:

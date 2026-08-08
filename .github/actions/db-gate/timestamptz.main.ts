@@ -1,7 +1,7 @@
 import { SQL } from "bun";
 
 import { allowlistFrom, entry, inputs, report, required } from "../_lib/gate.ts";
-import { timestamptzGate, WALL_CLOCK_QUERY, type WallClockColumn } from "./timestamptz.ts";
+import { COLUMN_QUERY, type Column, timestamptzGate } from "./timestamptz.ts";
 
 await entry(async () => {
   const read = inputs("timestamp-allowlist");
@@ -21,7 +21,7 @@ await entry(async () => {
   // Read through Bun's own client: the runner needs no psql, and the rows arrive
   // typed rather than as text to split on a separator an identifier could contain.
   const sql = new SQL(url);
-  const columns = (await sql.unsafe(WALL_CLOCK_QUERY)) as WallClockColumn[];
+  const columns = (await sql.unsafe(COLUMN_QUERY)) as Column[];
   await sql.close();
 
   report(

@@ -167,6 +167,20 @@ function entriesIn(value: string): string[] {
  * A gate takes one of these whole rather than its `entries`: the reason on each
  * entry is enforced by reporting `problems`, and a signature that accepted the
  * list alone would let a caller typecheck while dropping that half.
+ *
+ * What is *not* here is the other rule all three allowlists in this repo keep —
+ * that an entry standing for nothing under grade is refused. It reads like one
+ * member taking the universe and handing back what matched and what did not,
+ * and for two of the three it would be: stack-gate and the timestamptz gate
+ * both compare the entry text against a set of names. route-coverage does not.
+ * Its entries are parsed into a method and a path before anything can be
+ * compared, the parse has a diagnostic of its own, the comparison is against a
+ * normalised key rather than the entry, and it asks a second question of the
+ * entries that do match — did the ramp reach this route after all. A member
+ * that served it would take a key function and a policy flag for `unreasoned`,
+ * which is a larger interface than the `filter` it would replace in the two
+ * that fit. Two of a one-line set difference is duplication; the diagnostics
+ * are each gate's own either way.
  */
 export interface Allowlist {
   /** Each entry with its reason stripped: the part a gate compares against. */

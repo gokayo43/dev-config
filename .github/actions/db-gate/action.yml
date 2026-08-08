@@ -53,7 +53,8 @@ inputs:
       Columns whose value really is a wall-clock reading rather than an instant,
       as `schema.table.column -- why` entries, one per line — an identifier may
       itself contain a space. The reason is part of the entry, the price a lint
-      directive pays.
+      directive pays. An entry naming a column the schema does not have, or one
+      that is no longer a wall-clock column, is refused rather than kept.
     default: ""
 
 # One action rather than several, and not because everything here is about the
