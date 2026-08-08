@@ -114,7 +114,8 @@ export function isObject(value: unknown): value is Record<string, unknown> {
 export function kindOf(value: unknown): string {
   if (value === undefined) return "absent";
   if (value === null) return "null";
-  return Array.isArray(value) ? "an array" : `a ${typeof value}`;
+  if (Array.isArray(value)) return "an array";
+  return typeof value === "object" ? "an object" : `a ${typeof value}`;
 }
 
 /**

@@ -249,9 +249,9 @@ describe("a route log that will not read", () => {
     ["42", "the top level is a number"],
     ["[]", "the top level is an array"],
     ['{"counts":[]}', "routeTable is absent"],
-    ['{"routeTable":{},"counts":[]}', "routeTable is a object"],
+    ['{"routeTable":{},"counts":[]}', "routeTable is an object"],
     ['{"routeTable":[]}', "counts is absent"],
-    ['{"routeTable":[],"counts":{}}', "counts is a object"],
+    ['{"routeTable":[],"counts":{}}', "counts is an object"],
   ])("a payload that is not a route log (%s) says so", (text, detail) => {
     expect(() => read(text)).toThrow("is not a route log");
     expect(() => read(text)).toThrow(detail);
