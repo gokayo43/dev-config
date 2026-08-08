@@ -16,13 +16,20 @@ export interface Column {
  *
  * `udt_name` rather than `data_type`, because an array of wall-clock timestamps
  * reports its data_type as ARRAY and hides the element type in `_timestamp`.
- * Being in this table is also the whole of what "wall-clock" means below, so
- * the answer to "is it one" and the answer to "what should it be" are one read.
+ * Being in here is also the whole of what "wall-clock" means below, so the
+ * answer to "is it one" and the answer to "what should it be" are one read.
+ *
+ * A Map rather than an object, because the key is a Postgres identifier and a
+ * repo may call an enum whatever it likes. An object answers `constructor` and
+ * `toString` out of its prototype, and truthily — so a schema with a type of
+ * that name would go red and its author be told to store instants as
+ * `function Object() { [native code] }`. A Map holds what was put in it and
+ * nothing else, which makes that unrepresentable rather than guarded against.
  */
-const WALL_CLOCK: Record<string, string> = {
-  timestamp: "timestamptz",
-  _timestamp: "timestamptz[]",
-};
+const WALL_CLOCK = new Map([
+  ["timestamp", "timestamptz"],
+  ["_timestamp", "timestamptz[]"],
+]);
 
 /**
  * Keyed by schema as well as table, because `app.events.occurred_at` and
@@ -67,7 +74,7 @@ export function timestamptzGate(columns: readonly Column[], allowlist: Allowlist
   for (const column of columns) {
     const name = named(column);
     present.add(name);
-    const fix = WALL_CLOCK[column.udt_name];
+    const fix = WALL_CLOCK.get(column.udt_name);
     if (fix !== undefined) wallClock.set(name, fix);
   }
 

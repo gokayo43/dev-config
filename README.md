@@ -599,7 +599,7 @@ jobs:
 | `timestamp-allowlist` | `""`                               | `schema.table.column -- why` entries whose value really is a wall-clock reading rather than an instant, one per line; an entry is refused when it carries no reason, when the schema has no column of that name, or when that column is no longer a wall-clock one. |
 | `capacity-path`       | `""`                               | Paths to ramp alongside the health route, one per line.                                                                                                                                                                                                             |
 | `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                                                                                                          |
-| `db-gate-evidence`    | `db-gate-evidence`                 | The artifact name for the k6 summary, the two route-log snapshots and the app's output, for a matrix that runs more than one leg.                                                                                                                                   |
+| `db-gate-evidence`    | `db-gate-evidence`                 | The artifact name for the k6 summary, the two route-log snapshots, the backfill check's three data dumps and the app's output, for a matrix that runs more than one leg.                                                                                            |
 | `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                                                                   |
 | `test-suite-evidence` | `test-suite-evidence`              | The artifact name for the junit report, for a matrix that runs more than one leg.                                                                                                                                                                                   |
 
@@ -619,9 +619,9 @@ name would collide exactly as quietly as the constant, with a trailing dash.
 
 Eight inputs are aimed at steps of the database job — `upgrade-gate`,
 `capacity-path`, `capacity-script`, `db-gate-evidence`, `route-allowlist`,
-`timestamp-allowlist`, `backfill-seed` and `backfill-command` — and each
-fails the run when passed with `database: false`, saying which: being quietly
-ignored is how a ramp somebody asked for turns out never to have run.
+`timestamp-allowlist`, `backfill-seed` and `backfill-command` — and each fails
+the run when passed with `database: false`, saying which: being quietly ignored
+is how a ramp somebody asked for turns out never to have run.
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches

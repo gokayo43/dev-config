@@ -169,6 +169,33 @@ describe("the price of the hatch", () => {
     );
   });
 
+  // One mistake earns one diagnostic. Each of these entries is a line its
+  // author is going back to anyway, so the second question — is this route even
+  // served, did the ramp reach it, is it a route at all — is noise on top of an
+  // answer they already have. stack-gate and the timestamptz gate charge the
+  // hatch the same way, and this was the one that did not.
+  test.each(["POST /retired", "GET /health", "/health"])(
+    "an entry with no reason (%s) is not asked the second question",
+    (entry) => {
+      expect(problems(entry).filter((message) => message.includes(entry))).toEqual([
+        containing("without saying why"),
+      ]);
+    },
+  );
+
+  // The other half of that rule: it still waives its route, so the floor does
+  // not report the route as well. Two diagnostics for one line, either way
+  // round, is the thing being avoided.
+  test("an entry with no reason still waives the route it names", () => {
+    expect(problems("GET /ready")).toEqual([
+      containing("route-allowlist waives GET /ready without saying why"),
+      containing("OPTIONS / is served"),
+      containing("OPTIONS /* is served"),
+      containing("POST /presets is served"),
+      containing("ALL /events is served"),
+    ]);
+  });
+
   // The same rule extra-paths carries in the pin gate: an escape hatch nobody
   // can see rotting is how a gate quietly stops covering what it names.
   test("an allowlist entry the app does not serve is a stale hatch", () => {

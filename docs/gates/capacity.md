@@ -146,7 +146,9 @@ lint directive pays. An entry is refused in its turn when it is not a route,
 when it names a route the app does not serve, and when it waives a route the
 ramp **did** exercise — an escape hatch nobody can see rotting is how a gate
 quietly stops covering what it names, and a waiver whose reason has stopped
-being true is exactly that.
+being true is exactly that. An entry with no reason is asked none of those three
+questions: it fails the step for the missing reason, still waives its route, and
+one mistake earns one diagnostic.
 
 The usual entries are a CORS plugin's `OPTIONS` handlers, and their reason is
 worth knowing, because it is not "no load generator sends a preflight": a

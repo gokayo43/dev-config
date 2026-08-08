@@ -1,4 +1,4 @@
-import { detail, entry, inputs, notice, report, required } from "../_lib/gate.ts";
+import { entry, inputs, reportVerdict, required } from "../_lib/gate.ts";
 import { replayGate } from "./replay.ts";
 
 await entry(async () => {
@@ -20,17 +20,13 @@ await entry(async () => {
     );
   }
 
-  const { summary, divergence, problems } = await replayGate({
-    // The action ran this from the project it was pointed at, and the migrator
-    // and the lineage are both read relative to it.
-    root: process.cwd(),
-    url,
-    upgrade: asked === "true" ? { baseRef: read["base-ref"], before: read["before"] } : undefined,
-  });
-
-  detail(divergence);
-  // A run that failed says so through its annotations. A summary beside them
-  // would be the step paraphrasing its own error back at the reader.
-  if (summary !== undefined) notice(summary);
-  report(problems);
+  reportVerdict(
+    await replayGate({
+      // The action ran this from the project it was pointed at, and the
+      // migrator and the lineage are both read relative to it.
+      root: process.cwd(),
+      url,
+      upgrade: asked === "true" ? { baseRef: read["base-ref"], before: read["before"] } : undefined,
+    }),
+  );
 });

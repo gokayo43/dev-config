@@ -25,10 +25,9 @@ a change to a rule usually lands here too.
   **action** reads; what two gates of one action share stays in that action's
   directory, which is what `db-gate/database.ts` is — the database those gates
   build for themselves, and the one derivation of "these two dumps came out the
-  same". The shell helpers beside them are
-  `pinned-tool.sh` — the
-  verified fetch every pinned binary goes through — and `k6.sh`, which is that
-  fetch plus the one k6 pin, so the three ramps in this house run one binary.
+  same". The shell helpers beside them are `pinned-tool.sh` — the verified fetch
+  every pinned binary goes through — and `k6.sh`, which is that fetch plus the
+  one k6 pin, so the three ramps in this house run one binary.
   Actions, rather than scripts run out of the package every repo already
   installs: a gate in `node_modules` runs only if the repo's own workflow
   remembers to run it, and it moves whenever the lockfile moves — including on

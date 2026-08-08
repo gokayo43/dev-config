@@ -32,13 +32,48 @@ export function notice(message: string): void {
 }
 
 /**
- * Lines the log carries as they are. An annotation is one line and is rendered
- * on the step, so evidence that runs to hundreds of lines — every line two
- * schema dumps disagree about — belongs in the log beside it rather than in the
- * message, which has to stay short enough to read.
+ * What a gate that proves a property reports, rather than a bare `Problem[]`:
+ * the claim it established, or the evidence behind one it could not.
+ *
+ * The two are exclusive by construction — `passed` and `refused` below are the
+ * only ways to build one — because a step that failed has already said so in
+ * its annotations, and a summary beside them would be the step paraphrasing its
+ * own error back at the reader.
  */
-export function detail(lines: readonly string[]): void {
-  for (const line of lines) console.log(line);
+export interface Verdict {
+  /** What holding proved, for the log. Absent when it did not hold: the problems are the report. */
+  readonly summary: string | undefined;
+  /** What the two sides do not share — a diagnostic that only says "they differ" is not one. */
+  readonly divergence: string[];
+  readonly problems: Problem[];
+}
+
+/** A verdict with nothing to report, which is every passing one. */
+export function passed(summary: string): Verdict {
+  return { summary, divergence: [], problems: [] };
+}
+
+/** A verdict that fails the step. There is no summary: what happened is the problem. */
+export function refused(problems: Problem[], divergence: string[] = []): Verdict {
+  return { summary: undefined, divergence, problems };
+}
+
+/**
+ * The whole of what a `*.main.ts` does with one. Here rather than copied into
+ * each entry point because it is the same three writes every time and their
+ * order is load-bearing: the divergence goes to the log as it stands, before
+ * the annotation summarising it, so a reader who scrolls to the error finds
+ * what it was about above rather than somewhere below.
+ *
+ * The divergence is log lines rather than annotations because an annotation is
+ * one line rendered on the step, and evidence that runs to hundreds — every
+ * line two dumps disagree about — has to go somewhere a message that stays
+ * short enough to read cannot.
+ */
+export function reportVerdict({ summary, divergence, problems }: Verdict): void {
+  for (const line of divergence) console.log(line);
+  if (summary !== undefined) notice(summary);
+  report(problems);
 }
 
 /**
@@ -168,19 +203,26 @@ function entriesIn(value: string): string[] {
  * entry is enforced by reporting `problems`, and a signature that accepted the
  * list alone would let a caller typecheck while dropping that half.
  *
- * What is *not* here is the other rule all three allowlists in this repo keep —
- * that an entry standing for nothing under grade is refused. It reads like one
- * member taking the universe and handing back what matched and what did not,
- * and for two of the three it would be: stack-gate and the timestamptz gate
- * both compare the entry text against a set of names. route-coverage does not.
- * Its entries are parsed into a method and a path before anything can be
- * compared, the parse has a diagnostic of its own, the comparison is against a
- * normalised key rather than the entry, and it asks a second question of the
- * entries that do match — did the ramp reach this route after all. A member
- * that served it would take a key function and a policy flag for `unreasoned`,
- * which is a larger interface than the `filter` it would replace in the two
- * that fit. Two of a one-line set difference is duplication; the diagnostics
- * are each gate's own either way.
+ * What is *not* here is the other rule every allowlist in this repo keeps —
+ * that an entry standing for nothing under grade is refused, naming it. It
+ * reads like one member taking the universe and handing back what matched and
+ * what did not, and for two of the three it would be: stack-gate and the
+ * timestamptz gate both compare the entry text against a set of names.
+ * route-coverage cannot. Its entries are parsed into a method and a path first,
+ * with a diagnostic of its own for one that is not a route at all; what it
+ * compares is a normalised key rather than the entry, so `options /*` and
+ * `OPTIONS /*` are one route and neither is a member of any set of entry
+ * spellings; and it asks a second question of the ones that do match — did the
+ * ramp reach this route after all. Serving that would take a key function and
+ * three kinds of answer back, a larger interface than the `filter` it would
+ * replace in the two that fit. Two of a one-line set difference is duplication,
+ * and the diagnostics are each gate's own either way.
+ *
+ * `unreasoned` below is the piece all three do share, which is why it is a
+ * field here rather than a set each of them derives its own way: an entry
+ * already refused for saying nothing about why is asked none of the questions
+ * above, since its author is going back to that line regardless and one mistake
+ * earns one diagnostic.
  */
 export interface Allowlist {
   /** Each entry with its reason stripped: the part a gate compares against. */

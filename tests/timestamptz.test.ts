@@ -59,6 +59,26 @@ describe("timestamptz gate", () => {
     expect(timestamptzGate(COLUMNS, waiving("app.events.occurred_at"))).toHaveLength(2);
   });
 
+  // A type name is a Postgres identifier, and the catalogue reports whatever a
+  // repo called its enum. Asked of a plain object, "constructor" and "toString"
+  // answer out of the prototype rather than out of the two wall-clock types —
+  // and truthily, so a correct schema goes red and the diagnostic tells its
+  // author to store instants as `function Object() { [native code] }`. Every
+  // column reaches this now, rather than only the two types the query used to
+  // filter for, so any repo with such a type reaches the lookup.
+  test("a type named for something on Object's prototype is not a wall-clock type", () => {
+    const typed = (udt_name: string): Column => ({
+      table_schema: "public",
+      table_name: "thing",
+      column_name: "kind",
+      udt_name,
+    });
+
+    expect(timestamptzGate([typed("constructor")], waiving())).toEqual([]);
+    expect(timestamptzGate([typed("toString")], waiving())).toEqual([]);
+    expect(timestamptzGate([typed("hasOwnProperty")], waiving())).toEqual([]);
+  });
+
   // The columns the fixture carries beside the wall-clock ones. A gate that
   // refused on the catalogue rather than on the type would report all seven.
   test("a column that already stores an instant is not refused", () => {
@@ -166,7 +186,8 @@ describe("the price of the hatch", () => {
 
   // One mistake earns one diagnostic: an entry with no reason is a line its
   // author is going back to regardless, and reporting it dead as well would be
-  // two findings about one edit. stack-allowlist charges it the same way.
+  // two findings about one edit. The other two allowlists charge it the same
+  // way.
   test("an entry with no reason is not also reported dead", () => {
     expect(messages(timestamptzGate(COLUMNS, parsed("public.reading.taken_at")))).toEqual([
       containing("waives public.reading.taken_at without saying why"),

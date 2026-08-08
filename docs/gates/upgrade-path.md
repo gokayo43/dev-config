@@ -145,9 +145,7 @@ fixed name would do; against a server two runs share, deriving it is what keeps
 each run dropping and recreating its own database rather than the one the other
 is midway through migrating. Of the path and not of a clock, so that one
 checkout derives one name on every run: reclaiming what a killed run left behind
-is the next run arriving at the same name. A caller that declares that name as
-its _own_ database is refused, since dropping it would take the one the app
-boots against.
+is the next run arriving at the same name.
 
 ## Which commit counts as the base
 

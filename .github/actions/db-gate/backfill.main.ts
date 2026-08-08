@@ -1,4 +1,4 @@
-import { detail, entry, inputs, notice, report, required } from "../_lib/gate.ts";
+import { entry, inputs, reportVerdict, required } from "../_lib/gate.ts";
 import { backfillGate } from "./backfill.ts";
 
 await entry(async () => {
@@ -20,23 +20,19 @@ await entry(async () => {
     "the backfill check builds its own database on the service the calling job declared",
   );
 
-  const { summary, divergence, problems } = await backfillGate({
-    // The action ran this from the project it was pointed at, and both commands
-    // are the repo's own, run the way the repo would run them.
-    root: process.cwd(),
-    url,
-    seed: read["backfill-seed"],
-    command: read["backfill-command"],
-    evidence: {
-      seeded: read["seeded-data"],
-      first: read["first-data"],
-      second: read["second-data"],
-    },
-  });
-
-  detail(divergence);
-  // A run that failed says so through its annotations. A summary beside them
-  // would be the step paraphrasing its own error back at the reader.
-  if (summary !== undefined) notice(summary);
-  report(problems);
+  reportVerdict(
+    await backfillGate({
+      // The action ran this from the project it was pointed at, and both
+      // commands are the repo's own, run the way the repo would run them.
+      root: process.cwd(),
+      url,
+      seed: read["backfill-seed"],
+      command: read["backfill-command"],
+      evidence: {
+        seeded: read["seeded-data"],
+        first: read["first-data"],
+        second: read["second-data"],
+      },
+    }),
+  );
 });

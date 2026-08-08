@@ -5,8 +5,12 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import { backfillGate, type Evidence } from "../.github/actions/db-gate/backfill.ts";
-import { scratchDatabase, type Verdict } from "../.github/actions/db-gate/database.ts";
+import {
+  backfillDatabase,
+  backfillGate,
+  type Evidence,
+} from "../.github/actions/db-gate/backfill.ts";
+import type { Verdict } from "../.github/actions/_lib/gate.ts";
 
 import { containing } from "./matchers.ts";
 import { lineage, type Migration, migratesFrom } from "./lineage.ts";
@@ -95,7 +99,7 @@ async function ran(backfill: string, seed: string = SEEDS): Promise<Ran> {
     "backfill.ts": runs([backfill]),
   });
   const evidence = await evidenceDir();
-  const database = scratchDatabase(repo.root, "backfill");
+  const database = backfillDatabase(repo.root);
   databases.push(database);
   return {
     verdict: await backfillGate({

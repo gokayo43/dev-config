@@ -1,17 +1,7 @@
 import { SQL } from "bun";
 
-import {
-  beside,
-  compare,
-  type Dump,
-  dumpOf,
-  migrate,
-  passed,
-  refused,
-  scratchDatabase,
-  shell,
-  type Verdict,
-} from "./database.ts";
+import { passed, refused, type Verdict } from "../_lib/gate.ts";
+import { beside, compare, type Dump, dumpOf, migrate, scratchDatabase, shell } from "./database.ts";
 
 /**
  * What a backfill is asked to prove: **running it a second time leaves what the
@@ -34,6 +24,15 @@ import {
  * What it cannot see is in docs/gates/db-gate.md, under the section of that
  * name, and it is worth reading before trusting this for more than it says.
  */
+
+/**
+ * The database the backfill is graded in, beside the one the caller declared.
+ * `database.ts` says why it is derived rather than fixed, and replay.ts names
+ * its own the same way: the purpose string belongs to the gate that has one.
+ */
+export function backfillDatabase(root: string): string {
+  return scratchDatabase(root, "backfill");
+}
 
 export interface Evidence {
   /** The state the seed wrote — what the backfill was graded against. */
@@ -94,13 +93,13 @@ const SEQUENCE = /^SELECT pg_catalog\.setval\(/;
  * own table once the order is gone: a bare tab-separated row in a diagnostic
  * belongs to no table its reader can find.
  */
-async function dataOf(url: string, of: string): Promise<Dump> {
+async function dataOf(url: string, of: string, where: string): Promise<Dump> {
   const dumped = await dumpOf(url, ["--data-only", "--inserts"]);
   const lines = dumped.split("\n").filter((line) => line.trim() !== "" && !SEQUENCE.test(line));
-  return { of, text: lines.toSorted().join("\n") };
-}
-
-async function kept(dump: Dump, where: string): Promise<Dump> {
+  const dump = { of, text: lines.toSorted().join("\n") };
+  // Written where it was read rather than by the caller, so that every read
+  // this gate makes is one the run can publish: a dump the step compared and
+  // did not leave behind is a verdict nobody can check.
   await Bun.write(where, `${dump.text}\n`);
   return dump;
 }
@@ -133,7 +132,7 @@ export async function backfillGate({
     ]);
   }
 
-  const database = scratchDatabase(root, "backfill");
+  const database = backfillDatabase(root);
   const own = beside(url, database);
   const server = new SQL(url);
   try {
@@ -156,7 +155,7 @@ export async function backfillGate({
       seed,
       `backfill-seed (\`${seed}\`) failed against ${database} — its own output is above; it writes the state the backfill was written for, and nothing here can be graded without it`,
     );
-    const seeded = await kept(await dataOf(own, "the state the seed wrote"), evidence.seeded);
+    const seeded = await dataOf(own, "the state the seed wrote", evidence.seeded);
     const wrote = seeded.text.split("\n").some((line) => ROW.test(line) && !JOURNAL_ROW.test(line));
     if (!wrote) {
       return refused([
@@ -172,7 +171,7 @@ export async function backfillGate({
       command,
       `backfill-command (\`${command}\`) failed against ${database} — its own output is above; it ran against the state backfill-seed had just written`,
     );
-    const first = await kept(await dataOf(own, "the data after one backfill"), evidence.first);
+    const first = await dataOf(own, "the data after one backfill", evidence.first);
 
     await shell(
       root,
@@ -180,10 +179,7 @@ export async function backfillGate({
       command,
       `backfill-command (\`${command}\`) failed on its second run, having just succeeded on the first — its own output is above; it is running against a database that already has its effects, which is what a retried or resumed deploy does to it`,
     );
-    const second = await kept(
-      await dataOf(own, "the data after a second backfill"),
-      evidence.second,
-    );
+    const second = await dataOf(own, "the data after a second backfill", evidence.second);
 
     const changed = compare(first, second);
     if (changed !== undefined) {

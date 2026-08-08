@@ -107,6 +107,14 @@ function routeFrom(entry: string): Route | undefined {
   return shaped ? { method, path } : undefined;
 }
 
+/**
+ * Not `_lib/gate.ts`'s `Verdict`, which it otherwise resembles. A verdict's
+ * summary is the claim the gate established, so it is absent when there is none
+ * — what happened is the problems. This summary is a measurement of the floor,
+ * and it earns the same line of log either way: "5 of 10 routes exercised by the
+ * ramp" is what a reader wants most on the run that failed. Folding the two
+ * would mean dropping the count from exactly those runs.
+ */
 export interface Coverage {
   /** One line for the log, so a step that passed still shows the floor was evaluated. */
   readonly summary: string;
@@ -150,19 +158,33 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
 
   const waived = new Set<string>();
   const hatch: Problem[] = [];
+
+  // An entry already refused for saying nothing about why is asked none of the
+  // questions below: its author is going back to that line regardless, and one
+  // mistake earns one diagnostic. stack-gate and the timestamptz gate charge
+  // the hatch the same way. The other half of that rule is the end of the loop
+  // — a reasonless entry still waives its route, so the floor does not report
+  // the route as uncovered on top of it.
+  const unreasoned = new Set(allowlist.unreasoned);
+  const rotted = (entry: string, message: string): void => {
+    if (!unreasoned.has(entry)) hatch.push({ message });
+  };
+
   for (const entry of allowlist.entries) {
     const route = routeFrom(entry);
     if (route === undefined) {
-      hatch.push({
-        message: `route-allowlist entry '${entry}' is not a route — write 'METHOD /path', matching a line of the app's own route table`,
-      });
+      rotted(
+        entry,
+        `route-allowlist entry '${entry}' is not a route — write 'METHOD /path', matching a line of the app's own route table`,
+      );
       continue;
     }
     const name = key(route);
     if (!table.has(name)) {
-      hatch.push({
-        message: `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
-      });
+      rotted(
+        entry,
+        `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
+      );
       continue;
     }
     if (covered.has(name)) {
@@ -170,9 +192,10 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
       // ramp reached it, so the reason is no longer true, and an exemption
       // nobody can see rotting is how a gate quietly stops covering what it
       // names.
-      hatch.push({
-        message: `route-allowlist waives ${entry}, which the ramp did exercise — drop the entry and let the floor hold the route`,
-      });
+      rotted(
+        entry,
+        `route-allowlist waives ${entry}, which the ramp did exercise — drop the entry and let the floor hold the route`,
+      );
       continue;
     }
     waived.add(name);

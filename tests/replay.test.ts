@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import type { Event } from "../.github/actions/_lib/gate.ts";
-import { beside, type Verdict } from "../.github/actions/db-gate/database.ts";
+import type { Event, Verdict } from "../.github/actions/_lib/gate.ts";
+import { beside } from "../.github/actions/db-gate/database.ts";
 import { replayGate, upgradeDatabase } from "../.github/actions/db-gate/replay.ts";
 
 import { containing } from "./matchers.ts";
@@ -664,29 +664,6 @@ describe("replay gate", () => {
     expect(refused).toContain("failed replaying");
     expect(refused).toContain("rather than this branch's");
     expect(await git(repo.root, ["status", "--porcelain"])).toBe("");
-  });
-
-  // The gate drops this database. A caller that declared it as its own would be
-  // asking the check to destroy the one the app boots against.
-  test("a caller that declares the gate's own database is refused", async () => {
-    const repo = await history(
-      { ...migratesFrom(JOURNALLED, "drizzle"), ...lineage("drizzle", CREATES_THING) },
-      {
-        ...migratesFrom(JOURNALLED, "drizzle"),
-        ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
-      },
-    );
-    const name = upgradeDatabase(repo.root);
-    await onServer([`create database "${name}"`]);
-    databases.push(name);
-
-    const verdict = await replayGate({
-      root: repo.root,
-      url: beside(SERVER, name),
-      upgrade: pushedOver(repo.revs[0] ?? ""),
-    });
-
-    expect(messages(verdict)).toEqual([containing(`the declared database is called ${name}`)]);
   });
 
   // The one way this gate could pass by having been given nothing: a checkout

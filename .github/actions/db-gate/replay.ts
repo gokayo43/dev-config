@@ -4,7 +4,17 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import { baseRevision, type Event, git, isObject, type Problem, repoFiles } from "../_lib/gate.ts";
+import {
+  baseRevision,
+  type Event,
+  git,
+  isObject,
+  passed,
+  type Problem,
+  refused,
+  repoFiles,
+  type Verdict,
+} from "../_lib/gate.ts";
 import {
   beside,
   compare,
@@ -12,10 +22,7 @@ import {
   type Dump,
   dumpOf,
   migrate,
-  passed,
-  refused,
   scratchDatabase,
-  type Verdict,
 } from "./database.ts";
 
 /**
@@ -46,7 +53,9 @@ import {
 
 /**
  * The database the upgrade path is replayed into, beside the one the caller
- * declared. `database.ts` says why it is derived rather than fixed.
+ * declared. `database.ts` says why it is derived rather than fixed, and
+ * backfill.ts names its own the same way: the purpose string belongs to the
+ * gate that has one.
  */
 export function upgradeDatabase(root: string): string {
   return scratchDatabase(root, "upgrade_path");
@@ -94,12 +103,13 @@ async function mustRead(
 }
 
 /**
- * The schema as pg_dump reports it. Order is left alone: pg_dump is
- * deterministic, so two schemas holding the same statements in a different
- * order really are two schemas.
+ * The schema as pg_dump reports it, named the way a diagnostic about it has to
+ * name it. Order is left alone — pg_dump is deterministic, so two schemas
+ * holding the same statements in a different order really are two schemas,
+ * which is where this parts company with the data half's `dataOf`.
  */
-async function schemaOf(url: string): Promise<string> {
-  return await dumpOf(url, ["--schema-only"]);
+async function schemaOf(url: string, of: string): Promise<Dump> {
+  return { of, text: await dumpOf(url, ["--schema-only"]) };
 }
 
 /** A migration lineage as the base ref had it: the directory, and every file in it. */
@@ -405,7 +415,7 @@ function clocksIn({ files }: BaseLineage): number[] {
 /** What the upgrade path came to, or the lineages that never got there. */
 type Upgraded =
   | { readonly unapplied: string[] }
-  | { readonly text: string; readonly replayed: string[] };
+  | { readonly dump: Dump; readonly replayed: string[] };
 
 /**
  * The schema a deployed database reaches: the base ref's lineage first, then
@@ -458,7 +468,7 @@ async function upgradedSchema(
       `bun run db:migrate failed applying this branch's migrations onto ${databaseIn(upgrade)}, a database built from ${from} — the output above names the statement; it applies to a database built from empty and not to one ${from} had already migrated`,
     );
     return {
-      text: await schemaOf(upgrade),
+      dump: await schemaOf(upgrade, `the schema upgraded from ${from}`),
       replayed: asked.filter(({ clocks }) => clocks.length > 0).map(({ dir }) => dir),
     };
   } finally {
@@ -476,13 +486,13 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
     url,
     `bun run db:migrate failed replaying the history from empty into ${databaseIn(url)} — the output above names the statement; a migration that only applies to an already-migrated database aborts here and nowhere else`,
   );
-  const fresh: Dump = { of: "the schema built from empty", text: await schemaOf(url) };
+  const fresh = await schemaOf(url, "the schema built from empty");
   await migrate(
     root,
     url,
     `bun run db:migrate failed on its second run over ${databaseIn(url)}, having just succeeded on the first — the output above names the statement; it is being executed against a database that already has its effects, so either the runner is not skipping what it has applied or that statement is not re-runnable`,
   );
-  const again: Dump = { of: "the schema after a second replay", text: await schemaOf(url) };
+  const again = await schemaOf(url, "the schema after a second replay");
 
   const repeated = compare(fresh, again);
   if (repeated !== undefined) {
@@ -497,14 +507,6 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
   }
 
   if (upgrade === undefined) return passed(REPLAYED);
-
-  if (databaseIn(url) === upgradeDatabase(root)) {
-    return refused([
-      {
-        message: `the declared database is called ${upgradeDatabase(root)}, which is the name the upgrade path is built in and dropped under for this checkout — declare the app's database under another name, or this check would drop the one it is meant to leave alone`,
-      },
-    ]);
-  }
 
   // A checkout that cannot say where it came from is refused rather than
   // reported as having nothing to upgrade from: the whole check would pass by
@@ -537,8 +539,7 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
     );
   }
 
-  const upgraded: Dump = { of: `the schema upgraded from ${from}`, text: built.text };
-  const diverged = compare(fresh, upgraded);
+  const diverged = compare(fresh, built.dump);
   if (diverged === undefined) {
     return passed(
       `${REPLAYED}; upgrading a database built from ${from} (${built.replayed.join(", ")}) reaches the same schema`,
