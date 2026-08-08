@@ -32,13 +32,14 @@ inputs:
       newline-separated, since an app serves more than one route and the floor
       below asks for all of them.
     default: ""
-  capacity-report:
+  db-gate-evidence:
     description: >-
-      The artifact name for what the ramp measured and read — the k6 summary,
-      both route-log snapshots and the app's own output. A matrix that ramps
-      more than one leg gives each its own, since an artifact name may only be
-      claimed once. Empty takes the name below, so a caller can pass this
-      straight through without having to know how "unset" is spelled.
+      The artifact name for everything this gate leaves behind — the k6
+      summary, both route-log snapshots and the app's own output, whichever of
+      them the run got as far as writing. A matrix that runs more than one leg
+      gives each its own, since an artifact name may only be claimed once.
+      Empty takes the name below, so a caller can pass this straight through
+      without having to know how "unset" is spelled.
     default: ""
   route-allowlist:
     description: >-
@@ -208,7 +209,7 @@ runs:
         # artifact rather than one per file: a name may be claimed once per run,
         # and a matrix leg that gave this input its own name would still collide
         # on any second name written out here.
-        name: ${{ inputs.capacity-report || 'capacity-report' }}
+        name: ${{ inputs['db-gate-evidence'] || 'db-gate-evidence' }}
         path: |
           ${{ runner.temp }}/capacity.json
           ${{ runner.temp }}/route-log-before.json

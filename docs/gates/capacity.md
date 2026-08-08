@@ -174,12 +174,12 @@ jobs:
         OPTIONS /* -- the cors plugin answers these before the request reaches a route, so no ramp can make one visible
 ```
 
-| Input             | Effect                                                                                                                                                                                                                                                                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `capacity-path`   | Paths ramped alongside the health route, comma- or newline-separated. A health route measures the socket and one round trip; point these at the endpoints doing the work the project is for, and prefer ones that read or write. Every route the app serves belongs here or in `route-allowlist`.                         |
-| `capacity-script` | A k6 script of the repo's own, when the default ramp is the wrong shape — a write path needing a body, an authenticated route. It replaces the shipped script entirely; `HEALTH_URL` and `CAPACITY_PATH` are in its environment, and the failure bound and the route floor hold it exactly as they hold the shipped ramp. |
-| `capacity-report` | The artifact name for what the ramp measured and read. A matrix that ramps more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                         |
-| `route-allowlist` | Routes the ramp cannot cover, as `METHOD /path -- why` entries matching the app's own route table, one per line — the reason is prose and prose has commas in it. The reason is part of the entry and an entry without one is refused — that is the whole price of the hatch.                                             |
+| Input              | Effect                                                                                                                                                                                                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `capacity-path`    | Paths ramped alongside the health route, comma- or newline-separated. A health route measures the socket and one round trip; point these at the endpoints doing the work the project is for, and prefer ones that read or write. Every route the app serves belongs here or in `route-allowlist`.                         |
+| `capacity-script`  | A k6 script of the repo's own, when the default ramp is the wrong shape — a write path needing a body, an authenticated route. It replaces the shipped script entirely; `HEALTH_URL` and `CAPACITY_PATH` are in its environment, and the failure bound and the route floor hold it exactly as they hold the shipped ramp. |
+| `db-gate-evidence` | The artifact name for everything the gate leaves behind. A matrix that runs more than one leg gives each its own, since an artifact name may only be claimed once.                                                                                                                                                        |
+| `route-allowlist`  | Routes the ramp cannot cover, as `METHOD /path -- why` entries matching the app's own route table, one per line — the reason is prose and prose has commas in it. The reason is part of the entry and an entry without one is refused — that is the whole price of the hatch.                                             |
 
 Every one of these, and `upgrade-gate` with them, is aimed at a step of the
 database job — so passing any of the five with `database: false` fails the run
@@ -196,7 +196,7 @@ that route has to be ramped or reasoned about by name.
 
 The run summary gets a table — mean requests/s, request count, peak VUs, failure
 rate, p(95)/p(99)/max latency — and everything the steps wrote into the runner
-is uploaded as the `capacity-report` artifact, so a run's evidence survives past
+is uploaded as the `db-gate-evidence` artifact, so a run's evidence survives past
 the runner that produced it:
 
 | File                    | What it answers                                                                          |

@@ -56,10 +56,11 @@ on:
           newline-separated, since the route floor asks for every route the app serves.
         type: string
         default: ""
-      capacity-report:
+      db-gate-evidence:
         description: >-
-          The artifact name for what the ramp measured and read, for a matrix that ramps
-          more than one leg. Empty takes db-gate's own name, which is where that default lives.
+          The artifact name for everything the database gate leaves behind, for a matrix
+          that runs more than one leg. Empty takes db-gate's own name, which is where that
+          default lives.
         type: string
         default: ""
       route-allowlist:
@@ -102,13 +103,13 @@ jobs:
       # cannot be, has said plainly that it expects a ramp.
       - if: >-
           ${{ !inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
-          || inputs.capacity-script != '' || inputs.capacity-report != ''
+          || inputs.capacity-script != '' || inputs['db-gate-evidence'] != ''
           || inputs.route-allowlist != '') }}
         env:
           UPGRADE_GATE: ${{ inputs.upgrade-gate }}
           CAPACITY_PATH: ${{ inputs.capacity-path }}
           CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
-          CAPACITY_REPORT: ${{ inputs.capacity-report }}
+          DB_GATE_EVIDENCE: ${{ inputs['db-gate-evidence'] }}
           ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
         run: |
           set -euo pipefail
@@ -121,8 +122,8 @@ jobs:
           if [ -n "$CAPACITY_SCRIPT" ]; then
             echo "::error::capacity-script needs database: true — the ramp runs against the app the database job boots"
           fi
-          if [ -n "$CAPACITY_REPORT" ]; then
-            echo "::error::capacity-report needs database: true — it names the artifact the database job's ramp uploads"
+          if [ -n "$DB_GATE_EVIDENCE" ]; then
+            echo "::error::db-gate-evidence needs database: true — it names the artifact the database job uploads"
           fi
           if [ -n "$ROUTE_ALLOWLIST" ]; then
             echo "::error::route-allowlist needs database: true — the route floor is measured across the database job's ramp"
@@ -230,5 +231,5 @@ jobs:
           timestamp-allowlist: ${{ inputs.timestamp-allowlist }}
           capacity-script: ${{ inputs.capacity-script }}
           capacity-path: ${{ inputs.capacity-path }}
-          capacity-report: ${{ inputs.capacity-report }}
+          db-gate-evidence: ${{ inputs['db-gate-evidence'] }}
           route-allowlist: ${{ inputs.route-allowlist }}

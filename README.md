@@ -594,7 +594,7 @@ jobs:
 | `timestamp-allowlist` | `""`                               | `schema.table.column` entries whose value really is a wall-clock reading rather than an instant, one per line.                                                                                                   |
 | `capacity-path`       | `""`                               | Paths to ramp alongside the health route, comma- or newline-separated.                                                                                                                                           |
 | `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                                                       |
-| `capacity-report`     | `capacity-report`                  | The artifact name for the k6 summary, the two route-log snapshots and the app's output, for a matrix that ramps more than one leg.                                                                               |
+| `db-gate-evidence`    | `db-gate-evidence`                 | The artifact name for the k6 summary, the two route-log snapshots and the app's output, for a matrix that runs more than one leg.                                                                                |
 | `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                |
 
 `upgrade-gate` and the four capacity inputs are aimed at steps of the database
