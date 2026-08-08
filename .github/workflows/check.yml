@@ -46,6 +46,19 @@ on:
           when the denylist has stopped denying it.
         type: string
         default: ""
+      backfill-seed:
+        description: >-
+          How to put a database into the state this repo's backfill was written for,
+          as shell code. Set it with backfill-command or not at all.
+        type: string
+        default: ""
+      backfill-command:
+        description: >-
+          The backfill, as shell code. Run twice against the state backfill-seed
+          wrote, in a database of the check's own, with the data compared either side
+          of the second run.
+        type: string
+        default: ""
       start-command:
         description: How the boot gate starts the app.
         type: string
@@ -123,7 +136,8 @@ jobs:
       - if: >-
           ${{ !inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
           || inputs.capacity-script != '' || inputs['db-gate-evidence'] != ''
-          || inputs.route-allowlist != '' || inputs.timestamp-allowlist != '') }}
+          || inputs.route-allowlist != '' || inputs.timestamp-allowlist != ''
+          || inputs.backfill-command != '' || inputs.backfill-seed != '') }}
         env:
           UPGRADE_GATE: ${{ inputs.upgrade-gate }}
           CAPACITY_PATH: ${{ inputs.capacity-path }}
@@ -131,6 +145,8 @@ jobs:
           DB_GATE_EVIDENCE: ${{ inputs['db-gate-evidence'] }}
           ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
           TIMESTAMP_ALLOWLIST: ${{ inputs.timestamp-allowlist }}
+          BACKFILL_COMMAND: ${{ inputs.backfill-command }}
+          BACKFILL_SEED: ${{ inputs.backfill-seed }}
         run: |
           set -euo pipefail
           if [ "$UPGRADE_GATE" = true ]; then
@@ -150,6 +166,12 @@ jobs:
           fi
           if [ -n "$TIMESTAMP_ALLOWLIST" ]; then
             echo "::error::timestamp-allowlist needs database: true — the column types are read from the database that job migrates"
+          fi
+          if [ -n "$BACKFILL_COMMAND" ]; then
+            echo "::error::backfill-command needs database: true — the backfill runs against a database the database job builds"
+          fi
+          if [ -n "$BACKFILL_SEED" ]; then
+            echo "::error::backfill-seed needs database: true — it writes into a database the database job builds"
           fi
           exit 1
 
@@ -253,6 +275,8 @@ jobs:
       - uses: gokayo43/dev-config/.github/actions/db-gate@77ebe89d4cedcc644ea782b02b0f8b1a139c2183 # v0.43.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
+          backfill-seed: ${{ inputs.backfill-seed }}
+          backfill-command: ${{ inputs.backfill-command }}
           start-command: ${{ inputs.start-command }}
           health-url: ${{ inputs.health-url }}
           timestamp-allowlist: ${{ inputs.timestamp-allowlist }}

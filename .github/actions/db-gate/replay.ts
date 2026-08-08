@@ -12,7 +12,10 @@ import {
   type Dump,
   dumpOf,
   migrate,
+  passed,
+  refused,
   scratchDatabase,
+  type Verdict,
 } from "./database.ts";
 
 /**
@@ -67,14 +70,6 @@ export interface Replay {
   readonly url: string;
   /** The run's own history, when the upgrade path is being proved as well. */
   readonly upgrade: Event | undefined;
-}
-
-export interface Verdict {
-  /** What a replay that held proved, for the log. Absent when it did not hold: the problems are the report then. */
-  readonly summary: string | undefined;
-  /** What the two schemas do not share — a diagnostic that only says "they differ" is not one. */
-  readonly divergence: string[];
-  readonly problems: Problem[];
 }
 
 /**
@@ -470,16 +465,6 @@ async function upgradedSchema(
     await server.unsafe(`drop database if exists "${database}" with (force)`);
     await server.close();
   }
-}
-
-/** A verdict with nothing to report, which is every passing one. */
-function passed(summary: string): Verdict {
-  return { summary, divergence: [], problems: [] };
-}
-
-/** A verdict that fails the step. There is no summary: what happened is the problem. */
-function refused(problems: Problem[], divergence: string[] = []): Verdict {
-  return { summary: undefined, divergence, problems };
 }
 
 const REPLAYED =

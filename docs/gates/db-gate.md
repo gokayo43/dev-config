@@ -69,6 +69,72 @@ with:
     public.audit log.at -- the shift board's wall time, not an instant
 ```
 
+## Backfills
+
+`backfill-seed` and `backfill-command` add one property: **running the
+backfill a second time leaves what the first run left.** Both are shell, both
+are optional, and each without the other fails the step — an input silently
+ignored is how a gate somebody asked for turns out never to have run.
+
+```yaml
+with:
+  backfill-seed: bun run scripts/seed-pre-slug.ts
+  backfill-command: bun run scripts/backfill-slugs.ts
+```
+
+A backfill is not a thing that runs once. `principles.md` requires them to be
+idempotent because every way of running one twice is ordinary: a phased rollout
+finds a range it missed, a deploy dies halfway and is retried, the expand step
+ships on Tuesday and the backfill runs again on Friday for the rows written in
+between. The shape that does not survive that — an `insert` with no conflict
+clause, an `update` guarded on nothing, a counter incremented rather than set —
+does not error. It doubles rows, and it looks like a backfill that worked until
+somebody counts them.
+
+So the step builds a database of its own on the declared service, migrates it
+with the repo's own `db:migrate`, runs `backfill-seed` once and
+`backfill-command` twice, and compares `pg_dump --data-only --inserts` either
+side of the second run. Its own database rather than the declared one because
+the seed writes rows, and the boot step below claims the app comes up against
+a database its migrations built.
+
+The comparison is of rows: the dump is sorted, since heap order is a fact about
+when autovacuum last woke rather than about the data, and `--inserts` is what
+keeps each line naming its own table once that order is gone. A sequence's
+position is dropped for the same reason — an `on conflict do nothing` consumes
+one whether or not the row lands, and refusing that would be refusing the guard
+rather than the backfill.
+
+A seed that leaves no rows behind is refused rather than passed. A backfill
+against a database the migrations have just built has nothing to find, so
+running it twice would compare two empty databases and certify whatever the
+backfill does.
+
+All three dumps — the state the seed wrote, and the data after each run —
+leave the run in the evidence artifact, whichever of them the step got as far as
+writing.
+
+### What this cannot catch
+
+Named rather than papered over, because a gate whose limits are undocumented
+gets trusted for things it never checked.
+
+- **Anything the seed does not write.** Idempotency is proved over that state
+  and no other. A backfill that is not idempotent on a row shape the seed has no
+  example of passes, and the seed is where that is fixed.
+- **Whether the backfill is right.** That a second run changes nothing says
+  nothing about whether the first run did the correct thing.
+- **A run killed midway.** Both runs here go to completion. A backfill that is
+  idempotent between whole runs and not between a killed one and its retry —
+  anything that records progress outside the transaction it is progressing in —
+  looks the same to this.
+- **Two of them at once.** There is one writer here, so nothing about racing
+  backfills is exercised.
+- **Effects outside this database.** Files written, jobs queued, third-party
+  calls made. A backfill that emails every user twice passes.
+- **Sequence positions**, dropped from the comparison above, and anything else
+  `pg_dump --data-only` does not carry.
+
 Once it has booted, the job ramps it and publishes what that measured.
 That is a step of this gate rather than a gate of its own, and it has a page:
 [capacity.md](capacity.md).

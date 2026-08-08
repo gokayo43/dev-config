@@ -17,6 +17,18 @@ inputs:
       reaches the schema a fresh one gets. Needs the base ref in the checkout —
       fetch-depth: 0 — and a second database on the declared service.
     default: "false"
+  backfill-seed:
+    description: >-
+      How to put a database into the state this repo's backfill was written for.
+      Runs as shell code, against a database of the check's own. Set it with
+      backfill-command or not at all.
+    default: ""
+  backfill-command:
+    description: >-
+      The backfill, run twice against the state backfill-seed wrote, with the
+      data compared either side of the second run. Runs as shell code. Set it
+      with backfill-seed or not at all.
+    default: ""
   start-command:
     description: How to start the app. Runs as shell code.
     required: true
@@ -35,8 +47,9 @@ inputs:
   db-gate-evidence:
     description: >-
       The artifact name for everything this gate leaves behind — the k6
-      summary, both route-log snapshots and the app's own output, whichever of
-      them the run got as far as writing. A matrix that runs more than one leg
+      summary, both route-log snapshots, the three data dumps the backfill
+      check compares and the app's own output, whichever of them the run got as
+      far as writing. A matrix that runs more than one leg
       MUST give each its own: an artifact name may be claimed once per run, the
       default below is a constant, and the second leg to upload fails on the
       duplicate. Empty takes that default, so a caller can pass this straight
@@ -109,6 +122,28 @@ runs:
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/timestamptz.main.ts"
+
+    # A backfill is re-run whenever a deploy is retried or resumed, so running it
+    # twice has to leave what one run left. In a database of the check's own,
+    # built by the same migrations: the seed writes rows, and the boot step
+    # below claims the app comes up against a database its migrations built.
+    #
+    # The condition is either input rather than both, so that a caller who set
+    # one of them is told so — being quietly ignored is how a gate somebody
+    # asked for turns out never to have run.
+    - name: A backfill that can be run twice
+      if: ${{ inputs.backfill-command != '' || inputs.backfill-seed != '' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_BACKFILL_SEED: ${{ inputs.backfill-seed }}
+        INPUT_BACKFILL_COMMAND: ${{ inputs.backfill-command }}
+        INPUT_SEEDED_DATA: ${{ runner.temp }}/backfill-seeded.sql
+        INPUT_FIRST_DATA: ${{ runner.temp }}/backfill-first.sql
+        INPUT_SECOND_DATA: ${{ runner.temp }}/backfill-second.sql
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/backfill.main.ts"
 
     # Migrations applying is half of it; the app running against the schema they
     # produced is the other half. Health answers 200 only once the process is up
@@ -254,6 +289,9 @@ runs:
         # simply absent. The boot step's own annotation, not this file, is what
         # says an app failed to start.
         path: |
+          ${{ runner.temp }}/backfill-seeded.sql
+          ${{ runner.temp }}/backfill-first.sql
+          ${{ runner.temp }}/backfill-second.sql
           ${{ runner.temp }}/capacity.json
           ${{ runner.temp }}/route-log-before.json
           ${{ runner.temp }}/route-log-after.json

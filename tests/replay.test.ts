@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { SQL } from "bun";
 
 import type { Event } from "../.github/actions/_lib/gate.ts";
-import { beside } from "../.github/actions/db-gate/database.ts";
-import { replayGate, upgradeDatabase, type Verdict } from "../.github/actions/db-gate/replay.ts";
+import { beside, type Verdict } from "../.github/actions/db-gate/database.ts";
+import { replayGate, upgradeDatabase } from "../.github/actions/db-gate/replay.ts";
 
 import { containing } from "./matchers.ts";
-import { git, history, IDENTITY, type Repo, type Tree, under } from "./tree.ts";
+import { lineage, type Migration, migratesFrom, scripted } from "./lineage.ts";
+import { git, history, IDENTITY, type Repo, under } from "./tree.ts";
 
 /**
  * A real Postgres, because the property under test is what a database ends up
@@ -78,52 +79,6 @@ async function exists(database: string): Promise<boolean> {
   )) as unknown[];
   await server.close();
   return rows.length > 0;
-}
-
-/** One migration as a lineage holds it: a file, and the journal row that orders it. */
-interface Migration {
-  readonly tag: string;
-  /** The journal's own clock. An applied migration is recognised by this and nothing else. */
-  readonly when: number;
-  readonly sql: string;
-}
-
-/**
- * A drizzle lineage under `dir`, in the shape `drizzle-kit generate` writes: the
- * journal beside the files it names. Captured from a real generate run — the
- * migrator reads `entries` and refuses a folder without the file.
- */
-function lineage(dir: string, ...migrations: readonly Migration[]): Tree {
-  const journal = {
-    version: "7",
-    dialect: "postgresql",
-    entries: migrations.map(({ when, tag }, idx) => ({
-      idx,
-      version: "7",
-      when,
-      tag,
-      breakpoints: true,
-    })),
-  };
-  return {
-    [`${dir}/meta/_journal.json`]: JSON.stringify(journal, undefined, 2),
-    ...Object.fromEntries(migrations.map(({ tag, sql }) => [`${dir}/${tag}.sql`, sql])),
-  };
-}
-
-/** The repo's declaration of how it migrates, and of where its lineages are. */
-function migratesFrom(migrator: string, ...dirs: readonly string[]): Tree {
-  return scripted(`bun run ${migrator} ${dirs.map((dir) => `./${dir}`).join(" ")}`);
-}
-
-function scripted(script: string): Tree {
-  return {
-    "package.json": `${JSON.stringify(
-      { name: "fixture", private: true, type: "module", scripts: { "db:migrate": script } },
-      undefined,
-      2,
-    )}\n`,
-  };
 }
 
 const THING = { tag: "0000_thing", when: 1_000 } as const;

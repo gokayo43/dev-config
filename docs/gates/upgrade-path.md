@@ -220,4 +220,6 @@ is. The same blind spot hides the "never applied" refusal from a repo that
 renames its journal table: that check reads the tables drizzle names by default.
 
 **Anything about data.** This is a schema comparison. A migration that backfills
-a column wrongly passes it.
+a column wrongly passes it. Whether a backfill survives being run twice is a
+separate step of the same gate — [db-gate.md](db-gate.md) — and it says nothing
+about whether the backfill is right either.

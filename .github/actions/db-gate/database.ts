@@ -1,5 +1,7 @@
 import { resolve } from "node:path";
 
+import type { Problem } from "../_lib/gate.ts";
+
 /**
  * Not a gate. What the gates in this directory that build a database of their
  * own share: where they put it, how they run the repo's own commands against
@@ -80,6 +82,21 @@ export async function migrate(root: string, url: string, failed: string): Promis
 }
 
 /**
+ * A command the repo wrote as shell, which is how a caller names one it has not
+ * put in a package script. Through bash for the reason the boot step runs
+ * `start-command` that way: a pipe, a `&&` or a quoted argument is shell, and a
+ * split on whitespace would run something the caller did not write.
+ */
+export async function shell(
+  root: string,
+  url: string,
+  command: string,
+  failed: string,
+): Promise<void> {
+  await against(root, url, ["bash", "-c", command], failed);
+}
+
+/**
  * pg_dump wraps its output in `\restrict`/`\unrestrict` tokens that are random
  * per invocation, so two dumps of one database never compare equal as-is.
  */
@@ -100,6 +117,25 @@ export async function dumpOf(url: string, args: readonly string[]): Promise<stri
     .split("\n")
     .filter((line) => !PER_INVOCATION.test(line))
     .join("\n");
+}
+
+/** What a gate that compares two dumps reports. */
+export interface Verdict {
+  /** What a comparison that held proved, for the log. Absent when it did not hold: the problems are the report then. */
+  readonly summary: string | undefined;
+  /** What the two dumps do not share — a diagnostic that only says "they differ" is not one. */
+  readonly divergence: string[];
+  readonly problems: Problem[];
+}
+
+/** A verdict with nothing to report, which is every passing one. */
+export function passed(summary: string): Verdict {
+  return { summary, divergence: [], problems: [] };
+}
+
+/** A verdict that fails the step. There is no summary: what happened is the problem. */
+export function refused(problems: Problem[], divergence: string[] = []): Verdict {
+  return { summary: undefined, divergence, problems };
 }
 
 /** A dump, named the way the diagnostic has to name it. */

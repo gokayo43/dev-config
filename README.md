@@ -592,6 +592,8 @@ jobs:
 | `upgrade-gate`        | `false`                            | Also proves that a database upgraded from the base ref's migrations reaches the schema a fresh one gets. Needs `database: true`; for repos whose database is deployed.                                                                                              |
 | `contract-exemptions` | `""`                               | Repo-contract facts this repo is structurally unable to satisfy, space-separated. A marketing site names `docs-spine`; a repo being wound down names `lifecycle-retire`.                                                                                            |
 | `stack-allowlist`     | `""`                               | Packages this repo keeps against the stack denylist, as `<package> -- why` entries, one per line; an entry is refused when it carries no reason, when nothing here declares the package any more, or when the denylist has stopped denying it.                      |
+| `backfill-seed`       | `""`                               | Shell code putting a database into the state this repo's backfill was written for. Set it with `backfill-command` or not at all.                                                                                                                                    |
+| `backfill-command`    | `""`                               | The backfill, as shell code: run twice against the state `backfill-seed` wrote, in a database of the check's own, with the data compared either side of the second run.                                                                                             |
 | `start-command`       | `bun run start`                    | How the boot gate starts the app.                                                                                                                                                                                                                                   |
 | `health-url`          | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200.                                                                                                                                                                                                                      |
 | `timestamp-allowlist` | `""`                               | `schema.table.column -- why` entries whose value really is a wall-clock reading rather than an instant, one per line; an entry is refused when it carries no reason, when the schema has no column of that name, or when that column is no longer a wall-clock one. |
@@ -615,11 +617,11 @@ document as reachable from inside a composite action, and a context that is not
 reachable evaluates to an empty string rather than to an error — so the derived
 name would collide exactly as quietly as the constant, with a trailing dash.
 
-Six inputs are aimed at steps of the database job — `upgrade-gate`,
-`capacity-path`, `capacity-script`, `db-gate-evidence`, `route-allowlist` and
-`timestamp-allowlist` — and each fails the run when passed with
-`database: false`, saying which: being quietly ignored is how a ramp somebody
-asked for turns out never to have run.
+Eight inputs are aimed at steps of the database job — `upgrade-gate`,
+`capacity-path`, `capacity-script`, `db-gate-evidence`, `route-allowlist`,
+`timestamp-allowlist`, `backfill-seed` and `backfill-command` — and each
+fails the run when passed with `database: false`, saying which: being quietly
+ignored is how a ramp somebody asked for turns out never to have run.
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches
