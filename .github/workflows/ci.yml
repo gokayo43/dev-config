@@ -85,18 +85,19 @@ jobs:
           . .github/actions/_lib/k6.sh
           bun tests/capacity-script.ts
 
-      # Every JSON file nothing else here reads. What is skipped is a file whose
-      # own tool specifies JSON with comments — oxlint's schema declares
-      # `allowComments` and `allowTrailingCommas`, TypeScript has always taken
-      # both — and each is parsed by that tool in `bun run check` above, which
-      # fails loudly on a broken one. `JSON.parse` would fail on the comments.
-      # Matched by file name at any depth: what makes a file JSONC is which tool
-      # reads it, and a config in a subdirectory is read by the same one.
+      # Every JSON file nothing else here reads. What is skipped is a file some
+      # other tool already parses, in a dialect `JSON.parse` refuses: oxlint's
+      # schema declares `allowComments` and `allowTrailingCommas` and TypeScript
+      # has always taken both, and `bun run check` above fails loudly on a broken
+      # one. So the skip has to match where that tool actually looks. oxlint
+      # reads a config from the directory it is linting, at any depth, and the
+      # base it extends with it; `tsc` here is given the root project alone, so a
+      # tsconfig in a subdirectory is parsed by nothing and belongs in this step.
       - name: Parse every JSON config
         run: |
           set -euo pipefail
           mapfile -t files < <(git ls-files '*.json' |
-            grep -vE '(^|/)(\.oxlintrc\.json|oxlint\.base\.json|tsconfig(\.[^/]+)?\.json)$')
+            grep -vE '((^|/)(\.oxlintrc|oxlint\.base)\.json|^tsconfig(\.[^/]+)?\.json)$')
           # The ${} below are JS template literals, not shell expansions.
           # shellcheck disable=SC2016
           node -e '

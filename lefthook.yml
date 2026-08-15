@@ -16,11 +16,10 @@ pre-commit:
       #
       # Check-only, and never `--fix`: a hook that fixes edits staged code after
       # the author read the diff and before anyone else does. It would also cost
-      # every behaviour-changing autofixer in the rule set — `unicorn/no-array-sort`
-      # rewrites in-place `.sort()` to a copy, `unicorn/prefer-set-has` swaps the
-      # data structure, `preserve-caught-error` injects `{ cause }` at sites the
-      # author did not touch — because leaving them enabled would mean applying
-      # them silently on commit.
+      # every behaviour-changing autofixer plain `--fix` applies —
+      # `unicorn/prefer-set-has` swaps the data structure, `preserve-caught-error`
+      # injects `{ cause }` at sites the author did not touch — because leaving
+      # them enabled would mean applying them silently on commit.
       run: bunx oxlint --report-unused-disable-directives-severity=error {staged_files}
     secrets:
       # --staged scans the index, not the working tree: a key that reaches a
