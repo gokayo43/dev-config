@@ -300,6 +300,45 @@ export function resolveType(
 }
 
 /**
+ * What a resolved type is, written down: where it stopped, the arguments in
+ * force there, and the aliases entered to reach it. Two resolutions agreeing on
+ * those three are the same question, however they were spelled on the way in.
+ * @param {ResolvedType} resolved
+ * @returns {string}
+ */
+function resolutionKey(resolved) {
+  const substitutions = [...resolved.substitutions]
+    .map(([name, type]) => `${name}=${type.start}:${type.end}`)
+    .toSorted()
+    .join(",");
+  const entered = [...resolved.resolving].toSorted().join(",");
+  return `${resolved.type.start}:${resolved.type.end}|${substitutions}|${entered}`;
+}
+
+/**
+ * The answers already worked out for this file. A union asks the same question
+ * of every member, so `type L1 = L0 | L0` doubles the work per level: at a
+ * nesting TypeScript answers in a fifth of a second, twenty-six seconds went
+ * into resolving one alias chain over and over. Per environment, which is per
+ * file, so nothing outlives the run that filled it.
+ * @type {WeakMap<TypeEnvironment, Map<string, UnsafeDictionary["unsafeValue"] | null>>}
+ */
+const unsafeValues = new WeakMap();
+
+/**
+ * @param {TypeEnvironment} environment
+ * @returns {Map<string, UnsafeDictionary["unsafeValue"] | null>}
+ */
+function unsafeValueCache(environment) {
+  const known = unsafeValues.get(environment);
+  if (known !== undefined) return known;
+  /** @type {Map<string, UnsafeDictionary["unsafeValue"] | null>} */
+  const cache = new Map();
+  unsafeValues.set(environment, cache);
+  return cache;
+}
+
+/**
  * Which escape hatch a value type is, when it is one. A union counts if any
  * member does; an intersection only when every member does, since one concrete
  * member is a contract the others cannot widen — except `any`, which erases it.
@@ -311,6 +350,21 @@ export function resolveType(
  */
 function unsafeDirectValue(type, environment, substitutions, resolving) {
   const resolved = resolveType(type, environment, substitutions, resolving);
+  const cache = unsafeValueCache(environment);
+  const key = resolutionKey(resolved);
+  const known = cache.get(key);
+  if (known !== undefined) return known;
+  const answer = unsafeResolvedValue(resolved, environment);
+  cache.set(key, answer);
+  return answer;
+}
+
+/**
+ * @param {ResolvedType} resolved
+ * @param {TypeEnvironment} environment
+ * @returns {UnsafeDictionary["unsafeValue"] | null}
+ */
+function unsafeResolvedValue(resolved, environment) {
   const node = resolved.type;
   /** @param {ESTree.TSType} each */
   const unsafeMember = (each) =>

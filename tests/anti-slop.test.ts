@@ -180,6 +180,17 @@ const HANDLER = `type Handler = () => void;
 declare const startHandler: Handler;
 `;
 
+/**
+ * A chain of union aliases, which is the shape resolution used to be
+ * exponential over: every level asks the same question of two members. Twenty-six
+ * levels took twenty-six seconds, against a fifth of a second from `tsc` — so
+ * the case has no bound of its own to assert, because a suite that cannot finish
+ * inside its timeout is how the regression announces itself.
+ */
+const UNION_CHAIN = Array.from({ length: 26 }, (_, level) =>
+  level === 0 ? "type L0 = string;" : `type L${level} = L${level - 1} | L${level - 1};`,
+).join("\n");
+
 const HOUSE = {
   "no-chained-type-assertions": [
     {
@@ -451,6 +462,18 @@ export function handle(input: Payload): void {
       reports: [],
     },
     {
+      // Not a type TypeScript accepts (TS2456), and every rule here runs on the
+      // pre-commit hook, where a file is halfway through being written. The
+      // wrong implementation restarts resolution for each union member with no
+      // memory of the aliases already entered, so this one never terminates.
+      name: "an alias that names itself through a union does not run forever",
+      source: `type Selfish = Selfish | unknown;
+export function f(x: Selfish): void {
+  void x;
+}`,
+      reports: ["Parameter `x`"],
+    },
+    {
       // `Reversed<unknown, string>` applies `Handler<string, unknown>`, whose
       // body is its own `Output` — `unknown`. The wrong implementation binds an
       // inner alias's parameters against the map it is still building, so
@@ -597,6 +620,12 @@ export declare const table: Outer<unknown, string>;`,
 type Inner<Box> = Box;
 export declare const table: Record<string, Box<unknown>>;`,
       reports: ["unknown escape hatch"],
+    },
+    {
+      name: "a union alias chain is answered once per level, not once per branch",
+      source: `${UNION_CHAIN}
+export type Bag = Record<string, L25>;`,
+      reports: [],
     },
     {
       name: "and the same shape carrying a real value type is left alone",

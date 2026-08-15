@@ -1,5 +1,5 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
-/** @import { TypeEnvironment } from "../shared/types.js" */
+/** @import { Substitutions, TypeEnvironment } from "../shared/types.js" */
 
 import { createTypeEnvironment, resolveType } from "../shared/types.js";
 
@@ -88,15 +88,25 @@ function bannedParameterTypeRule(banned) {
 
       /**
        * A union counts: a parameter typed `object | string` accepts everything
-       * `object` does, which is the whole of what the rule is about.
+       * `object` does, which is the whole of what the rule is about. Each member
+       * carries on from where the union was resolved rather than starting over,
+       * or an alias reached through a union is entered again on every member and
+       * one that names itself never terminates.
        * @param {ESTree.TSType} type
+       * @param {Substitutions} substitutions
+       * @param {ReadonlySet<string>} resolving
        * @returns {boolean}
        */
-      const accepts = (type) => {
+      const accepts = (type, substitutions, resolving) => {
         if (environment === null) return false;
-        const { type: resolved } = resolveType(type, environment);
-        if (resolved.type === banned.node) return true;
-        return resolved.type === "TSUnionType" && resolved.types.some(accepts);
+        const resolved = resolveType(type, environment, substitutions, resolving);
+        if (resolved.type.type === banned.node) return true;
+        return (
+          resolved.type.type === "TSUnionType" &&
+          resolved.type.types.some((member) =>
+            accepts(member, resolved.substitutions, resolved.resolving),
+          )
+        );
       };
 
       /** @param {ParameterOwner} node */
@@ -104,7 +114,7 @@ function bannedParameterTypeRule(banned) {
         for (const parameter of node.params) {
           const annotation = parameterAnnotation(parameter);
           if (annotation === null || annotation === undefined) continue;
-          if (!accepts(annotation.typeAnnotation)) continue;
+          if (!accepts(annotation.typeAnnotation, new Map(), new Set())) continue;
           const name = parameterName(parameter, context.sourceCode, banned.written);
           if (name === banned.exemptName) continue;
           context.report({
