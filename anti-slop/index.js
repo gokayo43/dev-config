@@ -7,13 +7,14 @@
 // under `node_modules` (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING), and this
 // directory is inside `node_modules` for every repo that consumes it. `tsc`
 // still checks it here — `checkJs` in this repo's tsconfig.
+/* oxlint-disable anti-slop/no-shape-in-symbol-names -- the rule named for the word it bans is imported here under its own name, rather than under one spelled around itself */
 /** @import { Plugin } from "@oxlint/plugins" */
 
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.js";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.js";
 import { noObjectParametersRule } from "./rules/no-object-parameters.js";
 import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.js";
-import { noForbiddenTermInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.js";
+import { noShapeInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.js";
 import { noUnknownParametersRule } from "./rules/no-unknown-parameters.js";
 import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases.js";
 import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.js";
@@ -27,7 +28,7 @@ const antiSlop = {
     "no-known-value-widening": noKnownValueWideningRule,
     "no-object-parameters": noObjectParametersRule,
     "no-runtime-typeof": noRuntimeTypeofRule,
-    "no-shape-in-symbol-names": noForbiddenTermInSymbolNamesRule,
+    "no-shape-in-symbol-names": noShapeInSymbolNamesRule,
     "no-unknown-parameters": noUnknownParametersRule,
     "no-unknown-type-aliases": noUnknownTypeAliasesRule,
     "no-unsafe-dictionary-type": noUnsafeDictionaryTypeRule,

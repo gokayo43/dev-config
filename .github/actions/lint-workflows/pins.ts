@@ -109,7 +109,7 @@ export async function pinGate(root: string, extraPaths: readonly string[]): Prom
   );
 
   const files = [...new Set([...own, ...extra.flat()])].toSorted((a, b) => a.localeCompare(b));
-  const documents = await parseEach(root, files, (text) => Bun.YAML.parse(text), "YAML");
+  const documents = await parseEach(root, files, "YAML");
 
   const references: Reference[] = documents.read.flatMap(({ file, value }) => [
     ...referencesIn(value).map((used) => ({ file, kind: "action" as const, value: used })),

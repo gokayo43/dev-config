@@ -3,13 +3,6 @@ import { describe, expect, test } from "bun:test";
 import { contract, manifestWith, withSpec } from "./repo-contract-fixture.ts";
 import { containing } from "./matchers.ts";
 
-/** A peer declaration carrying one spec, which is the only thing these cases vary. */
-async function peer(spec: unknown): Promise<string[]> {
-  return await contract(
-    manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
-  );
-}
-
 /**
  * How a manifest's dependency specs are graded — the pin check over what this
  * repo installs, and the inverse rule over what it declares a consumer may
@@ -17,6 +10,13 @@ async function peer(spec: unknown): Promise<string[]> {
  * the contract is about files rather than about version grammar.
  */
 describe("how a dependency spec is graded", () => {
+  /** A peer declaration carrying one spec, which is the only thing these cases vary. */
+  async function peer(spec: unknown): Promise<string[]> {
+    return await contract(
+      manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
+    );
+  }
+
   test.each([
     "^0.61.0",
     "~0.61.0",

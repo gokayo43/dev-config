@@ -425,29 +425,124 @@ export interface Batch<T> {
 }
 
 /**
+ * The dialect a batch of files is written in, which is the whole of what varies
+ * between the gates that read them. `package.json` is strict JSON — a comment
+ * in one is a file npm and bun both refuse — while an oxlint or TypeScript
+ * config is JSON with comments by its own tool's specification, and a workflow
+ * is YAML. The name is also the word the diagnostic uses.
+ */
+const DIALECTS = {
+  JSON: (text: string): unknown => JSON.parse(text) as unknown,
+  "JSON with comments": (text: string): unknown => JSON.parse(withoutComments(text)) as unknown,
+  YAML: (text: string): unknown => Bun.YAML.parse(text),
+};
+
+export type Dialect = keyof typeof DIALECTS;
+
+/**
+ * The text with its comments and trailing commas blanked out. README asks a
+ * repo to write the reason for an override beside it, and oxlint's schema
+ * declares `allowComments` and `allowTrailingCommas` while TypeScript has
+ * always taken both — so a gate that refused the reason it asked for would be
+ * refusing a valid file. Blanked rather than deleted so a parse error still
+ * points at the character it is about.
+ *
+ * A scan rather than a regex, because `//` inside a string is data: the
+ * `$schema` line at the top of these files is a URL, and a stripper that ate it
+ * would turn a working config into the failure it was written to prevent.
+ */
+function withoutComments(text: string): string {
+  const kept: string[] = [];
+  const commas: number[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    if (char === '"') {
+      index = copyString(text, index, kept);
+      continue;
+    }
+    if (char === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
+      index = blankComment(text, index, kept);
+      continue;
+    }
+    if (char === ",") commas.push(kept.length);
+    kept.push(char);
+    index += 1;
+  }
+  for (const at of commas) {
+    if (closesNext(kept, at)) kept[at] = " ";
+  }
+  return kept.join("");
+}
+
+/** Whether the next thing after the comma at `at` closes its object or array, making it trailing. */
+function closesNext(kept: readonly string[], at: number): boolean {
+  for (let index = at + 1; index < kept.length; index += 1) {
+    const char = kept[index] ?? "";
+    if (char.trim() === "") continue;
+    return char === "}" || char === "]";
+  }
+  return false;
+}
+
+/** The string literal starting at `from`, copied whole; answers the index after it. */
+function copyString(text: string, from: number, kept: string[]): number {
+  kept.push('"');
+  let index = from + 1;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    kept.push(char);
+    if (char === "\\") {
+      kept.push(text[index + 1] ?? "");
+      index += 2;
+      continue;
+    }
+    index += 1;
+    if (char === '"') break;
+  }
+  return index;
+}
+
+/** The comment starting at `from`, as the whitespace it stands in for. */
+function blankComment(text: string, from: number, kept: string[]): number {
+  const end =
+    text[from + 1] === "/"
+      ? nextIndexOf(text, "\n", from + 2)
+      : nextIndexOf(text, "*/", from + 2) + 2;
+  for (let index = from; index < end; index += 1) kept.push(text[index] === "\n" ? "\n" : " ");
+  return end;
+}
+
+/** Where `needle` next appears, or the end of the text when it does not appear again. */
+function nextIndexOf(text: string, needle: string, from: number): number {
+  const at = text.indexOf(needle, from);
+  return at === -1 ? text.length : at;
+}
+
+/**
  * Parses every file, each rescued on its own. A batch that threw would take
  * every finding the other files had already produced with it, and report a
  * parse error naming no file at all — which is the least useful diagnostic a
  * gate can emit.
  */
-export async function parseEach<T>(
+export async function parseEach(
   root: string,
   files: readonly string[],
-  parse: (text: string) => T,
-  language: string,
-): Promise<Batch<T>> {
+  dialect: Dialect,
+): Promise<Batch<unknown>> {
+  const parse = DIALECTS[dialect];
   const results = await Promise.all(
     files.map(async (file) => {
       try {
         return { file, value: parse(await Bun.file(`${root}/${file}`).text()) };
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
-        return { file, problem: { file, message: `is not valid ${language}: ${detail}` } };
+        return { file, problem: { file, message: `is not valid ${dialect}: ${detail}` } };
       }
     }),
   );
   return {
-    read: results.filter((result): result is Parsed<T> => "value" in result),
+    read: results.filter((result): result is Parsed<unknown> => "value" in result),
     problems: results.flatMap((result) => ("problem" in result ? [result.problem] : [])),
   };
 }
@@ -456,15 +551,18 @@ export async function parseEach<T>(
 export type Manifest = Parsed<ConfigObject>;
 
 /**
- * Every parsed file as the object a config's top level has to be. `JSON.parse`
- * answers `null`, a number or an array as readily as an object, and every
- * reader downstream goes straight to a field — so the shape is settled here,
- * where the file can still be named, rather than as a TypeError inside whichever
- * check reached the value first. It takes the batch rather than the paths
- * because the dialect differs by file — `package.json` is strict JSON, an
- * oxlint or TypeScript config is JSON with comments — and this answer does not.
+ * Every one of these files as the object a config's top level has to be.
+ * `JSON.parse` answers `null`, a number or an array as readily as an object,
+ * and every reader downstream goes straight to a field — so the shape is
+ * settled here, where the file can still be named, rather than as a TypeError
+ * inside whichever check reached the value first.
  */
-export function objectsIn(parsed: Batch<unknown>): Batch<ConfigObject> {
+export async function jsonObjects(
+  root: string,
+  files: readonly string[],
+  dialect: Extract<Dialect, "JSON" | "JSON with comments"> = "JSON",
+): Promise<Batch<ConfigObject>> {
+  const parsed = await parseEach(root, files, dialect);
   const read: Manifest[] = [];
   const problems = [...parsed.problems];
   for (const { file, value } of parsed.read) {
@@ -482,8 +580,7 @@ export function objectsIn(parsed: Batch<unknown>): Batch<ConfigObject> {
 // while still requiring the whole final path segment: "apps/my-package.json"
 // does not match, and neither pathspec can return anything but a package.json.
 export async function manifests(root: string): Promise<Batch<ConfigObject>> {
-  const files = await repoFiles(root, ["package.json", "*/package.json"]);
-  return objectsIn(await parseEach(root, files, (text) => JSON.parse(text) as unknown, "JSON"));
+  return await jsonObjects(root, await repoFiles(root, ["package.json", "*/package.json"]));
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {

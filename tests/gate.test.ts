@@ -200,14 +200,14 @@ describe("allowlist entries", () => {
 // inviolable property is that the last tree given is the tree at HEAD — a
 // builder that quietly commits something else grades every gate above it
 // against a repository nobody wrote.
-/** Every path a revision holds, which is what a tree is compared by here. */
-async function treeAt(root: string, rev: string): Promise<string[]> {
-  return (await git(root, ["ls-tree", "-r", "--name-only", rev])).split("\n").filter(Boolean);
-}
-
 describe("a repository built from a list of trees", () => {
   const A: Tree = { "a.txt": "A\n" };
   const B: Tree = { "b.txt": "B\n" };
+
+  /** Every path a revision holds, which is what a tree is compared by here. */
+  async function treeAt(root: string, rev: string): Promise<string[]> {
+    return (await git(root, ["ls-tree", "-r", "--name-only", rev])).split("\n").filter(Boolean);
+  }
 
   test("ends at the last tree given", async () => {
     const repo = await history(A, B);

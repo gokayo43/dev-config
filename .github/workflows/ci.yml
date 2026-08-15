@@ -85,16 +85,18 @@ jobs:
           . .github/actions/_lib/k6.sh
           bun tests/capacity-script.ts
 
-      # Every JSON file nothing else here reads. The four skipped are JSON with
-      # comments by their own tool's specification — oxlint's schema declares
+      # Every JSON file nothing else here reads. What is skipped is a file whose
+      # own tool specifies JSON with comments — oxlint's schema declares
       # `allowComments` and `allowTrailingCommas`, TypeScript has always taken
       # both — and each is parsed by that tool in `bun run check` above, which
       # fails loudly on a broken one. `JSON.parse` would fail on the comments.
+      # Matched by file name at any depth: what makes a file JSONC is which tool
+      # reads it, and a config in a subdirectory is read by the same one.
       - name: Parse every JSON config
         run: |
           set -euo pipefail
           mapfile -t files < <(git ls-files '*.json' |
-            grep -vxE '(\.oxlintrc|oxlint\.base|tsconfig|tsconfig\.base)\.json')
+            grep -vE '(^|/)(\.oxlintrc\.json|oxlint\.base\.json|tsconfig(\.[^/]+)?\.json)$')
           # The ${} below are JS template literals, not shell expansions.
           # shellcheck disable=SC2016
           node -e '

@@ -54,21 +54,10 @@ describe("a database beside the one the caller declared", () => {
  * are not something a fixture repo can produce. What has to hold is that no
  * answer of "these differ" comes with nothing to say about how.
  */
-/** A schema dump's units, which is how the replay gate cuts one: its lines. */
-const lines = (of: string, text: string): Dump => ({ of, each: "line", units: text.split("\n") });
-
-/** A data dump's units, which the replay gate cuts per row rather than per line. */
-const rows = (of: string, ...units: string[]): Dump => ({ of, each: "row", units });
-
-/** Captures what a case writes to stdout, and puts stdout back. */
-function logged() {
-  const captured: string[] = [];
-  const wrote = console.log;
-  console.log = (line: unknown) => void captured.push(String(line));
-  return { lines: captured, restore: () => void (console.log = wrote) };
-}
-
 describe("comparing two dumps", () => {
+  /** A schema dump's units, which is how the replay gate cuts one: its lines. */
+  const lines = (of: string, text: string): Dump => ({ of, each: "line", units: text.split("\n") });
+
   const left = lines("the left schema", 'CREATE TABLE "a" ();\nCREATE TABLE "b" ();\n');
 
   test("identical text is the only way two schemas are equal", () => {
@@ -112,6 +101,8 @@ describe("comparing two dumps", () => {
   // that each span several would be the diagnostic repeating the mistake the
   // unit exists to prevent.
   test("the count is of whatever the producer cut the dump into", () => {
+    /** A data dump's units, which the replay gate cuts per row rather than per line. */
+    const rows = (of: string, ...units: string[]): Dump => ({ of, each: "row", units });
     const difference = compare(
       rows("the data before", "INSERT INTO t VALUES (1, 'A\nB');"),
       rows("the data after"),
@@ -137,6 +128,14 @@ describe("giving up the database a gate built", () => {
     await server.unsafe("select 1");
     await server.close();
     return server;
+  }
+
+  /** Captures what a case writes to stdout, and puts stdout back. */
+  function logged() {
+    const lines: string[] = [];
+    const wrote = console.log;
+    console.log = (line: unknown) => void lines.push(String(line));
+    return { lines, restore: () => void (console.log = wrote) };
   }
 
   test("a drop that cannot run does not become the error the run reports", async () => {

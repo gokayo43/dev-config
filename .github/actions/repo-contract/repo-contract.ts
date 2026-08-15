@@ -10,12 +10,11 @@ import {
   isIgnored,
   isObject,
   isTracked,
+  jsonObjects,
   type Manifest,
   manifests,
   type Missing,
-  objectsIn,
   oneOf,
-  parseEach,
   type Problem,
   record,
   repoFiles,
@@ -278,79 +277,6 @@ interface Config {
 }
 
 /**
- * The text with its comments and trailing commas blanked out. Both configs read
- * through `readJson` are JSON with comments by their own specification —
- * oxlint's schema declares `allowComments` and `allowTrailingCommas`, and
- * TypeScript has always taken both — and README asks a repo to write the reason
- * for an override beside it. Blanked rather than deleted so a parse error still
- * points at the character it is about.
- *
- * A scan rather than a regex, because `//` inside a string is data: the
- * `$schema` line at the top of these files is a URL, and a stripper that ate it
- * would turn a working config into the failure it was written to prevent.
- * `package.json` keeps its strict read, since a comment there is a file npm and
- * bun both refuse.
- */
-function withoutComments(text: string): string {
-  const kept: string[] = [];
-  const commas: number[] = [];
-  let index = 0;
-  while (index < text.length) {
-    const char = text[index] ?? "";
-    if (char === '"') {
-      index = copyString(text, index, kept);
-      continue;
-    }
-    if (char === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
-      index = blankComment(text, index, kept);
-      continue;
-    }
-    if (char === ",") commas.push(kept.length);
-    kept.push(char);
-    index += 1;
-  }
-  for (const at of commas) {
-    const next = kept.slice(at + 1).find((each) => each.trim() !== "");
-    if (next === "}" || next === "]") kept[at] = " ";
-  }
-  return kept.join("");
-}
-
-/** The string literal starting at `from`, copied whole; answers the index after it. */
-function copyString(text: string, from: number, kept: string[]): number {
-  kept.push('"');
-  let index = from + 1;
-  while (index < text.length) {
-    const char = text[index] ?? "";
-    kept.push(char);
-    if (char === "\\") {
-      kept.push(text[index + 1] ?? "");
-      index += 2;
-      continue;
-    }
-    index += 1;
-    if (char === '"') break;
-  }
-  return index;
-}
-
-/** The comment starting at `from`, as the whitespace it stands in for. */
-function blankComment(text: string, from: number, kept: string[]): number {
-  const end =
-    text[from + 1] === "/"
-      ? nextIndexOf(text, "\n", from + 2)
-      : nextIndexOf(text, "*/", from + 2) + 2;
-  for (let index = from; index < end; index += 1) kept.push(text[index] === "\n" ? "\n" : " ");
-  return end;
-}
-
-/** Where `needle` next appears, or the end of the text when it does not appear again. */
-function nextIndexOf(text: string, needle: string, from: number): number {
-  const at = text.indexOf(needle, from);
-  return at === -1 ? text.length : at;
-}
-
-/**
  * A JSON config this contract grades, or the problem standing in for it.
  * Missing and unreadable are different states — only the first is fixed by
  * writing the file — and neither leaves a caller fields to read.
@@ -359,9 +285,7 @@ async function readJson(root: string, file: string): Promise<Config> {
   if (!(await Bun.file(`${root}/${file}`).exists())) {
     return { contents: undefined, problems: [{ file, message: `${file} is missing` }] };
   }
-  const batch = objectsIn(
-    await parseEach(root, [file], (text) => JSON.parse(withoutComments(text)) as unknown, "JSON"),
-  );
+  const batch = await jsonObjects(root, [file], "JSON with comments");
   return { contents: batch.read[0]?.value, problems: batch.problems };
 }
 

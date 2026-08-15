@@ -82,6 +82,12 @@
     {
       "files": ["**/*.test.ts", "**/*.test.tsx"],
       "rules": {
+        // A helper one describe uses belongs inside it, next to the cases that
+        // read it. Hoisting it to module scope to satisfy this rule separates a
+        // describe from the doc comment written above it, moves the helper away
+        // from its only caller, and renames whatever its locals now collide
+        // with — three costs for a file that is read case by case.
+        "unicorn/consistent-function-scoping": "off",
         // An override REPLACES a rule's whole configuration rather than adding
         // to it (oxc#12179), so the ESM globals lock is restated here — drop it
         // and test files silently regain `__dirname`, `require`, `__filename`.
