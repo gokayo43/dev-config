@@ -300,7 +300,7 @@ the base:
 | `no-object-parameters`       | the broad `object` type on an input                                    |
 | `no-unknown-parameters`      | an `unknown` parameter, except the `cause` convention                  |
 | `no-runtime-typeof`          | a runtime `typeof` — parse at the boundary instead                     |
-| `no-shape-in-symbol-names`   | "shape" in a symbol name                                               |
+| `no-shape-in-symbol-names`   | "shape" in a name the file declares                                    |
 
 Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT) at
 commit `abaeb63`. Upstream vendors the rules into each repo; they live here
@@ -310,6 +310,20 @@ release pair already does. Upstream's tenth rule,
 `no-conditional-empty-object-spread`, is deliberately not ported: with
 `exactOptionalPropertyTypes` the conditional spread is the only type-legal way
 to conditionally include a field in an option bag you do not own.
+
+Two rules answer differently from upstream, both because a rule at `error`
+across the fleet must refuse something the author can change:
+
+- **`no-known-value-widening`** does not call an anonymous object type a
+  widening when it names exactly the keys of the literal below it. Upstream
+  does, and its only escapes are deleting the return type or inventing a name
+  for it — the opposite of what this repo asks for everywhere else.
+- **`no-shape-in-symbol-names`** fires where a name is chosen — declarations,
+  parameters, the properties a file writes out, the local a name is imported
+  under — and not on property reads of values the file does not own. Upstream
+  visits every identifier, which refuses `schema.shape` (zod's documented API,
+  and zod is the fleet's pick) and `svg.shapeRendering`, and offers a per-site
+  disable as the only remedy.
 
 Two facts about how it is wired, both load-bearing:
 

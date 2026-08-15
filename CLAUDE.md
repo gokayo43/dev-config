@@ -57,12 +57,15 @@ a change to a rule usually lands here too.
   config cannot carry the reason, so it is here.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
   clean one. A gate without one is a claim; `anti-slop.test.ts` holds every lint
-  rule in `anti-slop/` to the same bar — a block of cases per rule, plus
-  upstream's own fixtures as a differential oracle over the three rules it ships
-  tests for. Two suites are not a gate's: `oxlint-base.test.ts` holds what the
-  base config itself must, since an override REPLACES a list-shaped rule rather
-  than adding to it, and `action-evidence.test.ts` holds every action publishing
-  an artifact to keeping the runner-temp paths its own YAML names.
+  rule in `anti-slop/` to the same bar — a block of cases per rule, run through
+  `lint-fixture.ts`, which lints a whole block in one oxlint spawn and refuses a
+  run whose plugin threw or whose exit status and diagnostics disagree, both of
+  which otherwise read as a clean tree. `anti-slop-upstream.test.ts` is
+  upstream's own fixtures, as a differential oracle over the three rules it
+  ships tests for. Two suites are not a gate's: `oxlint-base.test.ts` holds what
+  the base config itself must, since an override REPLACES a list-shaped rule
+  rather than adding to it, and `action-evidence.test.ts` holds every action
+  publishing an artifact to keeping the runner-temp paths its own YAML names.
   `repo-contract-fixture.ts` is the clean tree the repo contract's two suites
   share.
 - `docs/gates/*.md` — a reference page per gate. README holds the map.
