@@ -8,8 +8,10 @@ const config: KnipConfig = {
   // it. Splitting the entry point out of the gate module is also what lets the
   // coverage floor mean something: a module the suite drives reports its own
   // coverage, rather than carrying an entry block no test can reach.
-  entry: [".github/actions/*/*.main.ts", "tests/*.ts"],
-  project: [".github/actions/**/*.ts", "tests/**/*.ts"],
+  // `anti-slop/index.js` is the same kind of entry from the other direction:
+  // oxlint loads it by the path in `oxlint.base.json`, which knip does not read.
+  entry: [".github/actions/*/*.main.ts", "anti-slop/index.js", "tests/*.ts"],
+  project: [".github/actions/**/*.ts", "anti-slop/**/*.js", "tests/**/*.ts"],
   // knip reads every `run:` block for the binaries it invokes, which is worth
   // having — it is how a workflow reaching for an undeclared tool gets caught.
   // `let` is bash's arithmetic builtin inside an inlined JS snippet, not a tool.

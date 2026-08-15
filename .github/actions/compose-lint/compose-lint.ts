@@ -1,12 +1,10 @@
-import { type Problem, record } from "../_lib/gate.ts";
+import { type ConfigObject, type Problem, record } from "../_lib/gate.ts";
 
 const MIGRATE = "migrate";
 const OPT_OUT = "x-no-healthcheck";
 const HOST_NETWORK_OPT_OUT = "x-host-network";
 
-type Service = Record<string, unknown>;
-
-function checkHealthcheck(name: string, service: Service, file: string): Problem[] {
+function checkHealthcheck(name: string, service: ConfigObject, file: string): Problem[] {
   if (service["healthcheck"] !== undefined) return [];
   const reason = service[OPT_OUT];
   if (typeof reason === "string" && reason.trim() !== "") return [];
@@ -18,7 +16,7 @@ function checkHealthcheck(name: string, service: Service, file: string): Problem
   ];
 }
 
-function checkMemoryCap(name: string, service: Service, file: string): Problem[] {
+function checkMemoryCap(name: string, service: ConfigObject, file: string): Problem[] {
   if (service["mem_limit"] !== undefined) return [];
   return [
     {
@@ -28,7 +26,7 @@ function checkMemoryCap(name: string, service: Service, file: string): Problem[]
   ];
 }
 
-function checkPorts(name: string, service: Service, file: string): Problem[] {
+function checkPorts(name: string, service: ConfigObject, file: string): Problem[] {
   const ports = service["ports"];
   if (!Array.isArray(ports)) return [];
   return ports
@@ -48,7 +46,7 @@ function checkPorts(name: string, service: Service, file: string): Problem[] {
  * listener it opens is on every interface and the loopback rule above has
  * nothing left to check.
  */
-function checkNetworkMode(name: string, service: Service, file: string): Problem[] {
+function checkNetworkMode(name: string, service: ConfigObject, file: string): Problem[] {
   if (service["network_mode"] !== "host") return [];
   const reason = service[HOST_NETWORK_OPT_OUT];
   if (typeof reason === "string" && reason.trim() !== "") return [];
@@ -60,7 +58,7 @@ function checkNetworkMode(name: string, service: Service, file: string): Problem
   ];
 }
 
-function checkMigrationOrder(name: string, service: Service, file: string): Problem[] {
+function checkMigrationOrder(name: string, service: ConfigObject, file: string): Problem[] {
   if (name === MIGRATE || service["build"] === undefined) return [];
   const condition = record(record(service["depends_on"])[MIGRATE])["condition"];
   if (condition === "service_completed_successfully") return [];
@@ -72,7 +70,7 @@ function checkMigrationOrder(name: string, service: Service, file: string): Prob
   ];
 }
 
-function checkMigrateService(services: Record<string, unknown>, file: string): Problem[] {
+function checkMigrateService(services: ConfigObject, file: string): Problem[] {
   const migrate = services[MIGRATE];
   if (migrate === undefined) {
     return [

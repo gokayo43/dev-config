@@ -3,17 +3,19 @@ import { stat } from "node:fs/promises";
 
 import {
   baseRevision,
+  type ConfigObject,
   DEPENDENCY_FIELDS,
   type Event,
   git,
   isIgnored,
   isObject,
   isTracked,
-  jsonObjects,
   type Manifest,
   manifests,
   type Missing,
+  objectsIn,
   oneOf,
+  parseEach,
   type Problem,
   record,
   repoFiles,
@@ -49,7 +51,7 @@ function lifecycleOf(value: unknown): Lifecycle | undefined {
   return oneOf(LIFECYCLES, value);
 }
 
-function declaredIn(contents: Record<string, unknown>): Declared {
+function declaredIn(contents: ConfigObject): Declared {
   const value = contents["lifecycle"];
   return {
     found: value === undefined ? "is absent" : `reads ${JSON.stringify(value)}`,
@@ -271,8 +273,81 @@ type Exemption = keyof typeof EXEMPTIONS;
 
 interface Config {
   /** Undefined whenever there is nothing to grade — `problems` says which of the two reasons. */
-  readonly contents: Record<string, unknown> | undefined;
+  readonly contents: ConfigObject | undefined;
   readonly problems: readonly Problem[];
+}
+
+/**
+ * The text with its comments and trailing commas blanked out. Both configs read
+ * through `readJson` are JSON with comments by their own specification —
+ * oxlint's schema declares `allowComments` and `allowTrailingCommas`, and
+ * TypeScript has always taken both — and README asks a repo to write the reason
+ * for an override beside it. Blanked rather than deleted so a parse error still
+ * points at the character it is about.
+ *
+ * A scan rather than a regex, because `//` inside a string is data: the
+ * `$schema` line at the top of these files is a URL, and a stripper that ate it
+ * would turn a working config into the failure it was written to prevent.
+ * `package.json` keeps its strict read, since a comment there is a file npm and
+ * bun both refuse.
+ */
+function withoutComments(text: string): string {
+  const kept: string[] = [];
+  const commas: number[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    if (char === '"') {
+      index = copyString(text, index, kept);
+      continue;
+    }
+    if (char === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
+      index = blankComment(text, index, kept);
+      continue;
+    }
+    if (char === ",") commas.push(kept.length);
+    kept.push(char);
+    index += 1;
+  }
+  for (const at of commas) {
+    const next = kept.slice(at + 1).find((each) => each.trim() !== "");
+    if (next === "}" || next === "]") kept[at] = " ";
+  }
+  return kept.join("");
+}
+
+/** The string literal starting at `from`, copied whole; answers the index after it. */
+function copyString(text: string, from: number, kept: string[]): number {
+  kept.push('"');
+  let index = from + 1;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    kept.push(char);
+    if (char === "\\") {
+      kept.push(text[index + 1] ?? "");
+      index += 2;
+      continue;
+    }
+    index += 1;
+    if (char === '"') break;
+  }
+  return index;
+}
+
+/** The comment starting at `from`, as the whitespace it stands in for. */
+function blankComment(text: string, from: number, kept: string[]): number {
+  const end =
+    text[from + 1] === "/"
+      ? nextIndexOf(text, "\n", from + 2)
+      : nextIndexOf(text, "*/", from + 2) + 2;
+  for (let index = from; index < end; index += 1) kept.push(text[index] === "\n" ? "\n" : " ");
+  return end;
+}
+
+/** Where `needle` next appears, or the end of the text when it does not appear again. */
+function nextIndexOf(text: string, needle: string, from: number): number {
+  const at = text.indexOf(needle, from);
+  return at === -1 ? text.length : at;
 }
 
 /**
@@ -284,7 +359,9 @@ async function readJson(root: string, file: string): Promise<Config> {
   if (!(await Bun.file(`${root}/${file}`).exists())) {
     return { contents: undefined, problems: [{ file, message: `${file} is missing` }] };
   }
-  const batch = await jsonObjects(root, [file]);
+  const batch = objectsIn(
+    await parseEach(root, [file], (text) => JSON.parse(withoutComments(text)) as unknown, "JSON"),
+  );
   return { contents: batch.read[0]?.value, problems: batch.problems };
 }
 
@@ -307,7 +384,7 @@ async function statOf(path: string): Promise<Stats | undefined> {
   }
 }
 
-function specOf(contents: Record<string, unknown>, name: string): string | undefined {
+function specOf(contents: ConfigObject, name: string): string | undefined {
   for (const field of DEPENDENCY_FIELDS) {
     const spec = record(contents[field])[name];
     if (typeof spec === "string") return spec;
@@ -325,7 +402,7 @@ function specOf(contents: Record<string, unknown>, name: string): string | undef
 const SHIPPED_FIELDS = ["dependencies", "optionalDependencies"] as const;
 
 /** Any of Sentry's per-runtime SDKs, among what a manifest actually ships. */
-function hasSentry(contents: Record<string, unknown>): boolean {
+function hasSentry(contents: ConfigObject): boolean {
   return SHIPPED_FIELDS.some((field) =>
     Object.keys(record(contents[field])).some((name) => name.startsWith(SENTRY)),
   );
@@ -349,7 +426,7 @@ async function checkLockfiles(root: string): Promise<Problem[]> {
 
 async function checkLineage(
   root: string,
-  contents: Record<string, unknown>,
+  contents: ConfigObject,
   exempt: boolean,
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
@@ -419,7 +496,7 @@ async function checkBunfig(root: string): Promise<Problem[]> {
   const text = await readText(`${root}/bunfig.toml`);
   if (text === undefined) return [{ file: "bunfig.toml", message: "bunfig.toml is missing" }];
 
-  const config = Bun.TOML.parse(text) as Record<string, unknown>;
+  const config = Bun.TOML.parse(text) as ConfigObject;
   const install = record(config["install"]);
   const test = record(config["test"]);
   const problems: Problem[] = [];
@@ -461,7 +538,7 @@ function runsOf(entry: unknown): string[] {
   ];
 }
 
-function hookRuns(hooks: Record<string, unknown>, hook: string): string[] {
+function hookRuns(hooks: ConfigObject, hook: string): string[] {
   const node = record(hooks[hook]);
   const jobs = node["jobs"];
   return [
@@ -563,7 +640,7 @@ async function checkDocs(root: string): Promise<Problem[]> {
 /** The repo's call into the shared gate, and what is wrong with the workflow that should hold it. */
 interface Call {
   /** The `with:` block of the job that calls check.yml, or nothing when no job does. */
-  readonly asked: Record<string, unknown> | undefined;
+  readonly asked: ConfigObject | undefined;
   readonly problems: Problem[];
 }
 
@@ -709,7 +786,7 @@ export interface Contract {
   readonly event: Event;
 }
 
-function checkRoot(contents: Record<string, unknown>, contract: Contract): Problem[] {
+function checkRoot(contents: ConfigObject, contract: Contract): Problem[] {
   const problems: Problem[] = [];
 
   const packageManager = contents["packageManager"];

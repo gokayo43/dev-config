@@ -103,8 +103,9 @@ function hits(counts: readonly Served[], route: Route, table: readonly Route[]):
  */
 function routeFrom(entry: string): Route | undefined {
   const [method = "", path, ...rest] = entry.split(/\s+/);
-  const shaped = method !== "" && path !== undefined && path.startsWith("/") && rest.length === 0;
-  return shaped ? { method, path } : undefined;
+  const wellFormed =
+    method !== "" && path !== undefined && path.startsWith("/") && rest.length === 0;
+  return wellFormed ? { method, path } : undefined;
 }
 
 /**

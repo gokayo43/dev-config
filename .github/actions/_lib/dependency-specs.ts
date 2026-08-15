@@ -202,12 +202,12 @@ const peerRange: Rule = (spec) => {
  * itself: a field added to `DEPENDENCY_FIELDS` and not graded here is a
  * compile error rather than a silent hole.
  */
-const PIN_RULES: Record<(typeof DEPENDENCY_FIELDS)[number], Rule> = {
+const PIN_RULES = {
   dependencies: installed,
   devDependencies: installed,
   optionalDependencies: installed,
   peerDependencies: peerRange,
-};
+} satisfies Record<(typeof DEPENDENCY_FIELDS)[number], Rule>;
 
 export function checkPins(all: readonly Manifest[]): Problem[] {
   return all.flatMap(({ file, value }) =>

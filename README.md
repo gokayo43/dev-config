@@ -28,6 +28,7 @@ to override a shared setting, the override carries a comment naming the reason.
 | ------------------------------ | -------------- | ------------------------------------------ |
 | `tsconfig.base.json`           | `tsc`          | `extends` by package name                  |
 | `oxlint.base.json`             | `oxlint`       | `extends` by `node_modules` path           |
+| `anti-slop/`                   | `oxlint`       | `jsPlugins` in `oxlint.base.json`          |
 | `knip.base.ts`                 | `knip`         | imported by `knip.ts`                      |
 | `lighthouserc.json`            | `lhci`         | `configPath` into `node_modules`           |
 | `default.json`                 | Renovate       | `extends` by GitHub preset name            |
@@ -104,7 +105,7 @@ relative to the config file — so the base is referenced through `node_modules`
 Configs merge first-to-last, so anything the local file declares wins over the
 base.
 
-The base sets `correctness: error`, `suspicious: warn`, `perf: warn`,
+The base sets `correctness: error`, `suspicious: error`, `perf: warn`,
 `no-console: warn`, and the hooks rules — which oxlint configures under the
 `react` plugin as `react/rules-of-hooks` and `react/exhaustive-deps`. Their
 diagnostics are labelled `react-hooks`, but there is no `react-hooks` plugin to
@@ -151,6 +152,18 @@ each one converts a question into silence:
 - `eslint/no-warning-comments` — `TODO`, `FIXME`, `XXX` and `HACK` anywhere in a
   comment. The register is GitHub issues in the repo the work belongs to; a
   marker in a file is invisible to anyone who is not already reading that file.
+- `typescript/no-restricted-types` — `Record<string, unknown>` and
+  `Record<string, any>`. The bag with no keys is how a shape nobody modelled
+  travels: it type-checks everywhere and asserts nothing. It is legal exactly
+  once per boundary, as a **named alias at the module that owns that boundary**,
+  carrying one disable with the why — `type ConfigObject = Record<string,
+unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
+  not own. Everything else is one of: model the shape, parse the input, or
+  delete the cast. A fleet-wide escape alias re-exported everywhere is the one
+  thing this must not become; the linter cannot see the difference, so review
+  does. Inline `{ [k: string]: unknown }` is not matched — the rule reads type
+  references, not shapes — but `anti-slop/no-unsafe-dictionary-type` below is,
+  and catches it along with aliases and mapped types.
 
 ### Overrides
 
@@ -228,6 +241,51 @@ to that line for the next person who writes there.
 
 Type-aware rules need resolved types, so a repo whose types come from generated
 code runs its codegen before linting, exactly as it does before `tsc`.
+
+### The anti-slop plugin
+
+Type-aware rules catch what `any` touches; they do not see a plain `as`. So
+`input as object as User`, a value widened to `unknown` and asserted back, an
+`unknown` parameter that never gets parsed, and a `Record<string, unknown>`
+value contract all pass a fully type-aware run — and assertion laundering is
+precisely the move an agent makes to silence the rules above. Nine rules close
+that, shipped in this package as an oxlint JS plugin and enabled at `error` by
+the base:
+
+| Rule                         | What it rejects                                                        |
+| ---------------------------- | ---------------------------------------------------------------------- |
+| `no-chained-type-assertions` | `x as object as User` — nested assertions that fabricate evidence      |
+| `no-widen-then-assert`       | widening a known local value and asserting it back later               |
+| `no-known-value-widening`    | a broad annotation over a known initializer; use `satisfies`           |
+| `no-unsafe-dictionary-type`  | dictionary contracts whose value type is `unknown`/`any`/`object`/`{}` |
+| `no-unknown-type-aliases`    | an alias that only renames `unknown`                                   |
+| `no-object-parameters`       | the broad `object` type on an input                                    |
+| `no-unknown-parameters`      | an `unknown` parameter, except the `cause` convention                  |
+| `no-runtime-typeof`          | a runtime `typeof` — parse at the boundary instead                     |
+| `no-shape-in-symbol-names`   | "shape" in a symbol name                                               |
+
+Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT) at
+commit `abaeb63`. Upstream vendors the rules into each repo; they live here
+because oxlint's `jsPlugins` API is alpha and explicitly outside semver, so the
+rule code and the oxlint version have to move as one pin — which is what the
+release pair already does. Upstream's tenth rule,
+`no-conditional-empty-object-spread`, is deliberately not ported: with
+`exactOptionalPropertyTypes` the conditional spread is the only type-legal way
+to conditionally include a field in an option bag you do not own.
+
+Two facts about how it is wired, both load-bearing:
+
+- **The `jsPlugins` specifier is relative to `oxlint.base.json`**, so a repo that
+  extends the base through `node_modules` resolves the plugin with no line of its
+  own. There is nothing to scaffold per repo.
+- **The plugin is JavaScript, not TypeScript.** Node refuses to strip types from
+  any file under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`),
+  and this directory is inside `node_modules` for every repo that consumes it.
+  `tsc` still checks it in this repo, through `checkJs` and JSDoc types.
+
+`tests/anti-slop.test.ts` drives each rule against a violating tree and a clean
+one with the real binary, and asserts that the base enables every rule the plugin
+defines — a rule that is not in the base is a rule no repo runs.
 
 ### What the linter cannot see
 

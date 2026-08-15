@@ -15,6 +15,12 @@ a change to a rule usually lands here too.
 
 - `*.base.json` / `knip.base.ts` / `lighthouserc.json` — the bases repos inherit.
   Anything keyed to a repo's own paths does not belong in one.
+- `anti-slop/` — the oxlint JS plugin `oxlint.base.json` names in `jsPlugins`,
+  ported from dmmulroy/anti-slop (README has the rule table and the credit).
+  Its specifier is relative to the base config, so consuming repos need no line
+  of their own. It is JavaScript with JSDoc types, not TypeScript, because Node
+  refuses to strip types under `node_modules` — which is where every consumer
+  has it; `checkJs` in `tsconfig.json` is what type-checks it here.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
 - `.github/workflows/check.yml` — the gate every repo calls.
 - `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
@@ -45,7 +51,8 @@ a change to a rule usually lands here too.
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
-  clean one. A gate without one is a claim. `action-evidence.test.ts` is the one
+  clean one. A gate without one is a claim; `anti-slop.test.ts` holds every lint
+  rule in `anti-slop/` to the same bar. `action-evidence.test.ts` is the one
   suite that is not a gate's: it holds every action publishing an artifact to
   keeping the runner-temp paths its own YAML names. `repo-contract-fixture.ts`
   is the clean tree that gate's two suites share.

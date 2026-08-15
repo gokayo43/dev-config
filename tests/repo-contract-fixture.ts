@@ -4,7 +4,7 @@
  * dependency spec is read is its own file — and a fixture each would be two
  * definitions of "a repo that passes", drifting apart on the first new fact.
  */
-import type { Event } from "../.github/actions/_lib/gate.ts";
+import type { ConfigObject, Event } from "../.github/actions/_lib/gate.ts";
 import type { Contract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { materialise, type Tree } from "./tree.ts";
@@ -54,8 +54,8 @@ export async function contract(tree: Tree, overrides: Partial<Contract> = {}): P
   return (await repoContract(root, { ...DEFAULTS, ...overrides })).map(({ message }) => message);
 }
 
-export function manifestWith(change: (contents: Record<string, unknown>) => void): Tree {
-  const contents = JSON.parse(CLEAN["package.json"] ?? "") as Record<string, unknown>;
+export function manifestWith(change: (contents: ConfigObject) => void): Tree {
+  const contents = JSON.parse(CLEAN["package.json"] ?? "") as ConfigObject;
   change(contents);
   return { ...CLEAN, "package.json": JSON.stringify(contents) };
 }

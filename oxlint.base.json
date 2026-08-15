@@ -9,6 +9,10 @@
   "options": {
     "typeAware": true
   },
+  // The house rules oxlint has no equivalent for. The specifier is relative to
+  // THIS file, so a repo extending the base by node_modules path resolves it
+  // without a line of its own. Plain JS on purpose — see anti-slop/index.js.
+  "jsPlugins": [{ "name": "anti-slop", "specifier": "./anti-slop/index.js" }],
   "rules": {
     "no-console": "warn",
     "no-empty": "error",
@@ -18,6 +22,19 @@
     ],
     "typescript/no-explicit-any": "error",
     "typescript/no-non-null-assertion": "error",
+    "typescript/no-restricted-types": [
+      "error",
+      {
+        "types": {
+          "Record<string, unknown>": {
+            "message": "define a boundary-specific alias with a reasoned suppression at its owning module, or model/parse the shape."
+          },
+          "Record<string, any>": {
+            "message": "define a boundary-specific alias with a reasoned suppression at its owning module, or model/parse the shape. `any` also defeats every type-aware rule below."
+          }
+        }
+      }
+    ],
     "typescript/ban-ts-comment": [
       "error",
       { "ts-expect-error": "allow-with-description", "minimumDescriptionLength": 12 }
@@ -43,7 +60,16 @@
     "typescript/no-unsafe-enum-comparison": "error",
     "typescript/no-unsafe-member-access": "error",
     "typescript/no-unsafe-return": "error",
-    "typescript/prefer-nullish-coalescing": "warn"
+    "typescript/prefer-nullish-coalescing": "warn",
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-shape-in-symbol-names": "error",
+    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-widen-then-assert": "error"
   },
   "overrides": [
     {

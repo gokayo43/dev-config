@@ -2,5 +2,17 @@
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
   "extends": ["./oxlint.base.json"],
   "env": { "node": true, "es2024": true },
-  "ignorePatterns": ["node_modules/**", ".github/actions/db-gate/capacity.js"]
+  "ignorePatterns": ["node_modules/**", ".github/actions/db-gate/capacity.js"],
+  "rules": {
+    // Two of the base's own rules, off here and nowhere else. Every gate in
+    // this repo reads a file it does not own — another repo's package.json,
+    // compose file, lockfile, workflow — and reads it with no runtime
+    // dependency of its own, because a gate that needs an install is a gate
+    // that can fail before it runs. The `unknown` parameter and the `typeof`
+    // that narrows it are therefore this repo's decoder: both rules exist to
+    // push parsing to the boundary, and in this repo the boundary is the
+    // product.
+    "anti-slop/no-runtime-typeof": "off",
+    "anti-slop/no-unknown-parameters": "off"
+  }
 }

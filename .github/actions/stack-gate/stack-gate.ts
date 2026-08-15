@@ -1,5 +1,6 @@
 import {
   type Allowlist,
+  type ConfigObject,
   deadEntries,
   DEPENDENCY_FIELDS,
   isObject,
@@ -47,7 +48,10 @@ interface Written {
  * `Written` and not listed here is a compile error rather than a key the parse
  * silently refuses.
  */
-const ENTRY_KEYS: Record<keyof Written, true> = { names: true, patterns: true, reason: true };
+const ENTRY_KEYS = { names: true, patterns: true, reason: true } satisfies Record<
+  keyof Written,
+  true
+>;
 
 /** An array's items as what they are, since `isArray` narrows unknown to `any[]`. */
 function itemsOf(value: unknown): readonly unknown[] | undefined {
@@ -89,7 +93,7 @@ function stringsOf(value: unknown): string[] | undefined {
  * SyntaxError from inside a loop over somebody's dependencies — attributed to
  * no entry, and only on the repos that declare enough to reach it.
  */
-function entryIn(fields: Record<string, unknown>): DenylistEntry | string {
+function entryIn(fields: ConfigObject): DenylistEntry | string {
   const unknown = Object.keys(fields).filter((key) => !(key in ENTRY_KEYS));
   if (unknown.length > 0) {
     return `carries ${unknown.join(", ")}, which no rule here reads — a denylist entry is names, patterns and reason`;

@@ -1,7 +1,15 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "types": ["bun"]
+    "types": ["bun"],
+    "allowJs": true,
+    "checkJs": true
   },
-  "include": [".github/actions/**/*.ts", "tests/**/*.ts", "knip.ts", "knip.base.ts"]
+  "include": [
+    ".github/actions/**/*.ts",
+    "anti-slop/**/*.js",
+    "tests/**/*.ts",
+    "knip.ts",
+    "knip.base.ts"
+  ]
 }

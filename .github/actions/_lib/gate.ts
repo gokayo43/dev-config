@@ -75,14 +75,14 @@ export async function entry(run: () => Promise<void>): Promise<void> {
 export function inputs<const Names extends readonly string[]>(
   ...names: Names
 ): Record<Names[number], string> {
-  const read = {} as Record<Names[number], string>;
-  for (const name of names) {
+  const read = names.map((name) => {
     const variable = `INPUT_${name.toUpperCase().replaceAll("-", "_")}`;
     const value = Bun.env[variable];
     if (value === undefined) throw new Error(`${variable} is not set — the action must pass it`);
-    read[name as Names[number]] = value;
-  }
-  return read;
+    return [name, value];
+  });
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- fromEntries answers a string-keyed record; that its keys are exactly `names` is what the signature promises and what no inference can express
+  return Object.fromEntries(read) as Record<Names[number], string>;
 }
 
 /**
@@ -104,8 +104,20 @@ export const DEPENDENCY_FIELDS = [
   "peerDependencies",
 ] as const;
 
-export function record(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+/**
+ * A config file's top level, decoded and no further. Every gate here reads
+ * files it does not own — another repo's package.json, compose file,
+ * lefthook.yml, bunfig.toml — so the keys are whatever that repo wrote, and
+ * each check names and validates the ones it needs where it reads them. A
+ * modelled type here would have to be every valid and invalid config in the
+ * fleet at once, and would claim about the file exactly what is not checked yet.
+ */
+// oxlint-disable-next-line typescript/no-restricted-types, anti-slop/no-unsafe-dictionary-type -- the one boundary this alias exists for; every gate reads config through it rather than restating it
+export type ConfigObject = Record<string, unknown>;
+
+export function record(value: unknown): ConfigObject {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the check on the left is the evidence: an object that is not null is exactly what the alias claims, and nothing narrower is claimed about its keys
+  return typeof value === "object" && value !== null ? (value as ConfigObject) : {};
 }
 
 /**
@@ -113,7 +125,7 @@ export function record(value: unknown): Record<string, unknown> {
  * it is handed; this is for the boundary that has to refuse the value instead,
  * because nothing below it can say anything true about a config that is `null`.
  */
-export function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is ConfigObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -440,20 +452,19 @@ export async function parseEach<T>(
   };
 }
 
-export type Manifest = Parsed<Record<string, unknown>>;
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- `ConfigObject` above is the boundary; this names the file kind that carries it, and resolves to the same one alias
+export type Manifest = Parsed<ConfigObject>;
 
 /**
- * Every one of these files as the object a JSON config has to be. `JSON.parse`
+ * Every parsed file as the object a config's top level has to be. `JSON.parse`
  * answers `null`, a number or an array as readily as an object, and every
  * reader downstream goes straight to a field — so the shape is settled here,
  * where the file can still be named, rather than as a TypeError inside whichever
- * check reached the value first.
+ * check reached the value first. It takes the batch rather than the paths
+ * because the dialect differs by file — `package.json` is strict JSON, an
+ * oxlint or TypeScript config is JSON with comments — and this answer does not.
  */
-export async function jsonObjects(
-  root: string,
-  files: readonly string[],
-): Promise<Batch<Record<string, unknown>>> {
-  const parsed = await parseEach(root, files, (text) => JSON.parse(text) as unknown, "JSON");
+export function objectsIn(parsed: Batch<unknown>): Batch<ConfigObject> {
   const read: Manifest[] = [];
   const problems = [...parsed.problems];
   for (const { file, value } of parsed.read) {
@@ -470,8 +481,9 @@ export async function jsonObjects(
 // matches a wildcard across "/", so the second pathspec below reaches any depth
 // while still requiring the whole final path segment: "apps/my-package.json"
 // does not match, and neither pathspec can return anything but a package.json.
-export async function manifests(root: string): Promise<Batch<Record<string, unknown>>> {
-  return await jsonObjects(root, await repoFiles(root, ["package.json", "*/package.json"]));
+export async function manifests(root: string): Promise<Batch<ConfigObject>> {
+  const files = await repoFiles(root, ["package.json", "*/package.json"]);
+  return objectsIn(await parseEach(root, files, (text) => JSON.parse(text) as unknown, "JSON"));
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {

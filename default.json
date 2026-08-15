@@ -41,6 +41,11 @@
       "description": "Better Auth's plugins are versioned in lockstep with the core; a plugin ahead of the core fails at import.",
       "matchPackageNames": ["better-auth", "/^@better-auth\\//"],
       "groupName": "Better Auth"
+    },
+    {
+      "description": "@oxlint/plugins publishes one version per oxlint release and describes that release's AST. The anti-slop rules are typed against it, so the two move together or this repo's typecheck grades the plugin against an AST oxlint is not handing it.",
+      "matchPackageNames": ["oxlint", "@oxlint/plugins"],
+      "groupName": "oxlint"
     }
   ],
   "customManagers": [

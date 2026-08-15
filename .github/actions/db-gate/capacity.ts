@@ -68,7 +68,7 @@ export function ranOnFrom(value: string): RanOn {
   return found;
 }
 
-const CAPTION: Record<RanOn, string[]> = {
+const CAPTION = {
   "ci-runner": [
     "Measured on a CI runner, which is not the deployed shape: read it against",
     "the last run rather than as a capacity claim. The number that answers",
@@ -79,7 +79,7 @@ const CAPTION: Record<RanOn, string[]> = {
     "This is the capacity claim testing.md asks for: record the number and the",
     "first bottleneck it hit, and take it again after a change to a hot path.",
   ],
-};
+} satisfies Record<RanOn, string[]>;
 
 /**
  * The measurement, for a run summary or a file beside the repo — or nothing,

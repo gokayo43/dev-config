@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { Event } from "../.github/actions/_lib/gate.ts";
+import type { ConfigObject, Event } from "../.github/actions/_lib/gate.ts";
 import { type Contract, repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { git, history, materialise, type Tree, under, without } from "./tree.ts";
 import { containing } from "./matchers.ts";
@@ -210,6 +210,40 @@ describe("a manifest that will not parse", () => {
   test("a config that will not parse is named", async () => {
     const problems = await contract({ ...CLEAN, ".oxlintrc.json": "{ oops" });
     expect(problems).toEqual([containing("is not valid JSON")]);
+  });
+
+  // Both configs read here are JSON with comments by their own specification —
+  // oxlint's schema sets `allowComments`, TypeScript has always allowed them —
+  // and the README tells a repo to write the reason for an override beside it.
+  // A gate that refused the reason it asked for is the shape this pins.
+  test("a reason written beside a config entry is not a parse failure", async () => {
+    const commented = `{
+  // The base, and the one rule this repo has a reason to differ on.
+  "extends": ["./node_modules/@gokayo43/dev-config/oxlint.base.json"],
+  "rules": {
+    /* Reads a URL out of a fixture, so a bare "//" is data here. */
+    "no-console": "off",
+  },
+}`;
+    expect(await contract({ ...CLEAN, ".oxlintrc.json": commented })).toEqual([]);
+    expect(
+      await contract({
+        ...CLEAN,
+        "tsconfig.json":
+          '{\n  // inherited\n  "extends": "@gokayo43/dev-config/tsconfig.base.json"\n}',
+      }),
+    ).toEqual([]);
+  });
+
+  // The `$schema` line of every config here holds `https://` — a stripper that
+  // reads `//` inside a string as a comment eats the rest of that line and the
+  // file stops parsing, which is a worse failure than the one being fixed.
+  test("a comment marker inside a string is data", async () => {
+    const withUrl = `{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "extends": ["./node_modules/@gokayo43/dev-config/oxlint.base.json"]
+}`;
+    expect(await contract({ ...CLEAN, ".oxlintrc.json": withUrl })).toEqual([]);
   });
 
   test("an absent root still says it is absent", async () => {
@@ -570,7 +604,7 @@ describe("ci-call waives the upgrade-gate rule with the call it is about", () =>
  * differs from its neighbour by the field and never by a backup script.
  */
 function declaring(value: string | undefined): Tree {
-  const contents = JSON.parse(LIVE_STATIC["package.json"] ?? "") as Record<string, unknown>;
+  const contents = JSON.parse(LIVE_STATIC["package.json"] ?? "") as ConfigObject;
   if (value === undefined) delete contents["lifecycle"];
   else contents["lifecycle"] = value;
   return { ...LIVE_STATIC, "package.json": JSON.stringify(contents) };

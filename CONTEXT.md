@@ -54,6 +54,12 @@ saying why: a healthcheck opt-out carrying its reason, a lint directive or an
 allowlist entry carrying its reason after `--`. A hatch that costs nothing is a
 hole.
 
+**Boundary alias** — the one place a type nobody modelled may be named: an alias
+at the module that owns a trust or wire boundary, carrying a single disable with
+the why. `ConfigObject` is the boundary between a gate and a file another repo
+wrote. Distinct from an escape alias, which is the same declaration re-exported
+for anyone who wants one — the linter cannot tell them apart, so review does.
+
 **Floor** — a bound set below what honest work already produces, there to catch
 the absence of the work rather than to be aimed at: the coverage threshold, and
 the capacity ramp's route coverage. A floor says a route has been under load
