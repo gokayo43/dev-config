@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { allowlistFrom, inputs, notice, report, required } from "../.github/actions/_lib/gate.ts";
 import { git, history, type Tree } from "./tree.ts";
 
-function captureLog() {
+function captureLog(): { lines: string[]; restore: () => void } {
   const lines: string[] = [];
   const spy = spyOn(console, "log").mockImplementation((...parts: unknown[]) => {
     lines.push(parts.map(String).join(" "));

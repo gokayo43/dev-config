@@ -222,6 +222,24 @@ export const handlers: Record<string, Handler> = { key: "start", value: startHan
       source: `${HANDLER}export const handlers = { start: startHandler } as Record<string, Handler>;`,
       reports: ["open dictionary"],
     },
+    {
+      // Upstream reports this, and the only escapes it leaves are deleting the
+      // annotation or inventing a name for a two-field return. An explicit
+      // return type over the literal it stands on is what makes the signature
+      // the contract instead of the body, which is what this repo asks for.
+      name: "an anonymous target naming exactly the keys written under it discards nothing",
+      source: `export function captureLog(): { lines: string[]; restore: () => void } {
+  const lines: string[] = [];
+  const restore = (): void => {};
+  return { lines, restore };
+}`,
+      reports: [],
+    },
+    {
+      name: "an anonymous target the value has a key beyond is still a loss",
+      source: `export const settings: { retries: number } = { retries: 2, verbose: true };`,
+      reports: ["anonymous object"],
+    },
   ],
 
   "no-object-parameters": [
@@ -473,6 +491,17 @@ export type Bag = Index;`,
 
   "no-widen-then-assert": [
     {
+      // The two rules held two lists of what counts as a known value and only
+      // one of them had `UnaryExpression` in it, so this laundering was caught
+      // when the literal was `1` and silent when it was `-1`.
+      name: "an operator over a literal is as known as the literal",
+      source: `export function round(): number {
+  const wide: unknown = -1;
+  return wide as number;
+}`,
+      reports: ["3:10"],
+    },
+    {
       name: "a widened const asserted back to what it was",
       source: `${USER}export function round(value: User): User {
   const wide: unknown = value;
@@ -656,7 +685,12 @@ describe("upstream's fixtures, against this port", () => {
     [`${PRELUDE} const commands: Record<string, Command> = { start: startCommand };`, 1],
     [`${PRELUDE} const commands: { [key: string]: Command } = { start: startCommand };`, 1],
     [`${PRELUDE} const commands: { [K in string]: Command } = { start: startCommand };`, 1],
-    [`${PRELUDE} const commands: { start: Command } = { start: startCommand };`, 1],
+    // The one place this port deliberately answers differently from upstream:
+    // an anonymous target naming exactly the keys of the literal under it
+    // discards nothing, and upstream's only escapes from reporting it are
+    // deleting the annotation or naming a type for it. Both cases below are
+    // `1` upstream.
+    [`${PRELUDE} const commands: { start: Command } = { start: startCommand };`, 0],
     [`${PRELUDE} const commands = { start: startCommand } as Record<string, Command>;`, 1],
     [
       `${PRELUDE} const commands = ({ start: startCommand } as Record<string, Command>) as object;`,
@@ -671,7 +705,7 @@ describe("upstream's fixtures, against this port", () => {
       `${PRELUDE} function create(): Record<string, Command> { return { start: startCommand }; }`,
       1,
     ],
-    [`${PRELUDE} function create(): { start: Command } { return { start: startCommand }; }`, 1],
+    [`${PRELUDE} function create(): { start: Command } { return { start: startCommand }; }`, 0],
     [
       `${PRELUDE} const source = { start: startCommand }; const commands: Record<string, Command> = source;`,
       1,

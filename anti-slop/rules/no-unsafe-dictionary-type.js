@@ -1,11 +1,12 @@
 /** @import { ESTree, Rule } from "@oxlint/plugins" */
-/** @import { TypeEnvironment } from "../shared/dictionary-types.js" */
+/** @import { TypeEnvironment } from "../shared/types.js" */
 
+import { typeReferenceName } from "../shared/syntax.js";
 import {
   classifyUnsafeDictionary,
   classifyUnsafeDictionaryValue,
   createTypeEnvironment,
-} from "../shared/dictionary-types.js";
+} from "../shared/types.js";
 
 /**
  * @param {ESTree.Node} node
@@ -13,14 +14,6 @@ import {
  */
 function isTypeNode(node) {
   return node.type.startsWith("TS") && node.type !== "TSTypeAnnotation";
-}
-
-/**
- * @param {ESTree.TSTypeReference} type
- * @returns {string | null}
- */
-function typeReferenceName(type) {
-  return type.typeName.type === "Identifier" ? type.typeName.name : null;
 }
 
 /**

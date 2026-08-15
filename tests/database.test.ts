@@ -131,7 +131,7 @@ describe("giving up the database a gate built", () => {
   }
 
   /** Captures what a case writes to stdout, and puts stdout back. */
-  function logged() {
+  function logged(): { lines: string[]; restore: () => void } {
     const lines: string[] = [];
     const wrote = console.log;
     console.log = (line: unknown) => void lines.push(String(line));

@@ -12,10 +12,9 @@
 
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.js";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.js";
-import { noObjectParametersRule } from "./rules/no-object-parameters.js";
 import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.js";
+import { noObjectParametersRule, noUnknownParametersRule } from "./rules/parameter-types.js";
 import { noShapeInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.js";
-import { noUnknownParametersRule } from "./rules/no-unknown-parameters.js";
 import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases.js";
 import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.js";
 import { noWidenThenAssertRule } from "./rules/no-widen-then-assert.js";

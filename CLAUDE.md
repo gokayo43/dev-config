@@ -17,6 +17,11 @@ a change to a rule usually lands here too.
   Anything keyed to a repo's own paths does not belong in one.
 - `anti-slop/` — the oxlint JS plugin `oxlint.base.json` names in `jsPlugins`,
   ported from dmmulroy/anti-slop (README has the rule table and the credit).
+  `shared/` holds the three questions more than one rule asks: `syntax.js` what
+  was written, `bindings.js` what a name stands for and whether it can change,
+  and `types.js` what a type finally means — `resolveType` is the one walk
+  through parentheses, type arguments, transparent built-ins and aliases, and
+  every classification is a switch over the node it stops at.
   Its specifier is relative to the base config, so consuming repos need no line
   of their own. It is JavaScript with JSDoc types, not TypeScript, because Node
   refuses to strip types under `node_modules` — which is where every consumer

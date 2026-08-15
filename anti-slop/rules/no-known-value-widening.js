@@ -1,72 +1,15 @@
-/** @import { ESTree, Rule, Scope, SourceCode, Variable } from "@oxlint/plugins" */
-/** @import { TypeEnvironment, WideningTarget } from "../shared/dictionary-types.js" */
+/** @import { ESTree, Rule, SourceCode, Variable } from "@oxlint/plugins" */
+/** @import { FunctionNode } from "../shared/syntax.js" */
+/** @import { TypeEnvironment, WideningTarget } from "../shared/types.js" */
 
+import { isSettledBinding, resolveVariable, variableDeclarator } from "../shared/bindings.js";
 import {
-  classifyWideningTarget,
-  createTypeEnvironment,
+  enclosingFunction,
   isKnownEvidenceExpression,
-} from "../shared/dictionary-types.js";
-
-/** @typedef {ESTree.ArrowFunctionExpression | ESTree.Function} FunctionExpression */
-
-/**
- * @param {ESTree.Expression} expression
- * @returns {ESTree.Expression}
- */
-function unwrapExpression(expression) {
-  let current = expression;
-  while (
-    current.type === "ParenthesizedExpression" ||
-    current.type === "TSAsExpression" ||
-    current.type === "TSSatisfiesExpression" ||
-    current.type === "TSTypeAssertion" ||
-    current.type === "TSNonNullExpression"
-  ) {
-    current = current.expression;
-  }
-  return current;
-}
-
-/**
- * @param {SourceCode} sourceCode
- * @param {ESTree.IdentifierReference} identifier
- * @returns {Variable | null}
- */
-function resolveVariable(sourceCode, identifier) {
-  /** @type {Scope | null} */
-  let scope = sourceCode.getScope(identifier);
-  while (scope !== null) {
-    const variable = scope.set.get(identifier.name);
-    if (variable !== undefined) return variable;
-    scope = scope.upper;
-  }
-  return null;
-}
-
-/**
- * @param {Variable} variable
- * @returns {ESTree.VariableDeclarator | null}
- */
-function variableDeclarator(variable) {
-  if (variable.defs.length !== 1) return null;
-  const [definition] = variable.defs;
-  return definition?.type === "Variable" && definition.node.type === "VariableDeclarator"
-    ? definition.node
-    : null;
-}
-
-/**
- * @param {Variable} variable
- * @param {ESTree.VariableDeclarator} declarator
- * @returns {boolean}
- */
-function isStableConstVariable(variable, declarator) {
-  return (
-    declarator.parent.type === "VariableDeclaration" &&
-    declarator.parent.kind === "const" &&
-    variable.references.every((reference) => reference.init || !reference.isWrite())
-  );
-}
+  propertyKeyName,
+  unwrapAssertions,
+} from "../shared/syntax.js";
+import { classifyWideningTarget, createTypeEnvironment } from "../shared/types.js";
 
 /**
  * @param {SourceCode} sourceCode
@@ -76,16 +19,12 @@ function isStableConstVariable(variable, declarator) {
  */
 function hasKnownEvidence(sourceCode, expression, visitedVariables = new Set()) {
   if (isKnownEvidenceExpression(expression)) return true;
-  const unwrapped = unwrapExpression(expression);
+  const unwrapped = unwrapAssertions(expression);
   if (unwrapped.type !== "Identifier") return false;
   const variable = resolveVariable(sourceCode, unwrapped);
   if (variable === null || visitedVariables.has(variable)) return false;
   const declarator = variableDeclarator(variable);
-  if (
-    declarator === null ||
-    declarator.init === null ||
-    !isStableConstVariable(variable, declarator)
-  ) {
+  if (declarator === null || declarator.init === null || !isSettledBinding(variable, declarator)) {
     return false;
   }
   visitedVariables.add(variable);
@@ -104,48 +43,18 @@ function annotationTarget(annotation, environment) {
 }
 
 /**
- * @param {ESTree.Node} node
- * @returns {FunctionExpression | null}
- */
-function enclosingFunction(node) {
-  /** @type {ESTree.Node | null} */
-  let current = node.parent;
-  while (current !== null && current.type !== "Program") {
-    if (
-      current.type === "ArrowFunctionExpression" ||
-      current.type === "FunctionDeclaration" ||
-      current.type === "FunctionExpression"
-    ) {
-      return current;
-    }
-    current = current.parent;
-  }
-  return null;
-}
-
-/**
  * @param {SourceCode} sourceCode
- * @param {ESTree.PropertyKey} key
- * @returns {string}
- */
-function sourceKeyName(sourceCode, key) {
-  if (key.type === "Identifier" || key.type === "PrivateIdentifier") return key.name;
-  if (key.type === "Literal") return String(key.value);
-  return sourceCode.getText(key);
-}
-
-/**
- * @param {SourceCode} sourceCode
- * @param {FunctionExpression | null} owner
+ * @param {FunctionNode | null} owner
  * @returns {string}
  */
 function functionName(sourceCode, owner) {
   if (owner === null) return "anonymous function";
   if (owner.id !== null) return owner.id.name;
   const parent = owner.parent;
-  if (parent.type === "VariableDeclarator" && parent.id.type === "Identifier")
+  if (parent.type === "VariableDeclarator" && parent.id.type === "Identifier") {
     return parent.id.name;
-  if (parent.type === "MethodDefinition") return sourceKeyName(sourceCode, parent.key);
+  }
+  if (parent.type === "MethodDefinition") return propertyKeyName(parent.key, sourceCode);
   return "anonymous function";
 }
 
@@ -154,7 +63,7 @@ function functionName(sourceCode, owner) {
  * @returns {boolean}
  */
 function isEmptyObjectExpression(expression) {
-  const unwrapped = unwrapExpression(expression);
+  const unwrapped = unwrapAssertions(expression);
   return unwrapped.type === "ObjectExpression" && unwrapped.properties.length === 0;
 }
 
@@ -164,6 +73,40 @@ function isEmptyObjectExpression(expression) {
  */
 function isDictionaryAccumulatorTarget(destination) {
   return destination.kind === "open dictionary" || destination.kind === "generic container";
+}
+
+/**
+ * Whether an anonymous object target is actually wider than the value written
+ * under it, which it is exactly when the value carries a property the target
+ * does not name. A target listing the keys of the literal below it discards
+ * nothing: it is the signature carrying the contract instead of the body, the
+ * opposite of what this rule exists to find. Upstream reports that too, and it
+ * is the one place this port deliberately differs. Anything the comparison
+ * cannot be honest about — a spread, a computed key, a value reached through a
+ * name — is left alone rather than guessed at.
+ * @param {ESTree.Expression} expression
+ * @param {ESTree.TSType} target
+ * @param {SourceCode} sourceCode
+ * @returns {boolean}
+ */
+function discardsProperties(expression, target, sourceCode) {
+  const value = unwrapAssertions(expression);
+  if (value.type !== "ObjectExpression" || target.type !== "TSTypeLiteral") return false;
+
+  /** @type {Set<string>} */
+  const named = new Set();
+  for (const member of target.members) {
+    if (member.type !== "TSPropertySignature" || member.computed) return false;
+    named.add(propertyKeyName(member.key, sourceCode));
+  }
+
+  /** @type {string[]} */
+  const written = [];
+  for (const property of value.properties) {
+    if (property.type !== "Property" || property.computed) return false;
+    written.push(propertyKeyName(property.key, sourceCode));
+  }
+  return written.some((name) => !named.has(name));
 }
 
 /**
@@ -202,6 +145,12 @@ export const noKnownValueWideningRule = {
     const reportFlow = (expression, destination, subject) => {
       if (destination === null) return;
       if (isDictionaryAccumulatorTarget(destination) && isEmptyObjectExpression(expression)) return;
+      if (
+        destination.kind === "anonymous object" &&
+        !discardsProperties(expression, destination.type, context.sourceCode)
+      ) {
+        return;
+      }
       if (!hasKnownEvidence(context.sourceCode, expression)) return;
       context.report({
         node: expression,
@@ -231,7 +180,7 @@ export const noKnownValueWideningRule = {
         reportFlow(
           node.value,
           targetFromAnnotation(node.typeAnnotation),
-          `property \`${sourceKeyName(context.sourceCode, node.key)}\``,
+          `property \`${propertyKeyName(node.key, context.sourceCode)}\``,
         );
       },
       AccessorProperty(node) {
@@ -239,7 +188,7 @@ export const noKnownValueWideningRule = {
         reportFlow(
           node.value,
           targetFromAnnotation(node.typeAnnotation),
-          `property \`${sourceKeyName(context.sourceCode, node.key)}\``,
+          `property \`${propertyKeyName(node.key, context.sourceCode)}\``,
         );
       },
       AssignmentExpression(node) {
