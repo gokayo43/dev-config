@@ -206,6 +206,14 @@ function resolvedSubstitutionArgument(type, base, resolving = new Set()) {
  * The type arguments an alias reference binds, on top of what was already in
  * force. Nothing when the reference leaves a parameter with neither an argument
  * nor a default, since the alias's body is then not a type at all.
+ *
+ * An argument written at the reference is read in the caller's scope, so it
+ * resolves against `base` — binding it against the map being built here makes
+ * `type Outer<A, B> = Inner<B, A>` hand `Inner` whatever `A` was just set to
+ * rather than the caller's `B`, and every permuted application of one alias by
+ * another silently resolves to the wrong type. A default is the exception: it
+ * is written inside the parameter list and TypeScript lets it name the
+ * parameters before it, so `type F<A, B = A>` reads the partial map.
  * @param {ESTree.TSTypeAliasDeclaration} alias
  * @param {ESTree.TSTypeReference} type
  * @param {Substitutions} base
@@ -216,9 +224,13 @@ function aliasSubstitution(alias, type, base) {
   const typeArguments = type.typeArguments?.params ?? [];
   const next = new Map(base);
   for (const [index, parameter] of parameters.entries()) {
-    const argument = typeArguments[index] ?? parameter.default;
+    const written = typeArguments[index];
+    const argument = written ?? parameter.default;
     if (argument === null) return null;
-    next.set(parameter.name.name, resolvedSubstitutionArgument(argument, next));
+    next.set(
+      parameter.name.name,
+      resolvedSubstitutionArgument(argument, written === undefined ? next : base),
+    );
   }
   return next;
 }
@@ -238,9 +250,16 @@ function aliasSubstitution(alias, type, base) {
  * @param {TypeEnvironment} environment
  * @param {Substitutions} [substitutions]
  * @param {ReadonlySet<string>} [resolving]
+ * @param {ReadonlySet<string>} [substituting] Parameter names already followed at this alias frame.
  * @returns {ResolvedType}
  */
-export function resolveType(type, environment, substitutions = new Map(), resolving = new Set()) {
+export function resolveType(
+  type,
+  environment,
+  substitutions = new Map(),
+  resolving = new Set(),
+  substituting = new Set(),
+) {
   const unwrapped = unwrapType(type);
   /** @type {ResolvedType} */
   const stopped = { type: unwrapped, substitutions, resolving };
@@ -250,16 +269,26 @@ export function resolveType(type, environment, substitutions = new Map(), resolv
 
   const substitution = substitutions.get(name);
   if (substitution !== undefined) {
-    return isUnappliedReferenceTo(substitution, name)
+    // Parameter names are tracked apart from alias names and start over at each
+    // alias frame. A parameter is only a cycle within the frame that bound it —
+    // `type Box<T> = Inner<T>; type Inner<Box> = Box;` binds a parameter named
+    // for an alias already entered, and refusing it as one loses the answer.
+    return isUnappliedReferenceTo(substitution, name) || substituting.has(name)
       ? stopped
-      : resolveType(substitution, environment, substitutions, resolving);
+      : resolveType(
+          substitution,
+          environment,
+          substitutions,
+          resolving,
+          new Set([...substituting, name]),
+        );
   }
 
   if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment)) {
     const wrapped = unwrapped.typeArguments?.params[0];
     return wrapped === undefined
       ? stopped
-      : resolveType(wrapped, environment, substitutions, resolving);
+      : resolveType(wrapped, environment, substitutions, resolving, substituting);
   }
 
   const alias = environment.aliases.get(name);

@@ -23,12 +23,68 @@ async function oxlint(tree: Tree): Promise<string[]> {
   const root = await materialise(tree);
   const proc = Bun.spawn([OXLINT, "."], { cwd: root, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(proc.stdout).text();
-  await proc.exited;
-  return output
-    .split("\n")
-    .filter((line) => /^\S+:\d+:\d+: (error|warning)/.test(line))
-    .map((line) => line.trim());
+  const status = await proc.exited;
+  const lines = output.split("\n").map((line) => line.trim());
+
+  // A rule that throws is reported as a line with no `file:line:col:` in it, so
+  // the filter below drops it and the file reads as clean — which is exactly
+  // what a case expecting no diagnostics asserts. Every clean tree in this file
+  // would certify a plugin that crashed on all nine rules.
+  const crashed = lines.find((line) => line.includes("Error running JS plugin"));
+  if (crashed !== undefined) throw new Error(crashed);
+
+  const reported = lines.filter((line) => /^\S+:\d+:\d+: (error|warning)/.test(line));
+  // And a config oxlint refuses, or a plugin it cannot load, is a run with no
+  // diagnostics at all. oxlint exits 1 for an error and 0 for warnings alone,
+  // so the two have to agree or something other than the rules answered.
+  const errors = reported.filter((line) => line.includes(": error")).length;
+  if (status !== (errors > 0 ? 1 : 0)) {
+    throw new Error(`oxlint exited ${status} with ${errors} error(s):\n${output}`);
+  }
+  return reported;
 }
+
+/**
+ * What every case here is read through, so it is worth one case of its own: a
+ * rule that throws and a config oxlint refuses both produce a run with no
+ * diagnostics, which is what most of the cases below assert.
+ */
+describe("the harness", () => {
+  const THROWING = `const rule = { create() { return { Program() { throw new Error("thrown"); } }; } };
+export default { meta: { name: "anti-slop" }, rules: { "no-runtime-typeof": rule } };
+`;
+
+  /** What a run was refused with, or the fact that it was not refused at all. */
+  async function refusal(tree: Tree): Promise<string> {
+    return await oxlint(tree).then(
+      () => "the run was accepted",
+      (thrown: unknown) => (thrown instanceof Error ? thrown.message : String(thrown)),
+    );
+  }
+
+  test("a plugin whose rule throws is a failure, not a clean tree", async () => {
+    const wired = JSON.stringify({
+      plugins: [],
+      categories: { correctness: "off" },
+      jsPlugins: [{ name: "anti-slop", specifier: "./throws.js" }],
+      rules: { "anti-slop/no-runtime-typeof": "error" },
+    });
+
+    expect(
+      await refusal({
+        ".oxlintrc.json": wired,
+        "throws.js": THROWING,
+        "case.ts": "export const one = 1;\n",
+      }),
+    ).toContain("Error running JS plugin");
+  });
+
+  test("a config oxlint will not read is a failure, not a clean tree", async () => {
+    expect(
+      await refusal({ ".oxlintrc.json": "{ not json", "case.ts": "export const one = 1;\n" }),
+    ).toContain("oxlint exited");
+  });
+});
 
 /** The rule under test and nothing else, so a case cannot pass on another rule's diagnostic. */
 function alone(rule: string): string {
@@ -394,6 +450,19 @@ export function handle(input: Payload): void {
 }`,
       reports: [],
     },
+    {
+      // `Reversed<unknown, string>` applies `Handler<string, unknown>`, whose
+      // body is its own `Output` — `unknown`. The wrong implementation binds an
+      // inner alias's parameters against the map it is still building, so
+      // `Output` reads back the value just written for `Input`.
+      name: "an inner alias applied under permuted parameters of the same names",
+      source: `type Handler<Input, Output> = Output;
+type Reversed<Input, Output> = Handler<Output, Input>;
+export function f(x: Reversed<unknown, string>): void {
+  void x;
+}`,
+      reports: ["Parameter `x`"],
+    },
   ],
 
   "no-unknown-type-aliases": [
@@ -416,6 +485,18 @@ export type Payload = Anything;`,
     {
       name: "an alias that refers to itself resolves to nothing rather than looping",
       source: `export type Payload = Payload;`,
+      reports: [],
+    },
+    {
+      // A type parameter may be named for a generic type in scope, and binding
+      // it to an applied reference to that type is what the wrong
+      // implementation follows forever: the parameter's own name looks up its
+      // own value on every pass. The plugin threw a RangeError here, and oxlint
+      // drops all nine rules for a file whose plugin threw.
+      name: "a type parameter named for a generic alias resolves rather than looping",
+      source: `type Box<T> = { readonly v: T };
+type Unwrap<Box> = Box;
+export type Payload = Unwrap<Box<number>>;`,
       reports: [],
     },
     {
@@ -486,6 +567,43 @@ export type Bag = Index;`,
   [key: string]: unknown;
 }`,
       reports: ["unknown escape hatch"],
+    },
+    {
+      // `Outer<string, unknown>` applies `Inner<unknown, string>`, so the value
+      // type is `string` and there is nothing to refuse. The wrong
+      // implementation reads `B` back as whatever `A` was just bound to, and
+      // both directions of that mistake are silent — this one refuses valid
+      // code, the next one waves the escape hatch through.
+      name: "an inner alias applied under permuted parameters of the same names",
+      source: `type Inner<A, B> = Record<string, B>;
+type Outer<A, B> = Inner<B, A>;
+export declare const table: Outer<string, unknown>;`,
+      reports: [],
+    },
+    {
+      name: "the permuted application that really does carry the escape hatch",
+      source: `type Inner<A, B> = Record<string, B>;
+type Outer<A, B> = Inner<B, A>;
+export declare const table: Outer<unknown, string>;`,
+      reports: ["unknown escape hatch"],
+    },
+    {
+      // A parameter is only a cycle inside the alias frame that bound it. The
+      // wrong implementation here is the tempting one-line guard: fold the
+      // parameter name into the set of aliases already entered, and a parameter
+      // named for an outer alias stops resolving — silently, on valid code.
+      name: "a parameter named for an alias already entered still resolves",
+      source: `type Box<T> = Inner<T>;
+type Inner<Box> = Box;
+export declare const table: Record<string, Box<unknown>>;`,
+      reports: ["unknown escape hatch"],
+    },
+    {
+      name: "and the same shape carrying a real value type is left alone",
+      source: `type Box<T> = Inner<T>;
+type Inner<Box> = Box;
+export declare const table: Record<string, Box<string>>;`,
+      reports: [],
     },
   ],
 

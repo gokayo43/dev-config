@@ -322,12 +322,15 @@ Two facts about how it is wired, both load-bearing:
   `tsc` still checks it in this repo, through `checkJs` and JSDoc types.
 
 `tests/anti-slop.test.ts` drives every rule with the real binary: a block of
-cases per rule — alias chains, shadowed built-ins, type-parameter substitution,
-the scope a binding resolves in, and the clean tree each of those has to leave
-alone — plus upstream's own fixtures for the three rules it ships tests for, run
-as a differential oracle against this port. It also asserts that the base enables
+cases per rule — alias chains, shadowed built-ins, type parameters bound by
+default, permuted between two aliases and named for the aliases they shadow, the
+scope a binding resolves in, and the clean tree each of those has to leave alone
+— plus upstream's own fixtures for the three rules it ships tests for, run as a
+differential oracle against this port. It also asserts that the base enables
 every rule the plugin defines: a rule that is not in the base is a rule no repo
-runs.
+runs. The harness carries cases of its own, because a plugin that throws and a
+config oxlint refuses both produce a run with no diagnostics — which is exactly
+what a clean-tree case asserts.
 
 ### What the linter cannot see
 
