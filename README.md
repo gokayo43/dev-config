@@ -111,6 +111,13 @@ The base sets `correctness: error`, `suspicious: error`, `perf: warn`,
 diagnostics are labelled `react-hooks`, but there is no `react-hooks` plugin to
 name in a config, and a config naming one silently lints nothing.
 
+`suspicious` denies rather than warns because every repo here is template-born
+and greenfield: there is no inherited violation count for a warn tier to report
+on, so it would only be a list nobody is required to drive to zero. A rule in
+that tier which is genuinely wrong for a repo becomes a disable carrying its
+reason, or an `overrides` entry — both visible, and both expiring the moment the
+finding does.
+
 **`warn` is advisory and cannot fail a build.** `oxlint` exits 0 with warnings
 outstanding, and no `--max-warnings` is passed anywhere in this repo's CI. So the
 deny tier is the gate and the warn tier is a report: a rule that has to hold goes
@@ -164,6 +171,9 @@ unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
   does. Inline `{ [k: string]: unknown }` is not matched — the rule reads type
   references, not shapes — but `anti-slop/no-unsafe-dictionary-type` below is,
   and catches it along with aliases and mapped types.
+- `no-restricted-globals` — `__dirname`, `__filename` and `require`. Every repo
+  here is ESM, where none of the three exists; the entries name the replacement
+  (`import.meta.dir`, `import.meta.url`, `import`) so the diagnostic is the fix.
 
 ### Overrides
 
@@ -177,6 +187,9 @@ Two facts are true of a file because of where it sits, not what it contains:
       "rules": {
         "no-restricted-globals": [
           "error",
+          { "name": "__dirname", "message": "…" },
+          { "name": "__filename", "message": "…" },
+          { "name": "require", "message": "…" },
           { "name": "setTimeout", "message": "…" },
           { "name": "setInterval", "message": "…" }
         ]
@@ -193,8 +206,33 @@ rises from `warn` to `error` on the server globs — a one-shot CLI under those
 paths carries a file-level disable with its reason, which is the shape the
 directive rule below already requires.
 
+**An override replaces a rule's whole configuration; it does not add to it**
+(oxc#12179). That is why the three ESM globals are restated in the test block
+above rather than only in `rules` — drop them and test files silently regain
+`__dirname` and `require`. Any override redefining a list-shaped rule has to
+carry the entries that must still hold everywhere.
+
 `overrides` survive `extends`, so a consuming repo inherits both without naming
 them.
+
+### Locking a settled decision
+
+A stack decision that has been made — this driver, not that one; this call, not
+the property that silently does the wrong thing — is worth exactly as much as
+the next person's memory of it. So it goes in the repo's own `.oxlintrc.json` as
+a `no-restricted-properties`, `no-restricted-imports` or `no-restricted-globals`
+entry whose message says **why it is settled** and **where the choke point is**:
+not "don't use X" but "use `mysqlAffectedRows()` from `~/lib/db-result` — reading
+`.affectedRows` off the wrapped object silently yields 0". Violations that
+predate the lock go in a per-file `overrides` whitelist, so a new one fails
+immediately while the old ones drain, and the whitelist going empty is what
+deletes the block — a ratchet, tracked by an issue, not a permanent carve-out.
+This repo runs one on itself for `typescript/no-unsafe-type-assertion`; the
+reference example for the choke messages is nfp-elysia's `.oxlintrc.json`.
+
+These rules are **per-repo and never go in the base**: a decision that is settled
+for one repo's stack is not settled for another's, and a base that carried them
+would be answering a question nobody in the consuming repo asked.
 
 ### Architecture rules
 

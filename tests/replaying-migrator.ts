@@ -14,7 +14,7 @@ if (url === undefined || url === "") throw new Error("DATABASE_URL is not set");
 const folder = Bun.argv[2];
 if (folder === undefined) throw new Error("usage: replaying-migrator.ts <migrations folder>");
 
-const files = (await readdir(folder)).filter((file) => file.endsWith(".sql")).sort();
+const files = (await readdir(folder)).filter((file) => file.endsWith(".sql")).toSorted();
 const client = new SQL(url);
 for (const file of files) {
   await client.unsafe(await Bun.file(`${folder}/${file}`).text());

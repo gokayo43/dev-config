@@ -14,5 +14,31 @@
     // product.
     "anti-slop/no-runtime-typeof": "off",
     "anti-slop/no-unknown-parameters": "off"
-  }
+  },
+  "overrides": [
+    {
+      // The ratchet the README describes, in the repo that describes it.
+      // `no-unsafe-type-assertion` blocks from this release on; the files below
+      // carry the assertions that predate it — a SQL driver's rows,
+      // `JSON.parse`, and fixtures asserting the shape they themselves wrote.
+      // A new one anywhere else fails immediately. Drains per file, and the
+      // list going empty is what removes this block: issue #38.
+      "files": [
+        ".github/actions/db-gate/replay.ts",
+        ".github/actions/db-gate/timestamptz.main.ts",
+        ".github/actions/repo-contract/repo-contract.ts",
+        "tests/backfill.test.ts",
+        "tests/capacity-script.ts",
+        "tests/matchers.ts",
+        "tests/replay.test.ts",
+        "tests/repo-contract-fixture.ts",
+        "tests/repo-contract.test.ts",
+        "tests/stack-gate.test.ts",
+        "tests/timestamptz.test.ts"
+      ],
+      "rules": {
+        "typescript/no-unsafe-type-assertion": "off"
+      }
+    }
+  ]
 }

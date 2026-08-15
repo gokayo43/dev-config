@@ -60,6 +60,12 @@ the why. `ConfigObject` is the boundary between a gate and a file another repo
 wrote. Distinct from an escape alias, which is the same declaration re-exported
 for anyone who wants one — the linter cannot tell them apart, so review does.
 
+**Ratchet** — a rule that blocks from now on, with the violations predating it
+named per file in `overrides` and drained by a tracked issue. A new one fails
+immediately, and the whitelist going empty is what deletes the block. Distinct
+from an exemption, which is about what a repo is, and from a downgrade to `warn`,
+which stops the rule blocking anything at all.
+
 **Floor** — a bound set below what honest work already produces, there to catch
 the absence of the work rather than to be aimed at: the coverage threshold, and
 the capacity ramp's route coverage. A floor says a route has been under load

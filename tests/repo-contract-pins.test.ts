@@ -3,6 +3,13 @@ import { describe, expect, test } from "bun:test";
 import { contract, manifestWith, withSpec } from "./repo-contract-fixture.ts";
 import { containing } from "./matchers.ts";
 
+/** A peer declaration carrying one spec, which is the only thing these cases vary. */
+async function peer(spec: unknown): Promise<string[]> {
+  return await contract(
+    manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
+  );
+}
+
 /**
  * How a manifest's dependency specs are graded — the pin check over what this
  * repo installs, and the inverse rule over what it declares a consumer may
@@ -60,12 +67,6 @@ describe("how a dependency spec is graded", () => {
   ])("a git ref that is not a commit (%s) is refused", async (spec) => {
     expect(await contract(withSpec("oxfmt", spec))).toEqual([containing("devDependencies.oxfmt")]);
   });
-
-  async function peer(spec: unknown): Promise<string[]> {
-    return await contract(
-      manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
-    );
-  }
 
   // The field where a range is the point, so anything that constrains is fine —
   // including the two that read like wildcards and are not: `^0` and `0.x` both

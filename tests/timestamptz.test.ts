@@ -25,6 +25,14 @@ function messages(problems: readonly { readonly message: string }[]): string[] {
   return problems.map(({ message }) => message);
 }
 
+/** A column that varies only in the type it declares, which is what these cases grade. */
+const typed = (udt_name: string): Column => ({
+  table_schema: "public",
+  table_name: "thing",
+  column_name: "kind",
+  udt_name,
+});
+
 describe("timestamptz gate", () => {
   test("a schema with no wall-clock column passes", () => {
     expect(timestamptzGate([], waiving())).toEqual([]);
@@ -67,13 +75,6 @@ describe("timestamptz gate", () => {
   // column reaches this now, rather than only the two types the query used to
   // filter for, so any repo with such a type reaches the lookup.
   test("a type named for something on Object's prototype is not a wall-clock type", () => {
-    const typed = (udt_name: string): Column => ({
-      table_schema: "public",
-      table_name: "thing",
-      column_name: "kind",
-      udt_name,
-    });
-
     expect(timestamptzGate([typed("constructor")], waiving())).toEqual([]);
     expect(timestamptzGate([typed("toString")], waiving())).toEqual([]);
     expect(timestamptzGate([typed("hasOwnProperty")], waiving())).toEqual([]);

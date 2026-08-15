@@ -356,7 +356,7 @@ async function onTheBaseLineage<T>(
     // `finally`: a restore that fails while the replay has already failed would
     // otherwise replace the diagnostic the author needs with an ENOENT, and the
     // directory it could not put back would be deleted with the copy below.
-    const refused = (
+    const unrestored = (
       await Promise.allSettled(
         lineages.map(async ({ dir }) => {
           await rm(join(root, dir), { recursive: true, force: true });
@@ -365,12 +365,12 @@ async function onTheBaseLineage<T>(
       )
     ).flatMap((settled) => (settled.status === "rejected" ? [String(settled.reason)] : []));
 
-    if (refused.length > 0) {
+    if (unrestored.length > 0) {
       keep = true;
       const first =
         "failed" in outcome ? ` The replay had already failed: ${String(outcome.failed)}` : "";
       throw new Error(
-        `this branch's own migration files could not be put back: ${refused.join("; ")} — the only copy is ${saved}, which has been left in place; restore it before doing anything else with this checkout.${first}`,
+        `this branch's own migration files could not be put back: ${unrestored.join("; ")} — the only copy is ${saved}, which has been left in place; restore it before doing anything else with this checkout.${first}`,
       );
     }
     if ("failed" in outcome) throw outcome.failed;
