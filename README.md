@@ -321,9 +321,13 @@ Two facts about how it is wired, both load-bearing:
   and this directory is inside `node_modules` for every repo that consumes it.
   `tsc` still checks it in this repo, through `checkJs` and JSDoc types.
 
-`tests/anti-slop.test.ts` drives each rule against a violating tree and a clean
-one with the real binary, and asserts that the base enables every rule the plugin
-defines — a rule that is not in the base is a rule no repo runs.
+`tests/anti-slop.test.ts` drives every rule with the real binary: a block of
+cases per rule — alias chains, shadowed built-ins, type-parameter substitution,
+the scope a binding resolves in, and the clean tree each of those has to leave
+alone — plus upstream's own fixtures for the three rules it ships tests for, run
+as a differential oracle against this port. It also asserts that the base enables
+every rule the plugin defines: a rule that is not in the base is a rule no repo
+runs.
 
 ### What the linter cannot see
 
