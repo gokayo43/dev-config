@@ -5,11 +5,18 @@ import { type Problem, REASON, repoFiles } from "../_lib/gate.ts";
 const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
 
 /**
- * Both spellings, because oxlint honours both: an `eslint-disable-next-line`
- * silences a rule exactly as an `oxlint-disable-next-line` does, so a gate that
- * knew only the oxlint spelling left the other one unreasoned and unreported.
+ * Every directive that silences a check, whoever reads it. Both lint spellings,
+ * because oxlint honours both — an `eslint-disable-next-line` silences a rule
+ * exactly as an `oxlint-disable-next-line` does, so a gate that knew only the
+ * oxlint spelling left the other one unreasoned and unreported — and Stryker's
+ * `Stryker disable` comment, which takes a mutant out of the mutation lane's
+ * run and out of its score. Three tools, one rule: a suppression says why.
+ *
+ * `Stryker restore` is not here. It ends a disabled region rather than opening
+ * one, and the reason it is asking for was owed at the `disable` above it.
  */
-const DIRECTIVE = /(?:\/\/|\/\*)\s*(?:oxlint|eslint)-disable(?:-next-line|-line)?\b/;
+const DIRECTIVE =
+  /(?:\/\/|\/\*)\s*(?:(?:oxlint|eslint)-disable(?:-next-line|-line)?|Stryker disable)\b/;
 
 /**
  * Files that park work in the tree. The queue is GitHub issues, in the repo the

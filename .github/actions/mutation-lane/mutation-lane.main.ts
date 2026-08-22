@@ -1,12 +1,12 @@
 import { appendFile } from "node:fs/promises";
 
-import { entry, inputs, notice, report } from "../_lib/gate.ts";
+import { entry, inputs, log, notice, report } from "../_lib/gate.ts";
 import { mutationLane } from "./mutation-lane.ts";
 
 await entry(async () => {
   const read = inputs("working-directory", "mutation-floor", "step-summary", "base-ref", "before");
 
-  const { note, table, problems } = await mutationLane({
+  const lane = await mutationLane({
     root: read["working-directory"],
     floor: read["mutation-floor"],
     // The two facts about the run, read from the `github` context by action.yml
@@ -16,10 +16,14 @@ await entry(async () => {
     event: { baseRef: read["base-ref"], before: read["before"] },
   });
 
-  notice(note);
+  // What the run wrote goes out before the annotations, for the reason db-gate
+  // publishes its divergence first: a reader who scrolls to the error finds
+  // what it was about above it rather than somewhere below.
+  if (lane.log !== undefined) log(lane.log);
+  notice(lane.note);
   // Published even for a run this step is about to fail: the score and the
   // mutants behind it are what the annotations are about.
-  if (table !== undefined) await appendFile(read["step-summary"], table);
+  if (lane.table !== undefined) await appendFile(read["step-summary"], lane.table);
 
-  report(problems);
+  report(lane.problems);
 });

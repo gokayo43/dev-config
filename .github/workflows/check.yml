@@ -250,7 +250,17 @@ jobs:
       # After the suite, because a mutation score over a suite that does not pass
       # is a number about nothing — and it runs the repo's own install, which the
       # steps above have already put on disk.
+      #
+      # The bound is here rather than inside the action because a composite
+      # action's own steps take no timeout-minutes; this is the only place a
+      # caller can put one. Ten, against a campaign whose cost is a test run per
+      # mutant: the fixture suite's runs are a couple of seconds for ten mutants
+      # on a file, so ten minutes is thousands of mutants — far more than a pull
+      # request's own domain lines produce, and short enough that a runner stuck
+      # on one mutant does not eat the job's fifteen and take the evidence of
+      # every step before it down with it.
       - if: inputs['mutation-lane']
+        timeout-minutes: 10
         uses: gokayo43/dev-config/.github/actions/mutation-lane@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}

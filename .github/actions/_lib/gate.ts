@@ -49,6 +49,17 @@ export function notice(message: string): void {
 }
 
 /**
+ * Evidence that belongs on the log rather than in an annotation: an annotation
+ * is one line rendered on the step, and what a gate has to show sometimes runs
+ * to hundreds — every line two dumps disagree about, everything a tool wrote
+ * before it died. Here rather than at each caller because this module is the
+ * one licensed to write to stdout, for the reason at the top of the file.
+ */
+export function log(text: string): void {
+  for (const line of text.split("\n")) console.log(line);
+}
+
+/**
  * The work a `*.main.ts` hands over, so that a gate which throws — an input the
  * action forgot to pass, a database refusing the connection, a file that is not
  * the shape it claims — reaches the log as the annotation GitHub renders on the

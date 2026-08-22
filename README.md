@@ -441,6 +441,14 @@ export default config;
 Everything knip keys off file paths stays local — a base glob that matches
 nothing in the consuming repo is itself reported as a configuration hint.
 
+The base also exports `mutationLaneDependencies`, the two packages a repo
+running [the mutation lane](docs/gates/mutation-lane.md) declares and knip would
+otherwise report as unused. A repo that runs the lane spreads it into its own
+`ignoreDependencies`; the names live in one place and the spread stays per-repo,
+because `treatConfigHintsAsErrors` makes an ignore matching no declared
+dependency an error — carrying it in the base would fail knip in every repo that
+does not run the lane.
+
 ## Tests and coverage
 
 `bunfig.toml` cannot be extended across packages, so this block is copied into

@@ -1,6 +1,6 @@
 import type { KnipConfig } from "knip";
 
-import { base } from "./knip.base.ts";
+import { base, mutationLaneDependencies } from "./knip.base.ts";
 
 const config: KnipConfig = {
   ...base,
@@ -16,12 +16,10 @@ const config: KnipConfig = {
   // having — it is how a workflow reaching for an undeclared tool gets caught.
   // `let` is bash's arithmetic builtin inside an inlined JS snippet, not a tool.
   ignoreBinaries: ["let"],
-  // The mutation lane's two packages, which nothing here imports and no `run:`
-  // block names: the gate resolves `node_modules/.bin/stryker` by path at run
-  // time, and Stryker loads the runner plugin by name through its own loader.
-  // They are declared here because that is where the lane asks a consuming repo
-  // to declare them — the suite drives real Stryker runs against this install.
-  ignoreDependencies: ["@stryker-mutator/core", "@hughescr/stryker-bun-runner"],
+  // The mutation lane's own two packages, which its suite drives against this
+  // repo's install. The names come from the base rather than from here;
+  // knip.base.ts says why the spread is the repo's.
+  ignoreDependencies: [...mutationLaneDependencies],
   // capacity.js is not this repo's program: it runs inside k6, against modules
   // built into that runtime and resolvable from no package.json anywhere. The
   // linter skips it for the same reason, and tests/capacity-script.ts executes

@@ -51,11 +51,15 @@ jobs:
       # This repo runs its own gates on itself, from the working tree. A gate
       # its author's repo cannot pass is a gate nobody should be asked to.
       #
-      # Three facts here are structural rather than unfinished: the configs
+      # Four facts here are structural rather than unfinished: the configs
       # inherit from this repo's own bases by relative path because a package
       # cannot extend itself by name, CI is this file rather than a call into
-      # check.yml because a commit cannot pin its own SHA, and there is no
-      # environment to shape — nothing here reads a secret at runtime.
+      # check.yml because a commit cannot pin its own SHA, there is no
+      # environment to shape — nothing here reads a secret at runtime — and
+      # there is no mutation lane, because this repo is gate scripts and has no
+      # pure domain layer for one to mutate. Its suite drives that gate against
+      # fixture repositories instead, which is the only place it can be run
+      # honestly here.
       - uses: ./.github/actions/repo-contract
         with:
           exemptions: config-lineage ci-call secrets

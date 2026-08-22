@@ -28,6 +28,9 @@ describe("suppression hygiene", () => {
   test.each([
     ["oxlint", "// oxlint-disable-next-line typescript/no-unnecessary-condition"],
     ["eslint", "// eslint-disable-next-line no-empty"],
+    // Stryker's own, which takes a mutant out of the mutation lane's run and
+    // out of its score. Three tools, one rule.
+    ["Stryker", "// Stryker disable next-line all"],
   ])("a reasonless %s directive is refused — oxlint honours both spellings", async (_, line) => {
     expect(await hygiene({ ...CLEAN, "src/index.ts": `${line}\nif (x) {\n}\n` })).toEqual([
       containing("src/index.ts: line 1"),
@@ -43,6 +46,11 @@ describe("suppression hygiene", () => {
     expect(await hygiene({ ...CLEAN, "src/cli.ts": `${line}\nconsole.log("hi");\n` })).toEqual([
       containing("src/cli.ts: line 1"),
     ]);
+  });
+
+  test("a Stryker restore is not a suppression and owes nothing", async () => {
+    const restored = "// Stryker restore all";
+    expect(await hygiene({ ...CLEAN, "src/cli.ts": `${restored}\nconst x = 1;\n` })).toEqual([]);
   });
 
   test("either spelling passes once it carries a reason", async () => {

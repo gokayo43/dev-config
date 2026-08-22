@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -19,7 +19,8 @@ import {
  * that asks for them. Stryker resolves a plugin by name from the working
  * directory, so both have to be in the repo's own install — which is also what
  * puts them under its lockfile, its exact pins and its release-age window,
- * rather than under a fetch this action performs at run time.
+ * rather than under a fetch this action performs at run time. `knip.base.ts`
+ * carries the same two names, for the same reason from the other side.
  */
 const CORE = "@stryker-mutator/core";
 const RUNNER = "@hughescr/stryker-bun-runner";
@@ -41,17 +42,19 @@ const STATUSES = [
 
 type Status = (typeof STATUSES)[number];
 
+type Worth = "detected" | "undetected" | "outside";
+
 /**
  * What every mutant is worth to the score, as a total function of the schema's
- * vocabulary rather than two membership tests with everything else falling
- * silently between them: a status left out of this table is a compile error
- * rather than a mutant quietly outside the ratio.
+ * vocabulary rather than membership tests with everything else falling silently
+ * between them: a status left out of this table is a compile error rather than
+ * a mutant quietly outside the ratio.
  *
  * `undetected` is the finding — `Survived` means tests ran the line and all
- * passed, `NoCoverage` means none ran it, the same statement one step earlier,
- * and both are worth the same diagnostic. `outside` is Stryker's own reading: a
- * mutant that would not compile, that errored, or that the config declined is
- * neither caught nor missed, so it is out of the ratio rather than a zero in it.
+ * passed, `NoCoverage` means none ran it, the same statement one step earlier.
+ * `outside` is Stryker's own reading: a mutant that would not compile, that
+ * errored, or that the config declined is neither caught nor missed, so it is
+ * out of the ratio rather than a zero in it.
  */
 const WORTH = {
   Killed: "detected",
@@ -62,14 +65,29 @@ const WORTH = {
   RuntimeError: "outside",
   Ignored: "outside",
   Pending: "outside",
-} as const satisfies Record<Status, string>;
+} as const satisfies Record<Status, Worth>;
+
+/**
+ * The one status whose worth depends on where it sits. `Ignored` is a
+ * `Stryker disable` comment in the source, and out of the ratio it takes the
+ * mutant from BOTH sides of the fraction — so a branch that writes an untested
+ * line and disables it raises the score it should have lowered, and clears the
+ * floor it should have breached. On a line the branch wrote, the directive is
+ * the branch's own choice and counts as a mutant nothing caught. Elsewhere it
+ * is somebody's earlier decision, and outside is the honest reading.
+ *
+ * That it also has to say WHY is not enforced here: `suppression-hygiene` holds
+ * every disable in the tree to carrying its reason, whichever tool reads it.
+ */
+function worthOf(status: Status, own: boolean): Worth {
+  return status === "Ignored" && own ? "undetected" : WORTH[status];
+}
 
 /**
  * What a repo declares its pure domain to be — the same element the layer rule
  * already reads, so that "pure domain" has one definition per repo rather than
  * a lint config and a gate input that can disagree. README's "Architecture
- * boundaries" is the shape; a `pattern` there names a folder, so everything
- * under it is domain.
+ * boundaries" is the shape.
  */
 const OXLINTRC = ".oxlintrc.json";
 const DOMAIN = "domain";
@@ -86,11 +104,13 @@ export interface Lane {
   readonly note: string;
   /** The measurement, for the step summary. Absent when nothing was mutated. */
   readonly table: string | undefined;
+  /** What the run wrote, for a failure whose reason is longer than an annotation. */
+  readonly log: string | undefined;
   readonly problems: Problem[];
 }
 
 function nothing(note: string, problems: Problem[] = []): Lane {
-  return { note, table: undefined, problems };
+  return { note, table: undefined, log: undefined, problems };
 }
 
 /**
@@ -101,11 +121,23 @@ function nothing(note: string, problems: Problem[] = []): Lane {
 type Domain = { readonly globs: string[] } | { readonly problems: readonly Problem[] };
 
 /**
+ * A `pattern` as eslint-plugin-boundaries reads it: one folder or several. The
+ * array form is the linter's own (`isBaseDescriptorPattern` takes a string or
+ * an array of them), so a gate that took only the string form would grade half
+ * a monorepo and say nothing about the other half.
+ */
+function patternsIn(element: ConfigObject): string[] {
+  const pattern = element["pattern"];
+  const listed = Array.isArray(pattern) ? pattern : [pattern];
+  return listed.filter((each): each is string => typeof each === "string");
+}
+
+/**
  * What `.oxlintrc.json` declares its pure domain to be. A config that is
  * missing or will not parse is `readJson`'s answer verbatim — the repo contract
- * already grades that file, and this gate has nothing to add to it. The one
- * diagnostic of this gate's own is for the file that reads fine and names no
- * domain: that is the repo not having decided what is pure.
+ * already grades that file, and this gate has nothing to add to it. The
+ * diagnostics of this gate's own are for the file that reads fine: one that
+ * names no domain, and one whose pattern names something that is not a folder.
  */
 async function domainGlobs(root: string): Promise<Domain> {
   const { contents, problems } = await readJson(root, OXLINTRC);
@@ -116,22 +148,64 @@ async function domainGlobs(root: string): Promise<Domain> {
   const globs = (Array.isArray(elements) ? elements : [])
     .filter(isObject)
     .filter((element) => element["type"] === DOMAIN)
-    .map((element) => element["pattern"])
-    .filter((pattern): pattern is string => typeof pattern === "string")
+    .flatMap(patternsIn)
     // A pattern names a folder, and a folder is often written with the slash
     // that follows it. Left on, the pathspec below asks git for `<pattern>//**`
     // and matches nothing — which is the shape a gate takes when it silently
     // stops gating.
     .map((pattern) => pattern.replace(/\/+$/, ""));
 
-  if (globs.length > 0) return { globs };
+  if (globs.length === 0) {
+    return {
+      problems: [
+        {
+          file: OXLINTRC,
+          message: `declare the pure domain as a boundaries element in ${OXLINTRC} — \`{ "type": "${DOMAIN}", "pattern": "src/domain" }\` — the lane mutates exactly what the layer rule keeps pure`,
+        },
+      ],
+    };
+  }
+
+  const reach = await Promise.all(globs.map(async (glob) => await reaches(root, glob)));
+  const named = globs.filter((_, index) => reach[index] === "a file").map(fileProblem);
+  if (named.length > 0) return { problems: named };
+  if (!reach.includes("a folder")) return { problems: [noFolderProblem(globs)] };
+  return { globs };
+}
+
+/**
+ * What the pattern reaches. The layer rule classifies everything *under* a
+ * folder, so a pattern naming a file asks git for `<it>/**`, matches nothing,
+ * and leaves the lane grading a domain of no files while reporting a clean
+ * pass. Reaching nothing at all is the weaker statement — a project scaffolded
+ * ahead of its domain folder, a workspace glob whose second project has none
+ * yet — and it is only a problem when it is true of every pattern the repo
+ * declared.
+ */
+async function reaches(root: string, glob: string): Promise<"a folder" | "a file" | "nothing"> {
+  let hit = false;
+  for (const found of new Bun.Glob(glob).scanSync({ cwd: root, onlyFiles: false })) {
+    hit = true;
+    try {
+      if ((await stat(join(root, found))).isDirectory()) return "a folder";
+    } catch {
+      // Gone between the scan and the stat; it is not a folder to us.
+    }
+  }
+  return hit ? "a file" : "nothing";
+}
+
+function fileProblem(glob: string): Problem {
   return {
-    problems: [
-      {
-        file: OXLINTRC,
-        message: `declare the pure domain as a boundaries element in ${OXLINTRC} — \`{ "type": "${DOMAIN}", "pattern": "src/domain" }\` — the lane mutates exactly what the layer rule keeps pure`,
-      },
-    ],
+    file: OXLINTRC,
+    message: `point the ${DOMAIN} element at a folder: \`${glob}\` names a file, and the layer rule classifies what is under a folder — the lane would mutate nothing and pass`,
+  };
+}
+
+function noFolderProblem(globs: readonly string[]): Problem {
+  return {
+    file: OXLINTRC,
+    message: `create the folder the ${DOMAIN} element names, or point it at one that exists: nothing here is under ${globs.map((glob) => `\`${glob}\``).join(" or ")}, so the lane would mutate nothing and pass`,
   };
 }
 
@@ -148,6 +222,13 @@ const HUNK = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/;
 const OPENS = "diff --git ";
 const NAMES = "+++ b/";
 
+interface Changed {
+  /** Every line this branch wrote, per domain file. */
+  readonly changed: Map<string, Set<number>>;
+  /** One per section whose file could not be named. */
+  readonly problems: Problem[];
+}
+
 /**
  * Every line this branch wrote, per domain file — one diff, which is the whole
  * of what "changed" means here. The same map answers both questions the lane
@@ -159,22 +240,24 @@ const NAMES = "+++ b/";
  * context the hunk header covers untouched lines either side, and a mutant
  * sitting in one of them would be reported as something this branch introduced.
  * `--diff-filter=d` drops what the branch deleted, since Stryker is handed
- * paths to read. `:(glob)` gives git the pattern semantics the layer rule means,
- * where a single wildcard stops at a slash and a double one does not — a bare
- * pathspec crosses slashes on either, so a workspace's element would classify a
- * project nested deeper than any workspace declares.
+ * paths to read. `--relative` makes both the pathspec and the reported paths
+ * the working directory's rather than the repository root's, which is the same
+ * statement the repo contract and the upgrade gate make with `<rev>:./path`: a
+ * monorepo's project sits below the root, and a path measured from the root
+ * would be handed to Stryker as one it cannot resolve from the project.
+ * `:(glob)` gives git the pattern semantics the layer rule means, where a
+ * single wildcard stops at a slash and a double one does not — a bare pathspec
+ * crosses slashes on either, so a workspace's element would classify a project
+ * nested deeper than any workspace declares.
  */
-async function changeSet(
-  root: string,
-  rev: string,
-  globs: readonly string[],
-): Promise<Map<string, Set<number>>> {
+async function changeSet(root: string, rev: string, globs: readonly string[]): Promise<Changed> {
   const diff = await git(root, [
     // Off, so a path outside ASCII arrives as itself rather than inside quotes
     // with escapes in it — the name is matched against the mutation report's.
     "-c",
     "core.quotepath=false",
     "diff",
+    "--relative",
     "--unified=0",
     "--diff-filter=d",
     rev,
@@ -184,20 +267,22 @@ async function changeSet(
   if (!diff.ok) throw new Error(`git diff against ${rev} failed in ${root}`);
 
   const changed = new Map<string, Set<number>>();
-  let heading = false;
+  const problems: Problem[] = [];
+  let unnamed: string | undefined;
   let lines: Set<number> | undefined;
 
   for (const line of diff.stdout.split("\n")) {
     if (line.startsWith(OPENS)) {
-      heading = true;
+      unnamed = line;
       lines = undefined;
       continue;
     }
-    if (heading && line.startsWith(NAMES)) {
+    if (unnamed !== undefined && line.startsWith(NAMES)) {
       // git delimits the name with a tab when it holds a space.
       const named = line.slice(NAMES.length);
       const tab = named.indexOf("\t");
       const file = tab === -1 ? named : named.slice(0, tab);
+      unnamed = undefined;
       if (isMutable(file)) {
         lines = new Set();
         changed.set(file, lines);
@@ -206,13 +291,26 @@ async function changeSet(
     }
     const hunk = HUNK.exec(line);
     if (hunk === null) continue;
-    heading = false;
+    if (unnamed !== undefined) {
+      // Content changed under a name this parser could not read: git C-quotes a
+      // path holding a quote, a backslash or a control character, and its
+      // header then reads `+++ "b/…"`. Refused rather than skipped, because a
+      // domain file the lane cannot see is a domain file the lane cannot grade
+      // while reporting that it did.
+      problems.push({ message: renameProblem(unnamed) });
+      unnamed = undefined;
+      continue;
+    }
     if (lines === undefined) continue;
     const start = Number(hunk[1]);
     const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
     for (let at = start; at < start + count; at += 1) lines.add(at);
   }
-  return changed;
+  return { changed, problems };
+}
+
+function renameProblem(header: string): string {
+  return `rename the file this branch changed so git can name it plainly — \`${header}\` is quoted because the path holds a quote, a backslash or a control character, and the lane cannot tell whether it is domain code`;
 }
 
 interface Mutant {
@@ -292,11 +390,38 @@ function percent(score: number): string {
   return `${(score * 100).toFixed(1)}%`;
 }
 
+/**
+ * A value out of the repo's own source, as a code span it cannot end early. The
+ * step summary is markdown, and a replacement carrying a backtick — every
+ * template literal in the tree does — closes the span, leaving the rest of the
+ * line to render as headings and table rows somebody wrote in a domain file.
+ * The same statement `commanded` in `_lib/gate.ts` makes about annotations: the
+ * text is not the gate author's to trust.
+ *
+ * CommonMark's own rule, rather than an escape: a span fenced by more backticks
+ * than its longest run contains cannot be ended from inside, and a space either
+ * side keeps a leading or trailing backtick from eating the fence.
+ */
+function span(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const runs = [...flat.matchAll(/`+/g)].map((run) => run[0].length);
+  const fence = "`".repeat(Math.max(0, ...runs) + 1);
+  const pad = flat.startsWith("`") || flat.endsWith("`") ? " " : "";
+  return `${fence}${pad}${flat}${pad}${fence}`;
+}
+
 interface Tally {
   readonly detected: number;
   readonly undetected: number;
   /** What the suite caught over what it could have. */
   readonly score: number;
+}
+
+/** A mutant with where it sits and what that makes it worth, decided once. */
+interface Graded {
+  readonly mutant: Mutant;
+  readonly own: boolean;
+  readonly worth: Worth;
 }
 
 /**
@@ -305,16 +430,15 @@ interface Tally {
  * rather than a zero score, which is a different claim: zero says the suite
  * caught none of them.
  */
-function tally(mutants: readonly Mutant[]): Tally | undefined {
-  const worth = mutants.map((mutant) => WORTH[mutant.status]);
-  const detected = worth.filter((each) => each === "detected").length;
-  const undetected = worth.filter((each) => each === "undetected").length;
-  const graded = detected + undetected;
-  return graded === 0 ? undefined : { detected, undetected, score: detected / graded };
+function tally(graded: readonly Graded[]): Tally | undefined {
+  const detected = graded.filter((each) => each.worth === "detected").length;
+  const undetected = graded.filter((each) => each.worth === "undetected").length;
+  const counted = detected + undetected;
+  return counted === 0 ? undefined : { detected, undetected, score: detected / counted };
 }
 
 /**
- * What the reader has to write, which is the only thing separating the two
+ * What the reader has to write, which is the only thing separating the
  * undetected statuses. The replacement is in the message rather than only in
  * the summary table because a line carries several mutants — an operator and
  * the block around it — and annotations that read identically are one finding
@@ -323,13 +447,14 @@ function tally(mutants: readonly Mutant[]): Tally | undefined {
 function survivorProblem(mutant: Mutant): Problem {
   const at = `line ${mutant.from}`;
   const swap = `\`${mutant.replacement}\` (${mutant.mutator})`;
-  return {
-    file: mutant.file,
-    message:
-      mutant.status === "NoCoverage"
-        ? `write the test that reaches ${at}: this branch wrote it and nothing runs it, so ${swap} in its place goes unnoticed`
-        : `write the case that fails on ${swap} at ${at}: this branch wrote that line and the suite passes either way`,
-  };
+  const wrote = "this branch wrote that line";
+  const message =
+    mutant.status === "NoCoverage"
+      ? `write the test that reaches ${at}: this branch wrote it and nothing runs it, so ${swap} in its place goes unnoticed`
+      : mutant.status === "Ignored"
+        ? `write the test for ${at} or drop the \`Stryker disable\` above it: ${wrote}, and a disabled ${swap} counts as one nothing caught rather than leaving the score`
+        : `write the case that fails on ${swap} at ${at}: ${wrote} and the suite passes either way`;
+  return { file: mutant.file, message };
 }
 
 /** The floor as a fraction, refused rather than defaulted — a default publishes a promise nobody made. */
@@ -344,8 +469,28 @@ function floorFrom(value: string): number | undefined {
   return floor;
 }
 
+/**
+ * A path as a pattern matching only itself. Stryker resolves every `mutate`
+ * entry as a glob, so a file whose NAME holds a glob character — `[id].ts` is
+ * the one every router in this house produces — resolves to nothing, and a file
+ * that resolves to nothing has no mutants, which reads as a clean pass.
+ *
+ * A one-character class is the escape its resolver honours; a backslash is not
+ * (probed against 9.6.1: `[[]id[]].ts` resolves, `\[id\].ts` does not). Three
+ * characters have no working form at all — `{`, `}` and `!`, where a class is
+ * either ignored or read as negation — so escaping is half the answer and the
+ * unresolved-pattern check below is the other half: whatever the escape cannot
+ * express is refused by name rather than passed over.
+ */
+function literal(path: string): string {
+  return path.replace(/[*?[\]()+@|]/g, (mark) => `[${mark}]`);
+}
+
+/** What Stryker says, once per `mutate` entry it could not resolve to a file. */
+const UNRESOLVED = /Glob pattern "([^"]*)" did not result in any files\./g;
+
 /** How Stryker is asked to mutate exactly these files with the house runner. */
-function strykerConfig(mutate: readonly string[], report: string): string {
+function strykerConfig(mutate: readonly string[], report: string, sandbox: string): string {
   return JSON.stringify({
     testRunner: "bun",
     coverageAnalysis: "perTest",
@@ -358,6 +503,13 @@ function strykerConfig(mutate: readonly string[], report: string): string {
     // that did not finish. Written down rather than left to a default, because
     // that reading is only safe while the two cannot be confused.
     thresholds: { break: null },
+    // Stryker copies the project into a sandbox to mutate it. The default puts
+    // that copy in the checkout as `.stryker-tmp`, and cleans it only after a
+    // run that finished — so every crash left a tree of the repo's own source
+    // behind for the steps after this one to lint, scan and count. Outside the
+    // checkout and always cleaned, the lane leaves nothing whatever happens.
+    tempDirName: sandbox,
+    cleanTempDir: "always",
   });
 }
 
@@ -375,6 +527,14 @@ export interface Input {
  * Selective because the alternative is not affordable: a full campaign over a
  * domain layer is minutes to hours, and a gate that costs that runs nightly or
  * not at all. What a pull request can be held to is the code in it.
+ *
+ * A filename crosses three name-spaces on its way through here — git's diff
+ * output, the filesystem under `root`, Stryker's glob resolver — and the one
+ * failure this gate cannot afford is a file that goes missing between two of
+ * them, because a file nobody mutated has no mutants and reads as a pass. So
+ * both crossings are checked rather than assumed: `changeSet` refuses a name it
+ * could not read out of the diff, and every `mutate` entry Stryker could not
+ * resolve is refused by name below.
  */
 export async function mutationLane({ root, event, floor }: Input): Promise<Lane> {
   const bound = floorFrom(floor);
@@ -391,11 +551,11 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Lane>
   }
   const rev = base.rev;
 
-  const changed = await changeSet(root, rev, domain.globs);
+  const { changed, problems } = await changeSet(root, rev, domain.globs);
+  if (problems.length > 0) return nothing("a changed file could not be named", problems);
   if (changed.size === 0) {
     return nothing(`no domain file changed against ${rev.slice(0, 12)} — nothing to mutate`);
   }
-  const mutate = [...changed.keys()];
 
   const stryker = join(root, "node_modules", ".bin", "stryker");
   if (!(await Bun.file(stryker).exists())) {
@@ -411,7 +571,8 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Lane>
   try {
     const config = join(scratch, "stryker.conf.json");
     const report = join(scratch, "mutation.json");
-    await Bun.write(config, strykerConfig(mutate, report));
+    const requested = new Map([...changed.keys()].map((file) => [literal(file), file]));
+    await Bun.write(config, strykerConfig([...requested.keys()], report, join(scratch, "sandbox")));
 
     const proc = Bun.spawn([stryker, "run", config], { cwd: root, stdout: "pipe", stderr: "pipe" });
     const [out, err] = await Promise.all([
@@ -419,12 +580,32 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Lane>
       new Response(proc.stderr).text(),
     ]);
     const status = await proc.exited;
+    const wrote = `${out}\n${err}`;
+
+    // Read on every exit, not only a failing one: Stryker resolves what it can
+    // and finishes cleanly over the rest, so an unresolved pattern is a green
+    // run with a file missing from it — the whole of the class this check
+    // exists for.
+    const missing = unresolvedIn(wrote, requested);
+    if (missing.length > 0)
+      return {
+        note: "a changed file never reached the run",
+        table: undefined,
+        log: wrote,
+        problems: missing,
+      };
+
     if (status !== 0) {
-      return nothing("the mutation run did not finish", [
-        {
-          message: `run \`bunx stryker run\` over ${mutate.join(", ")} to see it: the run exited ${status} — ${lastLines(`${out}\n${err}`)}`,
-        },
-      ]);
+      return {
+        note: "the mutation run did not finish",
+        table: undefined,
+        log: wrote,
+        problems: [
+          {
+            message: `fix what the run reported above: it exited ${status} without a report, so nothing was graded`,
+          },
+        ],
+      };
     }
 
     return verdict(await Bun.file(report).text(), changed, bound);
@@ -433,16 +614,20 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Lane>
   }
 }
 
-/** The tail of a failed run's output, which is where the reason for it is. */
-function lastLines(output: string): string {
-  return (
-    output
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line !== "")
-      .slice(-5)
-      .join(" / ") || "it wrote nothing"
-  );
+/** Every file Stryker was pointed at and could not find, named as the repo wrote it. */
+function unresolvedIn(wrote: string, requested: ReadonlyMap<string, string>): Problem[] {
+  const patterns = new Set([...wrote.matchAll(UNRESOLVED)].map((match) => match[1] ?? ""));
+  return [...patterns].flatMap((pattern) => {
+    const file = requested.get(pattern);
+    return file === undefined
+      ? []
+      : [
+          {
+            file,
+            message: `rename ${file} so its name carries no glob character: the run resolved it as \`${pattern}\` and found no file, and an unmutated file reads as one with nothing wrong`,
+          },
+        ];
+  });
 }
 
 /**
@@ -471,14 +656,17 @@ function verdict(
   changed: ReadonlyMap<string, ReadonlySet<number>>,
   bound: number | undefined,
 ): Lane {
-  const mutants = parseReport(text);
-  const counted = tally(mutants);
+  const graded = parseReport(text).map((mutant): Graded => {
+    const own = inTheChange(mutant, linesOf(changed, mutant.file));
+    return { mutant, own, worth: worthOf(mutant.status, own) };
+  });
+  const counted = tally(graded);
   const files = `${changed.size} changed domain file${changed.size === 1 ? "" : "s"}`;
   if (counted === undefined) return nothing(`${files} held no mutants`);
 
-  const surviving = mutants
-    .filter((mutant) => WORTH[mutant.status] === "undetected")
-    .filter((mutant) => inTheChange(mutant, linesOf(changed, mutant.file)));
+  const surviving = graded
+    .filter((each) => each.own && each.worth === "undetected")
+    .map((each) => each.mutant);
 
   const problems = surviving.map(survivorProblem);
   if (bound !== undefined && counted.score < bound) {
@@ -490,6 +678,7 @@ function verdict(
   return {
     note: `mutation score ${percent(counted.score)} over ${files}`,
     table: table(counted, surviving, bound),
+    log: undefined,
     problems,
   };
 }
@@ -509,7 +698,7 @@ function table(counted: Tally, surviving: readonly Mutant[], bound: number | und
     "",
     ...surviving.map(
       (mutant) =>
-        `- \`${mutant.file}:${mutant.from}\` ${mutant.mutator} → \`${mutant.replacement}\` (${mutant.status})`,
+        `- ${span(`${mutant.file}:${mutant.from}`)} ${mutant.mutator} → ${span(mutant.replacement)} (${mutant.status})`,
     ),
     "",
     "A floor, not a target: it catches a change that shipped without the test that",

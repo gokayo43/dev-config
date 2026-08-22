@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { symlink } from "node:fs/promises";
+import { readdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import { type Lane, mutationLane } from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { containing } from "./matchers.ts";
-import { history, type Tree, without } from "./tree.ts";
+import { history, type Tree, under, without } from "./tree.ts";
 
 /**
  * Stryker resolves its runner plugin, and `bun test` its own imports, out of
@@ -99,6 +99,19 @@ const KIND = `export interface Kind {
 }
 `;
 
+/** A tagged expression, so a mutant's replacement carries the backticks a code span is made of. */
+const TAGGED = "export function tag(cents: number): number {\n  return cents + `x`.length;\n}\n";
+
+/** Stryker's own way of taking a mutant out of the run, carrying the reason every disable here owes. */
+const DISABLED = `
+// Stryker disable next-line all -- the fee is a product decision, not arithmetic
+export const fee = (cents: number): number => cents + 50;
+`;
+
+const NOT_DISABLED = `
+export const fee = (cents: number): number => cents + 50;
+`;
+
 const BEFORE = repo({
   "src/domain/pricing.ts": PRICING,
   "tests/pricing.test.ts": TOTAL_TEST,
@@ -122,9 +135,17 @@ async function lane(
   trees: readonly Tree[],
   { floor = "", installed = true }: Run = {},
 ): Promise<Lane> {
+  return (await laneIn(trees, { floor, installed })).verdict;
+}
+
+/** The same run, with the checkout it worked in — for a case about what it left there. */
+async function laneIn(
+  trees: readonly Tree[],
+  { floor = "", installed = true }: Run = {},
+): Promise<{ verdict: Lane; root: string }> {
   const { root } = await history(...trees);
   if (installed) await symlink(NODE_MODULES, join(root, "node_modules"));
-  return await mutationLane({ root, event: { baseRef: "", before: "" }, floor });
+  return { verdict: await mutationLane({ root, event: { baseRef: "", before: "" }, floor }), root };
 }
 
 function messages({ problems }: Lane): string[] {
@@ -331,18 +352,166 @@ describe("the mutation lane", () => {
     expect(verdict.note).toBe("mutation score 100.0% over 2 changed domain files");
   });
 
-  // Reachable from the repo's own config: a pattern rooted outside the tree
-  // makes git refuse the pathspec, exit 128 and write nothing — which read as
-  // "no line changed" would leave a step that runs and can no longer fail.
-  test("a domain pattern git cannot resolve is refused, not read as an empty change", async () => {
-    const rooted = JSON.stringify({
-      settings: { "boundaries/elements": [{ type: "domain", pattern: "/src/domain" }] },
-    });
-    const { root } = await history(BEFORE, { ...CHANGED, ".oxlintrc.json": rooted });
+  // THE CLASS these four cases belong to: a filename crosses three name-spaces
+  // on its way through the lane — git's diff output, the filesystem under the
+  // root, Stryker's glob resolver — and a file that goes missing between two of
+  // them has no mutants, which reads as a branch with nothing wrong. Each case
+  // drops a file out of one crossing and asserts the lane says so.
 
-    expect(mutationLane({ root, event: { baseRef: "", before: "" }, floor: "" })).rejects.toThrow(
-      "git diff against",
+  test.each([
+    ["names a file rather than a folder", "src/domain/pricing.ts", "names a file"],
+    ["reaches nothing at all", "src/nowhere", "nothing here is under"],
+  ])("a domain pattern that %s is refused", async (_, pattern, said) => {
+    const declared = JSON.stringify({
+      settings: { "boundaries/elements": [{ type: "domain", pattern }] },
+    });
+    const verdict = await lane([BEFORE, { ...CHANGED, ".oxlintrc.json": declared }]);
+
+    expect(messages(verdict)).toEqual([containing(said)]);
+  });
+
+  // Stryker resolves every `mutate` entry as a glob, and this is the filename
+  // every router in this house produces. Unescaped it resolves to nothing, and
+  // a file nothing mutated has no mutants — the class, in the crossing into
+  // Stryker.
+  test("a domain file whose name is a glob pattern is still mutated", async () => {
+    const verdict = await lane([BEFORE, { ...BEFORE, "src/domain/[id].ts": WITH_FEE.trimStart() }]);
+
+    expect(messages(verdict)).toEqual([
+      containing("src/domain/[id].ts: write the test that reaches line 1"),
+      containing("src/domain/[id].ts: write the test that reaches line 2"),
+    ]);
+  });
+
+  // The residue of the same crossing: three characters have no working escape,
+  // so the lane reads Stryker's own report of what it could not resolve rather
+  // than trusting the escape to have covered everything.
+  test("a domain file Stryker cannot resolve is named rather than passed over", async () => {
+    const verdict = await lane([
+      BEFORE,
+      { ...BEFORE, "src/domain/{a,b}.ts": WITH_FEE.trimStart() },
+    ]);
+
+    expect(messages(verdict)).toEqual([
+      containing("rename src/domain/{a,b}.ts so its name carries no glob character"),
+    ]);
+    expect(verdict.note).toBe("a changed file never reached the run");
+  });
+
+  // The crossing out of git: a path holding a control character is C-quoted in
+  // the diff header, so the `+++ b/` line never matches and the file left the
+  // change set without a word.
+  test("a changed file git could not name plainly is refused", async () => {
+    const quoted = "src/domain/o\td.ts";
+    const verdict = await lane([BEFORE, { ...BEFORE, [quoted]: WITH_FEE.trimStart() }]);
+
+    expect(messages(verdict)).toEqual([containing("so git can name it plainly")]);
+    expect(verdict.note).toBe("a changed file could not be named");
+  });
+
+  // The crossing into the filesystem: `git diff` answers in paths from the
+  // repository root, and a project below it — every monorepo — would hand
+  // Stryker a path it cannot resolve from the project.
+  test("a project below the git root is graded against its own paths", async () => {
+    const { root } = await history(
+      { ".gitignore": "node_modules\n", ...under("app", BEFORE) },
+      {
+        ".gitignore": "node_modules\n",
+        ...under(
+          "app",
+          repo({
+            "src/domain/pricing.ts": PRICING + WITH_FEE,
+            "tests/pricing.test.ts": FEE_TEST,
+          }),
+        ),
+      },
     );
+    await symlink(NODE_MODULES, join(root, "app", "node_modules"));
+    const verdict = await mutationLane({
+      root: join(root, "app"),
+      event: { baseRef: "", before: "" },
+      floor: "",
+    });
+
+    // The project's own path, not `app/src/domain/pricing.ts`: the second is
+    // what the repository root would have called it, and what Stryker could not
+    // have resolved from inside the project.
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe("mutation score 100.0% over 1 changed domain file");
+    expect(verdict.table).toEqual(containing("| Undetected | 0 |"));
+  });
+
+  // `Ignored` leaves BOTH sides of the ratio, so before this rule a branch that
+  // wrote an untested line and disabled it scored HIGHER than one that only
+  // wrote it — 100% against 50% — and cleared a floor it should have breached.
+  // On a line the branch wrote, the directive is the branch's own choice.
+  test("a Stryker disable on a new line cannot raise the score", async () => {
+    const disabled = await lane([
+      BEFORE,
+      repo({ "src/domain/pricing.ts": PRICING + DISABLED, "tests/pricing.test.ts": TOTAL_TEST }),
+    ]);
+    const plain = await lane([
+      BEFORE,
+      repo({
+        "src/domain/pricing.ts": PRICING + NOT_DISABLED,
+        "tests/pricing.test.ts": TOTAL_TEST,
+      }),
+    ]);
+
+    expect(disabled.note).toBe(plain.note);
+    expect(disabled.note).toBe("mutation score 50.0% over 1 changed domain file");
+    expect(messages(disabled)).toEqual([
+      containing("write the test for line 6 or drop the `Stryker disable` above it"),
+      containing("write the test for line 6 or drop the `Stryker disable` above it"),
+    ]);
+  });
+
+  // eslint-plugin-boundaries takes `pattern` as a string or an array of them,
+  // so a repo mixing the two forms is one the linter gates whole. Reading only
+  // the string form gated half of it and said nothing about the other half.
+  test("a domain element whose pattern is an array is read as the linter reads it", async () => {
+    const mixed = JSON.stringify({
+      settings: {
+        "boundaries/elements": [
+          { type: "domain", pattern: "apps/api/src/domain" },
+          { type: "domain", pattern: ["apps/web/src/domain"] },
+        ],
+      },
+    });
+    const workspace = (tree: Tree): Tree => ({ ...repo(tree), ".oxlintrc.json": mixed });
+    const both = {
+      "apps/api/src/domain/pricing.ts": PRICING,
+      "apps/api/tests/pricing.test.ts": TOTAL_TEST,
+      "apps/web/src/domain/pricing.ts": PRICING,
+      "apps/web/tests/pricing.test.ts": TOTAL_TEST,
+    };
+
+    // The branch's only domain change is in the project declared as an array.
+    const verdict = await lane([
+      workspace(both),
+      workspace({ ...both, "apps/web/src/domain/pricing.ts": PRICING + WITH_FEE }),
+    ]);
+
+    expect(verdict.note).toBe("mutation score 50.0% over 1 changed domain file");
+    expect(messages(verdict)).toEqual([
+      containing("apps/web/src/domain/pricing.ts: write the test that reaches line 5"),
+      containing("apps/web/src/domain/pricing.ts: write the test that reaches line 6"),
+    ]);
+  });
+
+  // The summary is markdown, and a replacement is repo source: every template
+  // literal in the tree carries the backticks a code span is delimited by.
+  test("a replacement carrying backticks cannot end the span it is shown in", async () => {
+    const verdict = await lane([
+      BEFORE,
+      repo({
+        "src/domain/pricing.ts": PRICING + "\n" + TAGGED,
+        "tests/pricing.test.ts": TOTAL_TEST,
+      }),
+    ]);
+
+    expect(verdict.table).toEqual(containing("``cents - `x`.length``"));
+    expect(verdict.table).not.toEqual(containing("→ `cents - `x`.length` ("));
   });
 
   test.each(["pricing.d.ts", "pricing.test.ts", "pricing.md"])(
@@ -387,6 +556,23 @@ describe("the mutation lane", () => {
     ]);
   });
 
+  // Stryker copies the project into a sandbox to mutate it, and its default
+  // puts that copy in the checkout and cleans it only after a run that
+  // finished — so every crash left a second tree of the repo's own source for
+  // the steps after this one to lint, scan and count.
+  test.each([
+    ["that cannot finish", `${PRICING}export function broken(: number {\n`],
+    ["that finishes", PRICING + WITH_FEE],
+  ])("a run %s leaves nothing in the checkout", async (_, source) => {
+    const { root } = await laneIn([
+      BEFORE,
+      repo({ "src/domain/pricing.ts": source, "tests/pricing.test.ts": FEE_TEST }),
+    ]);
+
+    expect(await readdir(root)).not.toContain(".stryker-tmp");
+    expect(await readdir(root)).not.toContain("reports");
+  });
+
   test("a run that cannot finish reports what it wrote rather than a clean lane", async () => {
     const verdict = await lane([
       BEFORE,
@@ -396,7 +582,8 @@ describe("the mutation lane", () => {
       }),
     ]);
 
-    expect(messages(verdict)).toEqual([containing("to see it: the run exited")]);
+    expect(messages(verdict)).toEqual([containing("fix what the run reported above")]);
+    expect(verdict.log).toEqual(containing("Stryker"));
     expect(verdict.table).toBeUndefined();
   });
 

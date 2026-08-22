@@ -1,4 +1,4 @@
-import { notice, type Problem, report } from "../_lib/gate.ts";
+import { log, notice, type Problem, report } from "../_lib/gate.ts";
 
 /**
  * What the gates in this directory report, and how their entry points say it.
@@ -49,7 +49,7 @@ export function refused(problems: Problem[], divergence: string[] = []): Verdict
  * short enough to read cannot.
  */
 export function reportVerdict({ summary, divergence, problems }: Verdict): void {
-  for (const line of divergence) console.log(line);
+  for (const line of divergence) log(line);
   if (summary !== undefined) notice(summary);
   report(problems);
 }

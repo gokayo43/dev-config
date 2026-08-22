@@ -119,8 +119,13 @@ After tagging, bump `project-template`'s pins: `setup/ci.single.yml` and
 ## Adding a gate
 
 Write the check as `.github/actions/<name>/<name>.ts`, exporting a function that
-returns `Problem[]` and takes whatever it reads — a root path, injected
-fetchers — as arguments. The entry point is a separate `<name>.main.ts` that
+answers with the problems the step reports, and takes whatever it reads — a
+root path, injected fetchers — as arguments. `Problem[]` is the whole answer for
+a gate that only refuses; one that also publishes returns a shape of its own
+holding that list — db-gate's replay carries the divergence behind its verdict,
+its ramp the table it appends to the run summary, and the mutation lane both,
+plus whatever the run wrote. The `*.main.ts` is what turns each field into the
+thing that carries it: an annotation, a `::notice`, a step summary, the log. The entry point is a separate `<name>.main.ts` that
 `action.yml` runs: it hands its whole body to `entry()`, so that a throw reaches
 the log as an annotation rather than a stack trace, reads the inputs through
 `inputs()`, which throws on a missing one, and calls `report()`. Splitting them
