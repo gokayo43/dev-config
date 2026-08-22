@@ -575,6 +575,30 @@ export async function jsonObjects(
   return { read, problems };
 }
 
+export interface JsonFile {
+  /** Undefined whenever there is nothing to grade — `problems` says which of the two reasons. */
+  readonly contents: ConfigObject | undefined;
+  readonly problems: readonly Problem[];
+}
+
+/**
+ * A JSON config a gate reads, or the problem standing in for it. Missing and
+ * unreadable are different states — only the first is fixed by writing the file
+ * — and neither leaves a caller fields to read.
+ *
+ * The dialect is `JSON with comments` because every config asked for by name
+ * here is one a repo is invited to annotate: README asks for the reason for an
+ * override beside it, oxlint's schema declares `allowComments`, and TypeScript
+ * has always taken them.
+ */
+export async function readJson(root: string, file: string): Promise<JsonFile> {
+  if (!(await Bun.file(`${root}/${file}`).exists())) {
+    return { contents: undefined, problems: [{ file, message: `${file} is missing` }] };
+  }
+  const batch = await jsonObjects(root, [file], "JSON with comments");
+  return { contents: batch.read[0]?.value, problems: batch.problems };
+}
+
 // Every package.json in the repo, root and workspaces alike. A git pathspec
 // matches a wildcard across "/", so the second pathspec below reaches any depth
 // while still requiring the whole final path segment: "apps/my-package.json"

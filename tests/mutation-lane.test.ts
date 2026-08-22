@@ -80,6 +80,25 @@ test("adds the fee", () => {
 });
 `;
 
+/** Reaches the new function and asserts almost nothing about it, so its arithmetic mutant lives. */
+const WEAK_FEE_TEST = `import { expect, test } from "bun:test";
+import { total, withFee } from "../src/domain/pricing.ts";
+
+test("charges for every unit", () => {
+  expect(total(100, 3)).toBe(300);
+});
+
+test("adds the fee", () => {
+  expect(typeof withFee(100)).toBe("number");
+});
+`;
+
+/** A domain file that is all types, so Stryker finds nothing in it to mutate. */
+const KIND = `export interface Kind {
+  readonly name: string;
+}
+`;
+
 const BEFORE = repo({
   "src/domain/pricing.ts": PRICING,
   "tests/pricing.test.ts": TOTAL_TEST,
@@ -93,7 +112,16 @@ const BEFORE_WITH_A_GAP = repo({
   "tests/pricing.test.ts": TOTAL_TEST,
 });
 
-async function lane(trees: readonly Tree[], floor = "", installed = true): Promise<Lane> {
+interface Run {
+  readonly floor?: string;
+  /** Whether the fixture has the install a repo running this lane declares. */
+  readonly installed?: boolean;
+}
+
+async function lane(
+  trees: readonly Tree[],
+  { floor = "", installed = true }: Run = {},
+): Promise<Lane> {
   const { root } = await history(...trees);
   if (installed) await symlink(NODE_MODULES, join(root, "node_modules"));
   return await mutationLane({ root, event: { baseRef: "", before: "" }, floor });
@@ -101,17 +129,6 @@ async function lane(trees: readonly Tree[], floor = "", installed = true): Promi
 
 function messages({ problems }: Lane): string[] {
   return problems.map(({ file, message }) => `${file ?? ""}: ${message}`);
-}
-
-/** Why the lane refused to run at all — a bad input is a throw, not a problem it reports. */
-async function refusal(floor: string): Promise<string> {
-  const { root } = await history(BEFORE);
-  try {
-    await mutationLane({ root, event: { baseRef: "", before: "" }, floor });
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-  return `the lane accepted a floor of '${floor}'`;
 }
 
 describe("the mutation lane", () => {
@@ -133,6 +150,28 @@ describe("the mutation lane", () => {
     ]);
     expect(verdict.note).toBe("mutation score 40.0% over 1 changed domain file");
     expect(verdict.table).toEqual(containing("| Undetected | 6 |"));
+  });
+
+  // The other undetected status, and the one the diagnostic reads differently:
+  // a test does reach the line, and passes whatever the arithmetic on it says.
+  // Every other case here produces NoCoverage, so without this one the arm that
+  // addresses a reader who already has a test is never executed.
+  test("a new line a test reaches without pinning is refused as a survivor", async () => {
+    const verdict = await lane([
+      BEFORE,
+      repo({
+        "src/domain/pricing.ts": PRICING + WITH_FEE,
+        "tests/pricing.test.ts": WEAK_FEE_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([
+      "src/domain/pricing.ts: write the case that fails on `cents - 50` (ArithmeticOperator) at line 6: this branch wrote that line and the suite passes either way",
+    ]);
+    expect(verdict.note).toBe("mutation score 75.0% over 1 changed domain file");
+    expect(verdict.table).toEqual(
+      containing("- `src/domain/pricing.ts:6` ArithmeticOperator → `cents - 50` (Survived)"),
+    );
   });
 
   test("the same branch passes once the test pins those lines", async () => {
@@ -177,7 +216,7 @@ describe("the mutation lane", () => {
           "tests/pricing.test.ts": FEE_TEST,
         }),
       ],
-      "0.95",
+      { floor: "0.95" },
     );
 
     expect(messages(verdict)).toEqual([
@@ -245,6 +284,67 @@ describe("the mutation lane", () => {
     expect(beside.note).toEqual(containing("no domain file changed"));
   });
 
+  // docs/gates/mutation-lane.md says a monorepo may declare one element per
+  // project. `apps/web/src/domain/` also carries the trailing slash a folder is
+  // often written with, which the lane trims before handing git the pathspec —
+  // untrimmed it would ask for `apps/web/src/domain//**` and match nothing,
+  // which is the shape a gate takes when it silently stops gating.
+  test.each(["api", "web"])(
+    "a domain element per project reaches the %s project",
+    async (project) => {
+      const elements = JSON.stringify({
+        settings: {
+          "boundaries/elements": [
+            { type: "domain", pattern: "apps/api/src/domain" },
+            { type: "domain", pattern: "apps/web/src/domain/" },
+          ],
+        },
+      });
+      const workspace = (tree: Tree): Tree => ({ ...repo(tree), ".oxlintrc.json": elements });
+      const source = `apps/${project}/src/domain/pricing.ts`;
+      const suite = `apps/${project}/tests/pricing.test.ts`;
+
+      const verdict = await lane([
+        workspace({ [source]: PRICING, [suite]: TOTAL_TEST }),
+        workspace({ [source]: PRICING + WITH_FEE, [suite]: FEE_TEST }),
+      ]);
+
+      expect(messages(verdict)).toEqual([]);
+      expect(verdict.note).toBe("mutation score 100.0% over 1 changed domain file");
+    },
+  );
+
+  // The count is the change, not the report: Stryker lists only files it found
+  // something to mutate in, so a branch touching a file of types alongside a
+  // real one would otherwise be told it changed one file fewer than it did.
+  test("a file the run found nothing to mutate in is still a file this branch changed", async () => {
+    const verdict = await lane([
+      BEFORE,
+      repo({
+        "src/domain/pricing.ts": PRICING + WITH_FEE,
+        "src/domain/kind.ts": KIND,
+        "tests/pricing.test.ts": FEE_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe("mutation score 100.0% over 2 changed domain files");
+  });
+
+  // Reachable from the repo's own config: a pattern rooted outside the tree
+  // makes git refuse the pathspec, exit 128 and write nothing — which read as
+  // "no line changed" would leave a step that runs and can no longer fail.
+  test("a domain pattern git cannot resolve is refused, not read as an empty change", async () => {
+    const rooted = JSON.stringify({
+      settings: { "boundaries/elements": [{ type: "domain", pattern: "/src/domain" }] },
+    });
+    const { root } = await history(BEFORE, { ...CHANGED, ".oxlintrc.json": rooted });
+
+    expect(mutationLane({ root, event: { baseRef: "", before: "" }, floor: "" })).rejects.toThrow(
+      "git diff against",
+    );
+  });
+
   test.each(["pricing.d.ts", "pricing.test.ts", "pricing.md"])(
     "a changed %s under the domain is not a file to mutate",
     async (name) => {
@@ -258,27 +358,29 @@ describe("the mutation lane", () => {
   );
 
   test("a changed domain file that carries no mutants is a pass that says so", async () => {
-    const verdict = await lane([
-      BEFORE,
-      { ...BEFORE, "src/domain/kind.ts": "export interface Kind {\n  readonly name: string;\n}\n" },
-    ]);
+    const verdict = await lane([BEFORE, { ...BEFORE, "src/domain/kind.ts": KIND }]);
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.note).toBe("0 changed domain files held no mutants");
+    expect(verdict.note).toBe("1 changed domain file held no mutants");
     expect(verdict.table).toBeUndefined();
   });
 
-  test.each([
-    ["declares no element", { ...CHANGED, ".oxlintrc.json": "{}" }],
-    ["has no oxlint config at all", without(CHANGED, ".oxlintrc.json")],
-  ])("a repo that %s is told which element to write", async (_, after) => {
-    expect(messages(await lane([BEFORE, after]))).toEqual([
+  test("a repo whose config names no domain is told which element to write", async () => {
+    expect(messages(await lane([BEFORE, { ...CHANGED, ".oxlintrc.json": "{}" }]))).toEqual([
       containing(".oxlintrc.json: declare the pure domain as a boundaries element"),
     ]);
   });
 
+  // Not this gate's diagnostic to write: the repo contract already grades that
+  // file, and a second gate paraphrasing it is a second thing to keep true.
+  test("a repo with no oxlint config at all gets the answer that file's reader gives", async () => {
+    expect(messages(await lane([BEFORE, without(CHANGED, ".oxlintrc.json")]))).toEqual([
+      ".oxlintrc.json: .oxlintrc.json is missing",
+    ]);
+  });
+
   test("a repo without the runner installed is told which packages to declare", async () => {
-    const verdict = await lane([BEFORE, CHANGED], "", false);
+    const verdict = await lane([BEFORE, CHANGED], { installed: false });
 
     expect(messages(verdict)).toEqual([
       containing("package.json: add @stryker-mutator/core and @hughescr/stryker-bun-runner"),
@@ -347,7 +449,10 @@ describe("the mutation lane", () => {
   test.each(["75", "-1", "high"])(
     "a floor of '%s' is refused rather than read as a fraction",
     async (floor) => {
-      expect(await refusal(floor)).toEqual(containing("write it as a fraction between 0 and 1"));
+      const { root } = await history(BEFORE);
+      expect(mutationLane({ root, event: { baseRef: "", before: "" }, floor })).rejects.toThrow(
+        "write it as a fraction between 0 and 1",
+      );
     },
   );
 });

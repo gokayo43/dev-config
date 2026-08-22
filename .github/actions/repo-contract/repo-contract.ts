@@ -10,12 +10,12 @@ import {
   isIgnored,
   isObject,
   isTracked,
-  jsonObjects,
   type Manifest,
   manifests,
   type Missing,
   oneOf,
   type Problem,
+  readJson,
   record,
   repoFiles,
 } from "../_lib/gate.ts";
@@ -269,25 +269,6 @@ const EXEMPTIONS = {
 } as const;
 
 type Exemption = keyof typeof EXEMPTIONS;
-
-interface Config {
-  /** Undefined whenever there is nothing to grade — `problems` says which of the two reasons. */
-  readonly contents: ConfigObject | undefined;
-  readonly problems: readonly Problem[];
-}
-
-/**
- * A JSON config this contract grades, or the problem standing in for it.
- * Missing and unreadable are different states — only the first is fixed by
- * writing the file — and neither leaves a caller fields to read.
- */
-async function readJson(root: string, file: string): Promise<Config> {
-  if (!(await Bun.file(`${root}/${file}`).exists())) {
-    return { contents: undefined, problems: [{ file, message: `${file} is missing` }] };
-  }
-  const batch = await jsonObjects(root, [file], "JSON with comments");
-  return { contents: batch.read[0]?.value, problems: batch.problems };
-}
 
 async function readText(path: string): Promise<string | undefined> {
   const file = Bun.file(path);

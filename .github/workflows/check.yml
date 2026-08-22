@@ -130,28 +130,37 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Two steps here read history. gitleaks: the default shallow checkout
-          # hands it one commit, so a secret committed and later deleted on the
-          # same branch would go unreported even though pushing it had already
-          # burned the key. repo-contract: `lifecycle` is compared with the base
-          # ref's, and on a pull request the base branch has to be in the clone
-          # — a ref this run names and the checkout lacks is refused outright.
+          # Three steps here read history. gitleaks: the default shallow
+          # checkout hands it one commit, so a secret committed and later
+          # deleted on the same branch would go unreported even though pushing
+          # it had already burned the key. repo-contract: `lifecycle` is
+          # compared with the base ref's, and on a pull request the base branch
+          # has to be in the clone — a ref this run names and the checkout lacks
+          # is refused outright. The mutation lane: what it mutates is what this
+          # branch changed against that same base ref, and it is refused the
+          # same way.
           fetch-depth: 0
           # Nothing in this job pushes, and it installs and runs the repo's
           # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
-      # Every one of these is aimed at a step of the database job, so asking for
-      # one without that job is a request that would otherwise be ignored in
-      # silence — and a gate nobody notices is off is the worst kind. A repo
-      # that has written out the routes it wants ramped, or the reasons a route
-      # cannot be, has said plainly that it expects a ramp.
+      # Every input below is aimed at a step of something the caller did not
+      # ask to run, so passing one is a request that would otherwise be ignored
+      # in silence — and a gate nobody notices is off is the worst kind. Eight
+      # belong to the database job: a repo that has written out the routes it
+      # wants ramped, or the reasons a route cannot be, has said plainly that it
+      # expects a ramp. The ninth is the mutation lane's floor, which bounds a
+      # score only that step measures. One step for both, so a caller that got
+      # two of them wrong reads two annotations rather than one and then the
+      # next run's.
       - if: >-
-          ${{ !inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
+          ${{ (!inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
           || inputs.capacity-script != '' || inputs['db-gate-evidence'] != ''
           || inputs.route-allowlist != '' || inputs.timestamp-allowlist != ''
-          || inputs.backfill-command != '' || inputs.backfill-seed != '') }}
+          || inputs.backfill-command != '' || inputs.backfill-seed != ''))
+          || (!inputs['mutation-lane'] && inputs['mutation-floor'] != '') }}
         env:
+          DATABASE: ${{ inputs.database }}
           UPGRADE_GATE: ${{ inputs.upgrade-gate }}
           CAPACITY_PATH: ${{ inputs.capacity-path }}
           CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
@@ -160,40 +169,43 @@ jobs:
           TIMESTAMP_ALLOWLIST: ${{ inputs.timestamp-allowlist }}
           BACKFILL_COMMAND: ${{ inputs.backfill-command }}
           BACKFILL_SEED: ${{ inputs.backfill-seed }}
+          MUTATION_LANE: ${{ inputs['mutation-lane'] }}
+          MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
         run: |
           set -euo pipefail
-          if [ "$UPGRADE_GATE" = true ]; then
-            echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
+          # Re-asked here, because either half of the condition above can be
+          # what selected this step: without it a repo running the database job
+          # and no mutation lane would be told its ramp inputs need a job it
+          # already asked for.
+          if [ "$DATABASE" != true ]; then
+            if [ "$UPGRADE_GATE" = true ]; then
+              echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
+            fi
+            if [ -n "$CAPACITY_PATH" ]; then
+              echo "::error::capacity-path needs database: true — the ramp runs against the app the database job boots"
+            fi
+            if [ -n "$CAPACITY_SCRIPT" ]; then
+              echo "::error::capacity-script needs database: true — the ramp runs against the app the database job boots"
+            fi
+            if [ -n "$DB_GATE_EVIDENCE" ]; then
+              echo "::error::db-gate-evidence needs database: true — it names the artifact the database job uploads"
+            fi
+            if [ -n "$ROUTE_ALLOWLIST" ]; then
+              echo "::error::route-allowlist needs database: true — the route floor is measured across the database job's ramp"
+            fi
+            if [ -n "$TIMESTAMP_ALLOWLIST" ]; then
+              echo "::error::timestamp-allowlist needs database: true — the column types are read from the database that job migrates"
+            fi
+            if [ -n "$BACKFILL_COMMAND" ]; then
+              echo "::error::backfill-command needs database: true — the backfill runs against a database the database job builds"
+            fi
+            if [ -n "$BACKFILL_SEED" ]; then
+              echo "::error::backfill-seed needs database: true — it writes into a database the database job builds"
+            fi
           fi
-          if [ -n "$CAPACITY_PATH" ]; then
-            echo "::error::capacity-path needs database: true — the ramp runs against the app the database job boots"
+          if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_FLOOR" ]; then
+            echo "::error::mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
           fi
-          if [ -n "$CAPACITY_SCRIPT" ]; then
-            echo "::error::capacity-script needs database: true — the ramp runs against the app the database job boots"
-          fi
-          if [ -n "$DB_GATE_EVIDENCE" ]; then
-            echo "::error::db-gate-evidence needs database: true — it names the artifact the database job uploads"
-          fi
-          if [ -n "$ROUTE_ALLOWLIST" ]; then
-            echo "::error::route-allowlist needs database: true — the route floor is measured across the database job's ramp"
-          fi
-          if [ -n "$TIMESTAMP_ALLOWLIST" ]; then
-            echo "::error::timestamp-allowlist needs database: true — the column types are read from the database that job migrates"
-          fi
-          if [ -n "$BACKFILL_COMMAND" ]; then
-            echo "::error::backfill-command needs database: true — the backfill runs against a database the database job builds"
-          fi
-          if [ -n "$BACKFILL_SEED" ]; then
-            echo "::error::backfill-seed needs database: true — it writes into a database the database job builds"
-          fi
-          exit 1
-
-      # mutation-floor is aimed at the lane's own step, so asking for one
-      # without the lane is a number that would otherwise be ignored in silence
-      # — a floor nobody notices is off is a floor nobody has.
-      - if: ${{ !inputs['mutation-lane'] && inputs['mutation-floor'] != '' }}
-        run: |
-          echo "::error::mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
           exit 1
 
       - uses: gokayo43/dev-config/.github/actions/secret-scan@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
