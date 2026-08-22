@@ -230,8 +230,7 @@ not "don't use X" but "use `mysqlAffectedRows()` from `~/lib/db-result` — read
 predate the lock go in a per-file `overrides` whitelist, so a new one fails
 immediately while the old ones drain, and the whitelist going empty is what
 deletes the block — a ratchet, tracked by an issue, not a permanent carve-out.
-This repo runs one on itself for `typescript/no-unsafe-type-assertion`; the
-reference example for the choke messages is nfp-elysia's `.oxlintrc.json`.
+The reference example for the choke messages is nfp-elysia's `.oxlintrc.json`.
 
 These rules are **per-repo and never go in the base**: a decision that is settled
 for one repo's stack is not settled for another's, and a base that carried them
@@ -286,24 +285,41 @@ code runs its codegen before linting, exactly as it does before `tsc`.
 ### The anti-slop plugin
 
 Type-aware rules catch what `any` touches; they do not see a plain `as`. So
-`input as object as User`, a value widened to `unknown` and asserted back, an
-`unknown` parameter that never gets parsed, and a `Record<string, unknown>`
-value contract all pass a fully type-aware run — and assertion laundering is
-precisely the move an agent makes to silence the rules above. Nine rules close
-that, shipped in this package as an oxlint JS plugin and enabled at `error` by
-the base:
+`admin as User as object`, an `unknown` parameter that never gets parsed, a
+function that hands `unknown` back, and a `Record<string, unknown>` value
+contract all pass a fully type-aware run — and assertion laundering is precisely
+the move an agent makes to silence the rules above. Eleven rules close that,
+shipped in this package as an oxlint JS plugin and enabled at `error` by the
+base:
 
 | Rule                         | What it rejects                                                        |
 | ---------------------------- | ---------------------------------------------------------------------- |
 | `no-chained-type-assertions` | `x as object as User` — nested assertions that fabricate evidence      |
-| `no-widen-then-assert`       | widening a known local value and asserting it back later               |
 | `no-known-value-widening`    | a broad annotation over a known initializer; use `satisfies`           |
 | `no-unsafe-dictionary-type`  | dictionary contracts whose value type is `unknown`/`any`/`object`/`{}` |
 | `no-unknown-type-aliases`    | an alias that only renames `unknown`                                   |
 | `no-object-parameters`       | the broad `object` type on an input                                    |
 | `no-unknown-parameters`      | an `unknown` parameter, except the `cause` convention                  |
+| `no-unknown-returns`         | a declared return of `unknown` or `Promise<unknown>`                   |
+| `no-reflect-apply`           | `Reflect.apply`, which launders past a typed call                      |
+| `no-reflect-get`             | `Reflect.get`, which answers `any` for a property read                 |
 | `no-runtime-typeof`          | a runtime `typeof` — parse at the boundary instead                     |
 | `no-shape-in-symbol-names`   | "shape" in a name the file declares                                    |
+
+Where a ported rule overlapped oxlint's own `typescript/no-unsafe-type-assertion`
+— which the base denies through `suspicious` — both were run over the same
+fixtures and the weaker one deleted:
+
+- **`no-widen-then-assert` is gone.** Widening a value and asserting it back is
+  an assertion to a narrower type by construction, which is the whole of what
+  the native rule reads: it refuses every case the ported rule refused, at the
+  same line and column. Two diagnostics for one fault are two places to change
+  the day the answer moves.
+- **`no-chained-type-assertions` stays.** The native rule covers every chain
+  that fabricates a type, because such a chain has a narrowing link in it. A
+  chain whose every link widens has none: `admin as User as object` draws
+  nothing from the native rule, nothing from `no-unnecessary-type-assertion`,
+  and nothing else in the base says the type it started from was discarded.
 
 Four more are enabled only over `*.test.ts`, `*.test.tsx`, `*.spec.ts` and
 `*.spec.tsx`, because every one of them is ordinary code anywhere else: a source
@@ -400,14 +416,20 @@ anti-slop/no-call-log-assertions -- <reason>`. As everywhere else here, the
 reason is not optional; the suppression-hygiene gate holds every directive to
 carrying one.
 
-Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT) at
-commit `abaeb63`. Upstream vendors the rules into each repo; they live here
+Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT),
+at commit `abaeb63` and then at `6d53855`. Upstream vendors the rules into each repo; they live here
 because oxlint's `jsPlugins` API is alpha and explicitly outside semver, so the
 rule code and the oxlint version have to move as one pin — which is what the
 release pair already does. Upstream's tenth rule,
 `no-conditional-empty-object-spread`, is deliberately not ported: with
 `exactOptionalPropertyTypes` the conditional spread is the only type-legal way
-to conditionally include a field in an option bag you do not own.
+to conditionally include a field in an option bag you do not own. Two more are
+not ported either: `require-safety-comment-for-type-assertion`, whose goal the
+native rule and the reason-carrying disable already deliver in a form that is
+counted and checked rather than syntactic, and `no-module-mocking`, which knows
+`vi` and `jest` but not `bun:test` — `no-local-module-mocks` below covers all
+three runners, and refuses a stand-in over a module of ours rather than over a
+package, which is where a fake belongs.
 
 Two rules answer differently from upstream, both because a rule at `error`
 across the fleet must refuse something the author can change:
@@ -433,11 +455,11 @@ Two facts about how it is wired, both load-bearing:
   and this directory is inside `node_modules` for every repo that consumes it.
   `tsc` still checks it in this repo, through `checkJs` and JSDoc types.
 
-`tests/anti-slop.test.ts` drives the nine with the real binary: a block of cases
+`tests/anti-slop.test.ts` drives the eleven with the real binary: a block of cases
 per rule — alias chains, shadowed built-ins, type parameters bound by default,
 permuted between two aliases and named for the aliases they shadow, the scope a
 binding resolves in, and the clean tree each of those has to leave alone — plus
-upstream's own fixtures for the three rules it ships tests for, run as a
+upstream's own fixtures for the six rules it ships tests for, run as a
 differential oracle against this port. It also asks the plugin and the base for
 their rule names and requires them to match: a rule the base does not enable is
 a rule no repo runs, and a name in the base the plugin does not define is a rule

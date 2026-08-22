@@ -3,11 +3,12 @@ import { describe, expect, test } from "bun:test";
 import { reportsFor } from "./lint-fixture.ts";
 
 /**
- * Upstream's own fixtures for the three rules it ships tests for, run against
- * this port as a differential oracle: upstream is the implementation these
- * rules were ported from, so its verdicts are the contract the port has to
- * meet. Copied from dmmulroy/anti-slop at commit abaeb63,
- * `src/rules/*.test.ts`, with the counts it declares.
+ * Upstream's own fixtures, run against this port as a differential oracle:
+ * upstream is the implementation these rules were ported from, so its verdicts
+ * are the contract the port has to meet. Copied from dmmulroy/anti-slop
+ * (MIT) — the three rules it shipped tests for at commit abaeb63, and the
+ * three ported at 6d53855 — from `src/rules/*.test.ts`, with the counts each
+ * declares.
  */
 describe("upstream's fixtures, against this port", () => {
   const PRELUDE = "type Command = () => void; const startCommand = () => {};";
@@ -222,5 +223,52 @@ describe("upstream's fixtures, against this port", () => {
       "type Marker<T> = { readonly __brand?: never }; type Index<T, U = Marker<T>> = Record<string, U>; type A = Index<Item>;",
       1,
     ],
+  ]);
+  conformance("no-unknown-returns", [
+    ["type ImportedValue = unknown;", 0],
+    ["function parse(): ImportedValue { return input; }", 0],
+    ["function parse(): User { return user; }", 0],
+    ["function infer() { return input; }", 0],
+    ["function generic<Value>(): Value { return value; }", 0],
+    ["type Value = unknown; function generic<Value>(): Value { return value; }", 0],
+    ["type Key = unknown; type Mapped<Input> = { [Key in keyof Input]: () => Key };", 0],
+    [
+      "type Item = unknown; type Unpacked<Input> = Input extends Promise<infer Item> ? () => Item : never;",
+      0,
+    ],
+    ["function cause(): { cause: unknown } { return { cause: input }; }", 0],
+    ["type Result = { value: unknown }; function load(): Result { return result; }", 0],
+    ["function load(): Promise<User> { return promise; }", 0],
+    ["function load(): unknown { return input; }", 1],
+    ["const load = (): unknown => input;", 1],
+    ["type Loader = () => unknown;", 1],
+    ["interface Loader { load(): unknown }", 1],
+    ["declare function load(): unknown;", 1],
+    ["function load(): string | unknown { return input; }", 1],
+    ["function load(): Promise<unknown> { return promise; }", 1],
+    ["type UnknownValue = unknown; function load(): UnknownValue { return input; }", 1],
+    [
+      "type Item = unknown; type Fallback<Input> = Input extends infer Item ? string : () => Item;",
+      1,
+    ],
+  ]);
+
+  conformance("no-reflect-apply", [
+    ["const value = operation.apply(owner, args);", 0],
+    ["Reflect.get(owner, key);", 0],
+    ["const Reflect = { apply() { return 1; } }; Reflect.apply();", 0],
+    ["function invoke(Reflect: { apply(): number }) { return Reflect.apply(); }", 0],
+    ["const value = Reflect.apply(operation, owner, args);", 1],
+    ["const value = Reflect['apply'](operation, owner, args);", 1],
+  ]);
+
+  conformance("no-reflect-get", [
+    ["const value = owner.property;", 0],
+    ["const value = owner[key];", 0],
+    ["Reflect.set(owner, key, value);", 0],
+    ["const Reflect = { get() { return 1; } }; Reflect.get();", 0],
+    ["function read(Reflect: { get(): number }) { return Reflect.get(); }", 0],
+    ["const value = Reflect.get(owner, key);", 1],
+    ["const value = Reflect['get'](owner, key);", 1],
   ]);
 });

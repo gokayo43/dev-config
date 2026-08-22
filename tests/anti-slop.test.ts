@@ -61,6 +61,11 @@ const HANDLER = `type Handler = () => void;
 declare const startHandler: Handler;
 `;
 
+const REFLECT = `declare const operation: (owner: string, key: string) => number;
+declare const owner: { readonly key: string };
+declare const key: string;
+`;
+
 /**
  * A chain of union aliases, which is the shape resolution used to be
  * exponential over: every level asks the same question of two members. Twenty-six
@@ -109,6 +114,25 @@ export const settings = { retries: 2 } as const;`,
       name: "an angle-bracket assertion is the same assertion",
       source: `${USER}export const one = <User>(<object>input);`,
       reports: ["6:20"],
+    },
+    {
+      // Why this rule survived the differential against
+      // `typescript/no-unsafe-type-assertion`, which refuses every other
+      // violating case in this block: each link here widens, so the native
+      // rule has nothing unsafe to say and `no-unnecessary-type-assertion`
+      // nothing redundant. A chain up a hierarchy still discards the type it
+      // started from, and this is the only rule in the base that says so.
+      name: "a chain whose every link widens is refused by nothing else",
+      source: `interface Admin {
+  readonly id: string;
+  readonly level: number;
+}
+interface User {
+  readonly id: string;
+}
+declare const admin: Admin;
+export const one = admin as User as object;`,
+      reports: ["9:20"],
     },
   ],
 
@@ -243,6 +267,73 @@ export function save(value: Anything): void {
   void value;
 }`,
       reports: ["value"],
+    },
+    {
+      name: "a type parameter shadowing an alias is the parameter, not the alias",
+      source: `type Value = object;
+export function save<Value>(value: Value): void {
+  void value;
+}`,
+      reports: [],
+    },
+  ],
+
+  "no-reflect-apply": [
+    {
+      name: "a call laundered through Reflect",
+      source: `${REFLECT}export const value = Reflect.apply(operation, owner, [key]);`,
+      reports: ["Replace `Reflect.apply`"],
+    },
+    {
+      name: "the computed spelling is the same call — a rule keyed to the dot is one token from off",
+      source: `${REFLECT}export const value = Reflect["apply"](operation, owner, [key]);`,
+      reports: ["Replace `Reflect.apply`"],
+    },
+    {
+      name: "a function's own .apply is not Reflect's",
+      source: `${REFLECT}export const value = operation.apply(owner, [key]);`,
+      reports: [],
+    },
+    {
+      name: "a file that declares its own Reflect is not reaching for the global",
+      source: `const Reflect = { apply: (): number => 1 };
+export const value = Reflect.apply();`,
+      reports: [],
+    },
+    {
+      name: "Reflect.get is the sibling rule's method, not this one's",
+      source: `${REFLECT}export const value = Reflect.get(owner, key);`,
+      reports: [],
+    },
+  ],
+
+  "no-reflect-get": [
+    {
+      name: "a property read laundered through Reflect",
+      source: `${REFLECT}export const value = Reflect.get(owner, key);`,
+      reports: ["Replace `Reflect.get`"],
+    },
+    {
+      name: "the computed spelling is the same read",
+      source: `${REFLECT}export const value = Reflect["get"](owner, key);`,
+      reports: ["Replace `Reflect.get`"],
+    },
+    {
+      name: "an ordinary property read is what the rule asks for",
+      source: `${REFLECT}export const value = owner.key;`,
+      reports: [],
+    },
+    {
+      name: "a parameter named Reflect is somebody else's object",
+      source: `export function read(Reflect: { get(): number }): number {
+  return Reflect.get();
+}`,
+      reports: [],
+    },
+    {
+      name: "Reflect.set is not this rule's method",
+      source: `${REFLECT}Reflect.set(owner, key, 1);`,
+      reports: [],
     },
   ],
 
@@ -399,6 +490,108 @@ export function f(x: Reversed<unknown, string>): void {
 }`,
       reports: ["Parameter `x`"],
     },
+    {
+      name: "a type parameter shadowing an alias is the parameter, not the alias",
+      source: `type Value = unknown;
+export function save<Value>(value: Value): void {
+  void value;
+}`,
+      reports: [],
+    },
+    {
+      name: "a mapped type's key is bound where it is read",
+      source: `type Key = unknown;
+export type Mapped<Input> = { readonly [Key in keyof Input]: (x: Key) => void };`,
+      reports: [],
+    },
+    {
+      name: "an infer binder shadows inside the branch it is bound for",
+      source: `type Item = unknown;
+export type Unpacked<Input> = Input extends Promise<infer Item> ? (x: Item) => void : never;`,
+      reports: [],
+    },
+    {
+      // The wrong fix for the case above is to take every `infer` name out of
+      // the whole conditional. TypeScript binds one only in the true branch, so
+      // the same name elsewhere is still whatever the file declared.
+      name: "and nowhere else in the conditional",
+      source: `type Item = unknown;
+export type Fallback<Input> = Input extends string ? never : (x: Item) => void;`,
+      reports: ["Parameter `x`"],
+    },
+  ],
+
+  "no-unknown-returns": [
+    {
+      name: "a declared unknown return is the contract this refuses",
+      source: `${USER}export function load(): unknown {
+  return input;
+}`,
+      reports: ["6:25"],
+    },
+    {
+      name: "an inferred return type is not a declared contract",
+      source: `${USER}export function load() {
+  return input;
+}`,
+      reports: [],
+    },
+    {
+      name: "`Promise<unknown>` is the same contract one await later",
+      source: `${USER}export async function load(): Promise<unknown> {
+  return input;
+}`,
+      reports: ["6:31"],
+    },
+    {
+      name: "a promise of a domain type is what the rule asks for",
+      source: `${USER}export async function load(): Promise<User> {
+  return user;
+}`,
+      reports: [],
+    },
+    {
+      name: "a union with unknown in it is unknown",
+      source: `${USER}export function load(): string | unknown {
+  return input;
+}`,
+      reports: ["6:25"],
+    },
+    {
+      name: "an alias that only renames unknown is still unknown",
+      source: `${USER}type Payload = unknown;
+export function load(): Payload {
+  return input;
+}`,
+      reports: ["7:25"],
+    },
+    {
+      name: "a type parameter shadowing an alias is the parameter, not the alias",
+      source: `${USER}type Value = unknown;
+export function load<Value>(value: Value): Value {
+  return value;
+}`,
+      reports: [],
+    },
+    {
+      name: "a method signature declares a return contract too",
+      source: `${USER}export interface Loader {
+  load(): unknown;
+}`,
+      reports: ["7:11"],
+    },
+    {
+      name: "a function type alias declares one as well",
+      source: `${USER}export type Loader = () => unknown;`,
+      reports: ["6:28"],
+    },
+    {
+      name: "unknown behind a field is not the return contract",
+      source: `${USER}export function load(): { readonly cause: unknown } {
+  return { cause: input };
+}`,
+      reports: [],
+    },
   ],
 
   "no-unknown-type-aliases": [
@@ -547,88 +740,17 @@ type Inner<Box> = Box;
 export declare const table: Record<string, Box<string>>;`,
       reports: [],
     },
-  ],
-
-  "no-widen-then-assert": [
     {
-      // The two rules held two lists of what counts as a known value and only
-      // one of them had `UnaryExpression` in it, so this laundering was caught
-      // when the literal was `1` and silent when it was `-1`.
-      name: "an operator over a literal is as known as the literal",
-      source: `export function round(): number {
-  const wide: unknown = -1;
-  return wide as number;
-}`,
-      reports: ["3:10"],
-    },
-    {
-      name: "a widened const asserted back to what it was",
-      source: `${USER}export function round(value: User): User {
-  const wide: unknown = value;
-  return wide as User;
-}`,
-      reports: ["8:10"],
-    },
-    {
-      name: "the value carried through keeps its type and needs no assertion",
-      source: `${USER}export function round(value: User): User {
-  return value;
-}`,
+      name: "a type parameter shadowing an alias is the parameter, not the alias",
+      source: `type Value = unknown;
+export type Index<Value> = Record<string, Value>;`,
       reports: [],
     },
     {
-      name: "an assertion back to a broad type narrows nothing",
-      source: `${USER}export function round(value: User): unknown {
-  const wide: unknown = value;
-  return wide as unknown;
-}`,
+      name: "and a mapped type's value reads the same binder",
+      source: `type Value = object;
+export type Mapped<Value> = { readonly [K in string]: Value };`,
       reports: [],
-    },
-    {
-      name: "an assertion to a non-object does not narrow an object binding",
-      source: `${USER}export function round(value: User): string {
-  const wide: object = value;
-  return wide as string;
-}`,
-      reports: [],
-    },
-    {
-      name: "a reassignable binding is not evidence anything erased",
-      source: `${USER}export function round(value: User): User {
-  let wide: unknown = value;
-  wide = value;
-  return wide as User;
-}`,
-      reports: [],
-    },
-    {
-      name: "the widening written as an assertion rather than an annotation",
-      source: `${USER}export function round(value: User): User {
-  const wide = value as unknown;
-  return wide as User;
-}`,
-      reports: ["8:10"],
-    },
-    {
-      name: "an assertion in another function is not this binding's",
-      source: `${USER}export function round(value: User): () => User {
-  const wide: unknown = value;
-  void wide;
-  return () => value as User;
-}`,
-      reports: [],
-    },
-    {
-      name: "the binding resolved is the one in scope, not the one with the name",
-      source: `${USER}export function carry(value: User): User {
-  const wide = value;
-  return wide as User;
-}
-export function round(value: User): User {
-  const wide: unknown = value;
-  return wide as User;
-}`,
-      reports: ["12:10"],
     },
   ],
 } satisfies Record<string, readonly Case[]>;

@@ -322,6 +322,19 @@ jest.mock("./service.ts");`,
       reports: ["3:1", "4:1"],
     },
     {
+      // The hoisted call is not the only spelling either runner has, and a set
+      // holding one of three is a set the next line gets past: the deferred and
+      // ESM-aware forms exist because the hoisted one cannot see a runtime
+      // value or an ES module, not because they replace anything less.
+      name: "including the deferred and ESM-aware spellings of it",
+      source: `import { vi } from "vitest";
+import { jest } from "@jest/globals";
+vi.doMock("./service.ts", () => ({ run: () => 2 }));
+jest.doMock("./service.ts");
+jest.unstable_mockModule("./service.ts", () => ({ run: () => 2 }));`,
+      reports: ["3:1", "4:1", "5:1"],
+    },
+    {
       name: "a template with nothing to substitute is the string it looks like",
       source: `import { mock } from "bun:test";
 mock.module(\`./service.ts\`, () => ({ run: () => 2 }));`,

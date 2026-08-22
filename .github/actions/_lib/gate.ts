@@ -442,11 +442,20 @@ export interface Batch<T> {
  * config is JSON with comments by its own tool's specification, and a workflow
  * is YAML. The name is also the word the diagnostic uses.
  */
+/**
+ * What a dialect does, named once. `unknown` is the whole point of a decoder —
+ * the answer is whatever that repo wrote, and every reader below goes through
+ * `isObject` and `record` to say anything about it — so the contract is stated
+ * here, once, rather than three times as three returns nobody can widen.
+ */
+// oxlint-disable-next-line anti-slop/no-unknown-returns -- the decoder boundary this file exists to be: a parse of a file this repo does not own cannot answer a domain type, and the readers below are the parsing the rule asks for
+type Decode = (text: string) => unknown;
+
 const DIALECTS = {
-  JSON: (text: string): unknown => JSON.parse(text) as unknown,
-  "JSON with comments": (text: string): unknown => JSON.parse(withoutComments(text)) as unknown,
-  YAML: (text: string): unknown => Bun.YAML.parse(text),
-};
+  JSON: (text: string) => JSON.parse(text) as unknown,
+  "JSON with comments": (text: string) => JSON.parse(withoutComments(text)) as unknown,
+  YAML: (text: string) => Bun.YAML.parse(text),
+} satisfies Record<string, Decode>;
 
 export type Dialect = keyof typeof DIALECTS;
 

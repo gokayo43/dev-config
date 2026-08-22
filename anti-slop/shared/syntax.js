@@ -18,16 +18,6 @@ function isFunctionNode(node) {
 }
 
 /**
- * @param {ESTree.Expression} expression
- * @returns {ESTree.Expression}
- */
-export function unwrapParentheses(expression) {
-  let current = expression;
-  while (current.type === "ParenthesizedExpression") current = current.expression;
-  return current;
-}
-
-/**
  * Whether a node only wraps the value inside it. An assertion, a `satisfies`
  * and a `!` restate its type; a parenthesis restates nothing at all; and a
  * `ChainExpression` says the read may stop short, not that a different value is

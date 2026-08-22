@@ -11,6 +11,8 @@ const BUILT_INS = new Set([
   "Omit",
   "PropertyKey",
   "NonNullable",
+  "Promise",
+  "PromiseLike",
 ]);
 
 /** The built-ins that answer the same type they wrap, so a rule reads straight through them. */
@@ -441,21 +443,23 @@ function dictionaryValueTypes(type, environment, substitutions, resolving) {
 /**
  * @param {ESTree.TSType} valueType
  * @param {TypeEnvironment} environment
+ * @param {ReadonlySet<string>} [shadowed] Names bound as type parameters where the type was written.
  * @returns {UnsafeDictionary | null}
  */
-export function classifyUnsafeDictionaryValue(valueType, environment) {
-  const unsafeValue = unsafeDirectValue(valueType, environment, new Map(), new Set());
+export function classifyUnsafeDictionaryValue(valueType, environment, shadowed = new Set()) {
+  const unsafeValue = unsafeDirectValue(valueType, environment, new Map(), shadowed);
   return unsafeValue === null ? null : { unsafeValue };
 }
 
 /**
  * @param {ESTree.TSType} type
  * @param {TypeEnvironment} environment
+ * @param {ReadonlySet<string>} [shadowed] Names bound as type parameters where the type was written.
  * @returns {UnsafeDictionary | null}
  */
-export function classifyUnsafeDictionary(type, environment) {
-  for (const value of dictionaryValueTypes(type, environment, new Map(), new Set())) {
-    const unsafeValue = unsafeDirectValue(value.type, environment, value.substitutions, new Set());
+export function classifyUnsafeDictionary(type, environment, shadowed = new Set()) {
+  for (const value of dictionaryValueTypes(type, environment, new Map(), shadowed)) {
+    const unsafeValue = unsafeDirectValue(value.type, environment, value.substitutions, shadowed);
     if (unsafeValue !== null) return { unsafeValue };
   }
   return null;

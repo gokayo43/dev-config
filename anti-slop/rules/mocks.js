@@ -29,8 +29,20 @@ const STAND_INS = new Set(["mock", "spyOn", "jest.fn", "jest.spyOn", "vi.fn", "v
 /** The subset of those that reaches into a value the file did not make. */
 const SPIES = new Set(["spyOn", "jest.spyOn", "vi.spyOn"]);
 
-/** Replacing a whole module, under each runner's spelling of it. */
-const MODULE_MOCKS = new Set(["mock.module", "jest.mock", "vi.mock"]);
+/**
+ * Replacing a whole module, in every spelling the three runners give it. The
+ * deferred and ESM-aware forms are the same act — `vi.doMock` and
+ * `jest.unstable_mockModule` exist because the hoisted one cannot see a
+ * runtime value or an ES module, not because they replace anything less.
+ */
+const MODULE_MOCKS = new Set([
+  "mock.module",
+  "jest.doMock",
+  "jest.mock",
+  "jest.unstable_mockModule",
+  "vi.doMock",
+  "vi.mock",
+]);
 
 /**
  * The two ways an import names the module rather than an export of it. A star
