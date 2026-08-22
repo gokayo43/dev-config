@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 
-import { oxlint, reportsFor } from "./lint-fixture.ts";
+import { jsonObjects, record } from "../.github/actions/_lib/gate.ts";
+import antiSlop from "../anti-slop/index.js";
+import { type Case, cases, oxlint, underBase } from "./lint-fixture.ts";
 import type { Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
-const BASE = join(REPO, "oxlint.base.json");
 
 /**
  * What every case here is read through, so it is worth one case of its own: a
@@ -48,35 +49,6 @@ export default { meta: { name: "anti-slop" }, rules: { "no-runtime-typeof": rule
     ).toContain("oxlint exited");
   });
 });
-
-interface Case {
-  /** The wrong implementation this case would catch — not a restatement of the source. */
-  readonly name: string;
-  readonly source: string;
-  /**
-   * One fragment per diagnostic the rule must produce, in source order. An
-   * empty list is the assertion that the tree is clean, which is half of what
-   * every rule here has to get right.
-   */
-  readonly reports: readonly string[];
-}
-
-/** Runs a rule's cases, each against the diagnostics of its own file. */
-function cases(rule: string, list: readonly Case[]): void {
-  describe(rule, () => {
-    const sources = list.map(({ source }) => source);
-    for (const [index, each] of list.entries()) {
-      test(each.name, async () => {
-        const reported = (await reportsFor(rule, rule, sources))[index] ?? [];
-        expect(reported).toHaveLength(each.reports.length);
-        for (const [at, fragment] of each.reports.entries()) {
-          expect(reported[at]).toContain(`anti-slop(${rule})`);
-          expect(reported[at]).toContain(fragment);
-        }
-      });
-    }
-  });
-}
 
 const USER = `interface User {
   readonly id: string;
@@ -661,290 +633,42 @@ export function round(value: User): User {
   ],
 } satisfies Record<string, readonly Case[]>;
 
-/** A stand-in every case below reaches for, so the cases differ by what they do with it. */
-const SENT = `import { expect, mock, test } from "bun:test";
-const send = mock(() => 1);
-`;
 /**
- * The four rules the base enables only over test files, because every one of
- * them is ordinary code anywhere else: a source file counts calls, sleeps,
- * reads a `.mock` property off something of its own and passes a function to
- * `expect` in a helper, and none of that is a smell until it is a test's whole
- * evidence.
+ * Every rule the base turns on, wherever it turns it on. The scoped four are
+ * enabled in an override rather than at the top level, and a check that read
+ * only `rules` would call each of them a rule no repo runs.
  */
-const IN_TESTS = {
-  "no-call-count-assertions": [
-    {
-      name: "the count matcher is refused",
-      source: `${SENT}test("sends", () => {
-  expect(send).toHaveBeenCalledTimes(1);
-});`,
-      reports: ["4:16"],
-    },
-    {
-      name: "the order matchers go with it — a rule that knew only the count would leave them",
-      source: `${SENT}test("sends", () => {
-  expect(send).toHaveBeenNthCalledWith(1, "a");
-  expect(send).toHaveBeenLastCalledWith("a");
-  expect(send).toHaveBeenCalledOnce();
-});`,
-      reports: ["4:16", "5:16", "6:16"],
-    },
-    {
-      name: "a negated one is the same assertion a member further out from expect()",
-      source: `${SENT}test("sends", () => {
-  expect(send).not.toHaveBeenCalledTimes(1);
-  expect(send).not.toHaveBeenNthCalledWith(1, "a");
-});`,
-      reports: ["4:20", "5:20"],
-    },
-    {
-      name: "the matchers that grade the result are the ones a test is for",
-      source: `${SENT}test("sends", () => {
-  expect(send()).toBe(1);
-  expect([send()]).toHaveLength(1);
-});`,
-      reports: [],
-    },
-  ],
-  "no-mock-assertions": [
-    {
-      name: "a stand-in handed to expect is refused",
-      source: `${SENT}test("sends", () => {
-  expect(send).toBeDefined();
-});`,
-      reports: ["4:10"],
-    },
-    {
-      name: "what calling it produced is not the stand-in — the rule reads the argument, not the name in it",
-      source: `${SENT}test("sends", () => {
-  expect(send()).toBe(1);
-});`,
-      reports: [],
-    },
-    {
-      name: "a spy built inside the call is the same object",
-      source: `import { expect, spyOn, test } from "bun:test";
-test("sends", () => {
-  expect(spyOn(console, "log")).toBeDefined();
-});`,
-      reports: ["3:10"],
-    },
-    {
-      name: "the other two runners spell it their own way",
-      source: `import { expect, test } from "bun:test";
-declare const jest: { fn: () => () => void };
-declare const vi: { fn: () => () => void };
-const first = jest.fn();
-const second = vi.fn();
-test("sends", () => {
-  expect(first).toBeDefined();
-  expect(second).toBeDefined();
-});`,
-      reports: ["7:10", "8:10"],
-    },
-    {
-      name: "a name the test writes to later is not the call at its declaration",
-      source: `import { expect, mock, test } from "bun:test";
-let send = mock(() => 1);
-send = () => 2;
-test("sends", () => {
-  expect(send).toBeDefined();
-});`,
-      reports: [],
-    },
-    {
-      name: "a plain function is not a stand-in",
-      source: `import { expect, test } from "bun:test";
-const send = () => 1;
-test("sends", () => {
-  expect(send).toBeDefined();
-});`,
-      reports: [],
-    },
-    {
-      name: "the binding resolved is the one in scope, not the one with the name",
-      source: `${SENT}test("sends", () => {
-  const send = () => 1;
-  expect(send).toBeDefined();
-});
-test("sends again", () => {
-  expect(send).toBeDefined();
-});`,
-      reports: ["8:10"],
-    },
-    {
-      name: "the call log read by hand, in every spelling a rule keyed to one chain would miss",
-      source: `${SENT}test("sends", () => {
-  expect(send.mock.calls.length).toBe(1);
-  expect(send.mock.calls[0]).toEqual(["a"]);
-  expect(send.mock.calls.at(0)).toEqual(["a"]);
-  expect(send.mock.lastCall).toEqual(["a"]);
-});`,
-      reports: ["4:10", "5:10", "6:10", "7:10"],
-    },
-    {
-      name: "an object of the test's own that happens to have a mock property is not a stand-in",
-      source: `${SENT}test("sends", () => {
-  const recorded = { mock: { calls: [["a"]] } };
-  expect(recorded.mock.calls.length).toBe(1);
-  expect(recorded.mock.calls.at(0)).toEqual(["a"]);
-});`,
-      reports: [],
-    },
-  ],
-  "no-local-module-mocks": [
-    {
-      name: "a module of ours replaced wholesale is refused",
-      source: `import { mock } from "bun:test";
-mock.module("./service.ts", () => ({ run: () => 1 }));`,
-      reports: ["2:1"],
-    },
-    {
-      name: "a parent-relative specifier is ours as much as a sibling",
-      source: `import { mock } from "bun:test";
-mock.module("../db/client.ts", () => ({ query: () => [] }));`,
-      reports: ["2:1"],
-    },
-    {
-      name: "a package is the true external boundary a fake belongs at",
-      source: `import { mock } from "bun:test";
-mock.module("node:fs/promises", () => ({ readFile: () => "" }));
-mock.module("stripe", () => ({ charge: () => 1 }));`,
-      reports: [],
-    },
-    {
-      name: "a spy over a module of ours is the same move under another name",
-      source: `import { spyOn } from "bun:test";
-import * as service from "./service.ts";
-spyOn(service, "run");`,
-      reports: ["3:1"],
-    },
-    {
-      name: "a spy over a package's namespace stays at the boundary",
-      source: `import { spyOn } from "bun:test";
-import * as fs from "node:fs";
-spyOn(fs, "readFileSync");`,
-      reports: [],
-    },
-    {
-      name: "a spy over a global is not a module at all",
-      source: `import { spyOn } from "bun:test";
-spyOn(console, "log");`,
-      reports: [],
-    },
-  ],
-  "no-real-timers": [
-    {
-      name: "the timer globals are refused",
-      source: `import { test } from "bun:test";
-test("waits", () => {
-  setTimeout(() => undefined, 10);
-  setInterval(() => undefined, 10);
-  setImmediate(() => undefined);
-});`,
-      reports: ["3:3", "4:3", "5:3"],
-    },
-    {
-      name: "the sleeping promise is the timer written longhand",
-      source: `import { test } from "bun:test";
-test("waits", async () => {
-  await new Promise((resolve) => setTimeout(resolve, 5));
-});`,
-      reports: ["3:34"],
-    },
-    {
-      name: "Bun's sleeps are members of a global rather than globals",
-      source: `import { test } from "bun:test";
-test("waits", async () => {
-  await Bun.sleep(5);
-  Bun.sleepSync(5);
-});`,
-      reports: ["3:9", "4:3"],
-    },
-    {
-      name: "a property that shares the name is not the global",
-      source: `import { expect, test } from "bun:test";
-const clock = { setTimeout: (at: number) => at };
-test("waits", () => {
-  expect(clock.setTimeout(5)).toBe(5);
-});`,
-      reports: [],
-    },
-    {
-      name: "a name the file declares itself is a different function",
-      source: `import { test } from "bun:test";
-function setTimeout(run: () => void): void {
-  run();
-}
-test("waits", () => {
-  setTimeout(() => undefined);
-});`,
-      reports: [],
-    },
-    {
-      name: "Bun's other members spend no time",
-      source: `import { expect, test } from "bun:test";
-test("reads", async () => {
-  expect(await Bun.file("package.json").text()).toContain("name");
-});`,
-      reports: [],
-    },
-  ],
-} satisfies Record<string, readonly Case[]>;
-
-/** The case a rule exists to reject, which is what the base has to be wired to catch. */
-function violating(list: readonly Case[]): string {
-  const first = list.find(({ reports }) => reports.length > 0);
-  if (first === undefined) throw new Error("a rule with no violating case is a rule with no suite");
-  return first.source;
-}
-
-/** Every rule's violating case, in a file named the way the base decides what it grades. */
-function underBase(suffix: string, rules: Record<string, readonly Case[]>): Tree {
-  return {
-    ".oxlintrc.json": JSON.stringify({ extends: [BASE], options: { typeAware: false } }),
-    ...Object.fromEntries(
-      Object.entries(rules).map(([rule, list]) => [`${rule}${suffix}`, violating(list)]),
-    ),
-  };
-}
-
-/** Every suffix the base grades as a test file — a rule enabled for one and not the rest is a hole. */
-const IN_TEST_FILES = [".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx"];
-
-/** And the ones it does not, which is the half that keeps the four out of source files. */
-const NOT_TEST_FILES = [".ts", ".tsx"];
+const enabled = await (async (): Promise<string[]> => {
+  const base = record(
+    (await jsonObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
+  );
+  const overrides = Array.isArray(base["overrides"]) ? base["overrides"] : [];
+  const blocks = [record(base["rules"]), ...overrides.map((each) => record(record(each)["rules"]))];
+  return blocks
+    .flatMap((block) => Object.keys(block))
+    .filter((rule) => rule.startsWith("anti-slop/"))
+    .map((rule) => rule.slice("anti-slop/".length))
+    .toSorted((left, right) => left.localeCompare(right));
+})();
 
 describe("anti-slop rules", () => {
-  for (const [rule, list] of Object.entries({ ...HOUSE, ...IN_TESTS })) cases(rule, list);
+  for (const [rule, list] of Object.entries(HOUSE)) cases(rule, list);
 
-  // A rule that is not in the base is a rule no repo runs — the cases above
-  // enable it by name themselves and would pass either way.
-  test("the base enables every rule the plugin defines", async () => {
+  // Asked of the plugin and the config rather than of a fixture: a rule that is
+  // not in the base is a rule no repo runs, and a name in the base the plugin
+  // does not define is a rule nobody notices is missing. The cases above enable
+  // each rule by name themselves and would pass either way.
+  test("the base enables every rule the plugin defines, and no name it does not", () => {
+    const defined = Object.keys(antiSlop.rules).toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+    expect(enabled).toEqual(defined);
+  });
+
+  test("and the unscoped ones fire in an ordinary source file", async () => {
     const wired = (await oxlint(underBase(".ts", HOUSE))).join("\n");
     for (const rule of Object.keys(HOUSE)) {
       expect(wired).toContain(`anti-slop(${rule})`);
-    }
-  });
-
-  // Per suffix rather than over all four at once: the base names them one by
-  // one, so a rule reaching `.test.ts` and not `.spec.tsx` is a hole a single
-  // pooled assertion would report as covered.
-  test.each(IN_TEST_FILES)("the base enables the four scoped rules in a %s", async (suffix) => {
-    const wired = (await oxlint(underBase(suffix, IN_TESTS))).join("\n");
-    for (const rule of Object.keys(IN_TESTS)) {
-      expect(wired).toContain(`anti-slop(${rule})`);
-    }
-  });
-
-  // The other half of scoping one to a test file: counting calls, sleeping and
-  // reaching into a module are what a source file does all day, and a rule that
-  // fired on them everywhere would be one every repo turned off.
-  test.each(NOT_TEST_FILES)("and says nothing about the same source in a %s", async (suffix) => {
-    const wired = (await oxlint(underBase(suffix, IN_TESTS))).join("\n");
-    for (const rule of Object.keys(IN_TESTS)) {
-      expect(wired).not.toContain(`anti-slop(${rule})`);
     }
   });
 });

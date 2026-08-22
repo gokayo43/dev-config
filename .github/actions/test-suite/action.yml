@@ -46,8 +46,25 @@ runs:
         suite=(bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml")
         seal=()
 
-        if [ -n "$TEST_NETWORK" ]; then
-          echo "::notice::the suite reaches a real network: $TEST_NETWORK"
+        # Trimmed, the way every allowlist entry in this repo is trimmed before
+        # it is read for a reason: a value made of spaces is not one, and this
+        # input exists only to carry a reason.
+        reason=${TEST_NETWORK#"${TEST_NETWORK%%[![:space:]]*}"}
+        reason=${reason%"${reason##*[![:space:]]}"}
+
+        if [ -n "$reason" ]; then
+          # A workflow command ends at the newline, so a reason written across
+          # several lines would put everything after the first outside the
+          # notice — and into the log as whatever those lines happen to spell.
+          # Refused rather than silently truncated: half a reason in the log is
+          # worse than none, because it reads like the whole one.
+          case $reason in
+            *$'\n'*)
+              echo "::error::test-network must be one line — it is read in review, and a workflow command ends at the first newline, so the rest of the reason would be swallowed"
+              exit 1
+              ;;
+          esac
+          echo "::notice::the suite reaches a real network: $reason"
         else
           if ! sudo --non-interactive true 2>/dev/null; then
             echo "::error::the suite is run sealed in a network namespace, which needs passwordless sudo on the runner — GitHub-hosted Linux runners have it, a self-hosted one has to grant it, and a suite that genuinely reaches a network says so in the test-network input instead"
@@ -68,7 +85,17 @@ runs:
             env "PATH=$PATH")
         fi
 
-        "${seal[@]}" "${suite[@]}"
+        # As a job this shell owns, rather than in the foreground. The runner
+        # cancels a step by signalling the process it started and nothing else
+        # (actions/runner's ProcessInvoker: SIGINT, 7.5s, SIGTERM, 2.5s,
+        # SIGKILL, to the entry process alone), so a foreground `bun test` is
+        # left running on a machine about to be reclaimed — and inside a
+        # namespace where nothing else can see it. Forwarding is the whole fix:
+        # sudo passes the signal down, and the tree goes with it.
+        "${seal[@]}" "${suite[@]}" &
+        running=$!
+        trap 'kill -TERM "$running" 2>/dev/null || true' INT TERM
+        wait "$running"
 
         # Anchored on the root element: a per-file <testsuite name="…"> line
         # carries its own skipped count, and a file whose name contains

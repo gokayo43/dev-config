@@ -311,12 +311,12 @@ file counts calls, sleeps, reaches into a module of its own and hands a function
 to `expect` in a helper, and none of that is a smell until it is a test's whole
 evidence.
 
-| Rule                       | What it rejects                                                |
-| -------------------------- | -------------------------------------------------------------- |
-| `no-call-count-assertions` | `toHaveBeenCalledTimes` and the order matchers, wherever read  |
-| `no-mock-assertions`       | `expect()` on a stand-in, or on anything reached through one   |
-| `no-local-module-mocks`    | `mock.module()` or `spyOn()` whose target is a relative import |
-| `no-real-timers`           | `setTimeout`, `setInterval`, `setImmediate`, `Bun.sleep`       |
+| Rule                       | What it rejects                                               |
+| -------------------------- | ------------------------------------------------------------- |
+| `no-call-count-assertions` | the count and order matchers, on an `expect()` chain          |
+| `no-mock-assertions`       | `expect()` on a stand-in, or on anything read through one     |
+| `no-local-module-mocks`    | `mock.module()` or `spyOn()` over a relative import           |
+| `no-real-timers`           | the timer globals, `Bun.sleep`, and the `node:timers` modules |
 
 What they have in common is that each of them passes against an implementation
 nobody would ship. A call log grades the collaborator calls an implementation
@@ -327,21 +327,59 @@ module, and the real one is right there to call; and a suite that waits for real
 time is slow in proportion to how much of it it waits for and flaky in
 proportion to how loaded the runner is.
 
-The two boundaries between those and the code they resemble are worth stating,
-because both rules are wrong without them. `no-mock-assertions` asks what the
-subject of the assertion is _reached through_, not what it is called: every way
-of reading a call log by hand — `.mock.calls.length`, `.mock.calls[0]`,
-`.mock.calls.at(0)`, `.mock.lastCall` — is one spelling of reaching through a
-stand-in, and a rule that matched chains would be one spelling behind forever.
-Calling the stand-in is the other side of that line: `expect(send())` is what
-the code under test would have got, which is the one thing about a stand-in
-worth asserting on, and an object of the test's own with a `mock` property on it
-is not a stand-in at all. For `no-local-module-mocks` the line is the specifier:
-a package is a true external boundary, so `mock.module("stripe", …)` is not what
-that rule is about.
+All four recognise their subject **through the import**, never through the name
+written at the call site. `import { mock as m }`, `import * as bt from
+"bun:test"` and vitest's or jest's spelling of the same call are one rule and
+one diagnostic — a gate keyed to the written name is a gate an `as` turns off,
+which is a one-token edit that reads as style. `bun:test`, `vitest` and
+`@jest/globals` are the modules; `jest` and `vi` are also read as globals,
+because two of the three runners inject them.
 
-Each carries the usual ` -- reason` escape, which the suppression-hygiene gate
-already holds to actually having a reason.
+Two boundaries are worth stating, because both rules are wrong without them.
+`no-mock-assertions` asks what the subject of the assertion is _reached
+through_: every way of reading a call log by hand — `.mock.calls.length`,
+`.mock.calls[0]`, `.mock.calls.at(0)`, `.mock.lastCall` — is one spelling of
+reaching through a stand-in, and a rule that matched chains would be one
+spelling behind forever. Calling the stand-in is the other side of that line:
+`expect(send())` is what the code under test would have got, which is the one
+thing about a stand-in worth asserting on, and an object of the test's own with
+a `mock` property on it is not a stand-in at all. For `no-local-module-mocks`
+the line is the specifier: a package is a true external boundary, so
+`mock.module("stripe", …)` is not what that rule is about.
+
+#### What they do not see
+
+A plugin reads one file at a time and has no type checker under it. Where that
+stops mattering is worth writing down, because an undocumented limit is one
+people find by shipping past it:
+
+- **Another file.** `export const send = mock(…)` in a shared test-utils module
+  is a stand-in these rules never see at the site asserting on it. This is the
+  realistic gap: a suite that keeps its stand-ins in a helper gets none of
+  `no-mock-assertions`.
+- **A container they cannot read into.** A stand-in in an object or array
+  literal is resolved through the property or the index; one in a `Map`, or
+  returned by a factory, is not.
+- **A name given to a global.** `const { sleep } = Bun`, `const later =
+setTimeout` and a namespace import of `node:timers` each put the function
+  behind a binding `no-real-timers` does not follow. The globals themselves,
+  `globalThis.setTimeout`, and a named import of one are all refused.
+- **A matcher computed from a value.** `expect(x)[matcher](1)` has no name to
+  read, and is left alone. `expect(x)["toHaveBeenCalledTimes"](1)` has one, and
+  is refused.
+
+The one place a rule refuses rather than shrugs is a module specifier it cannot
+read: `mock.module(import.meta.resolve("./x.ts"))` fails asking to be written as
+a string, because "cannot tell one of ours from a package" is not a reason to
+allow it.
+
+One line can be two smells: `expect(send).toHaveBeenCalledTimes(1)` is both a
+stand-in handed to `expect` and a call log asserted on, and it reports twice. A
+directive names rules one at a time, so the escape from both is both names in
+one — `oxlint-disable-next-line anti-slop/no-mock-assertions,
+anti-slop/no-call-count-assertions -- <reason>`. As everywhere else here, the
+reason is not optional; the suppression-hygiene gate holds every directive to
+carrying one.
 
 Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT) at
 commit `abaeb63`. Upstream vendors the rules into each repo; they live here
@@ -376,19 +414,27 @@ Two facts about how it is wired, both load-bearing:
   and this directory is inside `node_modules` for every repo that consumes it.
   `tsc` still checks it in this repo, through `checkJs` and JSDoc types.
 
-`tests/anti-slop.test.ts` drives every rule with the real binary: a block of
-cases per rule — alias chains, shadowed built-ins, type parameters bound by
-default, permuted between two aliases and named for the aliases they shadow, the
-scope a binding resolves in, and the clean tree each of those has to leave alone
-— plus upstream's own fixtures for the three rules it ships tests for, run as a
-differential oracle against this port. It also asserts that the base enables
-every rule the plugin defines: a rule that is not in the base is a rule no repo
-runs. The four scoped ones are asserted from both sides — the base catches them
-in a `.test.ts` and says nothing about the same source in a `.ts` — since a rule
-that fired everywhere is one every repo would turn off. The harness carries
-cases of its own, because a plugin that throws and a config oxlint refuses both
-produce a run with no diagnostics — which is exactly what a clean-tree case
-asserts.
+`tests/anti-slop.test.ts` drives the nine with the real binary: a block of cases
+per rule — alias chains, shadowed built-ins, type parameters bound by default,
+permuted between two aliases and named for the aliases they shadow, the scope a
+binding resolves in, and the clean tree each of those has to leave alone — plus
+upstream's own fixtures for the three rules it ships tests for, run as a
+differential oracle against this port. It also asks the plugin and the base for
+their rule names and requires them to match: a rule the base does not enable is
+a rule no repo runs, and a name in the base the plugin does not define is a rule
+nobody notices is missing.
+
+`tests/anti-slop-test-smells.test.ts` is the other four, which have a second
+question to answer about every case — the base has to catch them in a
+`.test.ts`, a `.spec.ts` and both `.tsx` spellings, and to say nothing about the
+same source in a `.ts` or a `.tsx`, since a rule that fired everywhere is one
+every repo would turn off. Most of its cases are the spellings that would
+otherwise turn a rule off: an `as` on an import, a namespace, an optional link,
+a global reached through `globalThis`, a matcher in brackets.
+
+The harness in `tests/lint-fixture.ts` carries cases of its own, because a
+plugin that throws and a config oxlint refuses both produce a run with no
+diagnostics — which is exactly what a clean-tree case asserts.
 
 ### What the linter cannot see
 

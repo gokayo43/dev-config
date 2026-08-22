@@ -1,5 +1,7 @@
 /** @import { ESTree, Scope, SourceCode, Variable } from "@oxlint/plugins" */
 
+import { unwrapAssertions } from "./syntax.js";
+
 /**
  * The variable an identifier refers to, found by walking out of the scope the
  * identifier appears in — which is what a reference means. The alternative,
@@ -50,4 +52,50 @@ export function isSettledBinding(variable, declarator) {
     declarator.init !== null &&
     variable.references.every((reference) => reference.init || !reference.isWrite())
   );
+}
+
+/**
+ * Where a name came from across a module boundary: the specifier it was
+ * imported from, and the name it was exported under rather than the one this
+ * file happens to call it.
+ *
+ * That distinction is the whole point. `mock`, `mock as m` and `bt.mock` off a
+ * namespace import are one export of one module, and a rule that recognised the
+ * written name would be disabled by an `as` — a one-token edit that reads as
+ * style. A namespace comes back as `*` and a default as `default`, so a caller
+ * can tell the three apart without repeating this walk.
+ * @param {Variable | null} variable
+ * @returns {{ source: string, name: string } | null}
+ */
+export function importedBinding(variable) {
+  const [definition] = variable?.defs ?? [];
+  if (definition?.type !== "ImportBinding") return null;
+  const declaration = definition.parent;
+  if (declaration === null || declaration.type !== "ImportDeclaration") return null;
+
+  const specifier = definition.node;
+  const source = declaration.source.value;
+  if (specifier.type === "ImportDefaultSpecifier") return { source, name: "default" };
+  if (specifier.type === "ImportNamespaceSpecifier") return { source, name: "*" };
+  if (specifier.type !== "ImportSpecifier") return null;
+  const imported = specifier.imported;
+  const name = imported.type === "Identifier" ? imported.name : imported.value;
+  return typeof name === "string" ? { source, name } : null;
+}
+
+/**
+ * The expression a name was given once and keeps: the initialiser of a `const`
+ * nothing writes to afterwards. Anything looser — a `let`, a name declared
+ * twice — is not evidence about what the name holds later, which is the rule
+ * every binding-reading rule here already goes by.
+ * @param {SourceCode} sourceCode
+ * @param {ESTree.IdentifierReference} identifier
+ * @returns {ESTree.Expression | null}
+ */
+export function settledValue(sourceCode, identifier) {
+  const variable = resolveVariable(sourceCode, identifier);
+  if (variable === null) return null;
+  const declarator = variableDeclarator(variable);
+  if (declarator === null || declarator.init === null) return null;
+  return isSettledBinding(variable, declarator) ? unwrapAssertions(declarator.init) : null;
 }

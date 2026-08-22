@@ -1,9 +1,12 @@
+import { describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 
 import { materialise, type Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
 const OXLINT = join(REPO, "node_modules/.bin/oxlint");
+/** The shipped base, which is what a scoping case has to be graded against rather than a copy. */
+export const BASE = join(REPO, "oxlint.base.json");
 const PLUGIN = join(REPO, "anti-slop/index.js");
 
 /**
@@ -94,4 +97,53 @@ export async function reportsFor(
     })();
   runs.set(key, started);
   return await started;
+}
+
+export interface Case {
+  /** The wrong implementation this case would catch — not a restatement of the source. */
+  readonly name: string;
+  readonly source: string;
+  /**
+   * One fragment per diagnostic the rule must produce, in source order. An
+   * empty list is the assertion that the tree is clean, which is half of what
+   * every rule here has to get right.
+   */
+  readonly reports: readonly string[];
+}
+
+/** Runs a rule's cases, each against the diagnostics of its own file. */
+export function cases(rule: string, list: readonly Case[]): void {
+  describe(rule, () => {
+    const sources = list.map(({ source }) => source);
+    for (const [index, each] of list.entries()) {
+      test(each.name, async () => {
+        const reported = (await reportsFor(rule, rule, sources))[index] ?? [];
+        expect(reported).toHaveLength(each.reports.length);
+        for (const [at, fragment] of each.reports.entries()) {
+          expect(reported[at]).toContain(`anti-slop(${rule})`);
+          expect(reported[at]).toContain(fragment);
+        }
+      });
+    }
+  });
+}
+
+/** The case a rule exists to reject, which is what the base has to be wired to catch. */
+function violating(list: readonly Case[]): string {
+  const first = list.find(({ reports }) => reports.length > 0);
+  if (first === undefined) throw new Error("a rule with no violating case is a rule with no suite");
+  return first.source;
+}
+
+/**
+ * Every rule's violating case, in a file named the way the base decides what it
+ * grades — which is the whole of what a scoped rule's suite is asking about.
+ */
+export function underBase(suffix: string, rules: Record<string, readonly Case[]>): Tree {
+  return {
+    ".oxlintrc.json": JSON.stringify({ extends: [BASE], options: { typeAware: false } }),
+    ...Object.fromEntries(
+      Object.entries(rules).map(([rule, list]) => [`${rule}${suffix}`, violating(list)]),
+    ),
+  };
 }

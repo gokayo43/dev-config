@@ -44,7 +44,27 @@ edited:
   coverage, snapshots, the junit report — lands root-owned in a workspace the
   steps after it still have to write to. `PATH` is restated across that hop
   because `sudo` takes it from `secure_path` whatever the environment says, and
-  the Bun the runner installed is not on it.
+  the Bun the runner installed is not on it. `TMPDIR` does not survive either,
+  with or without `--preserve-env`: `sudo` drops it unconditionally. On a
+  GitHub-hosted runner nothing sets one, so the suite gets `/tmp` as it always
+  would; a self-hosted runner that points `TMPDIR` somewhere deliberate — a
+  larger disk, a tmpfs — will not see it inside the seal.
+
+## What the seal costs
+
+A suite that starts its own datastore is the case to know about, because it
+fails inside the seal and the failure looks like the gate rather than like the
+lane. `docker run -p 5432:5432 …` from inside the namespace _starts_: the
+daemon is reached over a unix socket, and a filesystem socket is not network.
+The container's published port is on the host's loopback, though, and the
+namespace has its own — so nothing in the suite can connect to what it just
+started, and the run fails on connection refused.
+
+The fix is not the escape. A datastore a unit lane needs is either in-process
+(PGlite, an embedded store) or reached over a unix socket, both of which work
+inside the seal untouched; a datastore a _suite_ needs is the `database` job's
+subject, and that job does not run through this step. The escape is for a suite
+that reaches somebody else's host, which is a different thing and a rarer one.
 
 ## Naming a suite that has to reach a network
 
@@ -59,6 +79,14 @@ Non-empty unseals the whole suite and prints the reason as a notice on the run.
 It is read in review exactly like the reason on a lint directive, and it is
 about the suite — "it is slow otherwise" is a statement about the seal and not
 an answer. Empty, which is every repo until one has an answer, is sealed.
+
+The value is trimmed before it is read, the way every allowlist entry in this
+repo is: a reason made of spaces is not one, and a workflow that wrote `"   "`
+gets the seal rather than a waiver nobody can read. It also has to fit on one
+line — a workflow command ends at the first newline, so everything after it
+would land in the log as whatever those lines happen to spell, which is worse
+than no reason because it reads like the whole one. A multi-line value is
+refused outright.
 
 There is no per-file form of this. `bun test` grades coverage over one process
 against `bunfig.toml`'s `coverageThreshold`, so splitting the suite into a
@@ -79,3 +107,13 @@ having.
 
 The report is uploaded whatever happened to the run, because a failing suite is
 exactly when the per-test detail is worth having.
+
+## Cancellation
+
+The runner cancels a job by signalling the process it started — SIGINT, then
+SIGTERM 7.5 seconds later, then SIGKILL 2.5 seconds after that — and by
+signalling nothing else in the tree. A suite left in the foreground therefore
+outlives the shell that started it: still running, inside a namespace nothing
+on the box can see into, on a machine the runner is about to reclaim. So the
+suite runs as a job this step owns and the signal is forwarded to it; `sudo`
+passes it down, and the tree goes with it.

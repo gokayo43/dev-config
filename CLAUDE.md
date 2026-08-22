@@ -67,11 +67,15 @@ a change to a rule usually lands here too.
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
-  clean one. A gate without one is a claim; `anti-slop.test.ts` holds every lint
-  rule in `anti-slop/` to the same bar — a block of cases per rule, run through
-  `lint-fixture.ts`, which lints a whole block in one oxlint spawn and refuses a
-  run whose plugin threw or whose exit status and diagnostics disagree, both of
-  which otherwise read as a clean tree. `anti-slop-upstream.test.ts` is
+  clean one. A gate without one is a claim; `anti-slop.test.ts` and
+  `anti-slop-test-smells.test.ts` hold every lint rule in `anti-slop/` to the
+  same bar — a block of cases per rule, split where the base splits, since the
+  four scoped to test files have a second question to answer about every case
+  and the nine that apply everywhere do not. Both run through `lint-fixture.ts`,
+  which owns the case shape and lints a whole block in one oxlint spawn, and
+  refuses a run whose plugin threw or whose exit status and diagnostics
+  disagree, both of which otherwise read as a clean tree.
+  `anti-slop-upstream.test.ts` is
   upstream's own fixtures, as a differential oracle over the three rules it
   ships tests for. Two suites are not a gate's: `oxlint-base.test.ts` holds what
   the base config itself must — an override REPLACES a list-shaped rule rather

@@ -10,8 +10,11 @@
 /* oxlint-disable anti-slop/no-shape-in-symbol-names -- the rule named for the word it bans is imported here under its own name, rather than under one spelled around itself */
 /** @import { Plugin } from "@oxlint/plugins" */
 
-import { noLocalModuleMocksRule, noMockAssertionsRule } from "./rules/mocks.js";
-import { noCallCountAssertionsRule } from "./rules/no-call-count-assertions.js";
+import {
+  noCallCountAssertionsRule,
+  noLocalModuleMocksRule,
+  noMockAssertionsRule,
+} from "./rules/mocks.js";
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.js";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.js";
 import { noRealTimersRule } from "./rules/no-real-timers.js";

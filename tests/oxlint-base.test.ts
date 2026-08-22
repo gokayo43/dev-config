@@ -106,14 +106,19 @@ describe("the base's list-shaped rules", () => {
     expect(ENTRY_LIST_RULES.filter((rule) => entriesOf(rules[rule]).length > 0)).not.toEqual([]);
   });
 
-  // Nothing redefines one today, and the base is better for it — the case above
-  // proves the rule still has entries, and this fires the day an override takes
-  // some of them away.
-  test.each(redefinitions)(
-    "$rule in the override for $files still carries every entry the base states",
-    ({ rule, configured }) => {
+  // One case rather than one per redefinition. Nothing redefines a list-shaped
+  // rule today, and a `test.each` over that empty list registers no test at all
+  // — no `<testcase>` in the report, nothing for the suite gate to count, and a
+  // guard that is indistinguishable from a deleted one. Written this way it is
+  // always in the report, passes over an empty list, and names the offender the
+  // day there is one.
+  test("no override drops an entry the base states", () => {
+    const dropped = redefinitions.flatMap(({ rule, files, configured }) => {
       const carried = entriesOf(configured);
-      expect(entriesOf(rules[rule]).filter((entry) => !carried.includes(entry))).toEqual([]);
-    },
-  );
+      return entriesOf(rules[rule])
+        .filter((entry) => !carried.includes(entry))
+        .map((entry) => `${rule} in the override for ${files} drops ${entry}`);
+    });
+    expect(dropped).toEqual([]);
+  });
 });

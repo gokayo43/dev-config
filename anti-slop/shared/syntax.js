@@ -28,23 +28,33 @@ export function unwrapParentheses(expression) {
 }
 
 /**
- * The value under every parenthesis and type-only operator. An assertion,
- * a `satisfies` and a `!` all restate the type of the same expression, so what
- * they wrap is what a rule about where a value came from is asking about.
+ * Whether a node only wraps the value inside it. An assertion, a `satisfies`
+ * and a `!` restate its type; a parenthesis restates nothing at all; and a
+ * `ChainExpression` says the read may stop short, not that a different value is
+ * being read. None of them changes *which* value a rule about provenance is
+ * asking about, and both directions of the walk below go by this one list.
+ * @param {ESTree.Node} node
+ * @returns {node is ESTree.ParenthesizedExpression | ESTree.TSAsExpression | ESTree.TSTypeAssertion | ESTree.TSNonNullExpression | ESTree.TSSatisfiesExpression | ESTree.ChainExpression}
+ */
+function isValueWrapper(node) {
+  return (
+    node.type === "ParenthesizedExpression" ||
+    node.type === "TSAsExpression" ||
+    node.type === "TSTypeAssertion" ||
+    node.type === "TSNonNullExpression" ||
+    node.type === "TSSatisfiesExpression" ||
+    node.type === "ChainExpression"
+  );
+}
+
+/**
+ * The value under every one of those.
  * @param {ESTree.Expression} expression
  * @returns {ESTree.Expression}
  */
 export function unwrapAssertions(expression) {
   let current = expression;
-  while (
-    current.type === "ParenthesizedExpression" ||
-    current.type === "TSAsExpression" ||
-    current.type === "TSTypeAssertion" ||
-    current.type === "TSNonNullExpression" ||
-    current.type === "TSSatisfiesExpression"
-  ) {
-    current = current.expression;
-  }
+  while (isValueWrapper(current)) current = current.expression;
   return current;
 }
 
@@ -66,28 +76,42 @@ export function unwrapType(type) {
 }
 
 /**
- * Whether a member names its property rather than computing it or hiding it —
- * the two discriminants that tell `a.b` from `a[b]` and from `a.#b`. A
- * predicate rather than a condition at the one call site below, because narrowing
- * on the nested `property.type` is the whole point and only a predicate does it.
- * @param {ESTree.MemberExpression} node
- * @returns {node is ESTree.StaticMemberExpression}
+ * The property a member reads by name. `a.b` and `a["b"]` are one access
+ * written two ways, and a rule that knew only the first is one keystroke from
+ * silent — so both answer here. A key computed from a value, and a private
+ * field, have no name to give: that is the honest answer rather than a miss,
+ * and every caller treats it as "cannot say".
+ *
+ * Every member expression carries the type `"MemberExpression"` whatever the
+ * interface holding it is called, and discriminates on `computed`; this is the
+ * one place that has to know it.
+ * @param {ESTree.Node | null} node
+ * @returns {string | null}
  */
-function namesItsProperty(node) {
-  return !node.computed && node.property.type === "Identifier";
+export function memberName(node) {
+  if (node === null || node.type !== "MemberExpression") return null;
+  if (!node.computed) return node.property.type === "Identifier" ? node.property.name : null;
+  const key = unwrapAssertions(node.property);
+  return key.type === "Literal" && typeof key.value === "string" ? key.value : null;
 }
 
 /**
- * A member read by a name written out — `a.b`, never `a[b]` or `a.#b`. Every
- * member expression carries the type `"MemberExpression"` whatever the
- * interface holding it is called, so the rules that ask this ask it here rather
- * than each spelling the discriminants out.
- * @param {ESTree.Node | null} node
- * @returns {ESTree.StaticMemberExpression | null}
+ * The member expression a value is read out of — `Bun.sleep` from the `Bun` in
+ * it, and from `(Bun as typeof Bun)` or `Bun?` just the same. The climbing twin
+ * of `unwrapAssertions`, over the same list, for the rules that start at a
+ * resolved reference and have to ask what was done with it.
+ * @param {ESTree.Node} node
+ * @returns {ESTree.MemberExpression | null}
  */
-export function staticMember(node) {
-  if (node === null || node.type !== "MemberExpression") return null;
-  return namesItsProperty(node) ? node : null;
+export function readOutOf(node) {
+  let current = node;
+  let above = current.parent;
+  while (above !== null && isValueWrapper(above)) {
+    current = above;
+    above = current.parent;
+  }
+  if (above === null || above.type !== "MemberExpression") return null;
+  return above.object === current ? above : null;
 }
 
 /**
