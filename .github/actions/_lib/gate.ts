@@ -132,6 +132,16 @@ export function record(value: unknown): ConfigObject {
 }
 
 /**
+ * Whether there is a list here at all. Its own function because
+ * `Array.isArray` narrows an `unknown` to `any[]`, and every element read off
+ * that is an `any` — which is the thing a caller reaching for this is trying to
+ * stop having.
+ */
+export function isList(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
+}
+
+/**
  * Whether there is an object here at all. `record` reads a field off whatever
  * it is handed; this is for the boundary that has to refuse the value instead,
  * because nothing below it can say anything true about a config that is `null`.

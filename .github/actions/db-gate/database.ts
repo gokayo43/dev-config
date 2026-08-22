@@ -1,7 +1,7 @@
 import type { SQL } from "bun";
 import { resolve } from "node:path";
 
-import { type ConfigObject, isObject, kindOf, notice } from "../_lib/gate.ts";
+import { type ConfigObject, isList, isObject, kindOf, notice } from "../_lib/gate.ts";
 
 /**
  * Not a gate. What the gates in this directory that build a database of their
@@ -15,15 +15,6 @@ import { type ConfigObject, isObject, kindOf, notice } from "../_lib/gate.ts";
  * question both of them exist to ask, and the day they disagreed nobody would
  * know which was right.
  */
-
-/**
- * Whether there is a list here at all. Its own function because `Array.isArray`
- * narrows an `unknown` to `any[]` — every element then reads as `any`, which is
- * the thing the caller below is trying to stop having.
- */
-function isList(value: unknown): value is readonly unknown[] {
-  return Array.isArray(value);
-}
 
 /**
  * The rows a query answered, as objects a reader can say something true about.

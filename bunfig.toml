@@ -17,3 +17,9 @@ coverage = true
 # least-covered file rather than below the summary line.
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
+# The plugin's rules run inside a spawned oxlint, never in this process, so the
+# runner instruments them and then watches them execute nowhere: the whole
+# directory reads as unreached and drags each file under the per-file floor.
+# `tests/anti-slop*.test.ts` is what actually grades them, by linting fixture
+# trees with the shipped binary.
+coveragePathIgnorePatterns = ["anti-slop/**"]

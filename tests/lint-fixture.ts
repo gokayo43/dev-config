@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 
+import { type ConfigObject, isList, record } from "../.github/actions/_lib/gate.ts";
 import { materialise, type Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -8,6 +9,56 @@ const OXLINT = join(REPO, "node_modules/.bin/oxlint");
 /** The shipped base, which is what a scoping case has to be graded against rather than a copy. */
 export const BASE = join(REPO, "oxlint.base.json");
 const PLUGIN = join(REPO, "anti-slop/index.js");
+
+/** One diagnostic, as much of the JSON report as a case reads. */
+interface Diagnostic {
+  readonly filename: string;
+  readonly severity: string;
+  readonly code: string;
+  readonly message: string;
+  readonly line: number;
+  readonly column: number;
+}
+
+function textAt(held: ConfigObject, key: string): string {
+  const value = held[key];
+  return typeof value === "string" ? value : "";
+}
+
+function countAt(held: ConfigObject, key: string): number {
+  const value = held[key];
+  return typeof value === "number" ? value : 0;
+}
+
+/**
+ * Where a diagnostic sits: the first label's span, which is the one every
+ * reporter prints. A diagnostic with no labels belongs to no line — and, as
+ * `oxlint` below reads it, to no file either.
+ */
+function decoded(held: ConfigObject): Diagnostic {
+  const labels = held["labels"];
+  const span = record(record(isList(labels) ? labels[0] : {})["span"]);
+  return {
+    filename: textAt(held, "filename"),
+    severity: textAt(held, "severity"),
+    code: textAt(held, "code"),
+    message: textAt(held, "message"),
+    line: countAt(span, "line"),
+    column: countAt(span, "column"),
+  };
+}
+
+/**
+ * What a fixture run is told about where it is running, over the environment
+ * the suite was started in. An empty value is how one is taken away, which is
+ * what oxlint reads a variable it selects on as.
+ */
+export type Environment = Record<string, string>;
+
+/** A diagnostic written out, built from the report rather than scraped back out of one. */
+function stated({ filename, line, column, severity, code, message }: Diagnostic): string {
+  return `${filename}:${line}:${column}: ${severity} ${code}: ${message}`;
+}
 
 /**
  * A case is linted by the same binary CI runs, in a tree of its own: the rules
@@ -19,30 +70,63 @@ const PLUGIN = join(REPO, "anti-slop/index.js");
  * One run per block rather than per case: a case is a file in the tree, and
  * grouping the diagnostics by file is what puts each one back with its case.
  * Nine spawns instead of a hundred, with no case able to see another's.
+ *
+ * The format is pinned, and the report is parsed rather than matched. oxlint
+ * chooses a reporter from the environment when nothing says otherwise —
+ * `github` on a runner, `agent` under an AI agent's shell, a graphical one in
+ * an ordinary terminal — and only the agent shape reads as
+ * `file:line:column: severity`. A harness that recognised diagnostics by that
+ * shape agreed with itself on a developer's machine and called every case on CI
+ * a clean tree.
  */
-export async function oxlint(tree: Tree): Promise<string[]> {
+export async function oxlint(tree: Tree, environment: Environment = {}): Promise<string[]> {
   const root = await materialise(tree);
-  const proc = Bun.spawn([OXLINT, "."], { cwd: root, stdout: "pipe", stderr: "pipe" });
-  const output = await new Response(proc.stdout).text();
+  const proc = Bun.spawn([OXLINT, "--format=json", "."], {
+    cwd: root,
+    env: { ...process.env, ...environment },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [output, failed] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
   const status = await proc.exited;
-  const lines = output.split("\n").map((line) => line.trim());
 
-  // A rule that throws is reported as a line with no `file:line:col:` in it, so
-  // the filter below drops it and the file reads as clean — which is exactly
-  // what a case expecting no diagnostics asserts. Every clean tree in this file
-  // would certify a plugin that crashed on all nine rules.
-  const crashed = lines.find((line) => line.includes("Error running JS plugin"));
-  if (crashed !== undefined) throw new Error(crashed);
+  let report: unknown;
+  try {
+    report = JSON.parse(output) as unknown;
+  } catch {
+    // A config oxlint refuses, and a plugin it cannot load, never reach the
+    // reporter at all: the run says so in prose and exits non-zero.
+    throw new Error(`oxlint exited ${status} without a JSON report:\n${output}${failed}`);
+  }
 
-  const reported = lines.filter((line) => /^\S+:\d+:\d+: (error|warning)/.test(line));
-  // And a config oxlint refuses, or a plugin it cannot load, is a run with no
-  // diagnostics at all. oxlint exits 1 for an error and 0 for warnings alone,
-  // so the two have to agree or something other than the rules answered.
-  const errors = reported.filter((line) => line.includes(": error")).length;
+  const held = record(report)["diagnostics"];
+  const diagnostics = (isList(held) ? held : []).map((each) => decoded(record(each)));
+
+  // A rule that throws is reported as a diagnostic belonging to no file, so
+  // grouping by file drops it and every case reads clean — which is exactly
+  // what a case expecting no diagnostics asserts. One crashing plugin would
+  // otherwise certify every rule in this suite.
+  const loose = diagnostics.filter(({ filename }) => filename === "");
+  if (loose.length > 0) throw new Error(loose.map(({ message }) => message).join("\n"));
+
+  // oxlint exits 1 for an error and 0 for warnings alone, so the count and the
+  // status have to agree or something other than the rules answered.
+  const errors = diagnostics.filter(({ severity }) => severity === "error").length;
   if (status !== (errors > 0 ? 1 : 0)) {
     throw new Error(`oxlint exited ${status} with ${errors} error(s):\n${output}`);
   }
-  return reported;
+
+  return diagnostics
+    .toSorted(
+      (left, right) =>
+        left.filename.localeCompare(right.filename) ||
+        left.line - right.line ||
+        left.column - right.column,
+    )
+    .map(stated);
 }
 
 /** The rule under test and nothing else, so a case cannot pass on another rule's diagnostic. */
@@ -53,12 +137,6 @@ function alone(rule: string): string {
     jsPlugins: [{ name: "anti-slop", specifier: PLUGIN }],
     rules: { [`anti-slop/${rule}`]: "error" },
   });
-}
-
-/** Where a diagnostic sits, so a file's diagnostics read in source order whatever order they arrived in. */
-function position(line: string): [number, number] {
-  const [, at = "0", column = "0"] = line.split(":");
-  return [Number(at), Number(column)];
 }
 
 const runs = new Map<string, Promise<readonly (readonly string[])[]>>();
@@ -87,13 +165,7 @@ export async function reportsFor(
         const name = path.slice(path.lastIndexOf("/") + 1);
         byFile.set(name, [...(byFile.get(name) ?? []), line]);
       }
-      return files.map((file) =>
-        (byFile.get(file) ?? []).toSorted((left, right) => {
-          const [leftAt, leftColumn] = position(left);
-          const [rightAt, rightColumn] = position(right);
-          return leftAt - rightAt || leftColumn - rightColumn;
-        }),
-      );
+      return files.map((file) => byFile.get(file) ?? []);
     })();
   runs.set(key, started);
   return await started;

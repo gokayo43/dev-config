@@ -431,6 +431,13 @@ counted and checked rather than syntactic, and `no-module-mocking`, which knows
 three runners, and refuses a stand-in over a module of ours rather than over a
 package, which is where a fake belongs.
 
+Upstream's opt-in Effect rule, `no-service-constructor-imports`, was evaluated
+and declined: it keys on a `make<Capability>` naming convention, and a
+convention settled for one repo's stack is not a base rule — the same reason
+the choke rules above stay per-repo. There is nowhere else for it to go
+either. The base enables every rule this plugin defines, and the suite requires
+those two sets to be equal, so the plugin has no opt-in half to put it in.
+
 Two rules answer differently from upstream, both because a rule at `error`
 across the fleet must refuse something the author can change:
 

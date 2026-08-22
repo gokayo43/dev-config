@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 import { jsonObjects, record } from "../.github/actions/_lib/gate.ts";
 import antiSlop from "../anti-slop/index.js";
@@ -47,6 +47,47 @@ export default { meta: { name: "anti-slop" }, rules: { "no-runtime-typeof": rule
     expect(
       await refusal({ ".oxlintrc.json": "{ not json", "case.ts": "export const one = 1;\n" }),
     ).toContain("oxlint exited");
+  });
+
+  /**
+   * The variables that would otherwise make this suite grade its own format.
+   * oxlint answers `agent` for any of these, `github` when a runner sets
+   * `GITHUB_ACTIONS`, and a graphical format when none of them is set; an empty
+   * value is how it reads one as absent.
+   */
+  const UNSET_BY_THIS_SHELL = { AI_AGENT: "", CLAUDECODE: "", CURSOR_AGENT: "" };
+
+  // Only the agent format reads as `file:line:column: severity`, and a harness
+  // that recognised a diagnostic by that shape agreed with itself wherever it
+  // was written and called every case on CI a clean tree — the whole suite
+  // green on a developer's machine and refusing to run in the one place it
+  // grades a pull request. The environment is put into the state CI is in here
+  // rather than trusted, because the failure was invisible from anywhere else.
+  test.each([
+    ["a runner", { GITHUB_ACTIONS: "true" }],
+    ["an ordinary terminal", {}],
+  ])("a diagnostic is read the same on %s as under this shell", async (_where, chosen) => {
+    const reported = await oxlint(
+      {
+        ".oxlintrc.json": JSON.stringify({
+          plugins: [],
+          categories: { correctness: "off" },
+          jsPlugins: [{ name: "anti-slop", specifier: join(REPO, "anti-slop/index.js") }],
+          rules: { "anti-slop/no-chained-type-assertions": "error" },
+        }),
+        "case.ts": `interface User {
+  readonly id: string;
+}
+declare const input: unknown;
+export const one = input as object as User;
+`,
+      },
+      { ...UNSET_BY_THIS_SHELL, ...chosen },
+    );
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain("anti-slop(no-chained-type-assertions)");
+    expect(reported[0]).toContain("5:20");
   });
 });
 
