@@ -28,8 +28,12 @@ a change to a rule usually lands here too.
   has it; `checkJs` in `tsconfig.json` is what type-checks it here.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
 - `.github/workflows/check.yml` — the gate every repo calls.
-- `.github/actions/*/` — the executable gates. Each is an `action.yml`, a gate
-  module the suite drives, and a `*.main.ts` that GitHub runs. What more than
+- `.github/actions/*/` — the executable gates. Each is an `action.yml`, the gate
+  modules the suite drives, and a `*.main.ts` that GitHub runs. An action holds
+  more than one module when it holds more than one subject:
+  `repo-contract/live.ts` is what the word "live" derives — everything a repo
+  owes because it carries people — beside the contract every repo satisfies
+  whether or not anyone is on the other end. What more than
   one **action** reads lives in `_lib/`: `gate.ts`, and `dependency-specs.ts` —
   the version grammar the repo contract grades every spec by and the stack
   denylist asks which package a spec installs. What two gates of one action
