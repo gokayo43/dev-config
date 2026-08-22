@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -14,6 +14,14 @@ import { history, type Tree, under, without } from "./tree.ts";
  * the gate asks a consuming repo for.
  */
 const NODE_MODULES = join(import.meta.dir, "..", "node_modules");
+
+// Every case here spawns a real Stryker run over a fixture repository. With the
+// machine to itself the slowest takes 3.9s and the rest about 2.1s, against a
+// 5s default — so a case is one busy neighbour away from reporting a timeout as
+// a fault in the lane. Raised to the same 30s the backfill suite gives a case
+// that runs two gates, for the same reason: what a shared machine does to a
+// spawn is not a signal about the code under test.
+setDefaultTimeout(30_000);
 
 const OXLINTRC = JSON.stringify({
   settings: { "boundaries/elements": [{ type: "domain", pattern: "src/domain" }] },
