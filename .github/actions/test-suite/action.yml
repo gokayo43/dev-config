@@ -1,14 +1,29 @@
 name: Test suite
 description: >-
-  Runs bun test and proves the run happened. A suite that skips when its
-  database is missing leaves CI green over nothing at all, and bun records both
-  shapes that takes: a skipped test as <skipped/>, one that returned early
-  instead as assertions="0".
+  Runs bun test with no route off the host and proves the run happened. A suite
+  that skips when its database is missing leaves CI green over nothing at all,
+  and bun records both shapes that takes: a skipped test as <skipped/>, one that
+  returned early instead as assertions="0".
+
+  The lane this runs is the one the shared check.yml gives it: a job with no
+  service containers, which is what makes it a unit lane rather than a naming
+  convention. A test that reaches a live host there is slow, is graded by
+  somebody else's uptime, and fails on the week the gate is loudest — so the run
+  is sealed in a network namespace and the call fails where it is written.
+  docs/gates/test-suite.md has the shape of it.
 
 inputs:
   working-directory:
     description: Where the suite lives.
     default: .
+  network:
+    description: >-
+      Why this repo's suite has to reach a real network, which unseals it.
+      Empty — which is every repo until one has an answer here — runs the suite
+      with nothing but loopback reachable. The reason is the input: it is read
+      in review like the reason on a lint directive, and it is about the suite,
+      never about the gate.
+    default: ""
   test-suite-evidence:
     description: >-
       The artifact name for the junit report. A matrix that runs more than one
@@ -24,9 +39,35 @@ runs:
     - name: Run the suite
       shell: bash
       working-directory: ${{ inputs.working-directory }}
+      env:
+        NETWORK: ${{ inputs.network }}
       run: |
         set -euo pipefail
-        bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml"
+        suite=(bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml")
+
+        if [ -n "$NETWORK" ]; then
+          echo "::notice::the suite reaches a real network: $NETWORK"
+          "${suite[@]}"
+        else
+          if ! sudo --non-interactive true 2>/dev/null; then
+            echo "::error::the suite is run sealed in a network namespace, which needs passwordless sudo on the runner — GitHub-hosted Linux runners have it, a self-hosted one has to grant it, and a suite that genuinely reaches a network says so in the network input instead"
+            exit 1
+          fi
+          # Root twice over, and neither hop is optional. Creating the namespace
+          # needs it: the unprivileged form is refused on the runner image, where
+          # kernel.apparmor_restrict_unprivileged_userns reads 1 and the uid_map
+          # write is denied. Dropping straight back out of it keeps the suite's
+          # own files out of root's ownership, and PATH is restated across that
+          # hop because sudo takes it from secure_path whatever the environment
+          # says. `lo` exists in a fresh namespace and is created down: a server
+          # a test starts on 127.0.0.1 is not a network call, and the runner's
+          # own ports are on the other loopback whether this is up or not.
+          sudo --non-interactive --preserve-env unshare --net -- \
+            bash -c 'ip link set lo up && exec "$@"' sealed \
+            sudo --non-interactive --preserve-env --user "$(id -un)" -- \
+            env "PATH=$PATH" "${suite[@]}"
+        fi
+
         # Anchored on the root element: a per-file <testsuite name="…"> line
         # carries its own skipped count, and a file whose name contains
         # "testsuites" would otherwise answer for the whole run.

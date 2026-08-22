@@ -97,6 +97,14 @@ on:
           duplicate. Empty takes db-gate's own name, which is where that default lives.
         type: string
         default: ""
+      test-network:
+        description: >-
+          Why this repo's suite has to reach a real network. Empty — which is every repo
+          until one has an answer here — runs bun test sealed in a network namespace with
+          nothing but loopback in it, so a live call fails where it is written rather than
+          on the week somebody else's host is down.
+        type: string
+        default: ""
       test-suite-evidence:
         description: >-
           The artifact name for the junit report. A matrix that runs more than one leg
@@ -245,6 +253,7 @@ jobs:
 
       - uses: gokayo43/dev-config/.github/actions/test-suite@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
         with:
+          network: ${{ inputs['test-network'] }}
           test-suite-evidence: ${{ inputs['test-suite-evidence'] }}
 
       # After the suite, because a mutation score over a suite that does not pass

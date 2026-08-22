@@ -78,7 +78,11 @@ a change to a rule usually lands here too.
   `repo-contract-fixture.ts` is the clean tree the repo contract's two suites
   share, and `mutation-lane.test.ts` links this repo's own `node_modules` into
   each fixture and runs Stryker for real — a stubbed mutation run would prove
-  nothing about the tool that gate exists to drive.
+  nothing about the tool that gate exists to drive. `test-suite.test.ts` is the
+  same argument one level down: that gate is a shell script rather than a
+  module, so the suite extracts the step out of the shipped `action.yml` and
+  runs it over fixture suites of its own. It needs passwordless sudo, because
+  what it is grading is a network namespace.
 - `docs/gates/*.md` — a reference page per gate. README holds the map.
 
 ## Commands
@@ -88,9 +92,12 @@ bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites, coverage-floored
 ```
 
-`bun test` needs a Postgres: the replay gate's property is what two databases
-end up holding. It looks at `TEST_DATABASE_URL`, or localhost:5432, and creates
-and drops databases there — README's "Gating this repo" has the one-liner.
+`bun test` needs a Postgres and passwordless sudo — the first because the replay
+gate's property is what two databases end up holding, the second because the
+test-suite gate seals a run in a network namespace and nothing short of taking
+one says whether it holds. The suite looks at `TEST_DATABASE_URL`, or
+localhost:5432, and creates and drops databases there — README's "Gating this
+repo" has the one-liner.
 
 Two runs may share one server, which is what two worktrees under review are.
 Every database either end makes is named for what tells the runs apart: the

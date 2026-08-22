@@ -46,6 +46,7 @@ settings every repo shares; what a single gate asserts, and why, lives beside it
 | `compose-lint`        | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)                                                                                                                            |
 | `db-gate`             | [docs/gates/db-gate.md](docs/gates/db-gate.md), plus [upgrade-path.md](docs/gates/upgrade-path.md) and [capacity.md](docs/gates/capacity.md) for the replay and the ramp it can add |
 | `mutation-lane`       | [docs/gates/mutation-lane.md](docs/gates/mutation-lane.md)                                                                                                                          |
+| `test-suite`          | [docs/gates/test-suite.md](docs/gates/test-suite.md)                                                                                                                                |
 
 ## TypeScript
 
@@ -635,6 +636,12 @@ that server carries what tells the runs apart — the process for the suite's ow
 databases, and the checkout being worked on for the two a gate builds for itself
 (`upgrade_path_<digest>` and `backfill_<digest>`).
 
+The test-suite gate's own suite needs passwordless `sudo`, which is what taking a
+network namespace costs — a runner has it, and a machine that does not cannot run
+that suite honestly. It is the one gate here whose subject is not a module, so
+its cases extract the step out of the shipped `action.yml` and drive it over test
+suites of their own.
+
 The linting is the `lint-workflows` action — actionlint, pinned by version and
 archive checksum exactly like gitleaks, with shellcheck over every `run:` block.
 It runs here from the working tree, and `check.yml` runs it for every consuming
@@ -765,6 +772,7 @@ jobs:
 | `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                                                                                                                      |
 | `db-gate-evidence`    | `db-gate-evidence`                 | The artifact name for the k6 summary, the two route-log snapshots, the backfill check's three data dumps and the app's output, for a matrix that runs more than one leg.                                                                                                        |
 | `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                                                                               |
+| `test-network`        | `""`                               | Why this repo's suite has to reach a real network. Empty runs `bun test` sealed in a network namespace with nothing but loopback in it, so a live call fails where it is written. The reason is the input, and it is read in review like the reason on a lint directive.        |
 | `test-suite-evidence` | `test-suite-evidence`              | The artifact name for the junit report, for a matrix that runs more than one leg.                                                                                                                                                                                               |
 
 Both evidence names default to a constant, and an artifact name may be claimed
