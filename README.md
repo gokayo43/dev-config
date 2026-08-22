@@ -303,6 +303,33 @@ the base:
 | `no-runtime-typeof`          | a runtime `typeof` — parse at the boundary instead                     |
 | `no-shape-in-symbol-names`   | "shape" in a name the file declares                                    |
 
+Four more are enabled only over `*.test.ts`, `*.test.tsx`, `*.spec.ts` and
+`*.spec.tsx`, because every one of them is ordinary code anywhere else: a source
+file counts calls, sleeps, reaches into a module of its own and hands a function
+to `expect` in a helper, and none of that is a smell until it is a test's whole
+evidence.
+
+| Rule                       | What it rejects                                                          |
+| -------------------------- | ------------------------------------------------------------------------ |
+| `no-call-count-assertions` | `toHaveBeenCalledTimes` and the order matchers, and `.mock.calls.length` |
+| `no-mock-assertions`       | `expect(<a mock or spy>)` — the test asserting on its own object         |
+| `no-local-module-mocks`    | `mock.module()` or `spyOn()` whose target is a relative import           |
+| `no-real-timers`           | `setTimeout`, `setInterval`, `setImmediate`, `Bun.sleep`                 |
+
+What they have in common is that each of them passes against an implementation
+nobody would ship. A call log grades the collaborator calls an implementation
+happens to make and stays green when it never uses what it got back; a stand-in
+handed to `expect` is the test's own object, so the assertion is about what the
+test already did; a fake over a module in this repo grades the fake rather than
+the module, and the real one is right there to call; and a suite that waits for
+real time is slow in proportion to how much of it it waits for and flaky in
+proportion to how loaded the runner is. A relative specifier is the line between
+the third one and a legitimate fake: a package is a true external boundary, and
+`mock.module("stripe", …)` is not what that rule is about.
+
+Each carries the usual ` -- reason` escape, which the suppression-hygiene gate
+already holds to actually having a reason.
+
 Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT) at
 commit `abaeb63`. Upstream vendors the rules into each repo; they live here
 because oxlint's `jsPlugins` API is alpha and explicitly outside semver, so the
@@ -343,9 +370,12 @@ scope a binding resolves in, and the clean tree each of those has to leave alone
 — plus upstream's own fixtures for the three rules it ships tests for, run as a
 differential oracle against this port. It also asserts that the base enables
 every rule the plugin defines: a rule that is not in the base is a rule no repo
-runs. The harness carries cases of its own, because a plugin that throws and a
-config oxlint refuses both produce a run with no diagnostics — which is exactly
-what a clean-tree case asserts.
+runs. The four scoped ones are asserted from both sides — the base catches them
+in a `.test.ts` and says nothing about the same source in a `.ts` — since a rule
+that fired everywhere is one every repo would turn off. The harness carries
+cases of its own, because a plugin that throws and a config oxlint refuses both
+produce a run with no diagnostics — which is exactly what a clean-tree case
+asserts.
 
 ### What the linter cannot see
 

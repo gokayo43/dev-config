@@ -80,7 +80,7 @@
   },
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
       "rules": {
         // A helper one describe uses belongs inside it, next to the cases that
         // read it. Hoisting it to module scope to satisfy this rule separates a
@@ -95,16 +95,15 @@
           "error",
           { "name": "__dirname", "message": "Not defined in ESM — use import.meta.dir/url." },
           { "name": "__filename", "message": "Not defined in ESM — use import.meta.url/path." },
-          { "name": "require", "message": "ESM project — use import (import() for dynamic)." },
-          {
-            "name": "setTimeout",
-            "message": "a test that sleeps is slow and flaky — drive virtual time (TestClock) instead"
-          },
-          {
-            "name": "setInterval",
-            "message": "a test that sleeps is slow and flaky — drive virtual time (TestClock) instead"
-          }
-        ]
+          { "name": "require", "message": "ESM project — use import (import() for dynamic)." }
+        ],
+        // The four smells a suite has to be free of before its green means
+        // anything, and the only four in this plugin scoped to where they are
+        // smells: every one of them is ordinary code in a source file.
+        "anti-slop/no-call-count-assertions": "error",
+        "anti-slop/no-local-module-mocks": "error",
+        "anti-slop/no-mock-assertions": "error",
+        "anti-slop/no-real-timers": "error"
       }
     },
     {

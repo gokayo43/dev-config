@@ -661,6 +661,227 @@ export function round(value: User): User {
   ],
 } satisfies Record<string, readonly Case[]>;
 
+/** A stand-in every case below reaches for, so the cases differ by what they do with it. */
+const SENT = `import { expect, mock, test } from "bun:test";
+const send = mock(() => 1);
+`;
+/**
+ * The four rules the base enables only over test files, because every one of
+ * them is ordinary code anywhere else: a source file counts calls, sleeps,
+ * reads a `.mock` property off something of its own and passes a function to
+ * `expect` in a helper, and none of that is a smell until it is a test's whole
+ * evidence.
+ */
+const IN_TESTS = {
+  "no-call-count-assertions": [
+    {
+      name: "the count matcher is refused",
+      source: `${SENT}test("sends", () => {
+  expect(send).toHaveBeenCalledTimes(1);
+});`,
+      reports: ["4:16"],
+    },
+    {
+      name: "the order matchers go with it — a rule that knew only the count would leave them",
+      source: `${SENT}test("sends", () => {
+  expect(send).toHaveBeenNthCalledWith(1, "a");
+  expect(send).toHaveBeenLastCalledWith("a");
+  expect(send).toHaveBeenCalledOnce();
+});`,
+      reports: ["4:16", "5:16", "6:16"],
+    },
+    {
+      name: "the same assertion counted by hand rather than by matcher",
+      source: `${SENT}test("sends", () => {
+  expect(send.mock.calls.length).toBe(1);
+});`,
+      reports: ["4:10"],
+    },
+    {
+      name: "a length that is not a call log's — the chain is read whole, not for the word `calls`",
+      source: `${SENT}test("sends", () => {
+  const written = { calls: ["a"] };
+  expect(written.calls.length).toBe(1);
+  expect(send.mock.results.length).toBe(1);
+});`,
+      reports: [],
+    },
+    {
+      name: "the matchers that grade the result are the ones a test is for",
+      source: `${SENT}test("sends", () => {
+  expect(send()).toBe(1);
+  expect([send()]).toHaveLength(1);
+});`,
+      reports: [],
+    },
+  ],
+  "no-mock-assertions": [
+    {
+      name: "a stand-in handed to expect is refused",
+      source: `${SENT}test("sends", () => {
+  expect(send).toBeDefined();
+});`,
+      reports: ["4:10"],
+    },
+    {
+      name: "what calling it produced is not the stand-in — the rule reads the argument, not the name in it",
+      source: `${SENT}test("sends", () => {
+  expect(send()).toBe(1);
+});`,
+      reports: [],
+    },
+    {
+      name: "a spy built inside the call is the same object",
+      source: `import { expect, spyOn, test } from "bun:test";
+test("sends", () => {
+  expect(spyOn(console, "log")).toBeDefined();
+});`,
+      reports: ["3:10"],
+    },
+    {
+      name: "the other two runners spell it their own way",
+      source: `import { expect, test } from "bun:test";
+declare const jest: { fn: () => () => void };
+declare const vi: { fn: () => () => void };
+const first = jest.fn();
+const second = vi.fn();
+test("sends", () => {
+  expect(first).toBeDefined();
+  expect(second).toBeDefined();
+});`,
+      reports: ["7:10", "8:10"],
+    },
+    {
+      name: "a name the test writes to later is not the call at its declaration",
+      source: `import { expect, mock, test } from "bun:test";
+let send = mock(() => 1);
+send = () => 2;
+test("sends", () => {
+  expect(send).toBeDefined();
+});`,
+      reports: [],
+    },
+    {
+      name: "a plain function is not a stand-in",
+      source: `import { expect, test } from "bun:test";
+const send = () => 1;
+test("sends", () => {
+  expect(send).toBeDefined();
+});`,
+      reports: [],
+    },
+    {
+      name: "the binding resolved is the one in scope, not the one with the name",
+      source: `${SENT}test("sends", () => {
+  const send = () => 1;
+  expect(send).toBeDefined();
+});
+test("sends again", () => {
+  expect(send).toBeDefined();
+});`,
+      reports: ["8:10"],
+    },
+  ],
+  "no-local-module-mocks": [
+    {
+      name: "a module of ours replaced wholesale is refused",
+      source: `import { mock } from "bun:test";
+mock.module("./service.ts", () => ({ run: () => 1 }));`,
+      reports: ["2:1"],
+    },
+    {
+      name: "a parent-relative specifier is ours as much as a sibling",
+      source: `import { mock } from "bun:test";
+mock.module("../db/client.ts", () => ({ query: () => [] }));`,
+      reports: ["2:1"],
+    },
+    {
+      name: "a package is the true external boundary a fake belongs at",
+      source: `import { mock } from "bun:test";
+mock.module("node:fs/promises", () => ({ readFile: () => "" }));
+mock.module("stripe", () => ({ charge: () => 1 }));`,
+      reports: [],
+    },
+    {
+      name: "a spy over a module of ours is the same move under another name",
+      source: `import { spyOn } from "bun:test";
+import * as service from "./service.ts";
+spyOn(service, "run");`,
+      reports: ["3:1"],
+    },
+    {
+      name: "a spy over a package's namespace stays at the boundary",
+      source: `import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+spyOn(fs, "readFileSync");`,
+      reports: [],
+    },
+    {
+      name: "a spy over a global is not a module at all",
+      source: `import { spyOn } from "bun:test";
+spyOn(console, "log");`,
+      reports: [],
+    },
+  ],
+  "no-real-timers": [
+    {
+      name: "the timer globals are refused",
+      source: `import { test } from "bun:test";
+test("waits", () => {
+  setTimeout(() => undefined, 10);
+  setInterval(() => undefined, 10);
+  setImmediate(() => undefined);
+});`,
+      reports: ["3:3", "4:3", "5:3"],
+    },
+    {
+      name: "the sleeping promise is the timer written longhand",
+      source: `import { test } from "bun:test";
+test("waits", async () => {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+});`,
+      reports: ["3:34"],
+    },
+    {
+      name: "Bun's sleeps are members of a global rather than globals",
+      source: `import { test } from "bun:test";
+test("waits", async () => {
+  await Bun.sleep(5);
+  Bun.sleepSync(5);
+});`,
+      reports: ["3:9", "4:3"],
+    },
+    {
+      name: "a property that shares the name is not the global",
+      source: `import { expect, test } from "bun:test";
+const clock = { setTimeout: (at: number) => at };
+test("waits", () => {
+  expect(clock.setTimeout(5)).toBe(5);
+});`,
+      reports: [],
+    },
+    {
+      name: "a name the file declares itself is a different function",
+      source: `import { test } from "bun:test";
+function setTimeout(run: () => void): void {
+  run();
+}
+test("waits", () => {
+  setTimeout(() => undefined);
+});`,
+      reports: [],
+    },
+    {
+      name: "Bun's other members spend no time",
+      source: `import { expect, test } from "bun:test";
+test("reads", async () => {
+  expect(await Bun.file("package.json").text()).toContain("name");
+});`,
+      reports: [],
+    },
+  ],
+} satisfies Record<string, readonly Case[]>;
+
 /** The case a rule exists to reject, which is what the base has to be wired to catch. */
 function violating(list: readonly Case[]): string {
   const first = list.find(({ reports }) => reports.length > 0);
@@ -668,20 +889,38 @@ function violating(list: readonly Case[]): string {
   return first.source;
 }
 
+/** Every rule's violating case, in a file named the way the base decides what it grades. */
+function underBase(suffix: string, rules: Record<string, readonly Case[]>): Tree {
+  return {
+    ".oxlintrc.json": JSON.stringify({ extends: [BASE], options: { typeAware: false } }),
+    ...Object.fromEntries(
+      Object.entries(rules).map(([rule, list]) => [`${rule}${suffix}`, violating(list)]),
+    ),
+  };
+}
+
 describe("anti-slop rules", () => {
-  for (const [rule, list] of Object.entries(HOUSE)) cases(rule, list);
+  for (const [rule, list] of Object.entries({ ...HOUSE, ...IN_TESTS })) cases(rule, list);
 
   // A rule that is not in the base is a rule no repo runs — the cases above
   // enable it by name themselves and would pass either way.
   test("the base enables every rule the plugin defines", async () => {
-    const wired = await oxlint({
-      ".oxlintrc.json": JSON.stringify({ extends: [BASE], options: { typeAware: false } }),
-      ...Object.fromEntries(
-        Object.entries(HOUSE).map(([rule, list]) => [`${rule}.ts`, violating(list)]),
-      ),
-    });
-    for (const rule of Object.keys(HOUSE)) {
-      expect(wired.join("\n")).toContain(`anti-slop(${rule})`);
+    const wired = [
+      ...(await oxlint(underBase(".ts", HOUSE))),
+      ...(await oxlint(underBase(".test.ts", IN_TESTS))),
+    ].join("\n");
+    for (const rule of [...Object.keys(HOUSE), ...Object.keys(IN_TESTS)]) {
+      expect(wired).toContain(`anti-slop(${rule})`);
+    }
+  });
+
+  // The other half of scoping one to a test file: counting calls, sleeping and
+  // reaching into a module are what a source file does all day, and a rule that
+  // fired on them everywhere would be one every repo turned off.
+  test("the test-only rules say nothing about a file that is not a test", async () => {
+    const wired = (await oxlint(underBase(".ts", IN_TESTS))).join("\n");
+    for (const rule of Object.keys(IN_TESTS)) {
+      expect(wired).not.toContain(`anti-slop(${rule})`);
     }
   });
 });

@@ -66,6 +66,19 @@ export function unwrapType(type) {
 }
 
 /**
+ * A member read by a name written out — `a.b`, never `a[b]`. Every member
+ * expression carries the type `"MemberExpression"` and discriminates on
+ * `computed`, whatever the interface holding it is called, so the three rules
+ * that ask this ask it here rather than each spelling the discriminant out.
+ * @param {ESTree.Node | null} node
+ * @returns {ESTree.StaticMemberExpression | ESTree.PrivateFieldExpression | null}
+ */
+export function staticMember(node) {
+  if (node === null || node.type !== "MemberExpression" || node.computed) return null;
+  return node;
+}
+
+/**
  * The name a reference names, or nothing when it is qualified (`namespace.Type`)
  * — nothing here can say what a qualified name resolves to.
  * @param {ESTree.TSTypeReference} type
