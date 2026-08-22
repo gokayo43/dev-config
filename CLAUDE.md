@@ -48,6 +48,11 @@ a change to a rule usually lands here too.
   "Releasing", and it is why gate code is not importable by the repos it
   gates: anything they call directly is a package export instead, which is
   what `route-log.ts` below is.
+  `mutation-lane` is the one gate that runs a tool out of the gated repo's own
+  install rather than a binary it pins itself: Stryker resolves its runner
+  plugin from the working directory, and declaring the two packages in the
+  repo's manifest is what puts them under its lockfile, its exact pins and its
+  release-age window.
 - `route-log.ts` at the root is the protocol between an app and the
   route-coverage floor: the two strings and the three shapes, exported so that
   neither end reproduces them. It is in `files` and `exports` because a
@@ -67,7 +72,9 @@ a change to a rule usually lands here too.
   rather than adding to it, and `action-evidence.test.ts` holds every action
   publishing an artifact to keeping the runner-temp paths its own YAML names.
   `repo-contract-fixture.ts` is the clean tree the repo contract's two suites
-  share.
+  share, and `mutation-lane.test.ts` links this repo's own `node_modules` into
+  each fixture and runs Stryker for real — a stubbed mutation run would prove
+  nothing about the tool that gate exists to drive.
 - `docs/gates/*.md` — a reference page per gate. README holds the map.
 
 ## Commands

@@ -31,6 +31,19 @@ on:
         description: Hold docker-compose.yml to the deployment shape — for repos this box runs as containers.
         type: boolean
         default: false
+      mutation-lane:
+        description: >-
+          Mutate the domain files this branch changed and fail on a mutant its own lines
+          left undetected — for repos whose pure domain is declared as a boundaries element.
+        type: boolean
+        default: false
+      mutation-floor:
+        description: >-
+          The mutation score the changed domain files must hold, as a fraction between 0
+          and 1, the way bunfig.toml writes coverageThreshold. Empty publishes the score
+          and enforces nothing. Set it with mutation-lane or not at all.
+        type: string
+        default: ""
       contract-exemptions:
         description: >-
           Repo-contract facts this repo is structurally unable to satisfy, space-separated
@@ -175,6 +188,14 @@ jobs:
           fi
           exit 1
 
+      # mutation-floor is aimed at the lane's own step, so asking for one
+      # without the lane is a number that would otherwise be ignored in silence
+      # — a floor nobody notices is off is a floor nobody has.
+      - if: ${{ !inputs['mutation-lane'] && inputs['mutation-floor'] != '' }}
+        run: |
+          echo "::error::mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
+          exit 1
+
       - uses: gokayo43/dev-config/.github/actions/secret-scan@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -213,6 +234,14 @@ jobs:
       - uses: gokayo43/dev-config/.github/actions/test-suite@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
         with:
           test-suite-evidence: ${{ inputs['test-suite-evidence'] }}
+
+      # After the suite, because a mutation score over a suite that does not pass
+      # is a number about nothing — and it runs the repo's own install, which the
+      # steps above have already put on disk.
+      - if: inputs['mutation-lane']
+        uses: gokayo43/dev-config/.github/actions/mutation-lane@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
+        with:
+          mutation-floor: ${{ inputs['mutation-floor'] }}
 
   database:
     if: inputs.database

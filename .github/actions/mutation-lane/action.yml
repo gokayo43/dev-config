@@ -1,0 +1,40 @@
+name: Mutation lane
+description: >-
+  Mutates the domain files this branch changed and fails on a mutant its own
+  lines left undetected. Coverage says a line ran; this says the suite would
+  have noticed had the line been wrong. Selective by construction — a full
+  campaign over a domain layer costs minutes to hours, and a gate that costs
+  that runs nightly or not at all, so what a pull request is held to is the
+  code in it. The score over those files is published to the run summary, and
+  a repo that wants a number it cannot fall below declares mutation-floor.
+
+inputs:
+  working-directory:
+    description: Where the repository root is.
+    default: .
+  mutation-floor:
+    description: >-
+      The mutation score the changed domain files must hold, as a fraction
+      between 0 and 1 — the way bunfig.toml writes coverageThreshold. Empty
+      publishes the score and fails on nothing but a mutant this branch's own
+      lines left undetected.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # The two facts about the run are read from the `github` context here rather
+    # than threaded through as inputs, for the reason repo-contract and db-gate
+    # read them the same way: they are the event's own, identical for every
+    # caller, and a caller that had to pass them could pass them wrong. The base
+    # ref has to be in the checkout — fetch-depth: 0 — and this is refused
+    # without it.
+    - shell: bash
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
+        INPUT_BASE_REF: ${{ github.base_ref }}
+        INPUT_BEFORE: ${{ github.event.before }}
+      run: |
+        set -euo pipefail
+        INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bun "$GITHUB_ACTION_PATH/mutation-lane.main.ts"
