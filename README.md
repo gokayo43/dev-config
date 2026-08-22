@@ -185,16 +185,13 @@ Two facts are true of a file because of where it sits, not what it contains:
 {
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
       "rules": {
-        "no-restricted-globals": [
-          "error",
-          { "name": "__dirname", "message": "…" },
-          { "name": "__filename", "message": "…" },
-          { "name": "require", "message": "…" },
-          { "name": "setTimeout", "message": "…" },
-          { "name": "setInterval", "message": "…" }
-        ]
+        "unicorn/consistent-function-scoping": "off",
+        "anti-slop/no-call-count-assertions": "error",
+        "anti-slop/no-local-module-mocks": "error",
+        "anti-slop/no-mock-assertions": "error",
+        "anti-slop/no-real-timers": "error"
       }
     },
     { "files": ["src/server/**", "server/**", "apps/api/**"], "rules": { "no-console": "error" } }
@@ -202,17 +199,21 @@ Two facts are true of a file because of where it sits, not what it contains:
 }
 ```
 
-A test that sleeps is slow and flaky, so tests drive virtual time instead of the
-wall clock. And server code writes through the structured logger, so `no-console`
-rises from `warn` to `error` on the server globs — a one-shot CLI under those
-paths carries a file-level disable with its reason, which is the shape the
-directive rule below already requires.
+A test file is where the four scoped rules of [the plugin](#the-anti-slop-plugin)
+apply, and where a helper one `describe` uses belongs inside it rather than
+hoisted to module scope. And server code writes through the structured logger, so
+`no-console` rises from `warn` to `error` on the server globs — a one-shot CLI
+under those paths carries a file-level disable with its reason, which is the shape
+the directive rule below already requires.
 
 **An override replaces a rule's whole configuration; it does not add to it**
-(oxc#12179). That is why the three ESM globals are restated in the test block
-above rather than only in `rules` — drop them and test files silently regain
-`__dirname` and `require`. Any override redefining a list-shaped rule has to
-carry the entries that must still hold everywhere.
+(oxc#12179). An override that says nothing about a rule inherits it whole, so the
+cost lands only where one is redefined: an override restating a list-shaped rule
+to change a single thing about it silently exempts every file it matches from
+every entry it did not restate, in every repo extending the base. Nothing here
+redefines one today, and `tests/oxlint-base.test.ts` is what keeps that honest —
+it proves the semantics against a config it builds itself, and holds any override
+that does redefine one to carrying every entry the top level states.
 
 `overrides` survive `extends`, so a consuming repo inherits both without naming
 them.
@@ -310,23 +311,34 @@ file counts calls, sleeps, reaches into a module of its own and hands a function
 to `expect` in a helper, and none of that is a smell until it is a test's whole
 evidence.
 
-| Rule                       | What it rejects                                                          |
-| -------------------------- | ------------------------------------------------------------------------ |
-| `no-call-count-assertions` | `toHaveBeenCalledTimes` and the order matchers, and `.mock.calls.length` |
-| `no-mock-assertions`       | `expect(<a mock or spy>)` — the test asserting on its own object         |
-| `no-local-module-mocks`    | `mock.module()` or `spyOn()` whose target is a relative import           |
-| `no-real-timers`           | `setTimeout`, `setInterval`, `setImmediate`, `Bun.sleep`                 |
+| Rule                       | What it rejects                                                |
+| -------------------------- | -------------------------------------------------------------- |
+| `no-call-count-assertions` | `toHaveBeenCalledTimes` and the order matchers, wherever read  |
+| `no-mock-assertions`       | `expect()` on a stand-in, or on anything reached through one   |
+| `no-local-module-mocks`    | `mock.module()` or `spyOn()` whose target is a relative import |
+| `no-real-timers`           | `setTimeout`, `setInterval`, `setImmediate`, `Bun.sleep`       |
 
 What they have in common is that each of them passes against an implementation
 nobody would ship. A call log grades the collaborator calls an implementation
 happens to make and stays green when it never uses what it got back; a stand-in
-handed to `expect` is the test's own object, so the assertion is about what the
-test already did; a fake over a module in this repo grades the fake rather than
-the module, and the real one is right there to call; and a suite that waits for
-real time is slow in proportion to how much of it it waits for and flaky in
-proportion to how loaded the runner is. A relative specifier is the line between
-the third one and a legitimate fake: a package is a true external boundary, and
-`mock.module("stripe", …)` is not what that rule is about.
+is the test's own object, so an assertion about it is about what the test
+already did; a fake over a module in this repo grades the fake rather than the
+module, and the real one is right there to call; and a suite that waits for real
+time is slow in proportion to how much of it it waits for and flaky in
+proportion to how loaded the runner is.
+
+The two boundaries between those and the code they resemble are worth stating,
+because both rules are wrong without them. `no-mock-assertions` asks what the
+subject of the assertion is _reached through_, not what it is called: every way
+of reading a call log by hand — `.mock.calls.length`, `.mock.calls[0]`,
+`.mock.calls.at(0)`, `.mock.lastCall` — is one spelling of reaching through a
+stand-in, and a rule that matched chains would be one spelling behind forever.
+Calling the stand-in is the other side of that line: `expect(send())` is what
+the code under test would have got, which is the one thing about a stand-in
+worth asserting on, and an object of the test's own with a `mock` property on it
+is not a stand-in at all. For `no-local-module-mocks` the line is the specifier:
+a package is a true external boundary, so `mock.module("stripe", …)` is not what
+that rule is about.
 
 Each carries the usual ` -- reason` escape, which the suppression-hygiene gate
 already holds to actually having a reason.

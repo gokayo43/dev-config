@@ -88,15 +88,6 @@
         // from its only caller, and renames whatever its locals now collide
         // with — three costs for a file that is read case by case.
         "unicorn/consistent-function-scoping": "off",
-        // An override REPLACES a rule's whole configuration rather than adding
-        // to it (oxc#12179), so the ESM globals lock is restated here — drop it
-        // and test files silently regain `__dirname`, `require`, `__filename`.
-        "no-restricted-globals": [
-          "error",
-          { "name": "__dirname", "message": "Not defined in ESM — use import.meta.dir/url." },
-          { "name": "__filename", "message": "Not defined in ESM — use import.meta.url/path." },
-          { "name": "require", "message": "ESM project — use import (import() for dynamic)." }
-        ],
         // The four smells a suite has to be free of before its green means
         // anything, and the only four in this plugin scoped to where they are
         // smells: every one of them is ordinary code in a source file.

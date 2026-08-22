@@ -17,8 +17,11 @@ const STEP = await (async (): Promise<string> => {
   const scripts = (Array.isArray(steps) ? steps : [])
     .map((step) => record(step)["run"])
     .filter((run): run is string => typeof run === "string");
-  if (scripts.length !== 1) throw new Error(`test-suite has ${scripts.length} run steps, not one`);
-  return scripts[0] ?? "";
+  const [script, ...rest] = scripts;
+  if (script === undefined || rest.length > 0) {
+    throw new Error(`test-suite has ${scripts.length} run steps, not one`);
+  }
+  return script;
 })();
 
 interface Run {
@@ -35,7 +38,7 @@ async function ran(tree: Tree, network = ""): Promise<Run> {
   const root = await materialise(tree);
   const proc = Bun.spawn(["bash", "-c", STEP], {
     cwd: root,
-    env: { ...process.env, RUNNER_TEMP: root, NETWORK: network },
+    env: { ...process.env, RUNNER_TEMP: root, TEST_NETWORK: network },
     stdout: "pipe",
     stderr: "pipe",
   });

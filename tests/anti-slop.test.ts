@@ -691,20 +691,12 @@ const IN_TESTS = {
       reports: ["4:16", "5:16", "6:16"],
     },
     {
-      name: "the same assertion counted by hand rather than by matcher",
+      name: "a negated one is the same assertion a member further out from expect()",
       source: `${SENT}test("sends", () => {
-  expect(send.mock.calls.length).toBe(1);
+  expect(send).not.toHaveBeenCalledTimes(1);
+  expect(send).not.toHaveBeenNthCalledWith(1, "a");
 });`,
-      reports: ["4:10"],
-    },
-    {
-      name: "a length that is not a call log's — the chain is read whole, not for the word `calls`",
-      source: `${SENT}test("sends", () => {
-  const written = { calls: ["a"] };
-  expect(written.calls.length).toBe(1);
-  expect(send.mock.results.length).toBe(1);
-});`,
-      reports: [],
+      reports: ["4:20", "5:20"],
     },
     {
       name: "the matchers that grade the result are the ones a test is for",
@@ -780,6 +772,25 @@ test("sends again", () => {
   expect(send).toBeDefined();
 });`,
       reports: ["8:10"],
+    },
+    {
+      name: "the call log read by hand, in every spelling a rule keyed to one chain would miss",
+      source: `${SENT}test("sends", () => {
+  expect(send.mock.calls.length).toBe(1);
+  expect(send.mock.calls[0]).toEqual(["a"]);
+  expect(send.mock.calls.at(0)).toEqual(["a"]);
+  expect(send.mock.lastCall).toEqual(["a"]);
+});`,
+      reports: ["4:10", "5:10", "6:10", "7:10"],
+    },
+    {
+      name: "an object of the test's own that happens to have a mock property is not a stand-in",
+      source: `${SENT}test("sends", () => {
+  const recorded = { mock: { calls: [["a"]] } };
+  expect(recorded.mock.calls.length).toBe(1);
+  expect(recorded.mock.calls.at(0)).toEqual(["a"]);
+});`,
+      reports: [],
     },
   ],
   "no-local-module-mocks": [
@@ -899,17 +910,30 @@ function underBase(suffix: string, rules: Record<string, readonly Case[]>): Tree
   };
 }
 
+/** Every suffix the base grades as a test file — a rule enabled for one and not the rest is a hole. */
+const IN_TEST_FILES = [".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx"];
+
+/** And the ones it does not, which is the half that keeps the four out of source files. */
+const NOT_TEST_FILES = [".ts", ".tsx"];
+
 describe("anti-slop rules", () => {
   for (const [rule, list] of Object.entries({ ...HOUSE, ...IN_TESTS })) cases(rule, list);
 
   // A rule that is not in the base is a rule no repo runs — the cases above
   // enable it by name themselves and would pass either way.
   test("the base enables every rule the plugin defines", async () => {
-    const wired = [
-      ...(await oxlint(underBase(".ts", HOUSE))),
-      ...(await oxlint(underBase(".test.ts", IN_TESTS))),
-    ].join("\n");
-    for (const rule of [...Object.keys(HOUSE), ...Object.keys(IN_TESTS)]) {
+    const wired = (await oxlint(underBase(".ts", HOUSE))).join("\n");
+    for (const rule of Object.keys(HOUSE)) {
+      expect(wired).toContain(`anti-slop(${rule})`);
+    }
+  });
+
+  // Per suffix rather than over all four at once: the base names them one by
+  // one, so a rule reaching `.test.ts` and not `.spec.tsx` is a hole a single
+  // pooled assertion would report as covered.
+  test.each(IN_TEST_FILES)("the base enables the four scoped rules in a %s", async (suffix) => {
+    const wired = (await oxlint(underBase(suffix, IN_TESTS))).join("\n");
+    for (const rule of Object.keys(IN_TESTS)) {
       expect(wired).toContain(`anti-slop(${rule})`);
     }
   });
@@ -917,8 +941,8 @@ describe("anti-slop rules", () => {
   // The other half of scoping one to a test file: counting calls, sleeping and
   // reaching into a module are what a source file does all day, and a rule that
   // fired on them everywhere would be one every repo turned off.
-  test("the test-only rules say nothing about a file that is not a test", async () => {
-    const wired = (await oxlint(underBase(".ts", IN_TESTS))).join("\n");
+  test.each(NOT_TEST_FILES)("and says nothing about the same source in a %s", async (suffix) => {
+    const wired = (await oxlint(underBase(suffix, IN_TESTS))).join("\n");
     for (const rule of Object.keys(IN_TESTS)) {
       expect(wired).not.toContain(`anti-slop(${rule})`);
     }

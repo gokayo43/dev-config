@@ -11,15 +11,8 @@ import {
   repoFiles,
 } from "../_lib/gate.ts";
 import { checkPins, isExactVersion } from "../_lib/dependency-specs.ts";
-import {
-  checkCall,
-  checkLifecycle,
-  checkLive,
-  CI_WORKFLOW,
-  declaredIn,
-  lifecycleAtBase,
-  ownsDatabase,
-} from "./live.ts";
+import { CI_WORKFLOW } from "./ci-workflow.ts";
+import { checkLifecycle, checkLive, declaredIn, lifecycleAtBase } from "./live.ts";
 
 const DEV_CONFIG = "@gokayo43/dev-config";
 
@@ -29,6 +22,8 @@ const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 const KNIP_JSON_CONFIGS = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc"];
 
 const KNIP_CONFIGS = ["knip.ts", "knip.config.ts", "knip.js", "knip.config.js", "knip.mjs"];
+
+const CHECK_CALL = /^gokayo43\/dev-config\/\.github\/workflows\/check\.yml@[0-9a-f]{40}$/;
 
 /**
  * Facts a repo can be structurally unable to satisfy, as opposed to merely not
@@ -287,6 +282,49 @@ async function checkDocs(root: string): Promise<Problem[]> {
   return problems;
 }
 
+/** The repo's call into the shared gate, and what is wrong with the workflow that should hold it. */
+interface Call {
+  /** The `with:` block of the job that calls check.yml, or nothing when no job does. */
+  readonly asked: ConfigObject | undefined;
+  readonly problems: Problem[];
+}
+
+/**
+ * Read once and handed to everyone who has a question about it. Two rules turn
+ * on this file — that the call exists and is pinned, and that a live repo's
+ * copy of it asks for the upgrade gate — and they belong to different subjects:
+ * one is about the workflow, the other about the lifecycle. Threading a
+ * `live` boolean into the first would put the second inside a check that is not
+ * about it, and hide the fact that `ci-call` waives both.
+ */
+async function checkCall(root: string): Promise<Call> {
+  const text = await readText(`${root}/${CI_WORKFLOW}`);
+  if (text === undefined) {
+    return {
+      asked: undefined,
+      problems: [{ file: CI_WORKFLOW, message: "the repo has no CI workflow" }],
+    };
+  }
+
+  const jobs = record(record(Bun.YAML.parse(text))["jobs"]);
+  const call = Object.values(jobs)
+    .map((job) => record(job))
+    .find(({ uses }) => typeof uses === "string" && CHECK_CALL.test(uses));
+  if (call === undefined) {
+    return {
+      asked: undefined,
+      problems: [
+        {
+          file: CI_WORKFLOW,
+          message:
+            "no job calls gokayo43/dev-config/.github/workflows/check.yml pinned to a 40-character commit SHA — a tag is a name someone else can repoint",
+        },
+      ],
+    };
+  }
+  return { asked: record(call["with"]), problems: [] };
+}
+
 export interface Contract {
   /** The caller runs the database job, so the repo has to own a migration entry point. */
   readonly database: boolean;
@@ -362,9 +400,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   // waives both, which is a thing to be able to see rather than to discover.
   // A repo whose CI is not a call into check.yml has no call to pass
   // `upgrade-gate: true` to.
-  const call = exempt("ci-call")
-    ? { asked: undefined, problems: [] }
-    : checkCall(await readText(`${root}/${CI_WORKFLOW}`));
+  const call = exempt("ci-call") ? { asked: undefined, problems: [] } : await checkCall(root);
 
   const none = Promise.resolve<Problem[]>([]);
   const [base, lockfiles, lineage, bunfig, lefthook, secrets, docs, live] = await Promise.all([
@@ -379,7 +415,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     exempt("secrets") ? none : checkSecrets(root),
     exempt("docs-spine") ? none : checkDocs(root),
     declared.is === "live"
-      ? checkLive(root, all.read, { owned: ownsDatabase(all.read), gated: contract.database }, call)
+      ? checkLive(root, all.read, { database: contract.database, call: call.asked })
       : none,
   ]);
 

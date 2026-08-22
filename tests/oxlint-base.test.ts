@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { dirname } from "node:path";
 
-import { jsonObjects, record } from "../.github/actions/_lib/gate.ts";
+import { type ConfigObject, jsonObjects, record } from "../.github/actions/_lib/gate.ts";
+import { oxlint } from "./lint-fixture.ts";
 
 const REPO = dirname(import.meta.dir);
 
@@ -17,10 +18,7 @@ const base = record(
 /**
  * The rules whose configuration is a list of entries rather than one options
  * object: the settled-decision choke pattern the README describes. Anything
- * here that the base states at the top level has to hold everywhere, and an
- * override REPLACES a rule's whole configuration rather than adding to it
- * (oxc#12179) — so an override that redefines one and drops an entry silently
- * exempts every file it matches, in every repo that extends this file.
+ * here that the base states at the top level has to hold everywhere.
  */
 const ENTRY_LIST_RULES = [
   "no-restricted-globals",
@@ -32,6 +30,61 @@ const ENTRY_LIST_RULES = [
 function entriesOf(configured: unknown): string[] {
   return Array.isArray(configured) ? configured.slice(1).map((entry) => JSON.stringify(entry)) : [];
 }
+
+/**
+ * The semantics the guard below exists for, proven against a config built here
+ * rather than against the shipped base.
+ *
+ * It cannot be read off the base, because the base is entitled to have no
+ * override redefining a list-shaped rule — which is exactly the state it is in.
+ * A fact this whole file rests on must not be provable only while some other
+ * file happens to be shaped a certain way: a canary asserting "the base still
+ * has one for us to look at" turns the day someone deletes the last one into a
+ * failing test about nothing, which is how a real guard gets deleted with it.
+ */
+describe("an override that names a list-shaped rule", () => {
+  const USES_ALL = `export const a = __dirname;
+export const b = __filename;
+export const c = typeof require;
+`;
+
+  /** The base's own shape in miniature: three entries stated once, at the top. */
+  function config(override: ConfigObject | undefined): string {
+    return JSON.stringify({
+      plugins: [],
+      categories: { correctness: "off" },
+      rules: {
+        "no-restricted-globals": [
+          "error",
+          { name: "__dirname", message: "a" },
+          { name: "__filename", message: "b" },
+          { name: "require", message: "c" },
+        ],
+      },
+      overrides: [{ files: ["**/*.test.ts"], rules: override ?? {} }],
+    });
+  }
+
+  async function restricted(override: ConfigObject | undefined): Promise<number> {
+    const reported = await oxlint({
+      ".oxlintrc.json": config(override),
+      "case.test.ts": USES_ALL,
+    });
+    return reported.filter((line) => line.includes("no-restricted-globals")).length;
+  }
+
+  test("an override that says nothing about it inherits the whole list", async () => {
+    expect(await restricted(undefined)).toBe(3);
+  });
+
+  // REPLACES rather than merges (oxc#12179). An override that redefines the
+  // rule to change one thing about it silently exempts every file it matches
+  // from every entry it did not restate — in every repo extending the base.
+  test("an override that redefines it keeps only what it restated", async () => {
+    const kept = { "no-restricted-globals": ["error", { name: "__dirname", message: "a" }] };
+    expect(await restricted(kept)).toBe(1);
+  });
+});
 
 describe("the base's list-shaped rules", () => {
   const overrides = Array.isArray(base["overrides"]) ? base["overrides"] : [];
@@ -46,13 +99,16 @@ describe("the base's list-shaped rules", () => {
     }),
   );
 
-  // Otherwise every case below passes on an empty list, which is the state this
-  // whole file exists to notice: the base having stopped carrying the pattern.
-  test("the base states a list-shaped rule and an override redefines one", () => {
+  // The left-hand side of the comparison below. With no list-shaped rule stated
+  // at the top level there is nothing for an override to drop, and every case
+  // here would pass over an empty set for the rest of this repo's life.
+  test("the base states a list-shaped rule at the top level", () => {
     expect(ENTRY_LIST_RULES.filter((rule) => entriesOf(rules[rule]).length > 0)).not.toEqual([]);
-    expect(redefinitions).not.toEqual([]);
   });
 
+  // Nothing redefines one today, and the base is better for it — the case above
+  // proves the rule still has entries, and this fires the day an override takes
+  // some of them away.
   test.each(redefinitions)(
     "$rule in the override for $files still carries every entry the base states",
     ({ rule, configured }) => {

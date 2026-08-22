@@ -16,7 +16,7 @@ inputs:
   working-directory:
     description: Where the suite lives.
     default: .
-  network:
+  test-network:
     description: >-
       Why this repo's suite has to reach a real network, which unseals it.
       Empty — which is every repo until one has an answer here — runs the suite
@@ -40,17 +40,17 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        NETWORK: ${{ inputs.network }}
+        TEST_NETWORK: ${{ inputs['test-network'] }}
       run: |
         set -euo pipefail
         suite=(bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml")
+        seal=()
 
-        if [ -n "$NETWORK" ]; then
-          echo "::notice::the suite reaches a real network: $NETWORK"
-          "${suite[@]}"
+        if [ -n "$TEST_NETWORK" ]; then
+          echo "::notice::the suite reaches a real network: $TEST_NETWORK"
         else
           if ! sudo --non-interactive true 2>/dev/null; then
-            echo "::error::the suite is run sealed in a network namespace, which needs passwordless sudo on the runner — GitHub-hosted Linux runners have it, a self-hosted one has to grant it, and a suite that genuinely reaches a network says so in the network input instead"
+            echo "::error::the suite is run sealed in a network namespace, which needs passwordless sudo on the runner — GitHub-hosted Linux runners have it, a self-hosted one has to grant it, and a suite that genuinely reaches a network says so in the test-network input instead"
             exit 1
           fi
           # Root twice over, and neither hop is optional. Creating the namespace
@@ -62,11 +62,13 @@ runs:
           # says. `lo` exists in a fresh namespace and is created down: a server
           # a test starts on 127.0.0.1 is not a network call, and the runner's
           # own ports are on the other loopback whether this is up or not.
-          sudo --non-interactive --preserve-env unshare --net -- \
-            bash -c 'ip link set lo up && exec "$@"' sealed \
-            sudo --non-interactive --preserve-env --user "$(id -un)" -- \
-            env "PATH=$PATH" "${suite[@]}"
+          seal=(sudo --non-interactive --preserve-env unshare --net --
+            bash -c 'ip link set lo up && exec "$@"' sealed
+            sudo --non-interactive --preserve-env --user "$(id -un)" --
+            env "PATH=$PATH")
         fi
+
+        "${seal[@]}" "${suite[@]}"
 
         # Anchored on the root element: a per-file <testsuite name="…"> line
         # carries its own skipped count, and a file whose name contains

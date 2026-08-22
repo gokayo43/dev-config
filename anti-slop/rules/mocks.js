@@ -3,16 +3,16 @@
 import { isSettledBinding, resolveVariable, variableDeclarator } from "../shared/bindings.js";
 import { staticMember, unwrapAssertions } from "../shared/syntax.js";
 
+/** The stand-ins that reach into a value the file did not make, under all three runners. */
+const SPIES = new Set(["spyOn", "jest.spyOn", "vi.spyOn"]);
+
 /**
  * What the three runners spell a stand-in with. Written as the source does —
  * `spyOn` is imported bare from `bun:test` and reached through the namespace in
  * the other two — because the callee is what a reader sees and what a rule
  * asking "is this a stand-in" can answer from without a type checker.
  */
-const STAND_INS = new Set(["mock", "jest.fn", "vi.fn", "spyOn", "jest.spyOn", "vi.spyOn"]);
-
-/** The three spellings of the one that reaches into a module the file did not write. */
-const SPIES = new Set(["spyOn", "jest.spyOn", "vi.spyOn"]);
+const STAND_INS = new Set(["mock", "jest.fn", "vi.fn", ...SPIES]);
 
 /**
  * The callee as written: a bare name, or one qualified by a single object. A
@@ -37,11 +37,12 @@ function calleeName(callee) {
  * @returns {boolean}
  */
 function isStandIn(expression, sourceCode) {
-  const value = unwrapAssertions(expression);
-  if (value.type === "CallExpression") return STAND_INS.has(calleeName(value.callee) ?? "");
-  if (value.type !== "Identifier") return false;
+  if (expression.type === "CallExpression") {
+    return STAND_INS.has(calleeName(expression.callee) ?? "");
+  }
+  if (expression.type !== "Identifier") return false;
 
-  const variable = resolveVariable(sourceCode, value);
+  const variable = resolveVariable(sourceCode, expression);
   if (variable === null) return false;
   const declarator = variableDeclarator(variable);
   if (declarator === null || declarator.init === null) return false;
@@ -53,18 +54,49 @@ function isStandIn(expression, sourceCode) {
 }
 
 /**
- * Refuse `expect(<a stand-in>)`.
+ * Whether the expression is a stand-in or anything reached through one.
+ *
+ * Two steps outwards, and the difference between them is the whole rule.
+ * A property read — `spy.mock`, `spy.mock.calls[0]` — is a read *through* the
+ * stand-in, and so is a method called on one of those: `spy.mock.calls.at(0)`
+ * is the call log by another spelling. Calling the stand-in itself is not:
+ * `send()` is what the code under test would have got, which is the one thing
+ * about a stand-in worth asserting on. So a call is stepped through only when
+ * it was written on a property, and the stand-in test runs before either step,
+ * or `vi.fn()` would be read as a property of `vi`.
+ * @param {ESTree.Expression} subject
+ * @param {SourceCode} sourceCode
+ * @returns {boolean}
+ */
+function reachesStandIn(subject, sourceCode) {
+  let current = unwrapAssertions(subject);
+  for (;;) {
+    if (isStandIn(current, sourceCode)) return true;
+    if (current.type === "MemberExpression") {
+      current = unwrapAssertions(current.object);
+      continue;
+    }
+    if (current.type === "CallExpression" && current.callee.type === "MemberExpression") {
+      current = unwrapAssertions(current.callee.object);
+      continue;
+    }
+    return false;
+  }
+}
+
+/**
+ * Refuse `expect(<a stand-in, or anything read out of one>)`.
  * @type {Rule}
  */
 export const noMockAssertionsRule = {
   meta: {
     type: "problem",
     docs: {
-      description: "Disallow passing a mock or spy to expect().",
+      description: "Disallow passing a mock or spy, or anything read through one, to expect().",
     },
     messages: {
       mockAssertion:
-        "Assert on what the code under test returned, wrote or threw — a stand-in is the test's own object, so asserting on it asserts what the test already did.",
+        "Assert on what the code under test returned, wrote or threw — a stand-in and everything reachable through it are the test's own, so asserting on them asserts what the test already did.",
     },
   },
   createOnce(context) {
@@ -74,7 +106,7 @@ export const noMockAssertionsRule = {
         if (calleeName(node.callee) !== "expect") return;
         const [subject] = node.arguments;
         if (subject === undefined || subject.type === "SpreadElement") return;
-        if (isStandIn(subject, context.sourceCode)) {
+        if (reachesStandIn(subject, context.sourceCode)) {
           context.report({ node: subject, messageId: "mockAssertion" });
         }
       },

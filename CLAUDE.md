@@ -39,9 +39,11 @@ a change to a rule usually lands here too.
   denylist asks which package a spec installs. What two gates of one action
   share stays in that action's directory instead — `db-gate/database.ts`, the
   database those gates build for themselves and the one derivation of "these
-  two dumps came out the same", and `db-gate/verdict.ts`, what they report and
-  how their entry points say it. Either moves to `_lib/` when a second action
-  reads it, and not on the argument that one might.
+  two dumps came out the same", `db-gate/verdict.ts`, what they report and
+  how their entry points say it, and `repo-contract/ci-workflow.ts`, the one
+  path both halves of that contract have an opinion about and neither owns. Any
+  of them moves to `_lib/` when a second action reads it, and not on the
+  argument that one might.
   The shell helpers beside them are `pinned-tool.sh` — the verified fetch
   every pinned binary goes through — and `k6.sh`, which is that fetch plus the
   one k6 pin, so the three ramps in this house run one binary.
@@ -72,8 +74,9 @@ a change to a rule usually lands here too.
   which otherwise read as a clean tree. `anti-slop-upstream.test.ts` is
   upstream's own fixtures, as a differential oracle over the three rules it
   ships tests for. Two suites are not a gate's: `oxlint-base.test.ts` holds what
-  the base config itself must, since an override REPLACES a list-shaped rule
-  rather than adding to it, and `action-evidence.test.ts` holds every action
+  the base config itself must — an override REPLACES a list-shaped rule rather
+  than adding to it, which it proves against a config it builds itself and then
+  holds every override in the base to — and `action-evidence.test.ts` holds every action
   publishing an artifact to keeping the runner-temp paths its own YAML names.
   `repo-contract-fixture.ts` is the clean tree the repo contract's two suites
   share, and `mutation-lane.test.ts` links this repo's own `node_modules` into

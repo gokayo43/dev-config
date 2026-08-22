@@ -8,6 +8,13 @@ import { staticMember } from "../shared/syntax.js";
  * calls the collaborator exactly so and then does nothing with what it got
  * back, and fails against a correct rewrite that batches, caches or reorders —
  * which is the rewrite test read backwards.
+ *
+ * The name is matched wherever it is read, rather than only where it sits
+ * directly on an `expect(…)`: `.not`, `.resolves` and `.rejects` each put
+ * another member between the two, and a rule that insisted on the shape would
+ * be one negation away from silent. Reading the call log by hand is the same
+ * assertion and belongs to `no-mock-assertions`, which is the rule that knows
+ * what a stand-in is.
  */
 const CALL_MATCHERS = new Set([
   "toHaveBeenCalledOnce",
@@ -15,30 +22,6 @@ const CALL_MATCHERS = new Set([
   "toHaveBeenLastCalledWith",
   "toHaveBeenNthCalledWith",
 ]);
-
-/**
- * `<mock>.mock.calls.length`, spelled from the outside in — the same assertion
- * written by hand, and the spelling a rule that knew only the matchers above
- * would leave as the way through.
- */
-const CALL_LOG_LENGTH = ["length", "calls", "mock"];
-
-/**
- * Whether a member chain reads the call log's length: each step named in order
- * from the property outwards.
- * @param {ESTree.Node} node
- * @returns {boolean}
- */
-function readsCallLogLength(node) {
-  /** @type {ESTree.Node} */
-  let current = node;
-  for (const step of CALL_LOG_LENGTH) {
-    const member = staticMember(current);
-    if (member === null || member.property.name !== step) return false;
-    current = member.object;
-  }
-  return true;
-}
 
 /**
  * Refuse assertions about how many times, or in what order, a function was
@@ -49,8 +32,7 @@ export const noCallCountAssertionsRule = {
   meta: {
     type: "problem",
     docs: {
-      description:
-        "Disallow the call-count and call-order matchers, and the hand-written call-log length beside them.",
+      description: "Disallow the call-count and call-order matchers.",
     },
     messages: {
       callCount:
@@ -62,19 +44,12 @@ export const noCallCountAssertionsRule = {
       /** @param {ESTree.MemberExpression} node */
       MemberExpression(node) {
         const member = staticMember(node);
-        if (member === null) return;
-        const { name } = member.property;
-        if (CALL_MATCHERS.has(name)) {
-          context.report({
-            node: member.property,
-            messageId: "callCount",
-            data: { matcher: name },
-          });
-          return;
-        }
-        if (readsCallLogLength(member)) {
-          context.report({ node, messageId: "callCount", data: { matcher: "mock.calls.length" } });
-        }
+        if (member === null || !CALL_MATCHERS.has(member.property.name)) return;
+        context.report({
+          node: member.property,
+          messageId: "callCount",
+          data: { matcher: member.property.name },
+        });
       },
     };
   },

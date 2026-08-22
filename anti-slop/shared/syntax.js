@@ -66,16 +66,28 @@ export function unwrapType(type) {
 }
 
 /**
- * A member read by a name written out — `a.b`, never `a[b]`. Every member
- * expression carries the type `"MemberExpression"` and discriminates on
- * `computed`, whatever the interface holding it is called, so the three rules
- * that ask this ask it here rather than each spelling the discriminant out.
+ * Whether a member names its property rather than computing it or hiding it —
+ * the two discriminants that tell `a.b` from `a[b]` and from `a.#b`. A
+ * predicate rather than a condition at the one call site below, because narrowing
+ * on the nested `property.type` is the whole point and only a predicate does it.
+ * @param {ESTree.MemberExpression} node
+ * @returns {node is ESTree.StaticMemberExpression}
+ */
+function namesItsProperty(node) {
+  return !node.computed && node.property.type === "Identifier";
+}
+
+/**
+ * A member read by a name written out — `a.b`, never `a[b]` or `a.#b`. Every
+ * member expression carries the type `"MemberExpression"` whatever the
+ * interface holding it is called, so the rules that ask this ask it here rather
+ * than each spelling the discriminants out.
  * @param {ESTree.Node | null} node
- * @returns {ESTree.StaticMemberExpression | ESTree.PrivateFieldExpression | null}
+ * @returns {ESTree.StaticMemberExpression | null}
  */
 export function staticMember(node) {
-  if (node === null || node.type !== "MemberExpression" || node.computed) return null;
-  return node;
+  if (node === null || node.type !== "MemberExpression") return null;
+  return namesItsProperty(node) ? node : null;
 }
 
 /**

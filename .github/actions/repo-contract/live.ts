@@ -25,6 +25,7 @@ import {
   type Problem,
   record,
 } from "../_lib/gate.ts";
+import { CI_WORKFLOW } from "./ci-workflow.ts";
 
 /**
  * Whether the repo is deployed and carrying people, said by the repo about
@@ -226,7 +227,7 @@ function notDeclared({ found, is }: Declared): Problem[] {
  * restore and its upgrade gate by deleting one line from its own workflow,
  * which is the opposite of what a contract is for.
  */
-export function ownsDatabase(all: readonly Manifest[]): boolean {
+function ownsDatabase(all: readonly Manifest[]): boolean {
   return all.some(({ value }) => record(value["scripts"])["db:migrate"] !== undefined);
 }
 
@@ -283,50 +284,15 @@ function hasSentry(contents: ConfigObject): boolean {
   );
 }
 
-/** The repo's call into the shared gate, and what is wrong with the workflow that should hold it. */
-interface Call {
-  /** The `with:` block of the job that calls check.yml, or nothing when no job does. */
-  readonly asked: ConfigObject | undefined;
-  readonly problems: Problem[];
-}
-
-const CHECK_CALL = /^gokayo43\/dev-config\/\.github\/workflows\/check\.yml@[0-9a-f]{40}$/;
-
-export const CI_WORKFLOW = ".github/workflows/ci.yml";
-
 /**
- * Read once and handed to everyone who has a question about it. Two rules turn
- * on this file — that the call exists and is pinned, and that a live repo's
- * copy of it asks for the upgrade gate — and they belong to different subjects:
- * one is about the workflow, the other about the lifecycle. Threading a
- * `live` boolean into the first would put the second inside a check that is not
- * about it, and hide the fact that `ci-call` waives both.
+ * What the caller's workflow asked check.yml for — the half of these rules that
+ * is not read off the repo, and the only half that may be.
  */
-export function checkCall(text: string | undefined): Call {
-  if (text === undefined) {
-    return {
-      asked: undefined,
-      problems: [{ file: CI_WORKFLOW, message: "the repo has no CI workflow" }],
-    };
-  }
-
-  const jobs = record(record(Bun.YAML.parse(text))["jobs"]);
-  const call = Object.values(jobs)
-    .map((job) => record(job))
-    .find(({ uses }) => typeof uses === "string" && CHECK_CALL.test(uses));
-  if (call === undefined) {
-    return {
-      asked: undefined,
-      problems: [
-        {
-          file: CI_WORKFLOW,
-          message:
-            "no job calls gokayo43/dev-config/.github/workflows/check.yml pinned to a 40-character commit SHA — a tag is a name someone else can repoint",
-        },
-      ],
-    };
-  }
-  return { asked: record(call["with"]), problems: [] };
+interface Asked {
+  /** The caller runs the database job, so something replays the schema. */
+  readonly database: boolean;
+  /** The `with:` block of the job that calls check.yml, or nothing when the call is itself a problem. */
+  readonly call: ConfigObject | undefined;
 }
 
 /**
@@ -342,20 +308,13 @@ export function checkCall(text: string | undefined): Call {
  * upgrade and no drill to rehearse — demanding them would teach people to write
  * a script that does nothing in order to get past a gate.
  */
-interface Database {
-  /** The repo declares a migration entry point, so it owns a schema. */
-  readonly owned: boolean;
-  /** The caller runs the database job, so something replays that schema. */
-  readonly gated: boolean;
-}
-
 export async function checkLive(
   root: string,
   all: readonly Manifest[],
-  database: Database,
-  call: Call,
+  asked: Asked,
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
+  const owned = ownsDatabase(all);
 
   // Everything about a database is owed exactly when the repo owns one — read
   // from its own migration entry point, never from the workflow input, which
@@ -365,7 +324,7 @@ export async function checkLive(
   // A repo that owns a schema and runs no job over it is that same hole from
   // the other side: the rules would apply and every one of them would be
   // unenforceable, since the gate proving an upgrade never runs.
-  if (database.owned && !database.gated) {
+  if (owned && !asked.database) {
     problems.push({
       file: CI_WORKFLOW,
       message:
@@ -378,16 +337,16 @@ export async function checkLive(
   // without `database: true`, so asking a live site with no database for it
   // would be this contract demanding the one config the shared workflow
   // rejects.
-  if (database.owned) {
+  if (owned) {
     // Read off the call rather than out of the file's text, for the reason the
     // pin is: the fact is "this job asks check.yml for the upgrade gate", and a
     // repo can spell those words in a comment, in a second job, or in a
     // workflow that calls something else entirely. Both YAML spellings count —
     // GitHub casts a quoted `"true"` to the boolean the input declares, so a
     // repo that wrote it that way is asking for the gate and getting it.
-    // `asked` is undefined only when the call itself is already a problem.
-    const gate = call.asked?.["upgrade-gate"];
-    if (call.asked !== undefined && gate !== true && gate !== "true") {
+    // The `with:` block is undefined only when the call itself is already a problem.
+    const gate = asked.call?.["upgrade-gate"];
+    if (asked.call !== undefined && gate !== true && gate !== "true") {
       problems.push({
         file: CI_WORKFLOW,
         message:

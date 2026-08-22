@@ -253,7 +253,7 @@ jobs:
 
       - uses: gokayo43/dev-config/.github/actions/test-suite@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
         with:
-          network: ${{ inputs['test-network'] }}
+          test-network: ${{ inputs['test-network'] }}
           test-suite-evidence: ${{ inputs['test-suite-evidence'] }}
 
       # After the suite, because a mutation score over a suite that does not pass
