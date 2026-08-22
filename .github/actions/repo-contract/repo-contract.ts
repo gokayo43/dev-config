@@ -5,6 +5,7 @@ import {
   isIgnored,
   isTracked,
   manifests,
+  parseEach,
   type Problem,
   readJson,
   record,
@@ -141,7 +142,14 @@ async function checkBunfig(root: string): Promise<Problem[]> {
   const text = await readText(`${root}/bunfig.toml`);
   if (text === undefined) return [{ file: "bunfig.toml", message: "bunfig.toml is missing" }];
 
-  const config = Bun.TOML.parse(text) as ConfigObject;
+  // Read through the same rescue every other config here goes through, rather
+  // than parsed inline. `Bun.TOML.parse` throws on a malformed file, and a bare
+  // throw here leaves the step with a parse error naming no file and takes
+  // every finding the other checks had already produced with it.
+  const parsed = await parseEach(root, ["bunfig.toml"], "TOML");
+  if (parsed.problems.length > 0) return parsed.problems;
+
+  const config = record(parsed.read[0]?.value);
   const install = record(config["install"]);
   const test = record(config["test"]);
   const problems: Problem[] = [];

@@ -7,5 +7,6 @@ import { expect } from "bun:test";
  * place, rather than a rule switched off across every suite.
  */
 export function containing(text: string): string {
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- nothing here can check it: bun types the matcher as `any`, and the object it answers is a matcher rather than the string it stands in for, so no runtime check would be true of it
   return expect.stringContaining(text) as string;
 }

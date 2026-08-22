@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
 import { type Allowlist, allowlistFrom } from "../.github/actions/_lib/gate.ts";
-import { type Column, timestamptzGate } from "../.github/actions/db-gate/timestamptz.ts";
+import {
+  type Column,
+  columnsFrom,
+  timestamptzGate,
+} from "../.github/actions/db-gate/timestamptz.ts";
 
 import { containing } from "./matchers.ts";
 
@@ -19,7 +23,49 @@ const waiving = (...columns: string[]): Allowlist => ({
 // whose data_type is ARRAY, and a quoted identifier with a space in it. The
 // timestamptz scalar, the timestamptz[] and the integer beside them are in it
 // too — the query asks for every column, and what discriminates is the gate.
-const COLUMNS = (await Bun.file(new URL("./columns.json", import.meta.url)).json()) as Column[];
+const COLUMNS = columnsFrom(
+  await Bun.file(new URL("./columns.json", import.meta.url)).json(),
+  "columns.json",
+);
+
+// One decoder for the gate's live rows and for the capture above, so the
+// fixture cannot keep a shape the catalogue no longer answers. The wrong
+// implementation reads the four fields off whatever it was handed.
+describe("reading a catalogue answer", () => {
+  const row = {
+    table_schema: "public",
+    table_name: "events",
+    column_name: "occurred_at",
+    udt_name: "timestamp",
+  };
+
+  test("the capture this suite runs on is a list of columns", () => {
+    expect(COLUMNS.length).toBeGreaterThan(0);
+  });
+
+  test("an answer that is not a list is refused", () => {
+    expect(() => columnsFrom({ table_schema: "public" }, "the catalogue")).toThrow(
+      /the catalogue is an object rather than a list of columns/u,
+    );
+  });
+
+  test("a row that is not an object is refused", () => {
+    expect(() => columnsFrom(["public.events"], "the catalogue")).toThrow(
+      /row 0 is a string rather than a row/u,
+    );
+  });
+
+  test("a row missing one of the four names is refused, naming it", () => {
+    const { udt_name: _dropped, ...missing } = row;
+    expect(() => columnsFrom([missing], "the catalogue")).toThrow(
+      /row 0 has udt_name as absent rather than text/u,
+    );
+  });
+
+  test("a row carrying all four is read", () => {
+    expect(columnsFrom([row], "the catalogue")).toEqual([row]);
+  });
+});
 
 function messages(problems: readonly { readonly message: string }[]): string[] {
   return problems.map(({ message }) => message);

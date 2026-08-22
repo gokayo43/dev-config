@@ -2,12 +2,20 @@ import { describe, expect, test } from "bun:test";
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { ConfigObject, Event } from "../.github/actions/_lib/gate.ts";
+import type { Event } from "../.github/actions/_lib/gate.ts";
 import { type Contract, repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { git, history, materialise, type Tree, under, without } from "./tree.ts";
 import { containing } from "./matchers.ts";
 
-import { CLEAN, contract, DEFAULTS, manifestWith, PIN, withSpec } from "./repo-contract-fixture.ts";
+import {
+  CLEAN,
+  contract,
+  DEFAULTS,
+  manifestWith,
+  type PackageJson,
+  PIN,
+  withSpec,
+} from "./repo-contract-fixture.ts";
 
 describe("repo contract", () => {
   test("a repo that declares everything passes", async () => {
@@ -15,11 +23,9 @@ describe("repo contract", () => {
   });
 
   test("the package manager has to be bun, pinned", async () => {
-    const missing = await contract(manifestWith((contents) => delete contents["packageManager"]));
+    const missing = await contract(manifestWith((contents) => delete contents.packageManager));
     expect(missing).toEqual([containing("packageManager")]);
-    const wrong = await contract(
-      manifestWith((contents) => (contents["packageManager"] = "pnpm@10")),
-    );
+    const wrong = await contract(manifestWith((contents) => (contents.packageManager = "pnpm@10")));
     expect(wrong).toEqual([containing("packageManager")]);
   });
 
@@ -39,7 +45,7 @@ describe("repo contract", () => {
     expect(
       await contract(
         manifestWith((contents) => {
-          delete (contents["devDependencies"] as Record<string, string>)["oxlint-tsgolint"];
+          delete contents.devDependencies["oxlint-tsgolint"];
         }),
       ),
     ).toEqual([containing("oxlint-tsgolint is missing")]);
@@ -85,6 +91,15 @@ describe("repo contract", () => {
       containing("saveExact"),
       containing("coverageThreshold"),
     ]);
+  });
+
+  // `Bun.TOML.parse` throws, so a bunfig nobody can read used to leave the step
+  // with a parse error naming no file, and took the findings every other check
+  // had already produced with it. The wrong implementation is the one that
+  // parses this file outside the rescue the other configs are read through.
+  test("a bunfig nothing can parse is named, not thrown past", async () => {
+    const problems = await contract({ ...CLEAN, "bunfig.toml": "not toml at all\n" });
+    expect(problems).toEqual([containing("is not valid TOML")]);
   });
 
   // lefthook 2.x leads with `jobs:` — a list whose entries may be a `group:`
@@ -155,7 +170,7 @@ describe("repo contract", () => {
 
   test("db:migrate is only required of a repo that runs the database gate", async () => {
     const tree = manifestWith((contents) => {
-      delete (contents["scripts"] as Record<string, string>)["db:migrate"];
+      delete contents.scripts["db:migrate"];
     });
     expect(await contract(tree, { database: true })).toEqual([containing("db:migrate")]);
     expect(await contract(tree, { database: false })).toEqual([]);
@@ -321,8 +336,8 @@ const RESTORE_DRILL = "scripts/restore-drill.sh";
 /** Everything `lifecycle: "live"` derives, all of it satisfied. */
 const LIVE: Tree = {
   ...manifestWith((contents) => {
-    contents["lifecycle"] = "live";
-    contents["dependencies"] = { "@sentry/bun": "10.24.0" };
+    contents.lifecycle = "live";
+    contents.dependencies = { "@sentry/bun": "10.24.0" };
   }),
   [BACKUP]: "#!/usr/bin/env bash\n",
   [RESTORE_DRILL]: "#!/usr/bin/env bash\n",
@@ -349,19 +364,24 @@ interface LiveOptions extends Partial<Contract> {
   readonly executable?: readonly string[];
 }
 
+/**
+ * The manifest a live static site ships, and whatever a case changes about it.
+ * Stated once: the lifecycle cases below differ from this tree by one field,
+ * and rebuilding the other three around each of them is how two definitions of
+ * "a live static repo" start disagreeing about which fault a case is showing.
+ */
+function liveManifest(change: (contents: PackageJson) => void = () => {}): Tree {
+  return manifestWith((contents) => {
+    contents.lifecycle = "live";
+    contents.dependencies = { "@sentry/astro": "10.24.0" };
+    delete contents.scripts["db:migrate"];
+    change(contents);
+  });
+}
+
 /** A live repo with no database of its own: a marketing site, and half the fleet. */
 const LIVE_STATIC: Tree = {
-  ...without(
-    without(
-      manifestWith((contents) => {
-        contents["lifecycle"] = "live";
-        contents["dependencies"] = { "@sentry/astro": "10.24.0" };
-        delete (contents["scripts"] as Record<string, string>)["db:migrate"];
-      }),
-      BACKUP,
-    ),
-    RESTORE_DRILL,
-  ),
+  ...without(without(liveManifest(), BACKUP), RESTORE_DRILL),
   ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
 };
 
@@ -370,7 +390,7 @@ const LIVE_STATIC: Tree = {
 // this is.
 describe("the lifecycle field", () => {
   test("a repo that does not declare one is refused", async () => {
-    expect(await contract(manifestWith((contents) => delete contents["lifecycle"]))).toEqual([
+    expect(await contract(manifestWith((contents) => delete contents.lifecycle))).toEqual([
       containing("lifecycle is absent"),
     ]);
   });
@@ -378,7 +398,7 @@ describe("the lifecycle field", () => {
   test.each(["prod", "", "production", "Live", "true"])(
     "a lifecycle nobody defined (%s) is refused rather than read as either",
     async (value) => {
-      expect(await contract(manifestWith((contents) => (contents["lifecycle"] = value)))).toEqual([
+      expect(await contract(manifestWith((contents) => (contents.lifecycle = value)))).toEqual([
         containing(`lifecycle reads ${JSON.stringify(value)}`),
       ]);
     },
@@ -450,7 +470,7 @@ describe("what going live requires", () => {
 
   test("something in the repo has to report its crashes", async () => {
     const blind = manifestWith((contents) => {
-      contents["lifecycle"] = "live";
+      contents.lifecycle = "live";
     });
     expect(await live({ ...LIVE, "package.json": blind["package.json"] ?? "" })).toEqual([
       containing("a live repo reports its crashes"),
@@ -467,7 +487,7 @@ describe("what going live requires", () => {
     "@sentry/astro",
   ])("%s satisfies it, from anywhere in the workspace", async (name) => {
     const blind = manifestWith((contents) => {
-      contents["lifecycle"] = "live";
+      contents.lifecycle = "live";
     });
     expect(
       await live({
@@ -481,16 +501,12 @@ describe("what going live requires", () => {
   // Declaring is not shipping. A devDependency builds and tests the repo and
   // reaches no deployment, and a peer range states what a consumer may bring —
   // so an SDK in either is a repo whose crashes nobody hears.
-  test.each(["devDependencies", "peerDependencies"])(
+  test.each(["devDependencies", "peerDependencies"] as const)(
     "a Sentry SDK in %s alone is not crash reporting",
     async (field) => {
       const declared = manifestWith((contents) => {
-        contents["lifecycle"] = "live";
-        const existing = contents[field];
-        contents[field] = {
-          ...(typeof existing === "object" && existing !== null ? existing : {}),
-          "@sentry/bun": "10.24.0",
-        };
+        contents.lifecycle = "live";
+        contents[field] = { ...contents[field], "@sentry/bun": "10.24.0" };
       });
       expect(await live({ ...LIVE, "package.json": declared["package.json"] ?? "" })).toEqual([
         containing("a live repo reports its crashes"),
@@ -509,8 +525,8 @@ describe("a live repo with no database of its own", () => {
 
   test("still owes the crash reporting", async () => {
     const blind = manifestWith((contents) => {
-      contents["lifecycle"] = "live";
-      delete (contents["scripts"] as Record<string, string>)["db:migrate"];
+      contents.lifecycle = "live";
+      delete contents.scripts["db:migrate"];
     });
     expect(
       await live(
@@ -539,9 +555,9 @@ describe("a live monorepo owns its database wherever the migrations live", () =>
     ...without(
       without(
         manifestWith((contents) => {
-          contents["lifecycle"] = "live";
-          contents["dependencies"] = { "@sentry/bun": "10.24.0" };
-          delete (contents["scripts"] as Record<string, string>)["db:migrate"];
+          contents.lifecycle = "live";
+          contents.dependencies = { "@sentry/bun": "10.24.0" };
+          delete contents.scripts["db:migrate"];
         }),
         BACKUP,
       ),
@@ -604,10 +620,11 @@ describe("ci-call waives the upgrade-gate rule with the call it is about", () =>
  * differs from its neighbour by the field and never by a backup script.
  */
 function declaring(value: string | undefined): Tree {
-  const contents = JSON.parse(LIVE_STATIC["package.json"] ?? "") as ConfigObject;
-  if (value === undefined) delete contents["lifecycle"];
-  else contents["lifecycle"] = value;
-  return { ...LIVE_STATIC, "package.json": JSON.stringify(contents) };
+  const manifest = liveManifest((contents) => {
+    if (value === undefined) delete contents.lifecycle;
+    else contents.lifecycle = value;
+  });
+  return { ...LIVE_STATIC, "package.json": manifest["package.json"] ?? "" };
 }
 
 /** What a push of this branch tells the gate: the tip it had before. */

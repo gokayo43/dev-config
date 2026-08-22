@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { SQL } from "bun";
 
 import type { Event } from "../.github/actions/_lib/gate.ts";
-import { beside } from "../.github/actions/db-gate/database.ts";
+import { beside, rows } from "../.github/actions/db-gate/database.ts";
 import { replayGate, upgradeDatabase } from "../.github/actions/db-gate/replay.ts";
 import type { Verdict } from "../.github/actions/db-gate/verdict.ts";
 
@@ -75,11 +75,9 @@ async function emptyDatabase(): Promise<string> {
 
 async function exists(database: string): Promise<boolean> {
   const server = new SQL(SERVER);
-  const rows = (await server.unsafe(
-    `select 1 from pg_database where datname = '${database}'`,
-  )) as unknown[];
+  const found = await rows(server, `select 1 from pg_database where datname = '${database}'`);
   await server.close();
-  return rows.length > 0;
+  return found.length > 0;
 }
 
 const THING = { tag: "0000_thing", when: 1_000 } as const;

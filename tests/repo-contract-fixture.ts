@@ -4,7 +4,7 @@
  * dependency spec is read is its own file — and a fixture each would be two
  * definitions of "a repo that passes", drifting apart on the first new fact.
  */
-import type { ConfigObject, Event } from "../.github/actions/_lib/gate.ts";
+import type { Event } from "../.github/actions/_lib/gate.ts";
 import type { Contract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { materialise, type Tree } from "./tree.ts";
@@ -12,7 +12,25 @@ import { materialise, type Tree } from "./tree.ts";
 /** The commit a fixture's CI call is pinned to; any 40 hex characters would do. */
 export const PIN = "f1a8afef270d30bf25f2f30275ecf988123d9fb3";
 
-const MANIFEST = {
+/**
+ * The fields a case mutates, named rather than read off a parse. The fixture
+ * writes this file three lines below, so a case that goes through `JSON.parse`
+ * to change one key is asserting a shape it wrote itself — and the assertion,
+ * not the type, is what would still be there the day a field is renamed.
+ */
+export interface PackageJson {
+  name: string;
+  /** Optional because a manifest that has not declared one is a case the gate grades. */
+  packageManager?: string;
+  /** `unknown`, not `string`: what the gate says about a lifecycle that is not one is a case too. */
+  lifecycle?: unknown;
+  scripts: Record<string, string>;
+  devDependencies: Record<string, string>;
+  dependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+}
+
+const MANIFEST: PackageJson = {
   name: "clean",
   packageManager: "bun@1.3.11",
   lifecycle: "dev",
@@ -54,14 +72,14 @@ export async function contract(tree: Tree, overrides: Partial<Contract> = {}): P
   return (await repoContract(root, { ...DEFAULTS, ...overrides })).map(({ message }) => message);
 }
 
-export function manifestWith(change: (contents: ConfigObject) => void): Tree {
-  const contents = JSON.parse(CLEAN["package.json"] ?? "") as ConfigObject;
+export function manifestWith(change: (contents: PackageJson) => void): Tree {
+  const contents = structuredClone(MANIFEST);
   change(contents);
   return { ...CLEAN, "package.json": JSON.stringify(contents) };
 }
 
 export function withSpec(name: string, spec: string): Tree {
   return manifestWith((contents) => {
-    (contents["devDependencies"] as Record<string, string>)[name] = spec;
+    contents.devDependencies[name] = spec;
   });
 }

@@ -13,7 +13,10 @@ describe("how a dependency spec is graded", () => {
   /** A peer declaration carrying one spec, which is the only thing these cases vary. */
   async function peer(spec: unknown): Promise<string[]> {
     return await contract(
-      manifestWith((contents) => (contents["peerDependencies"] = { react: spec })),
+      manifestWith((contents) => {
+        // @ts-expect-error this suite's whole subject is a manifest declaring a spec that is not one; a well-formed PackageJson cannot hold that, and every case below writes it deliberately
+        contents.peerDependencies = { react: spec };
+      }),
     );
   }
 

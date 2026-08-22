@@ -8,7 +8,9 @@ import {
   databaseIn,
   discard,
   type Dump,
+  rows,
   scratchDatabase,
+  textColumn,
 } from "../.github/actions/db-gate/database.ts";
 
 const SERVER =
@@ -54,6 +56,45 @@ describe("a database beside the one the caller declared", () => {
  * are not something a fixture repo can produce. What has to hold is that no
  * answer of "these differ" comes with nothing to say about how.
  */
+// `Bun.SQL` answers `any`, so nothing about a row is checked by the compiler.
+// The wrong implementation is the one that trusts the query and reads the field
+// anyway: it gets a `TypeError` three frames later, about a value whose origin
+// the stack no longer names.
+describe("reading rows off a query", () => {
+  const db = new SQL(SERVER);
+
+  test("a row is handed over as an object with the columns it answered", async () => {
+    expect(await rows(db, "select 1 as n, 'a' as t")).toEqual([{ n: 1, t: "a" }]);
+  });
+
+  test("a named column arrives as the text it has to be", async () => {
+    expect(await textColumn(db, "select 'public' as s union all select 'app'", "s")).toEqual([
+      "public",
+      "app",
+    ]);
+  });
+
+  /** What a read was refused with, or the fact that it was not refused at all. */
+  async function refusal(read: Promise<unknown>): Promise<string> {
+    return await read.then(
+      () => "the query was accepted",
+      (thrown: unknown) => (thrown instanceof Error ? thrown.message : String(thrown)),
+    );
+  }
+
+  test("a column that is not text is refused, naming the column and the query", async () => {
+    expect(await refusal(textColumn(db, "select 1 as n", "n"))).toContain(
+      "has n as a number rather than text",
+    );
+  });
+
+  test("a column the query never answered is refused too", async () => {
+    expect(await refusal(textColumn(db, "select 1 as n", "missing"))).toContain(
+      "has missing as absent rather than text",
+    );
+  });
+});
+
 describe("comparing two dumps", () => {
   /** A schema dump's units, which is how the replay gate cuts one: its lines. */
   const lines = (of: string, text: string): Dump => ({ of, each: "line", units: text.split("\n") });
@@ -102,10 +143,10 @@ describe("comparing two dumps", () => {
   // unit exists to prevent.
   test("the count is of whatever the producer cut the dump into", () => {
     /** A data dump's units, which the replay gate cuts per row rather than per line. */
-    const rows = (of: string, ...units: string[]): Dump => ({ of, each: "row", units });
+    const perRow = (of: string, ...units: string[]): Dump => ({ of, each: "row", units });
     const difference = compare(
-      rows("the data before", "INSERT INTO t VALUES (1, 'A\nB');"),
-      rows("the data after"),
+      perRow("the data before", "INSERT INTO t VALUES (1, 'A\nB');"),
+      perRow("the data after"),
     );
 
     expect(difference?.headline).toContain("the data before alone has 1 row");

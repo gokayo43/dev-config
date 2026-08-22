@@ -10,6 +10,7 @@ import {
   backfillGate,
   type Evidence,
 } from "../.github/actions/db-gate/backfill.ts";
+import { rows, textColumn } from "../.github/actions/db-gate/database.ts";
 import type { Verdict } from "../.github/actions/db-gate/verdict.ts";
 
 import { containing } from "./matchers.ts";
@@ -188,11 +189,9 @@ function messages({ problems }: Verdict): string[] {
 
 async function exists(database: string): Promise<boolean> {
   const server = new SQL(SERVER);
-  const rows = (await server.unsafe(
-    `select 1 from pg_database where datname = '${database}'`,
-  )) as unknown[];
+  const found = await rows(server, `select 1 from pg_database where datname = '${database}'`);
   await server.close();
-  return rows.length > 0;
+  return found.length > 0;
 }
 
 describe("the backfill check", () => {
@@ -432,11 +431,13 @@ describe("the backfill check", () => {
 /** Every table on the declared database, to say that the gate wrote none of them. */
 async function tables(): Promise<string[]> {
   const server = new SQL(SERVER);
-  const rows = (await server.unsafe(
+  const names = await textColumn(
+    server,
     `select table_name from information_schema.tables where table_schema = 'public' order by table_name`,
-  )) as { table_name: string }[];
+    "table_name",
+  );
   await server.close();
-  return rows.map(({ table_name }) => table_name);
+  return names;
 }
 
 /** What the gate threw, as the text a case can read. A rejection is the diagnostic here. */

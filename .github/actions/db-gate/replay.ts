@@ -13,7 +13,9 @@ import {
   type Dump,
   dumpOf,
   migrate,
+  rows,
   scratchDatabase,
+  textColumn,
 } from "./database.ts";
 import { passed, refused, type Verdict } from "./verdict.ts";
 
@@ -389,15 +391,18 @@ async function onTheBaseLineage<T>(
 async function appliedIn(url: string): Promise<Set<number>> {
   const db = new SQL(url);
   try {
-    const schemas = (await db.unsafe(
+    const schemas = await textColumn(
+      db,
       `select table_schema from information_schema.tables where table_name = '__drizzle_migrations'`,
-    )) as { table_schema: string }[];
+      "table_schema",
+    );
     const applied = new Set<number>();
-    for (const { table_schema } of schemas) {
-      const rows = (await db.unsafe(
+    for (const table_schema of schemas) {
+      const journal = await rows(
+        db,
         `select created_at from "${table_schema.replaceAll('"', '""')}"."__drizzle_migrations"`,
-      )) as { created_at: unknown }[];
-      for (const { created_at } of rows) applied.add(Number(created_at));
+      );
+      for (const row of journal) applied.add(Number(row["created_at"]));
     }
     return applied;
   } finally {

@@ -1,7 +1,7 @@
 import type { SQL } from "bun";
 import { resolve } from "node:path";
 
-import { notice } from "../_lib/gate.ts";
+import { type ConfigObject, isObject, kindOf, notice } from "../_lib/gate.ts";
 
 /**
  * Not a gate. What the gates in this directory that build a database of their
@@ -15,6 +15,52 @@ import { notice } from "../_lib/gate.ts";
  * question both of them exist to ask, and the day they disagreed nobody would
  * know which was right.
  */
+
+/**
+ * Whether there is a list here at all. Its own function because `Array.isArray`
+ * narrows an `unknown` to `any[]` — every element then reads as `any`, which is
+ * the thing the caller below is trying to stop having.
+ */
+function isList(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
+}
+
+/**
+ * The rows a query answered, as objects a reader can say something true about.
+ *
+ * `Bun.SQL` answers `any`: a driver cannot know what a string of SQL returns.
+ * So a call site that goes straight to a field is asserting the shape, and the
+ * assertion is the only thing standing between a renamed column and a
+ * `TypeError` three frames from the query. The answer is refused here instead,
+ * where the SQL that produced it is still in hand to name.
+ */
+export async function rows(db: SQL, query: string): Promise<readonly ConfigObject[]> {
+  const answered = (await db.unsafe(query)) as unknown;
+  if (!isList(answered)) {
+    throw new Error(`the query answered ${kindOf(answered)} rather than rows — ${query}`);
+  }
+  return answered.map((row, at) => {
+    if (!isObject(row)) {
+      throw new Error(`row ${at} is ${kindOf(row)} rather than a row — ${query}`);
+    }
+    return row;
+  });
+}
+
+/**
+ * One named column out of every row, as the text it has to be. The column is
+ * named twice on purpose — once in the SQL and once here — because that is what
+ * makes a query and a reader that have drifted apart say so.
+ */
+export async function textColumn(db: SQL, query: string, column: string): Promise<string[]> {
+  return (await rows(db, query)).map((row, at) => {
+    const value = row[column];
+    if (typeof value !== "string") {
+      throw new Error(`row ${at} has ${column} as ${kindOf(value)} rather than text — ${query}`);
+    }
+    return value;
+  });
+}
 
 /** The same server, pointing at a different database. */
 export function beside(url: string, database: string): string {

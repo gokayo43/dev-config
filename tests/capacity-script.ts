@@ -9,6 +9,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { record } from "../.github/actions/_lib/gate.ts";
+
 function requireEnv(name: string): string {
   const value = Bun.env[name];
   if (value === undefined || value === "") {
@@ -50,7 +52,28 @@ const STAGE = "--stage=2s:5";
 interface Ramp {
   /** The shipped script declares no threshold, so a ramp that ran at all exits 0. */
   readonly exitCode: number;
-  readonly metrics: Record<string, Record<string, number>>;
+  readonly metrics: Metrics;
+}
+
+/** Every metric k6 reported, by the names the assertions below read them under. */
+type Metrics = Record<string, Record<string, number>>;
+
+/**
+ * k6's summary, as much of it as the assertions below read: a number per name
+ * per metric, and nothing claimed about the rest of the file. The numbers are
+ * what every check here compares, so a summary whose shape moved shows up as a
+ * missing metric rather than as arithmetic on whatever was there instead.
+ */
+function metricsIn(value: unknown): Metrics {
+  const metrics: Metrics = {};
+  for (const [metric, values] of Object.entries(record(record(value)["metrics"]))) {
+    const numbers: Record<string, number> = {};
+    for (const [name, held] of Object.entries(record(values))) {
+      if (typeof held === "number") numbers[name] = held;
+    }
+    metrics[metric] = numbers;
+  }
+  return metrics;
 }
 
 const summaries = await mkdtemp(join(tmpdir(), "capacity-"));
@@ -68,10 +91,7 @@ async function ramp(capacityPath: string | undefined, name: string): Promise<Ram
     stderr: "pipe",
   });
   const exitCode = await proc.exited;
-  const summary = (await Bun.file(out).json()) as {
-    metrics: Record<string, Record<string, number>>;
-  };
-  return { exitCode, metrics: summary.metrics };
+  return { exitCode, metrics: metricsIn((await Bun.file(out).json()) as unknown) };
 }
 
 function expect(condition: boolean, what: string): void {

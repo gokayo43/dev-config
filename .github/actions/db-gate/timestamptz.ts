@@ -1,4 +1,4 @@
-import { type Allowlist, deadEntries, type Problem } from "../_lib/gate.ts";
+import { type Allowlist, deadEntries, isObject, kindOf, type Problem } from "../_lib/gate.ts";
 
 /** A column, as `information_schema.columns` names it. */
 export interface Column {
@@ -7,6 +7,41 @@ export interface Column {
   readonly column_name: string;
   /** The type as the catalogue spells it: `timestamp`, `timestamptz`, `_timestamp`, `int4`. */
   readonly udt_name: string;
+}
+
+/** The four names this gate reads, so a catalogue row missing one says which. */
+const COLUMN_FIELDS = ["table_schema", "table_name", "column_name", "udt_name"] as const;
+
+/**
+ * Every column a catalogue answer holds, refused unless each row carries the
+ * four names below as text.
+ *
+ * One decoder for two readers: the gate reads the rows a live Postgres
+ * answered, and the suite reads the ones captured from one into
+ * `columns.json`. Two decodings of "a column" would let the fixture keep a
+ * shape the database no longer produces, which is the one thing a captured
+ * fixture must not be able to do.
+ */
+export function columnsFrom(value: unknown, source: string): Column[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${source} is ${kindOf(value)} rather than a list of columns`);
+  }
+  return value.map((row: unknown, at) => {
+    if (!isObject(row)) throw new Error(`${source} row ${at} is ${kindOf(row)} rather than a row`);
+    const [table_schema, table_name, column_name, udt_name] = COLUMN_FIELDS.map((field) => {
+      const held = row[field];
+      if (typeof held !== "string") {
+        throw new Error(`${source} row ${at} has ${field} as ${kindOf(held)} rather than text`);
+      }
+      return held;
+    });
+    return {
+      table_schema: table_schema ?? "",
+      table_name: table_name ?? "",
+      column_name: column_name ?? "",
+      udt_name: udt_name ?? "",
+    };
+  });
 }
 
 /**

@@ -454,6 +454,7 @@ type Decode = (text: string) => unknown;
 const DIALECTS = {
   JSON: (text: string) => JSON.parse(text) as unknown,
   "JSON with comments": (text: string) => JSON.parse(withoutComments(text)) as unknown,
+  TOML: (text: string) => Bun.TOML.parse(text),
   YAML: (text: string) => Bun.YAML.parse(text),
 } satisfies Record<string, Decode>;
 
