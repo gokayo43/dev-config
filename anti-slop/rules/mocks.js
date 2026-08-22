@@ -1,6 +1,11 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
 
-import { importedBinding, resolveVariable, settledValue } from "../shared/bindings.js";
+import {
+  importedBinding,
+  resolveVariable,
+  settledValue,
+  writesThroughMember,
+} from "../shared/bindings.js";
 import { memberName, propertyKeyName, unwrapAssertions } from "../shared/syntax.js";
 
 /**
@@ -27,6 +32,15 @@ const SPIES = new Set(["spyOn", "jest.spyOn", "vi.spyOn"]);
 /** Replacing a whole module, under each runner's spelling of it. */
 const MODULE_MOCKS = new Set(["mock.module", "jest.mock", "vi.mock"]);
 
+/**
+ * The two ways an import names the module rather than an export of it. A star
+ * is the obvious one; a default is the same object under Bun's CJS interop, and
+ * `import bt from "bun:test"` is what a reader writes when they think it is.
+ * Reading only the star made a default import turn all three of these rules off
+ * for a file — a one-token edit, and the diff of it is a shortened import line.
+ */
+const NAMESPACE_NAMES = new Set(["*", "default"]);
+
 /** Every way an assertion is opened. `soft` and `poll` are vitest's, and assert just the same. */
 const EXPECTS = new Set(["expect", "expect.soft", "expect.poll"]);
 
@@ -45,7 +59,11 @@ function runnerApi(sourceCode, expression) {
     const variable = resolveVariable(sourceCode, value);
     const imported = importedBinding(variable);
     if (imported !== null) {
-      return RUNNERS.has(imported.source) && imported.name !== "*" ? imported.name : null;
+      // The namespace itself names no export, and calling it is not a call of
+      // one — `bt()` is nothing this rule knows, whichever of the two spellings
+      // brought `bt` in.
+      const named = RUNNERS.has(imported.source) && !NAMESPACE_NAMES.has(imported.name);
+      return named ? imported.name : null;
     }
     return variable === null && RUNNER_GLOBALS.has(value.name) ? value.name : null;
   }
@@ -60,7 +78,7 @@ function runnerApi(sourceCode, expression) {
   const object = unwrapAssertions(value.object);
   if (object.type === "Identifier") {
     const imported = importedBinding(resolveVariable(sourceCode, object));
-    if (imported !== null && imported.name === "*") {
+    if (imported !== null && NAMESPACE_NAMES.has(imported.name)) {
       return RUNNERS.has(imported.source) ? name : null;
     }
   }
@@ -69,11 +87,39 @@ function runnerApi(sourceCode, expression) {
 }
 
 /**
+ * Whether every slot of a literal is readable from the literal itself. A spread
+ * merges keys nobody here can enumerate and shifts every index after it, a
+ * computed key names a slot only the run time knows, a getter is a call rather
+ * than a value, and a repeated key is one JS resolves in the opposite direction
+ * from a first-match scan. Each of them makes the answer a guess, and a guess
+ * in this direction is a diagnostic about a value that is not there.
+ * @param {ESTree.ObjectExpression | ESTree.ArrayExpression} container
+ * @param {SourceCode} sourceCode
+ * @returns {boolean}
+ */
+function slotsAreReadable(container, sourceCode) {
+  if (container.type === "ArrayExpression") {
+    return container.elements.every((element) => element?.type !== "SpreadElement");
+  }
+  const named = new Set();
+  for (const property of container.properties) {
+    if (property.type !== "Property" || property.computed || property.kind !== "init") return false;
+    const key = propertyKeyName(property.key, sourceCode);
+    if (named.has(key)) return false;
+    named.add(key);
+  }
+  return true;
+}
+
+/**
  * What a container written out as a literal holds at that key: `spies.send`
  * where `spies` is `{ send: mock() }`, and `list[0]` where `list` is
- * `[mock()]`. One binding away from where the stand-in was made is as far as
- * this reaches — a `Map`, a factory's return value and a stand-in exported by
- * another file are named limits in the README rather than silent ones.
+ * `[mock()]`.
+ *
+ * Nothing, whenever the slot's final value is not the one written at the
+ * declaration — an unreadable literal, or a container something writes through
+ * later. One binding deep in every direction is as far as this reaches, and the
+ * README says so rather than leaving it to be found.
  * @param {SourceCode} sourceCode
  * @param {ESTree.MemberExpression} member
  * @returns {ESTree.Expression | null}
@@ -83,27 +129,29 @@ function heldIn(sourceCode, member) {
   if (object.type !== "Identifier") return null;
   const container = settledValue(sourceCode, object);
   if (container === null) return null;
+  if (container.type !== "ObjectExpression" && container.type !== "ArrayExpression") return null;
+  if (!slotsAreReadable(container, sourceCode)) return null;
+
+  const variable = resolveVariable(sourceCode, object);
+  if (variable === null || writesThroughMember(variable)) return null;
 
   if (container.type === "ObjectExpression") {
     const key = memberName(member);
     if (key === null) return null;
     for (const property of container.properties) {
-      if (property.type !== "Property" || property.computed) continue;
+      if (property.type !== "Property") continue;
       if (propertyKeyName(property.key, sourceCode) === key) return property.value;
     }
     return null;
   }
 
-  if (container.type === "ArrayExpression" && member.computed) {
-    const index = unwrapAssertions(member.property);
-    if (index.type !== "Literal" || typeof index.value !== "number") return null;
-    const element = container.elements[index.value];
-    return element === null || element === undefined || element.type === "SpreadElement"
-      ? null
-      : element;
-  }
-
-  return null;
+  if (!member.computed) return null;
+  const index = unwrapAssertions(member.property);
+  if (index.type !== "Literal" || typeof index.value !== "number") return null;
+  const element = container.elements[index.value];
+  return element === null || element === undefined || element.type === "SpreadElement"
+    ? null
+    : element;
 }
 
 /**
@@ -180,10 +228,19 @@ function reachesStandIn(sourceCode, subject) {
  * calls the collaborator exactly so and then does nothing with what it got
  * back, and fails against a correct rewrite that batches, caches or reorders —
  * which is the rewrite test read backwards.
+ *
+ * `toHaveBeenCalled` and `toHaveBeenCalledWith` are in the set for the same
+ * reason the counts are: "was it called, and with what" is the call log, and
+ * asserting it is asserting the shape of a collaboration rather than an
+ * outcome. They also carry the rule on their own where nothing else can — a
+ * stand-in imported from another file is invisible to `no-mock-assertions`,
+ * and these are what is left.
  */
 const CALL_MATCHERS = new Set([
+  "toHaveBeenCalled",
   "toHaveBeenCalledOnce",
   "toHaveBeenCalledTimes",
+  "toHaveBeenCalledWith",
   "toHaveBeenLastCalledWith",
   "toHaveBeenNthCalledWith",
 ]);
@@ -210,18 +267,18 @@ function opensAnAssertion(sourceCode, matcher) {
 }
 
 /**
- * Refuse assertions about how many times, or in what order, a function was
- * called.
+ * Refuse assertions about a collaborator's call log — that it was called, how
+ * often, in what order, or with what.
  * @type {Rule}
  */
-export const noCallCountAssertionsRule = {
+export const noCallLogAssertionsRule = {
   meta: {
     type: "problem",
     docs: {
-      description: "Disallow the call-count and call-order matchers on an expect() chain.",
+      description: "Disallow the call-log matchers on an expect() chain.",
     },
     messages: {
-      callCount:
+      callLog:
         "Assert what the code under test produced or wrote, not its call log ({{matcher}}) — a call log grades the implementation you happen to have, and passes against one that never uses what it got back.",
     },
   },
@@ -232,7 +289,7 @@ export const noCallCountAssertionsRule = {
         const name = memberName(node);
         if (name === null || !CALL_MATCHERS.has(name)) return;
         if (!opensAnAssertion(context.sourceCode, node)) return;
-        context.report({ node: node.property, messageId: "callCount", data: { matcher: name } });
+        context.report({ node: node.property, messageId: "callLog", data: { matcher: name } });
       },
     };
   },
@@ -274,17 +331,20 @@ export const noMockAssertionsRule = {
  * `const` holding one is a name away from it.
  * @param {SourceCode} sourceCode
  * @param {ESTree.Expression} expression
+ * @param {Set<ESTree.Node>} seen
  * @returns {string | null}
  */
-function moduleNamed(sourceCode, expression) {
+function moduleNamed(sourceCode, expression, seen) {
   const value = unwrapAssertions(expression);
+  if (seen.has(value)) return null;
+  seen.add(value);
   if (value.type === "Literal") return typeof value.value === "string" ? value.value : null;
   if (value.type === "TemplateLiteral") {
     return value.expressions.length === 0 ? (value.quasis[0]?.value.cooked ?? null) : null;
   }
   if (value.type !== "Identifier") return null;
   const held = settledValue(sourceCode, value);
-  return held === null || held === value ? null : moduleNamed(sourceCode, held);
+  return held === null ? null : moduleNamed(sourceCode, held, seen);
 }
 
 /**
@@ -344,7 +404,7 @@ export const noLocalModuleMocksRule = {
         if (MODULE_MOCKS.has(api)) {
           const [specifier] = node.arguments;
           if (specifier === undefined || specifier.type === "SpreadElement") return;
-          const named = moduleNamed(sourceCode, specifier);
+          const named = moduleNamed(sourceCode, specifier, new Set());
           if (named === null) {
             context.report({ node: specifier, messageId: "unnamedModule" });
           } else if (isOurs(named)) {

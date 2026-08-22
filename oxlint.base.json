@@ -91,7 +91,7 @@
         // The four smells a suite has to be free of before its green means
         // anything, and the only four in this plugin scoped to where they are
         // smells: every one of them is ordinary code in a source file.
-        "anti-slop/no-call-count-assertions": "error",
+        "anti-slop/no-call-log-assertions": "error",
         "anti-slop/no-local-module-mocks": "error",
         "anti-slop/no-mock-assertions": "error",
         "anti-slop/no-real-timers": "error"

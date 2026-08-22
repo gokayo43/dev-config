@@ -188,7 +188,7 @@ Two facts are true of a file because of where it sits, not what it contains:
       "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
       "rules": {
         "unicorn/consistent-function-scoping": "off",
-        "anti-slop/no-call-count-assertions": "error",
+        "anti-slop/no-call-log-assertions": "error",
         "anti-slop/no-local-module-mocks": "error",
         "anti-slop/no-mock-assertions": "error",
         "anti-slop/no-real-timers": "error"
@@ -311,12 +311,12 @@ file counts calls, sleeps, reaches into a module of its own and hands a function
 to `expect` in a helper, and none of that is a smell until it is a test's whole
 evidence.
 
-| Rule                       | What it rejects                                               |
-| -------------------------- | ------------------------------------------------------------- |
-| `no-call-count-assertions` | the count and order matchers, on an `expect()` chain          |
-| `no-mock-assertions`       | `expect()` on a stand-in, or on anything read through one     |
-| `no-local-module-mocks`    | `mock.module()` or `spyOn()` over a relative import           |
-| `no-real-timers`           | the timer globals, `Bun.sleep`, and the `node:timers` modules |
+| Rule                     | What it rejects                                                                                      |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `no-call-log-assertions` | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what |
+| `no-mock-assertions`     | `expect()` on a stand-in, or on anything read through one                                            |
+| `no-local-module-mocks`  | `mock.module()` or `spyOn()` over a relative import                                                  |
+| `no-real-timers`         | the timer globals, `Bun.sleep`, and the `node:timers` modules                                        |
 
 What they have in common is that each of them passes against an implementation
 nobody would ship. A call log grades the collaborator calls an implementation
@@ -329,10 +329,11 @@ proportion to how loaded the runner is.
 
 All four recognise their subject **through the import**, never through the name
 written at the call site. `import { mock as m }`, `import * as bt from
-"bun:test"` and vitest's or jest's spelling of the same call are one rule and
-one diagnostic — a gate keyed to the written name is a gate an `as` turns off,
-which is a one-token edit that reads as style. `bun:test`, `vitest` and
-`@jest/globals` are the modules; `jest` and `vi` are also read as globals,
+"bun:test"`, `import bt from "bun:test"` — a default import is the same object
+under Bun's CJS interop — and vitest's or jest's spelling of the same call are
+one rule and one diagnostic. A gate keyed to the written name is a gate an `as`
+turns off, which is a one-token edit that reads as style. `bun:test`, `vitest`
+and `@jest/globals` are the modules; `jest` and `vi` are also read as globals,
 because two of the three runners inject them.
 
 Two boundaries are worth stating, because both rules are wrong without them.
@@ -349,24 +350,42 @@ the line is the specifier: a package is a true external boundary, so
 
 #### What they do not see
 
-A plugin reads one file at a time and has no type checker under it. Where that
-stops mattering is worth writing down, because an undocumented limit is one
-people find by shipping past it:
+A plugin reads one file at a time and has no type checker under it. Two
+boundaries follow from that, and everything below is an instance of one of them
+— written out because an undocumented limit is one people find by shipping past
+it.
 
-- **Another file.** `export const send = mock(…)` in a shared test-utils module
-  is a stand-in these rules never see at the site asserting on it. This is the
-  realistic gap: a suite that keeps its stand-ins in a helper gets none of
-  `no-mock-assertions`.
-- **A container they cannot read into.** A stand-in in an object or array
-  literal is resolved through the property or the index; one in a `Map`, or
-  returned by a factory, is not.
-- **A name given to a global.** `const { sleep } = Bun`, `const later =
-setTimeout` and a namespace import of `node:timers` each put the function
-  behind a binding `no-real-timers` does not follow. The globals themselves,
-  `globalThis.setTimeout`, and a named import of one are all refused.
-- **A matcher computed from a value.** `expect(x)[matcher](1)` has no name to
-  read, and is left alone. `expect(x)["toHaveBeenCalledTimes"](1)` has one, and
-  is refused.
+**Nothing crosses a module boundary.** A stand-in these rules recognise is one
+whose import they can read in the file asserting on it. `export const send =
+mock(…)` in a shared test-utils module, a local barrel that re-exports
+`{ mock } from "bun:test"`, and `await import("bun:test")` all put the runner or
+the stand-in on the far side of a boundary one file cannot see across. This is
+the realistic gap: a suite that keeps its stand-ins in a helper gets none of
+`no-mock-assertions`, and its call-log matchers are what is left holding the
+line — which is why `toHaveBeenCalled` and `toHaveBeenCalledWith` are in the set
+rather than only the counts.
+
+**Every reach is one binding deep.** A name is followed to the `const` that gave
+it its value, once, and a container is read at the slot written in the literal.
+One step further in any direction and the answer is nothing: a nested literal
+(`spies.deps.send`), a container behind a call (`Object.freeze({…})`) or a
+factory's return value, a slot filled after the declaration, a `Map`, a second
+name for the same container, or the call log itself lifted out
+(`const log = send.mock`). The same limit is why `const { sleep } = Bun`,
+`const later = setTimeout` and a namespace import of `node:timers` are past
+`no-real-timers`, while the globals themselves — under all four of their names,
+`globalThis`, `self`, `window`, `global` — and a named import of one are
+refused.
+
+Where a slot's final value is not the one written at the declaration, the reach
+stops rather than guesses. A spread, a computed or repeated key, a getter, or
+anything writing through the container (`spies.send = real`) all make the
+literal a poor witness, and a rule that read it anyway would report a stand-in
+that is not there by the time the assertion runs.
+
+**A matcher computed from a value** has no name to read: `expect(x)[matcher](1)`
+is left alone, while `expect(x)["toHaveBeenCalledTimes"](1)` has one and is
+refused.
 
 The one place a rule refuses rather than shrugs is a module specifier it cannot
 read: `mock.module(import.meta.resolve("./x.ts"))` fails asking to be written as
@@ -377,7 +396,7 @@ One line can be two smells: `expect(send).toHaveBeenCalledTimes(1)` is both a
 stand-in handed to `expect` and a call log asserted on, and it reports twice. A
 directive names rules one at a time, so the escape from both is both names in
 one — `oxlint-disable-next-line anti-slop/no-mock-assertions,
-anti-slop/no-call-count-assertions -- <reason>`. As everywhere else here, the
+anti-slop/no-call-log-assertions -- <reason>`. As everywhere else here, the
 reason is not optional; the suppression-hygiene gate holds every directive to
 carrying one.
 

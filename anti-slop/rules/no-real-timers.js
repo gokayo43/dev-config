@@ -15,6 +15,14 @@ const TIMERS = new Set(["setImmediate", "setInterval", "setTimeout"]);
 const SLEEPS = new Set(["sleep", "sleepSync"]);
 
 /**
+ * Every name for the global object. They are one object under four spellings,
+ * and a rule that knew only `globalThis` was one word away from silent:
+ * `self.setTimeout` is the same function reached the same long way round, and
+ * `window` is what a repo with a DOM lib writes without thinking about it.
+ */
+const HOLDERS = new Set(["global", "globalThis", "self", "window"]);
+
+/**
  * The modules that export the same functions under a name a file can choose.
  * Importing one is not a way round this rule: the promise-shaped `setTimeout`
  * of `node:timers/promises` spends exactly the time the global one does.
@@ -42,17 +50,18 @@ function sleepThrough(node) {
 function spentBy({ identifier }) {
   if (TIMERS.has(identifier.name)) return { at: identifier, name: identifier.name };
   if (identifier.name === "Bun") return sleepThrough(identifier);
-  if (identifier.name !== "globalThis") return null;
+  if (!HOLDERS.has(identifier.name)) return null;
 
   // `globalThis.setTimeout` is the same function reached the long way round,
   // and `globalThis.Bun.sleep` is Bun's the long way round.
+  const holder = identifier.name;
   const member = readOutOf(identifier);
   const name = memberName(member);
   if (name === null || member === null) return null;
-  if (TIMERS.has(name)) return { at: member, name: `globalThis.${name}` };
+  if (TIMERS.has(name)) return { at: member, name: `${holder}.${name}` };
   if (name !== "Bun") return null;
   const sleep = sleepThrough(member);
-  return sleep === null ? null : { at: sleep.at, name: `globalThis.${sleep.name}` };
+  return sleep === null ? null : { at: sleep.at, name: `${holder}.${sleep.name}` };
 }
 
 /**

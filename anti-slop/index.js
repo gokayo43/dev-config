@@ -11,7 +11,7 @@
 /** @import { Plugin } from "@oxlint/plugins" */
 
 import {
-  noCallCountAssertionsRule,
+  noCallLogAssertionsRule,
   noLocalModuleMocksRule,
   noMockAssertionsRule,
 } from "./rules/mocks.js";
@@ -29,7 +29,7 @@ import { noWidenThenAssertRule } from "./rules/no-widen-then-assert.js";
 const antiSlop = {
   meta: { name: "anti-slop" },
   rules: {
-    "no-call-count-assertions": noCallCountAssertionsRule,
+    "no-call-log-assertions": noCallLogAssertionsRule,
     "no-chained-type-assertions": noChainedTypeAssertionsRule,
     "no-known-value-widening": noKnownValueWideningRule,
     "no-local-module-mocks": noLocalModuleMocksRule,

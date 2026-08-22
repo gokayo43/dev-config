@@ -19,7 +19,7 @@ const send = mock(() => 1);
 `;
 
 const IN_TESTS = {
-  "no-call-count-assertions": [
+  "no-call-log-assertions": [
     {
       name: "the count matcher is refused",
       source: `${SENT}test("sends", () => {
@@ -67,6 +67,16 @@ test("sends", () => {
   expect(send)[matcher](1);
 });`,
       reports: [],
+    },
+    {
+      name: "was it called, and with what, is the call log — and the only reach onto a stand-in from another file",
+      source: `import { expect, test } from "bun:test";
+import { send } from "./helpers.test-utils.ts";
+test("sends", () => {
+  expect(send).toHaveBeenCalled();
+  expect(send).toHaveBeenCalledWith("a");
+});`,
+      reports: ["4:16", "5:16"],
     },
     {
       name: "the matchers that grade the result are the ones a test is for",
@@ -198,6 +208,50 @@ test("sends", () => {
   expect(spies.send.mock.calls.length).toBe(1);
 });`,
       reports: ["5:10", "6:10", "7:10"],
+    },
+    {
+      name: "a default import is the namespace too — Bun's interop makes them one object",
+      source: `import bt from "bun:test";
+const send = bt.mock(() => 1);
+bt.test("sends", () => {
+  bt.expect(send).toBeDefined();
+});`,
+      reports: ["4:13"],
+    },
+    {
+      name: "a container whose slot the source cannot settle is left alone, however it was unsettled",
+      source: `import { expect, mock, test } from "bun:test";
+const real = (): number => 3;
+const others = [1, 2];
+const shifted = [...others, mock(() => 1)];
+const overridden = { send: mock(() => 1), send: real };
+const written: { send: () => number } = { send: mock(() => 1) };
+written.send = real;
+test("none of the three holds a stand-in by the time it is read", () => {
+  expect(shifted[1]).toBe(2);
+  expect(overridden.send).toBe(real);
+  expect(written.send).toBe(real);
+});`,
+      reports: [],
+    },
+    {
+      name: "a runner reached through this repo's own re-export is past what one file can see",
+      source: `import { expect, mock, test } from "./barrel.ts";
+const send = mock(() => 1);
+test("sends", () => {
+  expect(send).toBeDefined();
+});`,
+      reports: [],
+    },
+    {
+      name: "and so is one imported at run time",
+      source: `import { expect, test } from "bun:test";
+const { mock } = await import("bun:test");
+const send = mock(() => 1);
+test("sends", () => {
+  expect(send).toBeDefined();
+});`,
+      reports: [],
     },
     {
       name: "an object of the test's own that happens to have a mock property is not a stand-in",
@@ -353,6 +407,15 @@ test("waits", async () => {
       reports: ["3:34", "4:9"],
     },
     {
+      name: "and `self` and `window` are the same object under other names",
+      source: `import { test } from "bun:test";
+test("waits", async () => {
+  await new Promise((resolve) => self.setTimeout(resolve, 5));
+  await new Promise((resolve) => window.setTimeout(resolve, 5));
+});`,
+      reports: ["3:34", "4:34"],
+    },
+    {
       name: "an assertion or an optional link around it changes which value, not that it sleeps",
       source: `import { test } from "bun:test";
 test("waits", async () => {
@@ -460,13 +523,13 @@ test("sends", () => {
     }
 
     test("one name leaves the other rule reporting", async () => {
-      expect((await under("no-call-count-assertions")).join("\n")).toContain(
+      expect((await under("no-call-log-assertions")).join("\n")).toContain(
         "anti-slop(no-mock-assertions)",
       );
     });
 
     test("both names in one directive is what silences the line", async () => {
-      expect(await under("no-call-count-assertions", "no-mock-assertions")).toEqual([]);
+      expect(await under("no-call-log-assertions", "no-mock-assertions")).toEqual([]);
     });
   });
 });

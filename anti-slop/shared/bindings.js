@@ -1,6 +1,6 @@
 /** @import { ESTree, Scope, SourceCode, Variable } from "@oxlint/plugins" */
 
-import { unwrapAssertions } from "./syntax.js";
+import { readOutOf, unwrapAssertions } from "./syntax.js";
 
 /**
  * The variable an identifier refers to, found by walking out of the scope the
@@ -98,4 +98,26 @@ export function settledValue(sourceCode, identifier) {
   const declarator = variableDeclarator(variable);
   if (declarator === null || declarator.init === null) return null;
   return isSettledBinding(variable, declarator) ? unwrapAssertions(declarator.init) : null;
+}
+
+/**
+ * Whether anything writes *through* the binding rather than to it —
+ * `spies.send = real`, `delete spies.send`, `spies.count++`.
+ *
+ * `isSettledBinding` answers for the name; this answers for what the name
+ * points at, and only the two together make a literal written at a declaration
+ * evidence about a slot later on. A `const` holding an object is still a
+ * `const` after every property of it has been replaced.
+ * @param {Variable} variable
+ * @returns {boolean}
+ */
+export function writesThroughMember(variable) {
+  return variable.references.some(({ identifier }) => {
+    const member = readOutOf(identifier);
+    if (member === null) return false;
+    const parent = member.parent;
+    if (parent.type === "AssignmentExpression") return parent.left === member;
+    if (parent.type === "UpdateExpression") return true;
+    return parent.type === "UnaryExpression" && parent.operator === "delete";
+  });
 }
