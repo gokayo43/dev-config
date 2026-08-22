@@ -1,6 +1,6 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
 
-import { resolveVariable } from "../shared/bindings.js";
+import { isGlobalBinding } from "../shared/bindings.js";
 import { memberName, unwrapAssertions } from "../shared/syntax.js";
 
 /**
@@ -13,14 +13,9 @@ import { memberName, unwrapAssertions } from "../shared/syntax.js";
  */
 function isGlobalReflect(sourceCode, expression) {
   const value = unwrapAssertions(expression);
-  if (value.type !== "Identifier" || value.name !== "Reflect") return false;
-  if (sourceCode.isGlobalReference(value)) return true;
-  // A name resolved to nothing, or to a variable nothing declares, is the
-  // global: `isGlobalReference` answers no for a reference the scope analysis
-  // could not place, and every one of those in a file that never declares
-  // `Reflect` is the built-in.
-  const variable = resolveVariable(sourceCode, value);
-  return variable === null || variable.defs.length === 0;
+  return (
+    value.type === "Identifier" && value.name === "Reflect" && isGlobalBinding(sourceCode, value)
+  );
 }
 
 /**

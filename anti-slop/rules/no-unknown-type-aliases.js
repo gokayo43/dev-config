@@ -21,7 +21,7 @@ export const noUnknownTypeAliasesRule = {
   create(context) {
     return {
       Program(node) {
-        const environment = createTypeEnvironment(node);
+        const environment = createTypeEnvironment(node, context.sourceCode);
         for (const alias of environment.aliases.values()) {
           // Its own name is already being resolved: an alias that refers to
           // itself defines nothing, and is not a way to spell `unknown`.

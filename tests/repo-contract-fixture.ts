@@ -72,10 +72,22 @@ export async function contract(tree: Tree, overrides: Partial<Contract> = {}): P
   return (await repoContract(root, { ...DEFAULTS, ...overrides })).map(({ message }) => message);
 }
 
-export function manifestWith(change: (contents: PackageJson) => void): Tree {
-  const contents = structuredClone(MANIFEST);
+/**
+ * A manifest with one thing about it changed, written back as the file. Takes
+ * the manifest it starts from, because the two suites that grade a package.json
+ * declare different repos and only the shape is shared.
+ */
+export function manifestJson(
+  manifest: PackageJson,
+  change: (contents: PackageJson) => void,
+): string {
+  const contents = structuredClone(manifest);
   change(contents);
-  return { ...CLEAN, "package.json": JSON.stringify(contents) };
+  return JSON.stringify(contents);
+}
+
+export function manifestWith(change: (contents: PackageJson) => void): Tree {
+  return { ...CLEAN, "package.json": manifestJson(MANIFEST, change) };
 }
 
 export function withSpec(name: string, spec: string): Tree {

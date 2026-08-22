@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 
-import { jsonObjects, record } from "../.github/actions/_lib/gate.ts";
+import { configObjects, record } from "../.github/actions/_lib/gate.ts";
 import antiSlop from "../anti-slop/index.js";
-import { type Case, cases, oxlint, underBase } from "./lint-fixture.ts";
+import { type Case, cases, lines, oxlint, underBase } from "./lint-fixture.ts";
 import type { Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -86,8 +86,9 @@ export const one = input as object as User;
     );
 
     expect(reported).toHaveLength(1);
-    expect(reported[0]).toContain("anti-slop(no-chained-type-assertions)");
-    expect(reported[0]).toContain("5:20");
+    expect(reported[0]?.code).toBe("anti-slop(no-chained-type-assertions)");
+    expect(reported[0]?.severity).toBe("error");
+    expect([reported[0]?.line, reported[0]?.column]).toEqual([5, 20]);
   });
 });
 
@@ -552,12 +553,27 @@ export type Unpacked<Input> = Input extends Promise<infer Item> ? (x: Item) => v
       reports: [],
     },
     {
-      // The wrong fix for the case above is to take every `infer` name out of
-      // the whole conditional. TypeScript binds one only in the true branch, so
-      // the same name elsewhere is still whatever the file declared.
-      name: "and nowhere else in the conditional",
+      // The wrong fix for the case above is to treat every `infer` name as
+      // bound across the whole conditional — which is what the scope built for
+      // one covers. TypeScript binds it in the true branch alone, so the `Item`
+      // below is still the alias at the top of the file.
+      name: "and nowhere else in the conditional, not even the branch beside it",
       source: `type Item = unknown;
-export type Fallback<Input> = Input extends string ? never : (x: Item) => void;`,
+export type Fallback<Input> = Input extends infer Item ? string : (x: Item) => void;`,
+      reports: ["Parameter `x`"],
+    },
+    {
+      // The binder is a fact about where a name is written, not a name to carry
+      // down: `Wrapper` is written at the top level, where nothing named
+      // `Value` is a parameter, so it resolves to the alias it was always
+      // going to. Carrying the caller's binders into the alias body silenced
+      // every module-level alias reached from inside a generic.
+      name: "a binder does not follow the walk into an alias declared at the top level",
+      source: `type Value = unknown;
+type Wrapper = Value;
+export function save<Value>(x: Wrapper): void {
+  void x;
+}`,
       reports: ["Parameter `x`"],
     },
   ],
@@ -627,6 +643,15 @@ export function load<Value>(value: Value): Value {
       reports: ["6:28"],
     },
     {
+      name: "a binder does not follow the walk into an alias declared at the top level",
+      source: `type Value = unknown;
+type Wrapper = Value;
+export function load<Value>(): Wrapper {
+  throw new Error("nothing to return");
+}`,
+      reports: ["3:32"],
+    },
+    {
       name: "unknown behind a field is not the return contract",
       source: `${USER}export function load(): { readonly cause: unknown } {
   return { cause: input };
@@ -647,6 +672,16 @@ export function load<Value>(value: Value): Value {
       reports: [],
     },
     {
+      // This rule reads a type reference by name like the three beside it, and
+      // was the last of the four to be told so: an alias that hands its own
+      // parameter straight back renames nothing, whatever the file happens to
+      // have called something else.
+      name: "an alias that returns its own parameter is not the alias of that name",
+      source: `type Value = unknown;
+export type Payload<Value> = Value;`,
+      reports: ["Value"],
+    },
+    {
       name: "every alias in a chain that ends at unknown, not only the last",
       source: `type Anything = unknown;
 export type Payload = Anything;`,
@@ -661,8 +696,8 @@ export type Payload = Anything;`,
       // A type parameter may be named for a generic type in scope, and binding
       // it to an applied reference to that type is what the wrong
       // implementation follows forever: the parameter's own name looks up its
-      // own value on every pass. The plugin threw a RangeError here, and oxlint
-      // drops all nine rules for a file whose plugin threw.
+      // own value on every pass. The plugin threw a RangeError here, and a
+      // plugin that throws takes every rule in it down for that file.
       name: "a type parameter named for a generic alias resolves rather than looping",
       source: `type Box<T> = { readonly v: T };
 type Unwrap<Box> = Box;
@@ -803,7 +838,7 @@ export type Mapped<Value> = { readonly [K in string]: Value };`,
  */
 const enabled = await (async (): Promise<string[]> => {
   const base = record(
-    (await jsonObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
+    (await configObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
   );
   const overrides = Array.isArray(base["overrides"]) ? base["overrides"] : [];
   const blocks = [record(base["rules"]), ...overrides.map((each) => record(record(each)["rules"]))];
@@ -829,7 +864,7 @@ describe("anti-slop rules", () => {
   });
 
   test("and the unscoped ones fire in an ordinary source file", async () => {
-    const wired = (await oxlint(underBase(".ts", HOUSE))).join("\n");
+    const wired = (await lines(underBase(".ts", HOUSE))).join("\n");
     for (const rule of Object.keys(HOUSE)) {
       expect(wired).toContain(`anti-slop(${rule})`);
     }

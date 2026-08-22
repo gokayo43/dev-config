@@ -11,7 +11,7 @@ import {
   kindOf,
   oneOf,
   type Problem,
-  readJson,
+  readConfig,
 } from "../_lib/gate.ts";
 
 /**
@@ -134,13 +134,13 @@ function patternsIn(element: ConfigObject): string[] {
 
 /**
  * What `.oxlintrc.json` declares its pure domain to be. A config that is
- * missing or will not parse is `readJson`'s answer verbatim — the repo contract
+ * missing or will not parse is `readConfig`'s answer verbatim — the repo contract
  * already grades that file, and this gate has nothing to add to it. The
  * diagnostics of this gate's own are for the file that reads fine: one that
  * names no domain, and one whose pattern names something that is not a folder.
  */
 async function domainGlobs(root: string): Promise<Domain> {
-  const { contents, problems } = await readJson(root, OXLINTRC);
+  const { contents, problems } = await readConfig(root, OXLINTRC);
   if (contents === undefined) return { problems };
 
   const settings = contents["settings"];

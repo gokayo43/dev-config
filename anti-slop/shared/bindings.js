@@ -23,6 +23,35 @@ export function resolveVariable(sourceCode, identifier) {
 }
 
 /**
+ * Whether the environment declared this variable rather than the file.
+ *
+ * An `env` or `globals` entry in the consuming repo's config resolves to a
+ * variable with nothing behind it — the name is in scope, and no line of the
+ * file put it there. Which is why a rule cannot read "did this resolve" as
+ * "does the file own it": a repo that declares `jest` and `vi` as globals would
+ * otherwise turn off every rule keyed to them by writing the config that says
+ * it uses them.
+ * @param {Variable} variable
+ * @returns {boolean}
+ */
+export function isEnvironmentDeclared(variable) {
+  return variable.defs.length === 0;
+}
+
+/**
+ * Whether a name is the environment's rather than the file's: placed in the
+ * global scope, placed nowhere at all, or resolved to one of the above.
+ * @param {SourceCode} sourceCode
+ * @param {ESTree.IdentifierReference} identifier
+ * @returns {boolean}
+ */
+export function isGlobalBinding(sourceCode, identifier) {
+  if (sourceCode.isGlobalReference(identifier)) return true;
+  const variable = resolveVariable(sourceCode, identifier);
+  return variable === null || isEnvironmentDeclared(variable);
+}
+
+/**
  * The declarator that introduced a variable, when one declarator did. A name
  * declared more than once has no single initializer to read evidence off, so
  * both rules that ask this want nothing rather than the first of several.

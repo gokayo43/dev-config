@@ -11,7 +11,7 @@ export const BASE = join(REPO, "oxlint.base.json");
 const PLUGIN = join(REPO, "anti-slop/index.js");
 
 /** One diagnostic, as much of the JSON report as a case reads. */
-interface Diagnostic {
+export interface Diagnostic {
   readonly filename: string;
   readonly severity: string;
   readonly code: string;
@@ -55,7 +55,11 @@ function decoded(held: ConfigObject): Diagnostic {
  */
 export type Environment = Record<string, string>;
 
-/** A diagnostic written out, built from the report rather than scraped back out of one. */
+/**
+ * A diagnostic written out. Presentation, and the last thing that happens to
+ * one: what a case matches on is a line, and nothing here reads a field back
+ * out of it.
+ */
 function stated({ filename, line, column, severity, code, message }: Diagnostic): string {
   return `${filename}:${line}:${column}: ${severity} ${code}: ${message}`;
 }
@@ -65,11 +69,13 @@ function stated({ filename, line, column, severity, code, message }: Diagnostic)
  * here are a plugin oxlint loads and drives, so nothing short of running it
  * says whether a rule fires. Type-aware checking is off because a fixture tree
  * has no tsconfig — every rule in this plugin is syntactic, and the ones that
- * are not live in `oxlint.base.json` as oxlint's own.
+ * are not live in `oxlint.base.json` as oxlint's own, graded by `lintAt` below
+ * against a tree carrying both.
  *
  * One run per block rather than per case: a case is a file in the tree, and
  * grouping the diagnostics by file is what puts each one back with its case.
- * Nine spawns instead of a hundred, with no case able to see another's.
+ * One spawn per rule instead of one per case, with no case able to see
+ * another's.
  *
  * The format is pinned, and the report is parsed rather than matched. oxlint
  * chooses a reporter from the environment when nothing says otherwise —
@@ -79,8 +85,22 @@ function stated({ filename, line, column, severity, code, message }: Diagnostic)
  * shape agreed with itself on a developer's machine and called every case on CI
  * a clean tree.
  */
-export async function oxlint(tree: Tree, environment: Environment = {}): Promise<string[]> {
-  const root = await materialise(tree);
+export async function oxlint(
+  tree: Tree,
+  environment: Environment = {},
+): Promise<readonly Diagnostic[]> {
+  return await lintAt(await materialise(tree), environment);
+}
+
+/**
+ * The same run, over a tree the caller has already made — which is what a case
+ * needing more than files does: the base's own rules are type-aware, and the
+ * analysis runs in a package the fixture has to be able to resolve.
+ */
+export async function lintAt(
+  root: string,
+  environment: Environment = {},
+): Promise<readonly Diagnostic[]> {
   const proc = Bun.spawn([OXLINT, "--format=json", "."], {
     cwd: root,
     env: { ...process.env, ...environment },
@@ -119,14 +139,17 @@ export async function oxlint(tree: Tree, environment: Environment = {}): Promise
     throw new Error(`oxlint exited ${status} with ${errors} error(s):\n${output}`);
   }
 
-  return diagnostics
-    .toSorted(
-      (left, right) =>
-        left.filename.localeCompare(right.filename) ||
-        left.line - right.line ||
-        left.column - right.column,
-    )
-    .map(stated);
+  return diagnostics.toSorted(
+    (left, right) =>
+      left.filename.localeCompare(right.filename) ||
+      left.line - right.line ||
+      left.column - right.column,
+  );
+}
+
+/** Every diagnostic written out, for a caller grading a whole tree at once. */
+export async function lines(tree: Tree): Promise<string[]> {
+  return (await oxlint(tree)).map(stated);
 }
 
 /** The rule under test and nothing else, so a case cannot pass on another rule's diagnostic. */
@@ -139,36 +162,52 @@ function alone(rule: string): string {
   });
 }
 
-const runs = new Map<string, Promise<readonly (readonly string[])[]>>();
+interface Run {
+  /** Identity, not contents: one block computes its list once and every case reads that one. */
+  readonly sources: readonly string[];
+  readonly reported: Promise<readonly (readonly string[])[]>;
+}
+
+const runs = new Map<string, Run>();
 
 /**
  * Every case in one block, lit by one oxlint run and handed back per case.
  * Memoised on the key so the block's cases share the run rather than repeating
  * it, and started by whichever case is executed first.
+ *
+ * Two blocks under one key would silently read each other's diagnostics —
+ * every case of the second graded against the first's tree, passing or failing
+ * for reasons nothing in it names — so a key arriving with a different list is
+ * refused rather than answered.
  */
 export async function reportsFor(
   key: string,
   rule: string,
   sources: readonly string[],
 ): Promise<readonly (readonly string[])[]> {
-  const started =
-    runs.get(key) ??
-    (async () => {
-      const files = sources.map((_, index) => `case-${index}.ts`);
-      const reported = await oxlint({
-        ".oxlintrc.json": alone(rule),
-        ...Object.fromEntries(files.map((file, index) => [file, sources[index] ?? ""])),
-      });
-      const byFile = new Map<string, string[]>();
-      for (const line of reported) {
-        const [path = ""] = line.split(":");
-        const name = path.slice(path.lastIndexOf("/") + 1);
-        byFile.set(name, [...(byFile.get(name) ?? []), line]);
-      }
-      return files.map((file) => byFile.get(file) ?? []);
-    })();
-  runs.set(key, started);
-  return await started;
+  const known = runs.get(key);
+  if (known !== undefined) {
+    if (known.sources !== sources) {
+      throw new Error(`two blocks of cases are sharing the run key "${key}"`);
+    }
+    return await known.reported;
+  }
+
+  const reported = (async () => {
+    const files = sources.map((_, index) => `case-${index}.ts`);
+    const diagnostics = await oxlint({
+      ".oxlintrc.json": alone(rule),
+      ...Object.fromEntries(files.map((file, index) => [file, sources[index] ?? ""])),
+    });
+    const byFile = new Map<string, string[]>();
+    for (const diagnostic of diagnostics) {
+      const name = diagnostic.filename.slice(diagnostic.filename.lastIndexOf("/") + 1);
+      byFile.set(name, [...(byFile.get(name) ?? []), stated(diagnostic)]);
+    }
+    return files.map((file) => byFile.get(file) ?? []);
+  })();
+  runs.set(key, { sources, reported });
+  return await reported;
 }
 
 export interface Case {

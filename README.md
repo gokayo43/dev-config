@@ -308,18 +308,17 @@ base:
 
 Where a ported rule overlapped oxlint's own `typescript/no-unsafe-type-assertion`
 — which the base denies through `suspicious` — both were run over the same
-fixtures and the weaker one deleted:
+fixtures and only the stronger one kept.
 
-- **`no-widen-then-assert` is gone.** Widening a value and asserting it back is
-  an assertion to a narrower type by construction, which is the whole of what
-  the native rule reads: it refuses every case the ported rule refused, at the
-  same line and column. Two diagnostics for one fault are two places to change
-  the day the answer moves.
-- **`no-chained-type-assertions` stays.** The native rule covers every chain
-  that fabricates a type, because such a chain has a narrowing link in it. A
-  chain whose every link widens has none: `admin as User as object` draws
-  nothing from the native rule, nothing from `no-unnecessary-type-assertion`,
-  and nothing else in the base says the type it started from was discarded.
+`no-chained-type-assertions` is the one that overlaps and stays. The native
+rule covers every chain that fabricates a type, because such a chain has a
+narrowing link in it for the checker to refuse. A chain whose every link widens
+has none: `admin as User as object` draws nothing from the native rule, nothing
+from `no-unnecessary-type-assertion`, and nothing else in the base says the type
+it started from was discarded. Widening a binding and asserting it back needs no
+rule of its own — that is an assertion to a narrower type by construction, which
+is the whole of what the native rule reads, and `oxlint-base.test.ts` grades the
+base on those shapes directly.
 
 Four more are enabled only over `*.test.ts`, `*.test.tsx`, `*.spec.ts` and
 `*.spec.tsx`, because every one of them is ordinary code anywhere else: a source
@@ -417,11 +416,10 @@ reason is not optional; the suppression-hygiene gate holds every directive to
 carrying one.
 
 Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT),
-at commit `abaeb63` and then at `6d53855`. Upstream vendors the rules into each repo; they live here
+level with upstream at commit `6d53855`. Upstream vendors the rules into each repo; they live here
 because oxlint's `jsPlugins` API is alpha and explicitly outside semver, so the
 rule code and the oxlint version have to move as one pin — which is what the
-release pair already does. Upstream's tenth rule,
-`no-conditional-empty-object-spread`, is deliberately not ported: with
+release pair already does. `no-conditional-empty-object-spread` is deliberately not ported: with
 `exactOptionalPropertyTypes` the conditional spread is the only type-legal way
 to conditionally include a field in an option bag you do not own. Two more are
 not ported either: `require-safety-comment-for-type-assertion`, whose goal the

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 import { SQL } from "bun";
 
@@ -8,6 +8,7 @@ import {
   databaseIn,
   discard,
   type Dump,
+  numberColumn,
   rows,
   scratchDatabase,
   textColumn,
@@ -63,6 +64,10 @@ describe("a database beside the one the caller declared", () => {
 describe("reading rows off a query", () => {
   const db = new SQL(SERVER);
 
+  afterAll(async () => {
+    await db.close();
+  });
+
   test("a row is handed over as an object with the columns it answered", async () => {
     expect(await rows(db, "select 1 as n, 'a' as t")).toEqual([{ n: 1, t: "a" }]);
   });
@@ -91,6 +96,29 @@ describe("reading rows off a query", () => {
   test("a column the query never answered is refused too", async () => {
     expect(await refusal(textColumn(db, "select 1 as n", "missing"))).toContain(
       "has missing as absent rather than text",
+    );
+  });
+
+  // A `bigint` arrives as text and an `int` as a number, and the replay gate
+  // turns on this one value: the migrations a database has already applied.
+  test("a column of numbers arrives as numbers, whichever way Postgres spelled it", async () => {
+    expect(
+      await numberColumn(db, "select 1756000000000::bigint as at union all select 2::int", "at"),
+    ).toEqual([1756000000000, 2]);
+  });
+
+  // The wrong implementation is `Number(row[column])`, which answers `NaN` for
+  // a column that is not there — and a `NaN` compares equal to nothing, so the
+  // migration it stands for is silently one this gate has never seen applied.
+  test("a number column the query never answered is refused, not read as NaN", async () => {
+    expect(await refusal(numberColumn(db, "select 1 as n", "created_at"))).toContain(
+      "has created_at as absent rather than a number",
+    );
+  });
+
+  test("and neither is a column holding something that is not one", async () => {
+    expect(await refusal(numberColumn(db, "select 'later' as at", "at"))).toContain(
+      "has at as a string rather than a number",
     );
   });
 });

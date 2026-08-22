@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { BASE, type Case, cases, oxlint, underBase } from "./lint-fixture.ts";
+import { BASE, type Case, cases, lines, underBase } from "./lint-fixture.ts";
 
 /**
  * The four rules the base enables only over test files, because every one of
@@ -492,7 +492,7 @@ describe("the test-smell rules", () => {
   // one, so a rule reaching `.test.ts` and not `.spec.tsx` is a hole a single
   // pooled assertion would report as covered.
   test.each(IN_TEST_FILES)("the base enables all four in a %s", async (suffix) => {
-    const wired = (await oxlint(underBase(suffix, IN_TESTS))).join("\n");
+    const wired = (await lines(underBase(suffix, IN_TESTS))).join("\n");
     for (const rule of Object.keys(IN_TESTS)) {
       expect(wired).toContain(`anti-slop(${rule})`);
     }
@@ -502,10 +502,33 @@ describe("the test-smell rules", () => {
   // reaching into a module are what a source file does all day, and a rule that
   // fired on them everywhere would be one every repo turned off.
   test.each(NOT_TEST_FILES)("and says nothing about the same source in a %s", async (suffix) => {
-    const wired = (await oxlint(underBase(suffix, IN_TESTS))).join("\n");
+    const wired = (await lines(underBase(suffix, IN_TESTS))).join("\n");
     for (const rule of Object.keys(IN_TESTS)) {
       expect(wired).not.toContain(`anti-slop(${rule})`);
     }
+  });
+
+  // A repo that declares the runner's globals in its own config, which is what
+  // `env` and `globals` are for, was turning these rules off by doing it: the
+  // name resolved to a variable the environment declared, and a rule reading
+  // "did this resolve" as "does the file own it" saw somebody else's `jest`.
+  test("a runner's globals declared in the config are still the runner's", async () => {
+    const declared = JSON.stringify({
+      extends: [BASE],
+      options: { typeAware: false },
+      globals: { jest: "readonly", vi: "readonly" },
+    });
+    const wired = (
+      await lines({
+        ".oxlintrc.json": declared,
+        "case.test.ts": `jest.mock("./service.ts");
+vi.mock("./service.ts", () => ({ run: () => 1 }));
+`,
+      })
+    ).join("\n");
+
+    expect(wired).toContain("anti-slop(no-local-module-mocks)");
+    expect(wired.match(/no-local-module-mocks/gu)).toHaveLength(2);
   });
 
   // One line is two smells here — a stand-in handed to `expect`, and its call
@@ -526,7 +549,7 @@ test("sends", () => {
     /** The same line under a directive naming the rules given. */
     async function under(...rules: readonly string[]): Promise<string[]> {
       const named = rules.map((rule) => `anti-slop/${rule}`).join(", ");
-      return await oxlint({
+      return await lines({
         ".oxlintrc.json": config,
         "case.test.ts": both.replace(
           "// DIRECTIVE",

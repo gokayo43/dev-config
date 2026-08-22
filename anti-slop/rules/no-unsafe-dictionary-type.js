@@ -1,9 +1,7 @@
 /** @import { ESTree, Rule } from "@oxlint/plugins" */
-/** @import { TypeParameterScopes } from "../shared/type-parameters.js" */
 /** @import { TypeEnvironment } from "../shared/types.js" */
 
 import { typeReferenceName } from "../shared/syntax.js";
-import { createTypeParameterScopes } from "../shared/type-parameters.js";
 import {
   classifyUnsafeDictionary,
   classifyUnsafeDictionaryValue,
@@ -43,26 +41,17 @@ function isPlainAliasConsumerUse(node, environment) {
 }
 
 /**
- * Each type is asked with the binders in scope where it sits, not where the
- * innermost one does: an enclosing type is outside any parameter the inner
- * declaration introduced, and reading it under the inner set would let a name
- * bound below silence a dictionary written above.
  * @param {ESTree.TSType} node
  * @param {TypeEnvironment} environment
- * @param {TypeParameterScopes} scopes
  * @returns {boolean}
  */
-function shouldReportType(node, environment, scopes) {
+function shouldReportType(node, environment) {
   if (isPlainAliasConsumerUse(node, environment)) return false;
-  if (classifyUnsafeDictionary(node, environment, scopes.at(node)) === null) return false;
+  if (classifyUnsafeDictionary(node, environment) === null) return false;
   let current = node.parent;
   while (current.type !== "Program") {
-    if (
-      isTypeNode(current) &&
-      classifyUnsafeDictionary(current, environment, scopes.at(current)) !== null
-    ) {
+    if (isTypeNode(current) && classifyUnsafeDictionary(current, environment) !== null)
       return false;
-    }
     current = current.parent;
   }
   return true;
@@ -87,7 +76,6 @@ export const noUnsafeDictionaryTypeRule = {
   createOnce(context) {
     /** @type {TypeEnvironment | null} */
     let environment = null;
-    const scopes = createTypeParameterScopes();
 
     /**
      * @param {ESTree.Node} node
@@ -99,18 +87,16 @@ export const noUnsafeDictionaryTypeRule = {
 
     /** @param {ESTree.TSType} node */
     const reportIfUnsafe = (node) => {
-      if (environment === null || !shouldReportType(node, environment, scopes)) return;
-      const unsafe = classifyUnsafeDictionary(node, environment, scopes.at(node));
+      if (environment === null || !shouldReportType(node, environment)) return;
+      const unsafe = classifyUnsafeDictionary(node, environment);
       if (unsafe === null) return;
       report(node, unsafe.unsafeValue);
     };
 
     return {
       Program(node) {
-        environment = createTypeEnvironment(node);
-        scopes.reset();
+        environment = createTypeEnvironment(node, context.sourceCode);
       },
-      TSInferType: scopes.record,
       TSTypeReference: reportIfUnsafe,
       TSTypeLiteral: reportIfUnsafe,
       TSMappedType: reportIfUnsafe,
@@ -119,7 +105,6 @@ export const noUnsafeDictionaryTypeRule = {
         const unsafe = classifyUnsafeDictionaryValue(
           node.typeAnnotation.typeAnnotation,
           environment,
-          scopes.at(node),
         );
         if (unsafe !== null) report(node, unsafe.unsafeValue);
       },

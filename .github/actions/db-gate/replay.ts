@@ -13,7 +13,7 @@ import {
   type Dump,
   dumpOf,
   migrate,
-  rows,
+  numberColumn,
   scratchDatabase,
   textColumn,
 } from "./database.ts";
@@ -398,11 +398,12 @@ async function appliedIn(url: string): Promise<Set<number>> {
     );
     const applied = new Set<number>();
     for (const table_schema of schemas) {
-      const journal = await rows(
+      const journal = await numberColumn(
         db,
         `select created_at from "${table_schema.replaceAll('"', '""')}"."__drizzle_migrations"`,
+        "created_at",
       );
-      for (const row of journal) applied.add(Number(row["created_at"]));
+      for (const created of journal) applied.add(created);
     }
     return applied;
   } finally {

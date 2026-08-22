@@ -1,6 +1,6 @@
-/** @import { ESTree, Reference, Rule, ScopeManager } from "@oxlint/plugins" */
+/** @import { ESTree, Reference, Rule, SourceCode } from "@oxlint/plugins" */
 
-import { importedBinding } from "../shared/bindings.js";
+import { importedBinding, isEnvironmentDeclared } from "../shared/bindings.js";
 import { memberName, readOutOf } from "../shared/syntax.js";
 
 /**
@@ -74,17 +74,15 @@ function spentBy({ identifier }) {
  * made reading only `through` a way round this rule. A name the file declares
  * or imports is neither, which is the point: a local `setTimeout` is something
  * else, and a property called `setTimeout` is not a reference at all.
- * @param {ScopeManager} scopeManager
+ * @param {SourceCode} sourceCode
  * @returns {readonly Reference[]}
  */
-function globalReferences(scopeManager) {
-  const global = scopeManager.globalScope;
+function globalReferences(sourceCode) {
+  const global = sourceCode.scopeManager.globalScope;
   if (global === null) return [];
   return [
     ...global.through,
-    ...global.variables
-      .filter(({ defs }) => defs.length === 0)
-      .flatMap(({ references }) => references),
+    ...global.variables.filter(isEnvironmentDeclared).flatMap(({ references }) => references),
   ];
 }
 
@@ -108,7 +106,7 @@ export const noRealTimersRule = {
   createOnce(context) {
     return {
       Program() {
-        for (const reference of globalReferences(context.sourceCode.scopeManager)) {
+        for (const reference of globalReferences(context.sourceCode)) {
           const spent = spentBy(reference);
           if (spent !== null) {
             context.report({ node: spent.at, messageId: "realTimer", data: { name: spent.name } });

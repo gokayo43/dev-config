@@ -4,21 +4,17 @@ import { allowlistFrom, type Problem } from "../.github/actions/_lib/gate.ts";
 import { denies, denylistIn, stackGate } from "../.github/actions/stack-gate/stack-gate.ts";
 import { materialise, trackThenDelete, type Tree } from "./tree.ts";
 import { containing } from "./matchers.ts";
+import { manifestJson, type PackageJson } from "./repo-contract-fixture.ts";
 
 const DENYLIST = new URL("../.github/actions/stack-gate/stack-denylist.json", import.meta.url);
 
 /** The real file, read the way the gate reads it — so the suite grades what ships, parsed. */
 const DENYLIST_ENTRIES = denylistIn(await Bun.file(DENYLIST).json(), String(DENYLIST));
 
-/** The fields a case mutates, named rather than read back off the file this writes. */
-interface PackageJson {
-  name: string;
-  dependencies: Record<string, string>;
-  devDependencies: Record<string, string>;
-}
-
+/** A repo whose stack is clean, which is the only thing these cases vary. */
 const MANIFEST: PackageJson = {
   name: "clean",
+  scripts: {},
   dependencies: { "drizzle-orm": "0.44.7", sonner: "2.0.7", clsx: "2.1.1" },
   devDependencies: { "drizzle-kit": "0.31.6", "jest-expo": "54.0.0" },
 };
@@ -35,9 +31,12 @@ async function gate(tree: Tree, allowlist = ""): Promise<string[]> {
 }
 
 function withDependency(name: string, version = "1.0.0"): Tree {
-  const contents = structuredClone(MANIFEST);
-  contents.dependencies[name] = version;
-  return { ...CLEAN, "package.json": JSON.stringify(contents) };
+  return {
+    ...CLEAN,
+    "package.json": manifestJson(MANIFEST, (contents) => {
+      contents.dependencies = { ...contents.dependencies, [name]: version };
+    }),
+  };
 }
 
 describe("stack gate", () => {

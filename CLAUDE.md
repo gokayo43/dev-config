@@ -70,14 +70,17 @@ a change to a rule usually lands here too.
   clean one. A gate without one is a claim; `anti-slop.test.ts` and
   `anti-slop-test-smells.test.ts` hold every lint rule in `anti-slop/` to the
   same bar — a block of cases per rule, split where the base splits, since the
-  four scoped to test files have a second question to answer about every case
-  and the nine that apply everywhere do not. Both run through `lint-fixture.ts`,
+  rules scoped to test files have a second question to answer about every case
+  and the ones that apply everywhere do not. Neither file states how many there
+  are: `anti-slop.test.ts` asks the plugin and the base for their rule names and
+  requires the two sets to be equal, which is the check a count would replace
+  with a number to forget. Both run through `lint-fixture.ts`,
   which owns the case shape and lints a whole block in one oxlint spawn, and
   refuses a run whose plugin threw or whose exit status and diagnostics
   disagree, both of which otherwise read as a clean tree.
   `anti-slop-upstream.test.ts` is
-  upstream's own fixtures, as a differential oracle over the three rules it
-  ships tests for. Two suites are not a gate's: `oxlint-base.test.ts` holds what
+  upstream's own fixtures, as a differential oracle over every rule it ships
+  tests for. Two suites are not a gate's: `oxlint-base.test.ts` holds what
   the base config itself must — an override REPLACES a list-shaped rule rather
   than adding to it, which it proves against a config it builds itself and then
   holds every override in the base to — and `action-evidence.test.ts` holds every action
@@ -98,6 +101,13 @@ a change to a rule usually lands here too.
 bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites, coverage-floored
 ```
+
+`anti-slop/**` sits outside that floor, in `bunfig.toml`: its rules run inside a
+spawned oxlint and never execute in the test process, so the runner instruments
+them and then watches them run nowhere. What carries their duty instead is
+`tests/anti-slop*.test.ts`, which lints fixture trees with the shipped binary —
+a block of cases per rule, and a check that the base enables exactly the rules
+the plugin defines.
 
 `bun test` needs a Postgres and passwordless sudo — the first because the replay
 gate's property is what two databases end up holding, the second because the

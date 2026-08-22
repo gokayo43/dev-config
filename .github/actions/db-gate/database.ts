@@ -39,18 +39,45 @@ export async function rows(db: SQL, query: string): Promise<readonly ConfigObjec
 }
 
 /**
- * One named column out of every row, as the text it has to be. The column is
- * named twice on purpose — once in the SQL and once here — because that is what
- * makes a query and a reader that have drifted apart say so.
+ * One column of one row, as the text it has to be. `where` names the row for
+ * the diagnostic, because by the time a column is missing the only useful thing
+ * left to say is which row and which query.
+ */
+export function textIn(row: ConfigObject, column: string, where: string): string {
+  const value = row[column];
+  if (typeof value !== "string") {
+    throw new Error(`${where} has ${column} as ${kindOf(value)} rather than text`);
+  }
+  return value;
+}
+
+/**
+ * The same, as the number it holds. Postgres hands a `bigint` back as text and
+ * an `int` as a number, so both spellings are one value here — and nothing else
+ * is one at all. `Number(undefined)` is `NaN`, which compares equal to nothing
+ * and so drops silently out of every set and comparison it reaches.
+ */
+function numberIn(row: ConfigObject, column: string, where: string): number {
+  const value = row[column];
+  const held = typeof value === "string" || typeof value === "number" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(held)) {
+    throw new Error(`${where} has ${column} as ${kindOf(value)} rather than a number`);
+  }
+  return held;
+}
+
+/**
+ * One named column out of every row. The column is named twice on purpose —
+ * once in the SQL and once here — because that is what makes a query and a
+ * reader that have drifted apart say so.
  */
 export async function textColumn(db: SQL, query: string, column: string): Promise<string[]> {
-  return (await rows(db, query)).map((row, at) => {
-    const value = row[column];
-    if (typeof value !== "string") {
-      throw new Error(`row ${at} has ${column} as ${kindOf(value)} rather than text — ${query}`);
-    }
-    return value;
-  });
+  return (await rows(db, query)).map((row, at) => textIn(row, column, `row ${at} of ${query}`));
+}
+
+/** The same, for a column of numbers. */
+export async function numberColumn(db: SQL, query: string, column: string): Promise<number[]> {
+  return (await rows(db, query)).map((row, at) => numberIn(row, column, `row ${at} of ${query}`));
 }
 
 /** The same server, pointing at a different database. */

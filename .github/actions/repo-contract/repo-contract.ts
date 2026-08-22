@@ -5,9 +5,8 @@ import {
   isIgnored,
   isTracked,
   manifests,
-  parseEach,
   type Problem,
-  readJson,
+  readConfig,
   record,
   repoFiles,
 } from "../_lib/gate.ts";
@@ -77,7 +76,7 @@ async function checkLineage(
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
 
-  const tsconfig = await readJson(root, "tsconfig.json");
+  const tsconfig = await readConfig(root, "tsconfig.json");
   problems.push(...tsconfig.problems);
   if (
     tsconfig.contents !== undefined &&
@@ -90,7 +89,7 @@ async function checkLineage(
     });
   }
 
-  const oxlintrc = await readJson(root, ".oxlintrc.json");
+  const oxlintrc = await readConfig(root, ".oxlintrc.json");
   problems.push(...oxlintrc.problems);
   if (oxlintrc.contents !== undefined) {
     const inherits = extendsList(oxlintrc.contents["extends"]).some((entry) =>
@@ -139,17 +138,14 @@ async function checkLineage(
 }
 
 async function checkBunfig(root: string): Promise<Problem[]> {
-  const text = await readText(`${root}/bunfig.toml`);
-  if (text === undefined) return [{ file: "bunfig.toml", message: "bunfig.toml is missing" }];
+  // The same read every other config here gets, in the dialect this one is
+  // written in. `Bun.TOML.parse` throws on a malformed file, and a bare throw
+  // leaves the step with a parse error naming no file and takes every finding
+  // the other checks had already produced with it.
+  const bunfig = await readConfig(root, "bunfig.toml", "TOML");
+  if (bunfig.contents === undefined) return [...bunfig.problems];
 
-  // Read through the same rescue every other config here goes through, rather
-  // than parsed inline. `Bun.TOML.parse` throws on a malformed file, and a bare
-  // throw here leaves the step with a parse error naming no file and takes
-  // every finding the other checks had already produced with it.
-  const parsed = await parseEach(root, ["bunfig.toml"], "TOML");
-  if (parsed.problems.length > 0) return parsed.problems;
-
-  const config = record(parsed.read[0]?.value);
+  const config = bunfig.contents;
   const install = record(config["install"]);
   const test = record(config["test"]);
   const problems: Problem[] = [];

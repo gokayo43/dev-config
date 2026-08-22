@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { dirname } from "node:path";
+import { symlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
-import { type ConfigObject, jsonObjects, record } from "../.github/actions/_lib/gate.ts";
-import { oxlint } from "./lint-fixture.ts";
+import { type ConfigObject, configObjects, record } from "../.github/actions/_lib/gate.ts";
+import { BASE, lintAt, oxlint } from "./lint-fixture.ts";
+import { materialise } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
 
@@ -12,7 +14,7 @@ const REPO = dirname(import.meta.dir);
  * asks every repo to write and `JSON.parse` refuses.
  */
 const base = record(
-  (await jsonObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
+  (await configObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
 );
 
 /**
@@ -70,7 +72,7 @@ export const c = typeof require;
       ".oxlintrc.json": config(override),
       "case.test.ts": USES_ALL,
     });
-    return reported.filter((line) => line.includes("no-restricted-globals")).length;
+    return reported.filter(({ code }) => code.includes("no-restricted-globals")).length;
   }
 
   test("an override that says nothing about it inherits the whole list", async () => {
@@ -120,5 +122,76 @@ describe("the base's list-shaped rules", () => {
         .map((entry) => `${rule} in the override for ${files} drops ${entry}`);
     });
     expect(dropped).toEqual([]);
+  });
+});
+
+/**
+ * What the base says about a widened binding asserted back to what it was.
+ *
+ * This repo shipped a rule for exactly that and deleted it, because oxlint's
+ * own `typescript/no-unsafe-type-assertion` — which the base denies through
+ * `suspicious` — refuses every one of the shapes below at the same line and
+ * column. That is the whole reason the rule is gone, so it is graded here
+ * rather than asserted in a commit message: widening a value and asserting it
+ * back is an assertion to a narrower type by construction, which is precisely
+ * what the native rule reads.
+ *
+ * Type-aware, because none of the base's own rules answer otherwise: the
+ * analysis runs in `oxlint-tsgolint`, so the tree gets this repo's install to
+ * resolve it out of, and a tsconfig for the checker to read.
+ */
+describe("the widened bindings the base still refuses", () => {
+  const USER = `interface User {
+  readonly id: string;
+}
+declare const user: User;
+`;
+
+  const WIDENED = {
+    "an operator over a literal, widened and asserted back": `export function round(): number {
+  const wide: unknown = -1;
+  return wide as number;
+}`,
+    "a known value widened by its annotation": `${USER}export function round(value: User): User {
+  const wide: unknown = value;
+  return wide as User;
+}`,
+    "the widening written as an assertion rather than an annotation": `${USER}export function round(value: User): User {
+  const wide = value as unknown;
+  return wide as User;
+}`,
+    "the binding in scope rather than the one with the name": `${USER}export function carry(value: User): User {
+  const wide = value;
+  return wide as User;
+}
+export function round(value: User): User {
+  const wide: unknown = value;
+  return wide as User;
+}`,
+  };
+
+  test.each(Object.entries(WIDENED))("%s", async (_name, source) => {
+    const root = await materialise({
+      ".oxlintrc.json": JSON.stringify({
+        extends: [BASE],
+        ignorePatterns: ["node_modules/**"],
+      }),
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: {
+          target: "esnext",
+          module: "preserve",
+          moduleResolution: "bundler",
+          strict: true,
+          noEmit: true,
+          skipLibCheck: true,
+        },
+        include: ["*.ts"],
+      }),
+      "case.ts": `${source}\n`,
+    });
+    await symlink(join(REPO, "node_modules"), join(root, "node_modules"));
+
+    const reported = await lintAt(root);
+    expect(reported.map(({ code }) => code)).toContain("typescript(no-unsafe-type-assertion)");
   });
 });

@@ -1,22 +1,31 @@
-/** @import { ESTree } from "@oxlint/plugins" */
+/** @import { ESTree, SourceCode } from "@oxlint/plugins" */
 
 import { typeReferenceName, unwrapType } from "./syntax.js";
-
-const BUILT_INS = new Set([
-  "Record",
-  "Readonly",
-  "Partial",
-  "Required",
-  "Pick",
-  "Omit",
-  "PropertyKey",
-  "NonNullable",
-  "Promise",
-  "PromiseLike",
-]);
+import { bindsTypeParameter } from "./type-parameters.js";
 
 /** The built-ins that answer the same type they wrap, so a rule reads straight through them. */
 const TRANSPARENT_WRAPPERS = new Set(["Readonly", "Partial", "Required", "NonNullable"]);
+
+/**
+ * Every name a rule here reads for what it means rather than for what a file
+ * called it — the dictionary shapes, the wrappers above, and the two a return
+ * type is read through. A file that declares or imports one of these has taken
+ * the name, and every rule that would otherwise read `Record<K, V>` as a
+ * dictionary or `Promise<T>` as an awaited `T` is reading someone else's type.
+ *
+ * One set, because the question is one: whose name is this? Which of them a
+ * rule then treats as transparent, as a container, or as a promise is that
+ * rule's own business, and the sets above and below say so.
+ */
+const BUILT_INS = new Set([
+  ...TRANSPARENT_WRAPPERS,
+  "Record",
+  "Pick",
+  "Omit",
+  "PropertyKey",
+  "Promise",
+  "PromiseLike",
+]);
 
 /** @typedef {ReadonlyMap<string, ESTree.TSType>} Substitutions */
 
@@ -48,6 +57,7 @@ const TRANSPARENT_WRAPPERS = new Set(["Readonly", "Partial", "Required", "NonNul
  * @property {ReadonlyMap<string, ESTree.TSTypeAliasDeclaration>} aliases
  * @property {ReadonlyMap<string, readonly ESTree.TSInterfaceDeclaration[]>} interfaces
  * @property {ReadonlySet<string>} shadowedBuiltIns
+ * @property {SourceCode} sourceCode Where a name written inside a generic is asked what it binds to.
  */
 
 /**
@@ -87,9 +97,10 @@ function declaredNames(declaration) {
 
 /**
  * @param {ESTree.Program} program
+ * @param {SourceCode} sourceCode
  * @returns {TypeEnvironment}
  */
-export function createTypeEnvironment(program) {
+export function createTypeEnvironment(program, sourceCode) {
   /** @type {Map<string, ESTree.TSTypeAliasDeclaration>} */
   const aliases = new Map();
   /** @type {Map<string, ESTree.TSInterfaceDeclaration[]>} */
@@ -116,7 +127,7 @@ export function createTypeEnvironment(program) {
     }
   }
 
-  return { aliases, interfaces, shadowedBuiltIns };
+  return { aliases, interfaces, shadowedBuiltIns, sourceCode };
 }
 
 /**
@@ -293,6 +304,13 @@ export function resolveType(
       : resolveType(wrapped, environment, substitutions, resolving, substituting);
   }
 
+  // Before the aliases, because a parameter has taken the name for the whole of
+  // the declaration binding it, and the alias of that name is a different type
+  // the file happens to also declare. Asked of the node rather than carried in,
+  // so descending into an alias body — written at the top level, where no
+  // parameter of the caller's reaches — drops the question by construction.
+  if (bindsTypeParameter(environment.sourceCode, unwrapped, name)) return stopped;
+
   const alias = environment.aliases.get(name);
   if (alias === undefined || resolving.has(name)) return stopped;
   const applied = aliasSubstitution(alias, unwrapped, substitutions);
@@ -443,23 +461,21 @@ function dictionaryValueTypes(type, environment, substitutions, resolving) {
 /**
  * @param {ESTree.TSType} valueType
  * @param {TypeEnvironment} environment
- * @param {ReadonlySet<string>} [shadowed] Names bound as type parameters where the type was written.
  * @returns {UnsafeDictionary | null}
  */
-export function classifyUnsafeDictionaryValue(valueType, environment, shadowed = new Set()) {
-  const unsafeValue = unsafeDirectValue(valueType, environment, new Map(), shadowed);
+export function classifyUnsafeDictionaryValue(valueType, environment) {
+  const unsafeValue = unsafeDirectValue(valueType, environment, new Map(), new Set());
   return unsafeValue === null ? null : { unsafeValue };
 }
 
 /**
  * @param {ESTree.TSType} type
  * @param {TypeEnvironment} environment
- * @param {ReadonlySet<string>} [shadowed] Names bound as type parameters where the type was written.
  * @returns {UnsafeDictionary | null}
  */
-export function classifyUnsafeDictionary(type, environment, shadowed = new Set()) {
-  for (const value of dictionaryValueTypes(type, environment, new Map(), shadowed)) {
-    const unsafeValue = unsafeDirectValue(value.type, environment, value.substitutions, shadowed);
+export function classifyUnsafeDictionary(type, environment) {
+  for (const value of dictionaryValueTypes(type, environment, new Map(), new Set())) {
+    const unsafeValue = unsafeDirectValue(value.type, environment, value.substitutions, new Set());
     if (unsafeValue !== null) return { unsafeValue };
   }
   return null;

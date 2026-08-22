@@ -2,6 +2,7 @@
 
 import {
   importedBinding,
+  isGlobalBinding,
   resolveVariable,
   settledValue,
   writesThroughMember,
@@ -77,7 +78,7 @@ function runnerApi(sourceCode, expression) {
       const named = RUNNERS.has(imported.source) && !NAMESPACE_NAMES.has(imported.name);
       return named ? imported.name : null;
     }
-    return variable === null && RUNNER_GLOBALS.has(value.name) ? value.name : null;
+    return isGlobalBinding(sourceCode, value) && RUNNER_GLOBALS.has(value.name) ? value.name : null;
   }
 
   if (value.type !== "MemberExpression") return null;

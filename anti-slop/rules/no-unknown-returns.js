@@ -2,7 +2,6 @@
 /** @import { Substitutions, TypeEnvironment } from "../shared/types.js" */
 
 import { typeReferenceName } from "../shared/syntax.js";
-import { createTypeParameterScopes } from "../shared/type-parameters.js";
 import { createTypeEnvironment, resolveType } from "../shared/types.js";
 
 /**
@@ -39,7 +38,6 @@ export const noUnknownReturnsRule = {
   createOnce(context) {
     /** @type {TypeEnvironment | null} */
     let environment = null;
-    const scopes = createTypeParameterScopes();
 
     /**
      * The awaited answer counts, which is the whole reason this reads through
@@ -85,16 +83,14 @@ export const noUnknownReturnsRule = {
     const checkReturnType = (node) => {
       const annotation = node.returnType;
       if (annotation === null || annotation === undefined) return;
-      if (!answersUnknown(annotation.typeAnnotation, new Map(), scopes.at(node))) return;
+      if (!answersUnknown(annotation.typeAnnotation, new Map(), new Set())) return;
       context.report({ node: annotation.typeAnnotation, messageId: "unknownReturn" });
     };
 
     return {
       Program(node) {
-        environment = createTypeEnvironment(node);
-        scopes.reset();
+        environment = createTypeEnvironment(node, context.sourceCode);
       },
-      TSInferType: scopes.record,
       ArrowFunctionExpression: checkReturnType,
       FunctionDeclaration: checkReturnType,
       FunctionExpression: checkReturnType,

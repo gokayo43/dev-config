@@ -446,21 +446,21 @@ export interface Batch<T> {
 }
 
 /**
- * The dialect a batch of files is written in, which is the whole of what varies
- * between the gates that read them. `package.json` is strict JSON — a comment
- * in one is a file npm and bun both refuse — while an oxlint or TypeScript
- * config is JSON with comments by its own tool's specification, and a workflow
- * is YAML. The name is also the word the diagnostic uses.
- */
-/**
  * What a dialect does, named once. `unknown` is the whole point of a decoder —
  * the answer is whatever that repo wrote, and every reader below goes through
  * `isObject` and `record` to say anything about it — so the contract is stated
- * here, once, rather than three times as three returns nobody can widen.
+ * here, once, rather than four times as four returns nobody can widen.
  */
 // oxlint-disable-next-line anti-slop/no-unknown-returns -- the decoder boundary this file exists to be: a parse of a file this repo does not own cannot answer a domain type, and the readers below are the parsing the rule asks for
 type Decode = (text: string) => unknown;
 
+/**
+ * The dialect a batch of files is written in, which is the whole of what varies
+ * between the gates that read them. `package.json` is strict JSON — a comment
+ * in one is a file npm and bun both refuse — while an oxlint or TypeScript
+ * config is JSON with comments by its own tool's specification, a bunfig is
+ * TOML, and a workflow is YAML. The name is also the word the diagnostic uses.
+ */
 const DIALECTS = {
   JSON: (text: string) => JSON.parse(text) as unknown,
   "JSON with comments": (text: string) => JSON.parse(withoutComments(text)) as unknown,
@@ -588,10 +588,10 @@ export type Manifest = Parsed<ConfigObject>;
  * settled here, where the file can still be named, rather than as a TypeError
  * inside whichever check reached the value first.
  */
-export async function jsonObjects(
+export async function configObjects(
   root: string,
   files: readonly string[],
-  dialect: Extract<Dialect, "JSON" | "JSON with comments"> = "JSON",
+  dialect: Dialect = "JSON",
 ): Promise<Batch<ConfigObject>> {
   const parsed = await parseEach(root, files, dialect);
   const read: Manifest[] = [];
@@ -606,27 +606,31 @@ export async function jsonObjects(
   return { read, problems };
 }
 
-export interface JsonFile {
+export interface ConfigFile {
   /** Undefined whenever there is nothing to grade — `problems` says which of the two reasons. */
   readonly contents: ConfigObject | undefined;
   readonly problems: readonly Problem[];
 }
 
 /**
- * A JSON config a gate reads, or the problem standing in for it. Missing and
+ * A config a gate reads by name, or the problem standing in for it. Missing and
  * unreadable are different states — only the first is fixed by writing the file
  * — and neither leaves a caller fields to read.
  *
- * The dialect is `JSON with comments` because every config asked for by name
- * here is one a repo is invited to annotate: README asks for the reason for an
- * override beside it, oxlint's schema declares `allowComments`, and TypeScript
- * has always taken them.
+ * The dialect defaults to `JSON with comments` because every config asked for
+ * this way is one a repo is invited to annotate: README asks for the reason for
+ * an override beside it, oxlint's schema declares `allowComments`, and
+ * TypeScript has always taken them.
  */
-export async function readJson(root: string, file: string): Promise<JsonFile> {
+export async function readConfig(
+  root: string,
+  file: string,
+  dialect: Dialect = "JSON with comments",
+): Promise<ConfigFile> {
   if (!(await Bun.file(`${root}/${file}`).exists())) {
     return { contents: undefined, problems: [{ file, message: `${file} is missing` }] };
   }
-  const batch = await jsonObjects(root, [file], "JSON with comments");
+  const batch = await configObjects(root, [file], dialect);
   return { contents: batch.read[0]?.value, problems: batch.problems };
 }
 
@@ -635,7 +639,7 @@ export async function readJson(root: string, file: string): Promise<JsonFile> {
 // while still requiring the whole final path segment: "apps/my-package.json"
 // does not match, and neither pathspec can return anything but a package.json.
 export async function manifests(root: string): Promise<Batch<ConfigObject>> {
-  return await jsonObjects(root, await repoFiles(root, ["package.json", "*/package.json"]));
+  return await configObjects(root, await repoFiles(root, ["package.json", "*/package.json"]));
 }
 
 export async function isTracked(root: string, path: string): Promise<boolean> {

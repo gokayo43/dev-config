@@ -1,7 +1,6 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
 /** @import { Substitutions, TypeEnvironment } from "../shared/types.js" */
 
-import { createTypeParameterScopes } from "../shared/type-parameters.js";
 import { createTypeEnvironment, resolveType } from "../shared/types.js";
 
 /** @typedef {ESTree.ParamPattern} Parameter */
@@ -86,7 +85,6 @@ function bannedParameterTypeRule(banned) {
     createOnce(context) {
       /** @type {TypeEnvironment | null} */
       let environment = null;
-      const scopes = createTypeParameterScopes();
 
       /**
        * A union counts: a parameter typed `object | string` accepts everything
@@ -116,7 +114,7 @@ function bannedParameterTypeRule(banned) {
         for (const parameter of node.params) {
           const annotation = parameterAnnotation(parameter);
           if (annotation === null || annotation === undefined) continue;
-          if (!accepts(annotation.typeAnnotation, new Map(), scopes.at(node))) continue;
+          if (!accepts(annotation.typeAnnotation, new Map(), new Set())) continue;
           const name = parameterName(parameter, context.sourceCode, banned.written);
           if (name === banned.exemptName) continue;
           context.report({
@@ -129,10 +127,8 @@ function bannedParameterTypeRule(banned) {
 
       return {
         Program(node) {
-          environment = createTypeEnvironment(node);
-          scopes.reset();
+          environment = createTypeEnvironment(node, context.sourceCode);
         },
-        TSInferType: scopes.record,
         ArrowFunctionExpression: checkParameters,
         FunctionDeclaration: checkParameters,
         FunctionExpression: checkParameters,
