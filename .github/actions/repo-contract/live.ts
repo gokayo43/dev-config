@@ -595,9 +595,9 @@ async function checkUnits(
     }
     // A unit that mentions the script and does not run it, which is a mistake
     // with a name rather than an absence.
-    const [wrong] = [...services.values()]
+    const wrong = [...services.values()]
       .map((service) => misruns(service, script, name))
-      .filter((said) => said !== undefined);
+      .find((said) => said !== undefined);
     return {
       problems: [
         ...problems,

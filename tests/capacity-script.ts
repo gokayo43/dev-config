@@ -161,6 +161,7 @@ expect(
 
 await server.stop(true);
 await rm(summaries, { recursive: true, force: true });
+// oxlint-disable-next-line eslint/no-console -- this script is a CI step, not a module: stdout is the only channel it has to report what it executed
 console.log(
   `capacity.js: health-only, one-path and list branches all executed (${hits.size} routes seen)`,
 );

@@ -559,8 +559,10 @@ export async function repoFiles(root: string, pathspecs: readonly string[]): Pro
   ]);
   if (!listing.ok) throw new Error(`git ls-files failed in ${root}`);
   const listed = listing.stdout.split("\0").filter((path) => path !== "");
-  const present = await Promise.all(listed.map((path) => Bun.file(`${root}/${path}`).exists()));
-  return listed.filter((_, index) => present[index] === true);
+  const found = await Promise.all(
+    listed.map(async (path) => ((await Bun.file(`${root}/${path}`).exists()) ? path : undefined)),
+  );
+  return found.filter((path) => path !== undefined);
 }
 
 interface Parsed<T> {

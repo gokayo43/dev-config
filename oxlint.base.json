@@ -14,6 +14,20 @@
   // without a line of its own. Plain JS on purpose — see anti-slop/index.js.
   "jsPlugins": [{ "name": "anti-slop", "specifier": "./anti-slop/index.js" }],
   "rules": {
+    // Off rather than warn, against `perf` above, which turns it on for a
+    // loop that awaits. In this house the awaiting loop is usually the correct
+    // one: migrations applied in order, a git index written commit by commit, a
+    // limiter bucket consumed one attempt at a time, a poll whose next attempt
+    // exists only because the last one missed, a batch loop that IS the bound
+    // on concurrency. That last one is the general case — a loop reading a file
+    // per iteration holds one file's lines at a time, and the `Promise.all` this
+    // rule asks for holds the whole repo's, so the advice costs memory that
+    // grows with the input. None of that shared state is visible to the rule.
+    // Fanning a loop out is a design call about specific shared state, made by
+    // whoever can see it; it is not a default a linter is owed. The rest of
+    // `perf` stays on: `unicorn/prefer-array-find` is about the code, not about
+    // the concurrency model.
+    "no-await-in-loop": "off",
     "no-console": "warn",
     "no-empty": "error",
     "eslint/no-warning-comments": [

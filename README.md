@@ -152,9 +152,12 @@ adding to them, which is why the base names every plugin it wants including the
 defaults `oxc`, `unicorn` and `typescript`. Across `extends` the arrays are
 unioned, so a repo that adds `plugins` of its own keeps the base's.
 
-The one rule the base switches off is `oxc/no-map-spread`, whose advice is to
-mutate in place — wrong for the copy-on-write style these codebases are written
-in.
+Three rules the base switches off: `no-await-in-loop` (a sequential loop is
+usually the correct one here, and the fan-out it asks for is a design call about
+shared state the rule cannot see — the reason in full sits beside the entry),
+`react/react-in-jsx-scope` (the automatic JSX runtime imports nothing), and
+`oxc/no-map-spread`, whose advice is to mutate in place — wrong for the
+copy-on-write style these codebases are written in.
 
 ### The escape hatches, and their price
 

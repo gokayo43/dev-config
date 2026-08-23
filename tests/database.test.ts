@@ -211,6 +211,7 @@ describe("giving up the database a gate built", () => {
     return server;
   }
 
+  /* oxlint-disable eslint/no-console -- these do not log: they swap stdout's sink out and back, which is how a case reads what the gate wrote to it */
   /** Captures what a case writes to stdout, and puts stdout back. */
   function logged(): { lines: string[]; restore: () => void } {
     const lines: string[] = [];
@@ -218,6 +219,7 @@ describe("giving up the database a gate built", () => {
     console.log = (line: unknown) => void lines.push(String(line));
     return { lines, restore: () => void (console.log = wrote) };
   }
+  /* oxlint-enable eslint/no-console */
 
   test("a drop that cannot run does not become the error the run reports", async () => {
     const server = await unusable();

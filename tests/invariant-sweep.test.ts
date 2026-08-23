@@ -270,11 +270,12 @@ describe("what the sweep catches", () => {
     expect(ok).toBe(false);
     // The runner colours its own diff, so the line is stripped of *that* before
     // anything is asserted about what the page managed to write.
-    const [line = ""] = said
-      // oxlint-disable-next-line eslint/no-control-regex -- the control character is the subject: this strips the runner's own colouring so the assertions below are about what the page managed to write
-      .replaceAll(/\u001b\[[0-9;]*m/g, "")
-      .split("\n")
-      .filter((each) => each.includes("overflow at"));
+    const line =
+      said
+        // oxlint-disable-next-line eslint/no-control-regex -- the control character is the subject: this strips the runner's own colouring so the assertions below are about what the page managed to write
+        .replaceAll(/\u001b\[[0-9;]*m/g, "")
+        .split("\n")
+        .find((each) => each.includes("overflow at")) ?? "";
     const detail = line.slice(line.indexOf("— ") + 2);
 
     expect(detail).toContain("div#wide");
