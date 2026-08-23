@@ -49,6 +49,25 @@ settings every repo shares; what a single gate asserts, and why, lives beside it
 | `mutation-lane`       | [docs/gates/mutation-lane.md](docs/gates/mutation-lane.md)                                                                                                                          |
 | `test-suite`          | [docs/gates/test-suite.md](docs/gates/test-suite.md)                                                                                                                                |
 
+Beside the gates CI runs are the modules a consuming repo **imports**. A gate
+refuses a tree from the outside; an export is code the repo calls, and it is the
+shape a rule takes when what it grades is only visible from inside the repo — an
+app's own route table, its own limiter, its own browser. Each is in `files` and
+`exports`, and each has a page of its own:
+
+| Export                    | Imported by                    | What it holds                                                                                                                                |
+| ------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `route-log.ts`            | the app, for the capacity ramp | the protocol between an app and the route-coverage floor — [docs/gates/capacity.md](docs/gates/capacity.md)                                  |
+| `invariant-sweep.ts`      | the Playwright specs           | zero console errors and no sideways scroll, on every page a test visits — [docs/exports/invariant-sweep.md](docs/exports/invariant-sweep.md) |
+| `limiter-conformance.ts`  | the rate limiter's own suite   | STACK's rate-limit rule, executable — [docs/exports/limiter-conformance.md](docs/exports/limiter-conformance.md)                             |
+| `response-schema.ts`      | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip — [docs/exports/response-schema.md](docs/exports/response-schema.md)     |
+| `characterization-net.ts` | a golden suite and its updater | the harness rules that keep a large golden net honest — [docs/exports/characterization-net.md](docs/exports/characterization-net.md)         |
+
+Gate code is deliberately **not** importable by the repos it gates — a gate in
+`node_modules` runs only if the repo's workflow remembers to, and it moves
+whenever the lockfile does. Anything a repo calls directly is one of these
+instead.
+
 ## TypeScript
 
 `tsconfig.base.json` resolves through Node module resolution, so it is referenced
@@ -744,6 +763,23 @@ throwaway. Two runs may share one: every name either the suite or a gate puts on
 that server carries what tells the runs apart — the process for the suite's own
 databases, and the checkout being worked on for the two a gate builds for itself
 (`upgrade_path_<digest>` and `backfill_<digest>`).
+
+The limiter conformance suite needs a Redis, since what it grades is a bucket
+shared by two processes and a limiter whose Redis is gone. It looks at
+`TEST_REDIS_URL`, or localhost:6379, and **flushes** whatever it finds there — so
+point it at a throwaway too:
+
+```sh
+docker run --rm -d -p 6379:6379 redis:7-alpine
+```
+
+The invariant sweep's suite drives a real browser against a real server, because
+every part of what that fixture claims is a browser fact. It needs Playwright's
+chromium, which CI installs and a machine gets with:
+
+```sh
+bunx playwright install --with-deps chromium-headless-shell
+```
 
 The test-suite gate's own suite needs passwordless `sudo`, which is what taking a
 network namespace costs — a runner has it, and a machine that does not cannot run

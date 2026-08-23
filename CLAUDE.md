@@ -68,10 +68,20 @@ a change to a rule usually lands here too.
   plugin from the working directory, and declaring the two packages in the
   repo's manifest is what puts them under its lockfile, its exact pins and its
   release-age window.
-- `route-log.ts` at the root is the protocol between an app and the
-  route-coverage floor: the two strings and the three shapes, exported so that
-  neither end reproduces them. It is in `files` and `exports` because a
-  consuming repo's app imports the types.
+- The `*.ts` at the root are the package's **exports** — what a consuming repo
+  imports and calls, as against the gates, which run over it from CI. Each is in
+  `files` and `exports`, and each is here rather than in an action for the same
+  reason: what it grades is only visible from inside the repo. `route-log.ts` is
+  the protocol between an app and the route-coverage floor;
+  `invariant-sweep.ts` is a Playwright fixture that watches every page a spec
+  visits; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
+  block a repo's limiter has to pass; `response-schema.ts` grades an Elysia
+  app's own route table; `characterization-net.ts` is the harness under a golden
+  suite. Their pages are `docs/exports/`.
+  Two of them register tests rather than answering with problems, and the split
+  is by subject rather than by taste: a route table is a value one call can
+  grade, and a limiter is a sequence of attempts against a live Redis that only
+  a test framework can sequence.
 - `db-gate/capacity.js` is the exception: it runs inside k6, not under this
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
@@ -105,7 +115,17 @@ a change to a rule usually lands here too.
   module, so the suite extracts the step out of the shipped `action.yml` and
   runs it over fixture suites of its own. It needs passwordless sudo, because
   what it is grading is a network namespace.
-- `docs/gates/*.md` — a reference page per gate. README holds the map.
+  The exports' suites are the same shape once more. `house-limiter.ts` is
+  STACK's limiter plus every named way of building a wrong one, and
+  `limiter-conformance.test.ts` spawns a `bun test` per build and asserts that
+  the house one passes and that each flaw fails the case paired with it — a
+  pairing the compiler requires to be total, so a wrong implementation nobody
+  wrote a case for does not exist. `sweep-fixture.ts` serves the pages the
+  invariant sweep is driven over and runs one Playwright process across every
+  spec: a browser and a server, because every fact that fixture claims is a
+  browser fact.
+- `docs/gates/*.md` — a reference page per gate; `docs/exports/*.md` — one per
+  package export. README holds both maps.
 
 ## Commands
 
@@ -121,13 +141,16 @@ them and then watches them run nowhere. What carries their duty instead is
 a block of cases per rule, and a check that the base enables exactly the rules
 the plugin defines.
 
-`bun test` needs a Postgres and passwordless sudo — the first because the replay
-gate's property is what two databases end up holding and the semantic fixtures'
-is what a real migration does to a real row, the second because the
-test-suite gate seals a run in a network namespace and nothing short of taking
-one says whether it holds. The suite looks at `TEST_DATABASE_URL`, or
-localhost:5432, and creates and drops databases there — README's "Gating this
-repo" has the one-liner.
+`bun test` needs a Postgres, a Redis, a chromium and passwordless sudo. The
+first because the replay gate's property is what two databases end up holding
+and the semantic fixtures' is what a real migration does to a real row; the
+second because a limiter's bucket is shared by two processes and its Redis can
+be gone; the third because what the invariant sweep claims is what a browser
+reports; the fourth because the test-suite gate seals a run in a network
+namespace and nothing short of taking one says whether it holds. The suite looks
+at `TEST_DATABASE_URL` or localhost:5432 and creates and drops databases there,
+and at `TEST_REDIS_URL` or localhost:6379, which it **flushes** — README's
+"Gating this repo" has the one-liners, including the browser install.
 
 Two runs may share one server, which is what two worktrees under review are.
 Every database either end makes is named for what tells the runs apart: the

@@ -17,9 +17,17 @@ coverage = true
 # least-covered file rather than below the summary line.
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
-# The plugin's rules run inside a spawned oxlint, never in this process, so the
-# runner instruments them and then watches them execute nowhere: the whole
-# directory reads as unreached and drags each file under the per-file floor.
+# Two things here execute only inside a spawned process, so the runner
+# instruments them and then watches them run nowhere: the file reads as
+# unreached and drags itself under the per-file floor.
+#
+# `anti-slop/**` — the plugin's rules run inside a spawned oxlint.
 # `tests/anti-slop*.test.ts` is what actually grades them, by linting fixture
 # trees with the shipped binary.
-coveragePathIgnorePatterns = ["anti-slop/**"]
+#
+# `tests/house-limiter.ts` — the limiter every conformance fixture is built
+# from, imported here only for its flaw names and run only by the `bun test`
+# that `tests/limiter-conformance.test.ts` spawns. What grades it is that same
+# suite: the house build has to pass the conformance suite and every flaw has to
+# fail the case paired with it.
+coveragePathIgnorePatterns = ["anti-slop/**", "tests/house-limiter.ts"]

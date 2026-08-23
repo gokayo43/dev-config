@@ -35,6 +35,21 @@ jobs:
           --health-timeout 5s
           --health-retries 30
 
+      # The limiter conformance suite grades a bucket two processes share and a
+      # limiter whose Redis is gone, neither of which anything in-process can
+      # stand in for. Published on 6379, which is where the suite looks when
+      # TEST_REDIS_URL says nothing else. It is flushed between cases, so this
+      # instance exists for that suite and nothing else.
+      redis:
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,6 +92,12 @@ jobs:
       - uses: ./.github/actions/shell-scripts
 
       - run: bun install --frozen-lockfile
+
+      # The invariant sweep this repo exports is a Playwright fixture, and what
+      # its suite grades is what a browser reports — so the suite drives one.
+      # The headless shell rather than the full chromium: nothing here opens a
+      # window, and it is the smaller download.
+      - run: bunx playwright install --with-deps chromium-headless-shell
 
       # The gates this repo ships are TypeScript, and their suite is what proves
       # each one refuses a violating tree and passes a clean one. Every other

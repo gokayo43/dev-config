@@ -13,6 +13,19 @@ a repo's own paths is not a base's business.
 says what to do about it, and a fixture suite proving it refuses a violating
 tree and passes a clean one. A check that cannot fail is a report.
 
+**Export** — a module in this package that a consuming repo imports and calls,
+as against a gate, which runs over that repo from CI. The distinction is not
+packaging: a gate reads a tree from outside and can be pinned to a commit, and
+an export is for the facts only visible from inside a running repo — its own
+route table, its own limiter, its own browser. Gate code is deliberately not
+importable, so anything a repo calls is an export.
+
+**Conformance suite** — an export that registers tests rather than answering
+with problems, because what it grades is a sequence rather than a value. It
+takes the repo's implementation and the resources it needs, and the repo's own
+`bun test` is what runs it. Distinct from a gate: nothing in CI knows it exists
+until the suite it is part of fails.
+
 **Deny tier** — the rules set to `error`. `warn` is advisory and cannot fail a
 build, so the deny tier is the whole of what a lint config enforces.
 

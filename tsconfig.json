@@ -6,6 +6,7 @@
     "checkJs": true
   },
   "include": [
+    "*.ts",
     ".github/actions/**/*.ts",
     "anti-slop/**/*.js",
     "tests/**/*.ts",
