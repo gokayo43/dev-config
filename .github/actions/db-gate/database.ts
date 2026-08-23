@@ -24,6 +24,12 @@ import { type ConfigObject, isList, isObject, kindOf, notice } from "../_lib/gat
  * assertion is the only thing standing between a renamed column and a
  * `TypeError` three frames from the query. The answer is refused here instead,
  * where the SQL that produced it is still in hand to name.
+ *
+ * The two refusals below are the narrowing, not guards over it: `unknown` is
+ * not something this can map, and its elements are not things it can read a
+ * column off. Neither is reachable through today's driver — a `Bun.SQL` query
+ * answers a list of objects even for DDL — and both are what makes the answer
+ * typed at all, so they stay and say so rather than being asserted away.
  */
 export async function rows(db: SQL, query: string): Promise<readonly ConfigObject[]> {
   const answered = (await db.unsafe(query)) as unknown;
@@ -52,6 +58,15 @@ export function textIn(row: ConfigObject, column: string, where: string): string
 }
 
 /**
+ * How Postgres writes a number it sent as text, and the only spelling of one
+ * this accepts. `Number` is far looser than the wire ever is: it reads `""` as
+ * zero, `"0x1f"` as 31 and `" 42 "` as 42, so a column holding an empty string
+ * or an identifier would arrive as a plausible number rather than as the fault
+ * it is.
+ */
+const DECIMAL = /^-?\d+(?:\.\d+)?$/u;
+
+/**
  * The same, as the number it holds. Postgres hands a `bigint` back as text and
  * an `int` as a number, so both spellings are one value here — and nothing else
  * is one at all. `Number(undefined)` is `NaN`, which compares equal to nothing
@@ -59,7 +74,10 @@ export function textIn(row: ConfigObject, column: string, where: string): string
  */
 function numberIn(row: ConfigObject, column: string, where: string): number {
   const value = row[column];
-  const held = typeof value === "string" || typeof value === "number" ? Number(value) : Number.NaN;
+  const held =
+    typeof value === "number" || (typeof value === "string" && DECIMAL.test(value))
+      ? Number(value)
+      : Number.NaN;
   if (!Number.isFinite(held)) {
     throw new Error(`${where} has ${column} as ${kindOf(value)} rather than a number`);
   }

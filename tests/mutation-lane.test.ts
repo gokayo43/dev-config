@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { type Lane, mutationLane } from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { containing } from "./matchers.ts";
-import { history, type Tree, under, without } from "./tree.ts";
+import { git, history, type Tree, under, without } from "./tree.ts";
 
 /**
  * Stryker resolves its runner plugin, and `bun test` its own imports, out of
@@ -137,22 +137,25 @@ interface Run {
   readonly floor?: string;
   /** Whether the fixture has the install a repo running this lane declares. */
   readonly installed?: boolean;
+  /** Settings written into the checkout's own config, the way a developer's `~/.gitconfig` would arrive. */
+  readonly configured?: readonly (readonly [string, string])[];
 }
 
 async function lane(
   trees: readonly Tree[],
-  { floor = "", installed = true }: Run = {},
+  { floor = "", installed = true, configured = [] }: Run = {},
 ): Promise<Lane> {
-  return (await laneIn(trees, { floor, installed })).verdict;
+  return (await laneIn(trees, { floor, installed, configured })).verdict;
 }
 
 /** The same run, with the checkout it worked in — for a case about what it left there. */
 async function laneIn(
   trees: readonly Tree[],
-  { floor = "", installed = true }: Run = {},
+  { floor = "", installed = true, configured = [] }: Run = {},
 ): Promise<{ verdict: Lane; root: string }> {
   const { root } = await history(...trees);
   if (installed) await symlink(NODE_MODULES, join(root, "node_modules"));
+  for (const [name, value] of configured) await git(root, ["config", "--local", name, value]);
   return { verdict: await mutationLane({ root, event: { baseRef: "", before: "" }, floor }), root };
 }
 
@@ -185,6 +188,45 @@ describe("the mutation lane", () => {
   // a test does reach the line, and passes whatever the arithmetic on it says.
   // Every other case here produces NoCoverage, so without this one the arm that
   // addresses a reader who already has a test is never executed.
+  // Everything this lane knows about a branch it reads out of `git diff` text,
+  // and every setting below rewrites that text. They are the ones a developer
+  // turns on for themselves and forgets, and they arrive in a checkout's own
+  // config exactly as they arrive from a `~/.gitconfig` — so the gate answers
+  // the same under them or it does not answer at all. `color.ui` is the one
+  // that matters most: escape codes stop `diff --git ` from starting a line,
+  // and a lane that finds no changed domain file reports a clean run.
+  test.each([
+    ["colour forced on", [["color.ui", "always"]] as const],
+    ["the diff prefixes dropped", [["diff.noprefix", "true"]] as const],
+    ["mnemonic prefixes", [["diff.mnemonicPrefix", "true"]] as const],
+    [
+      "all of them at once",
+      [
+        ["color.ui", "always"],
+        ["diff.noprefix", "true"],
+        ["diff.mnemonicPrefix", "true"],
+      ] as const,
+    ],
+  ])(
+    "a checkout configured with %s grades the same branch the same way",
+    async (_name, configured) => {
+      const verdict = await lane(
+        [
+          BEFORE,
+          repo({
+            "src/domain/pricing.ts": PRICING + WITH_FEE,
+            "tests/pricing.test.ts": WEAK_FEE_TEST,
+          }),
+        ],
+        { configured },
+      );
+
+      expect(messages(verdict)).toEqual([
+        "src/domain/pricing.ts: write the case that fails on `cents - 50` (ArithmeticOperator) at line 6: this branch wrote that line and the suite passes either way",
+      ]);
+    },
+  );
+
   test("a new line a test reaches without pinning is refused as a survivor", async () => {
     const verdict = await lane([
       BEFORE,

@@ -1,21 +1,75 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
 
-import { isGlobalBinding } from "../shared/bindings.js";
-import { memberName, unwrapAssertions } from "../shared/syntax.js";
+import {
+  isGlobalBinding,
+  isSettledBinding,
+  resolveVariable,
+  settledValue,
+  variableDeclarator,
+} from "../shared/bindings.js";
+import { memberName, propertyKeyName, unwrapAssertions } from "../shared/syntax.js";
 
 /**
- * Whether an expression is the global `Reflect` rather than something a file
- * named after it. A local binding of that name is somebody else's object, and a
- * rule that reads the spelling alone reports their code.
+ * Whether an expression is the global of that name, however it was reached: the
+ * name itself, the name read off `globalThis`, or a `const` given one of those
+ * once. Recognition goes through the binding rather than the spelling for the
+ * reason every rule here does — `globalThis.Reflect` and `const R = Reflect`
+ * are one object, and a rule keyed to the written form is one line away from
+ * off.
  * @param {SourceCode} sourceCode
  * @param {ESTree.Expression} expression
+ * @param {string} name
+ * @param {Set<ESTree.Node>} seen
  * @returns {boolean}
  */
-function isGlobalReflect(sourceCode, expression) {
+function isGlobalNamed(sourceCode, expression, name, seen) {
   const value = unwrapAssertions(expression);
-  return (
-    value.type === "Identifier" && value.name === "Reflect" && isGlobalBinding(sourceCode, value)
-  );
+
+  if (value.type === "MemberExpression") {
+    // The only object a global is a property of is the global object, which is
+    // itself reached by any of the three ways above.
+    return (
+      memberName(value) === name && isGlobalNamed(sourceCode, value.object, "globalThis", seen)
+    );
+  }
+  if (value.type !== "Identifier" || seen.has(value)) return false;
+  seen.add(value);
+  if (value.name === name && isGlobalBinding(sourceCode, value)) return true;
+  const held = settledValue(sourceCode, value);
+  return held !== null && isGlobalNamed(sourceCode, held, name, seen);
+}
+
+/**
+ * The `Reflect` method a bare name stands for, when a destructuring took it off
+ * the global — `const { apply } = Reflect` leaves a callable that does what
+ * `Reflect.apply` does, under a name with no `Reflect` in it.
+ * @param {SourceCode} sourceCode
+ * @param {ESTree.IdentifierReference} identifier
+ * @returns {string | null}
+ */
+function destructuredMethod(sourceCode, identifier) {
+  const variable = resolveVariable(sourceCode, identifier);
+  const declarator = variable === null ? null : variableDeclarator(variable);
+  if (
+    variable === null ||
+    declarator === null ||
+    declarator.init === null ||
+    declarator.id.type !== "ObjectPattern" ||
+    !isSettledBinding(variable, declarator) ||
+    !isGlobalNamed(sourceCode, declarator.init, "Reflect", new Set())
+  ) {
+    return null;
+  }
+
+  for (const property of declarator.id.properties) {
+    if (property.type !== "Property") continue;
+    const bound =
+      property.value.type === "AssignmentPattern" ? property.value.left : property.value;
+    if (bound.type === "Identifier" && bound.name === identifier.name) {
+      return propertyKeyName(property.key, sourceCode);
+    }
+  }
+  return null;
 }
 
 /**
@@ -41,14 +95,30 @@ function bannedReflectMethodRule(banned) {
       messages: { bannedReflect: banned.message },
     },
     create(context) {
+      const { sourceCode } = context;
+
+      /**
+       * @param {ESTree.Expression} callee
+       * @returns {boolean}
+       */
+      const callsBanned = (callee) => {
+        // `memberName` reads both spellings, so `Reflect["get"]` is the same
+        // call as `Reflect.get` and neither is a token away from off.
+        if (callee.type === "MemberExpression") {
+          return (
+            memberName(callee) === banned.method &&
+            isGlobalNamed(sourceCode, callee.object, "Reflect", new Set())
+          );
+        }
+        return (
+          callee.type === "Identifier" && destructuredMethod(sourceCode, callee) === banned.method
+        );
+      };
+
       return {
         /** @param {ESTree.CallExpression} node */
         CallExpression(node) {
-          const callee = unwrapAssertions(node.callee);
-          // `memberName` reads both spellings, so `Reflect["get"]` is the same
-          // call as `Reflect.get` and neither is a token away from off.
-          if (callee.type !== "MemberExpression" || memberName(callee) !== banned.method) return;
-          if (!isGlobalReflect(context.sourceCode, callee.object)) return;
+          if (!callsBanned(unwrapAssertions(node.callee))) return;
           context.report({ node, messageId: "bannedReflect" });
         },
       };

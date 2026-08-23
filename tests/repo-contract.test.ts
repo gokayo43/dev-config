@@ -102,6 +102,17 @@ describe("repo contract", () => {
     expect(problems).toEqual([containing("is not valid TOML")]);
   });
 
+  // The same as the bunfig above, for the two YAML files this gate reads. A
+  // parse that throws leaves the step with an error naming no file and takes
+  // every finding the other checks had already produced with it.
+  test.each([
+    ["lefthook.yml", "lefthook.yml"],
+    [".github/workflows/ci.yml", ".github/workflows/ci.yml"],
+  ])("a %s nothing can parse is named, not thrown past", async (_name, file) => {
+    const problems = await contract({ ...CLEAN, [file]: "key: [unclosed\n" });
+    expect(problems).toEqual([containing("is not valid YAML")]);
+  });
+
   // lefthook 2.x leads with `jobs:` — a list whose entries may be a `group:`
   // holding another list — and a gate that knew only `commands:` passed a
   // config declaring every hook it asks for while reading none of them.
@@ -170,7 +181,7 @@ describe("repo contract", () => {
 
   test("db:migrate is only required of a repo that runs the database gate", async () => {
     const tree = manifestWith((contents) => {
-      delete contents.scripts["db:migrate"];
+      delete contents.scripts?.["db:migrate"];
     });
     expect(await contract(tree, { database: true })).toEqual([containing("db:migrate")]);
     expect(await contract(tree, { database: false })).toEqual([]);
@@ -209,14 +220,16 @@ describe("a manifest that will not parse", () => {
     "a root manifest that is JSON but not an object (%s) is refused, not crashed on",
     async (text) => {
       expect(await contract({ ...CLEAN, "package.json": text })).toEqual([
-        containing("is not a JSON object"),
+        containing("is not an object — the top level of this JSON file is"),
       ]);
     },
   );
 
+  // A config read by name, which this gate takes in the dialect that invites a
+  // comment beside an entry — so the diagnostic names that dialect, not JSON.
   test("a config that is JSON but not an object says so, rather than failing to extend", async () => {
     expect(await contract({ ...CLEAN, "tsconfig.json": "null" })).toEqual([
-      containing("is not a JSON object"),
+      containing("the top level of this JSON with comments file is null"),
     ]);
   });
 
@@ -374,7 +387,7 @@ function liveManifest(change: (contents: PackageJson) => void = () => {}): Tree 
   return manifestWith((contents) => {
     contents.lifecycle = "live";
     contents.dependencies = { "@sentry/astro": "10.24.0" };
-    delete contents.scripts["db:migrate"];
+    delete contents.scripts?.["db:migrate"];
     change(contents);
   });
 }
@@ -526,7 +539,7 @@ describe("a live repo with no database of its own", () => {
   test("still owes the crash reporting", async () => {
     const blind = manifestWith((contents) => {
       contents.lifecycle = "live";
-      delete contents.scripts["db:migrate"];
+      delete contents.scripts?.["db:migrate"];
     });
     expect(
       await live(
@@ -557,7 +570,7 @@ describe("a live monorepo owns its database wherever the migrations live", () =>
         manifestWith((contents) => {
           contents.lifecycle = "live";
           contents.dependencies = { "@sentry/bun": "10.24.0" };
-          delete contents.scripts["db:migrate"];
+          delete contents.scripts?.["db:migrate"];
         }),
         BACKUP,
       ),

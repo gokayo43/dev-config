@@ -24,7 +24,8 @@ export interface PackageJson {
   packageManager?: string;
   /** `unknown`, not `string`: what the gate says about a lifecycle that is not one is a case too. */
   lifecycle?: unknown;
-  scripts: Record<string, string>;
+  /** Optional because a repo that runs no scripts is a repo this grades too. */
+  scripts?: Record<string, string>;
   devDependencies: Record<string, string>;
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;

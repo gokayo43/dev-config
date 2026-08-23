@@ -3,6 +3,7 @@ import {
   DEPENDENCY_FIELDS,
   type Event,
   isIgnored,
+  isList,
   isTracked,
   manifests,
   type Problem,
@@ -55,7 +56,7 @@ function specOf(contents: ConfigObject, name: string): string | undefined {
 
 function extendsList(value: unknown): string[] {
   if (typeof value === "string") return [value];
-  return Array.isArray(value) ? value.filter((entry) => typeof entry === "string") : [];
+  return isList(value) ? value.filter((entry) => typeof entry === "string") : [];
 }
 
 async function checkLockfiles(root: string): Promise<Problem[]> {
@@ -183,7 +184,7 @@ function runsOf(entry: unknown): string[] {
   const nested = record(node["group"])["jobs"];
   return [
     ...(typeof run === "string" ? [run] : []),
-    ...(Array.isArray(nested) ? nested.flatMap(runsOf) : []),
+    ...(isList(nested) ? nested.flatMap(runsOf) : []),
   ];
 }
 
@@ -192,15 +193,15 @@ function hookRuns(hooks: ConfigObject, hook: string): string[] {
   const jobs = node["jobs"];
   return [
     ...Object.values(record(node["commands"])).flatMap(runsOf),
-    ...(Array.isArray(jobs) ? jobs.flatMap(runsOf) : []),
+    ...(isList(jobs) ? jobs.flatMap(runsOf) : []),
   ];
 }
 
 async function checkLefthook(root: string): Promise<Problem[]> {
-  const text = await readText(`${root}/lefthook.yml`);
-  if (text === undefined) return [{ file: "lefthook.yml", message: "lefthook.yml is missing" }];
+  const lefthook = await readConfig(root, "lefthook.yml", "YAML");
+  if (lefthook.contents === undefined) return [...lefthook.problems];
 
-  const hooks = record(Bun.YAML.parse(text));
+  const hooks = lefthook.contents;
   const problems: Problem[] = [];
 
   if (
@@ -302,15 +303,18 @@ interface Call {
  * about it, and hide the fact that `ci-call` waives both.
  */
 async function checkCall(root: string): Promise<Call> {
-  const text = await readText(`${root}/${CI_WORKFLOW}`);
-  if (text === undefined) {
+  if (!(await Bun.file(`${root}/${CI_WORKFLOW}`).exists())) {
     return {
       asked: undefined,
       problems: [{ file: CI_WORKFLOW, message: "the repo has no CI workflow" }],
     };
   }
 
-  const jobs = record(record(Bun.YAML.parse(text))["jobs"]);
+  const workflow = await readConfig(root, CI_WORKFLOW, "YAML");
+  if (workflow.contents === undefined)
+    return { asked: undefined, problems: [...workflow.problems] };
+
+  const jobs = record(workflow.contents["jobs"]);
   const call = Object.values(jobs)
     .map((job) => record(job))
     .find(({ uses }) => typeof uses === "string" && CHECK_CALL.test(uses));

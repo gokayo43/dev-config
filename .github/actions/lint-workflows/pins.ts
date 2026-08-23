@@ -1,4 +1,4 @@
-import { type Problem, parseEach, record, repoFiles } from "../_lib/gate.ts";
+import { isList, type Problem, parseEach, record, repoFiles } from "../_lib/gate.ts";
 
 /** GitHub accepts both spellings for every one of these, so both are read. */
 export const ACTION_FILES = [".github/actions/*/action.yml", ".github/actions/*/action.yaml"];
@@ -15,7 +15,7 @@ const DIGEST = /@sha256:[0-9a-f]{64}$/;
  * all the same node to a parser and three separate holes in a regex.
  */
 export function referencesIn(document: unknown): string[] {
-  if (Array.isArray(document)) return document.flatMap(referencesIn);
+  if (isList(document)) return document.flatMap(referencesIn);
   if (typeof document !== "object" || document === null) return [];
 
   const node = record(document);

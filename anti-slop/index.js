@@ -1,5 +1,8 @@
-// Ported from dmmulroy/anti-slop (MIT) at commit abaeb63 —
-// https://github.com/dmmulroy/anti-slop/tree/abaeb63. Upstream vendors these
+// Ported from dmmulroy/anti-slop (MIT), level with upstream at commit 6d53855 —
+// https://github.com/dmmulroy/anti-slop/tree/6d53855. This line is where that
+// level is stated: this file ships inside node_modules for every repo that
+// consumes the plugin, and is the only part of the port a reader of one of
+// those repos can reach. Upstream vendors these
 // rules into each repo; they live in this package instead because oxlint's
 // jsPlugins API is alpha and not semver, so rule code and the oxlint pin have
 // to move as one — which is what this package's release pair already does.

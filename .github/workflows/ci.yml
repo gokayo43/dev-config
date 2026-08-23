@@ -100,8 +100,12 @@ jobs:
       - name: Parse every JSON config
         run: |
           set -euo pipefail
-          mapfile -t files < <(git ls-files '*.json' |
-            grep -vE '((^|/)(\.oxlintrc|oxlint\.base)\.json|^tsconfig(\.[^/]+)?\.json)$')
+          # NUL-delimited, the way `repoFiles` reads a listing: a path outside
+          # ASCII comes back quoted with escapes in it under the default
+          # `core.quotepath`, and a newline in one would be two entries. Neither
+          # is a name this repo has, and both are names a consumer could.
+          mapfile -t -d '' files < <(git -c core.quotepath=false ls-files -z '*.json' |
+            grep -zvE '((^|/)(\.oxlintrc|oxlint\.base)\.json|^tsconfig(\.[^/]+)?\.json)$')
           # The ${} below are JS template literals, not shell expansions.
           # shellcheck disable=SC2016
           node -e '

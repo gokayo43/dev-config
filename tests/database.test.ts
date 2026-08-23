@@ -116,9 +116,21 @@ describe("reading rows off a query", () => {
     );
   });
 
-  test("and neither is a column holding something that is not one", async () => {
-    expect(await refusal(numberColumn(db, "select 'later' as at", "at"))).toContain(
-      "has at as a string rather than a number",
+  // `Number` reads all of these as numbers, and the wire writes none of them
+  // that way: an empty column would arrive as zero, and a hex-looking
+  // identifier as whatever it parses to.
+  test.each(["", "0x1f", " 42 ", "1e3", "0b101", "later", "Infinity"])(
+    "and neither is a column holding %p, whatever Number would make of it",
+    async (held) => {
+      expect(await refusal(numberColumn(db, `select '${held}'::text as at`, "at"))).toContain(
+        "has at as a string rather than a number",
+      );
+    },
+  );
+
+  test("a number written the way Postgres writes one is read", async () => {
+    expect(await numberColumn(db, "select '-17'::text as at union all select '1.5'", "at")).toEqual(
+      [-17, 1.5],
     );
   });
 });

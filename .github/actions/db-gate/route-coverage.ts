@@ -1,5 +1,5 @@
 import { EVERY_METHOD, type Route, type RouteLog, type Served } from "../../../route-log.ts";
-import { type Allowlist, isObject, kindOf, type Problem } from "../_lib/gate.ts";
+import { type Allowlist, isList, isObject, kindOf, type Problem } from "../_lib/gate.ts";
 
 /**
  * The gate's half of the route-coverage floor. The protocol it reads — the
@@ -40,10 +40,10 @@ export function parseRouteLog(text: string, source: string): RouteLog {
     throw new Error(`${source} is not a route log: the top level is ${kindOf(parsed)}`);
   }
   const { routeTable, counts } = parsed;
-  if (!Array.isArray(routeTable)) {
+  if (!isList(routeTable)) {
     throw new Error(`${source} is not a route log: routeTable is ${kindOf(routeTable)}`);
   }
-  if (!Array.isArray(counts)) {
+  if (!isList(counts)) {
     throw new Error(`${source} is not a route log: counts is ${kindOf(counts)}`);
   }
   return {

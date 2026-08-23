@@ -3,6 +3,7 @@ import {
   type ConfigObject,
   deadEntries,
   DEPENDENCY_FIELDS,
+  isList,
   isObject,
   kindOf,
   type Manifest,
@@ -55,7 +56,7 @@ const ENTRY_KEYS = { names: true, patterns: true, reason: true } satisfies Recor
 
 /** An array's items as what they are, since `isArray` narrows unknown to `any[]`. */
 function itemsOf(value: unknown): readonly unknown[] | undefined {
-  if (!Array.isArray(value)) return undefined;
+  if (!isList(value)) return undefined;
   const items: readonly unknown[] = value;
   return items;
 }

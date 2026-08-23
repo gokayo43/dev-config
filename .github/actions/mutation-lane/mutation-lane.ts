@@ -7,6 +7,7 @@ import {
   type ConfigObject,
   type Event,
   git,
+  isList,
   isObject,
   kindOf,
   oneOf,
@@ -128,7 +129,7 @@ type Domain = { readonly globs: string[] } | { readonly problems: readonly Probl
  */
 function patternsIn(element: ConfigObject): string[] {
   const pattern = element["pattern"];
-  const listed = Array.isArray(pattern) ? pattern : [pattern];
+  const listed = isList(pattern) ? pattern : [pattern];
   return listed.filter((each): each is string => typeof each === "string");
 }
 
@@ -145,7 +146,7 @@ async function domainGlobs(root: string): Promise<Domain> {
 
   const settings = contents["settings"];
   const elements = isObject(settings) ? settings["boundaries/elements"] : undefined;
-  const globs = (Array.isArray(elements) ? elements : [])
+  const globs = (isList(elements) ? elements : [])
     .filter(isObject)
     .filter((element) => element["type"] === DOMAIN)
     .flatMap(patternsIn)
@@ -250,13 +251,54 @@ interface Changed {
  * crosses slashes on either, so a workspace's element would classify a project
  * nested deeper than any workspace declares.
  */
+/** What a child process is given: names to values, with nothing claimed about which names. */
+type ChildEnvironment = Record<string, string>;
+
+/**
+ * The environment a run of Stryker gets: the caller's, less the two ways of
+ * asking for colour and the terminal type they are read off.
+ *
+ * Everything this gate learns about a run it reads out of what that run wrote,
+ * and colour is escape codes in the middle of it. `FORCE_COLOR` is worse than
+ * unreadable — the bun runner looks for the inspector URL in its child's first
+ * lines, and does not find it once they are wrapped, so every mutant comes back
+ * as a run that did not finish. A developer who sets it for their own shell
+ * would get a red lane and nothing about their code to fix.
+ */
+function plainly(environment: Readonly<Record<string, string | undefined>>): ChildEnvironment {
+  const plain: ChildEnvironment = {};
+  for (const [name, value] of Object.entries(environment)) {
+    if (name === "FORCE_COLOR" || name === "CLICOLOR_FORCE" || value === undefined) continue;
+    plain[name] = value;
+  }
+  return { ...plain, NO_COLOR: "1", TERM: "dumb" };
+}
+
 async function changeSet(root: string, rev: string, globs: readonly string[]): Promise<Changed> {
   const diff = await git(root, [
-    // Off, so a path outside ASCII arrives as itself rather than inside quotes
-    // with escapes in it — the name is matched against the mutation report's.
+    // Every setting below shapes the text this function then reads back, and
+    // each of them is one a developer sets for themselves and forgets. A gate
+    // whose answer depends on the reader's `~/.gitconfig` has no answer.
+    //
+    // `core.quotepath` off, so a path outside ASCII arrives as itself rather
+    // than inside quotes with escapes in it — the name is matched against the
+    // mutation report's. `color.ui` off, because escape codes around every
+    // header stop `diff --git ` and `@@` from starting a line, which reads as a
+    // branch that changed no domain file at all: this gate's way of passing.
+    // The prefixes fixed, because `diff.noprefix` and `diff.mnemonicPrefix`
+    // rewrite the `a/` and `b/` the rename check below is written against.
     "-c",
     "core.quotepath=false",
+    "-c",
+    "color.ui=never",
+    "-c",
+    "diff.noprefix=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
     "diff",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
     "--relative",
     "--unified=0",
     "--diff-filter=d",
@@ -336,7 +378,7 @@ function parseReport(text: string): Mutant[] {
   }
   return Object.entries(files).flatMap(([file, value]) => {
     const listed = isObject(value) ? value["mutants"] : undefined;
-    if (!Array.isArray(listed)) {
+    if (!isList(listed)) {
       throw new Error(`the mutation report's ${file} has no mutants array`);
     }
     return listed.filter(isObject).map((mutant) => asMutant(file, mutant));
@@ -574,7 +616,12 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Lane>
     const requested = new Map([...changed.keys()].map((file) => [literal(file), file]));
     await Bun.write(config, strykerConfig([...requested.keys()], report, join(scratch, "sandbox")));
 
-    const proc = Bun.spawn([stryker, "run", config], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn([stryker, "run", config], {
+      cwd: root,
+      env: plainly(process.env),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     const [out, err] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),

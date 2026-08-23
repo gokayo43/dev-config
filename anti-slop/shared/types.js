@@ -1,7 +1,7 @@
 /** @import { ESTree, SourceCode } from "@oxlint/plugins" */
 
 import { typeReferenceName, unwrapType } from "./syntax.js";
-import { bindsTypeParameter } from "./type-parameters.js";
+import { localTypeBinding, OPAQUE } from "./local-types.js";
 
 /** The built-ins that answer the same type they wrap, so a rule reads straight through them. */
 const TRANSPARENT_WRAPPERS = new Set(["Readonly", "Partial", "Required", "NonNullable"]);
@@ -131,12 +131,21 @@ export function createTypeEnvironment(program, sourceCode) {
 }
 
 /**
+ * Whether a name is still the built-in it is spelled like. A file that declares
+ * or imports `Record` at the top level has taken the name, and so has one that
+ * declares it inside a function — the second is the same fact asked of the
+ * node, since a scope is the only thing that knows a declaration that far down.
  * @param {string} name
  * @param {TypeEnvironment} environment
+ * @param {ESTree.Node} node
  * @returns {boolean}
  */
-function isBuiltIn(name, environment) {
-  return BUILT_INS.has(name) && !environment.shadowedBuiltIns.has(name);
+function isBuiltIn(name, environment, node) {
+  return (
+    BUILT_INS.has(name) &&
+    !environment.shadowedBuiltIns.has(name) &&
+    localTypeBinding(environment.sourceCode, node, name) === null
+  );
 }
 
 /**
@@ -297,21 +306,22 @@ export function resolveType(
         );
   }
 
-  if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment)) {
+  // Before the built-ins and before the top-level aliases, because whatever
+  // declared this name nearest has taken it. Asked of the node rather than
+  // carried in, so descending into a declaration's body asks again from that
+  // body, whose scopes are its own — which is the drop a set threaded down
+  // through the walk could only fake.
+  const local = localTypeBinding(environment.sourceCode, unwrapped, name);
+  if (local === OPAQUE) return stopped;
+
+  if (local === null && TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment, unwrapped)) {
     const wrapped = unwrapped.typeArguments?.params[0];
     return wrapped === undefined
       ? stopped
       : resolveType(wrapped, environment, substitutions, resolving, substituting);
   }
 
-  // Before the aliases, because a parameter has taken the name for the whole of
-  // the declaration binding it, and the alias of that name is a different type
-  // the file happens to also declare. Asked of the node rather than carried in,
-  // so descending into an alias body — written at the top level, where no
-  // parameter of the caller's reaches — drops the question by construction.
-  if (bindsTypeParameter(environment.sourceCode, unwrapped, name)) return stopped;
-
-  const alias = environment.aliases.get(name);
+  const alias = local ?? environment.aliases.get(name);
   if (alias === undefined || resolving.has(name)) return stopped;
   const applied = aliasSubstitution(alias, unwrapped, substitutions);
   return applied === null
@@ -408,7 +418,12 @@ function unsafeResolvedValue(resolved, environment) {
   }
   if (node.type !== "TSTypeReference") return null;
   const name = typeReferenceName(node);
-  const declarations = name === null ? undefined : environment.interfaces.get(name);
+  // The interfaces this file declared at its top level, and only if the name is
+  // still theirs: an `interface Payload` inside a function is a different type
+  // from the one of that name above it, and reading the outer one is how a
+  // shape with fields gets reported as the empty escape hatch.
+  if (name === null || localTypeBinding(environment.sourceCode, node, name) !== null) return null;
+  const declarations = environment.interfaces.get(name);
   return declarations !== undefined && isEffectivelyEmptyInterface(declarations)
     ? "empty-object"
     : null;
@@ -443,7 +458,7 @@ function dictionaryValueTypes(type, environment, substitutions, resolving) {
   }
   if (node.type !== "TSTypeReference") return [];
   const name = typeReferenceName(node);
-  if (name === null || !isBuiltIn(name, environment)) return [];
+  if (name === null || !isBuiltIn(name, environment, node)) return [];
 
   if (name === "Record") {
     const value = node.typeArguments?.params[1];
@@ -539,11 +554,11 @@ export function classifyWideningTarget(type, environment) {
   const name = typeReferenceName(node);
   if (name === null) return null;
 
-  if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment)) {
+  if (TRANSPARENT_WRAPPERS.has(name) && isBuiltIn(name, environment, node)) {
     const wrapped = node.typeArguments?.params[0];
     return wrapped === undefined ? null : classifyWideningTarget(wrapped, environment);
   }
-  if (name === "Record" && isBuiltIn(name, environment))
+  if (name === "Record" && isBuiltIn(name, environment, node))
     return { kind: "open dictionary", type: node };
 
   const alias = environment.aliases.get(name);

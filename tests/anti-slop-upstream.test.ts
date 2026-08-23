@@ -6,9 +6,8 @@ import { reportsFor } from "./lint-fixture.ts";
  * Upstream's own fixtures, run against this port as a differential oracle:
  * upstream is the implementation these rules were ported from, so its verdicts
  * are the contract the port has to meet. Copied from dmmulroy/anti-slop
- * (MIT) — the three rules it shipped tests for at commit abaeb63, and the
- * three ported at 6d53855 — from `src/rules/*.test.ts`, with the counts each
- * declares.
+ * (MIT), from `src/rules/*.test.ts` at the commit `anti-slop/index.js` names,
+ * with the counts each case declares.
  */
 describe("upstream's fixtures, against this port", () => {
   const PRELUDE = "type Command = () => void; const startCommand = () => {};";

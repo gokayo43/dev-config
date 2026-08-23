@@ -4,7 +4,15 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import { baseRevision, type Event, git, isObject, type Problem, repoFiles } from "../_lib/gate.ts";
+import {
+  baseRevision,
+  type Event,
+  git,
+  isList,
+  isObject,
+  type Problem,
+  repoFiles,
+} from "../_lib/gate.ts";
 import {
   beside,
   compare,
@@ -417,7 +425,7 @@ function clocksIn({ files }: BaseLineage): number[] {
   if (journal === undefined) return [];
   const parsed: unknown = JSON.parse(journal.text);
   const entries = isObject(parsed) ? parsed["entries"] : undefined;
-  if (!Array.isArray(entries)) return [];
+  if (!isList(entries)) return [];
   return entries.flatMap((entry: unknown) => {
     const when = isObject(entry) ? entry["when"] : undefined;
     return typeof when === "number" ? [when] : [];

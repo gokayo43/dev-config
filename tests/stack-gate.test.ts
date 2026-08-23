@@ -14,7 +14,6 @@ const DENYLIST_ENTRIES = denylistIn(await Bun.file(DENYLIST).json(), String(DENY
 /** A repo whose stack is clean, which is the only thing these cases vary. */
 const MANIFEST: PackageJson = {
   name: "clean",
-  scripts: {},
   dependencies: { "drizzle-orm": "0.44.7", sonner: "2.0.7", clsx: "2.1.1" },
   devDependencies: { "drizzle-kit": "0.31.6", "jest-expo": "54.0.0" },
 };
@@ -71,7 +70,7 @@ describe("stack gate", () => {
   // straight to a dependency field of one.
   test("a manifest that is JSON but not an object is named, not crashed on", async () => {
     expect(await gate({ ...CLEAN, "package.json": "null" })).toEqual([
-      containing("package.json: is not a JSON object"),
+      containing("package.json: is not an object — the top level of this JSON file is"),
     ]);
   });
 

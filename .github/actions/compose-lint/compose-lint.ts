@@ -1,4 +1,4 @@
-import { type ConfigObject, type Problem, record } from "../_lib/gate.ts";
+import { type ConfigObject, isList, type Problem, record } from "../_lib/gate.ts";
 
 const MIGRATE = "migrate";
 const OPT_OUT = "x-no-healthcheck";
@@ -28,7 +28,7 @@ function checkMemoryCap(name: string, service: ConfigObject, file: string): Prob
 
 function checkPorts(name: string, service: ConfigObject, file: string): Problem[] {
   const ports = service["ports"];
-  if (!Array.isArray(ports)) return [];
+  if (!isList(ports)) return [];
   return ports
     .filter((port) =>
       typeof port === "string"

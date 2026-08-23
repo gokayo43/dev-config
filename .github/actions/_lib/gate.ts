@@ -582,7 +582,10 @@ export async function parseEach(
 export type Manifest = Parsed<ConfigObject>;
 
 /**
- * Every one of these files as the object a config's top level has to be.
+ * Every one of these files as the object a config's top level has to be. The
+ * dialect is named in the diagnostic because it is what the reader has to go
+ * and look at: a YAML file whose top level is a list is a real and ordinary
+ * mistake, and being told it is not a JSON object sends them to the wrong page.
  * `JSON.parse` answers `null`, a number or an array as readily as an object,
  * and every reader downstream goes straight to a field — so the shape is
  * settled here, where the file can still be named, rather than as a TypeError
@@ -600,7 +603,10 @@ export async function configObjects(
     if (isObject(value)) {
       read.push({ file, value });
     } else {
-      problems.push({ file, message: `is not a JSON object — the top level is ${kindOf(value)}` });
+      problems.push({
+        file,
+        message: `is not an object — the top level of this ${dialect} file is ${kindOf(value)}`,
+      });
     }
   }
   return { read, problems };

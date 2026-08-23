@@ -347,6 +347,39 @@ export const value = Reflect.apply();`,
       source: `${REFLECT}export const value = Reflect.get(owner, key);`,
       reports: [],
     },
+    {
+      // Three spellings of one object, each a line's edit from the last. A rule
+      // that only knows the bare name is turned off by assigning it to
+      // something, which reads as ordinary style.
+      name: "the global reached through globalThis is the same global",
+      source: `${REFLECT}export const value = globalThis.Reflect.apply(operation, owner, [key]);`,
+      reports: ["Replace `Reflect.apply`"],
+    },
+    {
+      name: "and so is one a const was given once",
+      source: `${REFLECT}const R = Reflect;
+export const value = R.apply(operation, owner, [key]);`,
+      reports: ["Replace `Reflect.apply`"],
+    },
+    {
+      name: "a method taken off it by destructuring still does what it did",
+      source: `${REFLECT}const { apply } = Reflect;
+export const value = apply(operation, owner, [key]);`,
+      reports: ["Replace `Reflect.apply`"],
+    },
+    {
+      name: "under whatever name the destructuring gave it",
+      source: `${REFLECT}const { apply: invoke } = globalThis.Reflect;
+export const value = invoke(operation, owner, [key]);`,
+      reports: ["Replace `Reflect.apply`"],
+    },
+    {
+      name: "a same-named method off an object that is not Reflect is not this",
+      source: `${REFLECT}const shim = { apply: (): number => 1 };
+const { apply } = shim;
+export const value = apply();`,
+      reports: [],
+    },
   ],
 
   "no-reflect-get": [
@@ -376,6 +409,23 @@ export const value = Reflect.apply();`,
       name: "Reflect.set is not this rule's method",
       source: `${REFLECT}Reflect.set(owner, key, 1);`,
       reports: [],
+    },
+    {
+      name: "the global reached through globalThis is the same global",
+      source: `${REFLECT}export const value = globalThis.Reflect.get(owner, key);`,
+      reports: ["Replace `Reflect.get`"],
+    },
+    {
+      name: "and so is one a const was given once",
+      source: `${REFLECT}const R = Reflect;
+export const value = R.get(owner, key);`,
+      reports: ["Replace `Reflect.get`"],
+    },
+    {
+      name: "a method taken off it by destructuring still does what it did",
+      source: `${REFLECT}const { get: read } = Reflect;
+export const value = read(owner, key);`,
+      reports: ["Replace `Reflect.get`"],
     },
   ],
 
@@ -652,6 +702,30 @@ export function load<Value>(): Wrapper {
       reports: ["3:32"],
     },
     {
+      // A declaration below the top level takes the name as surely as a
+      // parameter does, and unlike a parameter it has a body worth reading. The
+      // wrong implementation counts only the parameter forms, and then answers
+      // this from the alias at the top of the file.
+      name: "a type declared in a function body is the one that name means there",
+      source: `type V = unknown;
+export function f(): string {
+  type V = string;
+  const g = (): V => "";
+  return g();
+}`,
+      reports: [],
+    },
+    {
+      name: "and it is read through, so a local alias for unknown is still unknown",
+      source: `export function f(): string {
+  type Hidden = unknown;
+  const g = (): Hidden => undefined;
+  void g;
+  return "";
+}`,
+      reports: ["3:17"],
+    },
+    {
       name: "unknown behind a field is not the return contract",
       source: `${USER}export function load(): { readonly cause: unknown } {
   return { cause: input };
@@ -820,6 +894,30 @@ export declare const table: Record<string, Box<string>>;`,
       name: "a type parameter shadowing an alias is the parameter, not the alias",
       source: `type Value = unknown;
 export type Index<Value> = Record<string, Value>;`,
+      reports: [],
+    },
+    {
+      // The empty interface is the escape hatch this reports. One declared
+      // inside a function is a different type of the same name, and reading the
+      // outer one calls a shape with fields an escape hatch.
+      name: "an interface declared in a function body is not the one above it",
+      source: `interface Payload {}
+export function g(): string {
+  interface Payload {
+    readonly id: string;
+  }
+  const bag: Record<string, Payload> = { a: { id: "x" } };
+  return Object.keys(bag).join("");
+}`,
+      reports: [],
+    },
+    {
+      name: "and a locally declared Record is not the built-in one either",
+      source: `export function g(): string {
+  type Record<K, V> = { readonly key: K; readonly value: V };
+  const bag: Record<string, unknown> = { key: "a", value: 1 };
+  return String(bag.key);
+}`,
       reports: [],
     },
     {

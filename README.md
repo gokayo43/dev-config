@@ -415,8 +415,9 @@ anti-slop/no-call-log-assertions -- <reason>`. As everywhere else here, the
 reason is not optional; the suppression-hygiene gate holds every directive to
 carrying one.
 
-Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT),
-level with upstream at commit `6d53855`. Upstream vendors the rules into each repo; they live here
+Ported from [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop) (MIT);
+`anti-slop/index.js` names the upstream commit this port is level with, because
+that file is the one a consuming repo can read. Upstream vendors the rules into each repo; they live here
 because oxlint's `jsPlugins` API is alpha and explicitly outside semver, so the
 rule code and the oxlint version have to move as one pin — which is what the
 release pair already does. `no-conditional-empty-object-spread` is deliberately not ported: with
