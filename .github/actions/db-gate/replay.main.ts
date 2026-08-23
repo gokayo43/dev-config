@@ -2,7 +2,7 @@ import { entry, inputs, publish, required } from "../_lib/gate.ts";
 import { replayGate } from "./replay.ts";
 
 await entry(async () => {
-  const read = inputs("upgrade-gate", "base-ref", "before");
+  const read = inputs("upgrade-gate", "base-ref", "before", "semantic-fixtures");
 
   // The database the calling job declared, from the environment it owns. Taking
   // it as an action input as well would be two sources that can disagree about
@@ -27,6 +27,7 @@ await entry(async () => {
       root: process.cwd(),
       url,
       upgrade: asked === "true" ? { baseRef: read["base-ref"], before: read["before"] } : undefined,
+      fixtures: read["semantic-fixtures"],
     }),
   );
 });

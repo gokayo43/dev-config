@@ -33,8 +33,13 @@ a change to a rule usually lands here too.
   more than one module when it holds more than one subject:
   `repo-contract/live.ts` is what the word "live" derives — everything a repo
   owes because it carries people — beside the contract every repo satisfies
-  whether or not anyone is on the other end. What more than
-  one **action** reads lives in `_lib/`: `gate.ts`, and `dependency-specs.ts` —
+  whether or not anyone is on the other end.
+  `db-gate/semantic-fixtures.ts` is another: what the base ref's replay proves
+  about a _schema_ and what it proves about the _rows_ are two subjects, and the
+  second is the only gate here that grades data. What more than
+  one **action** reads lives in `_lib/`: `gate.ts` — which is where `plainly`
+  sits, the environment a child whose output a gate reads is given, now that two
+  actions spawn one — and `dependency-specs.ts` —
   the version grammar the repo contract grades every spec by and the stack
   denylist asks which package a spec installs. What two gates of one action
   share stays in that action's directory instead — `db-gate/database.ts`, the
@@ -110,7 +115,8 @@ a block of cases per rule, and a check that the base enables exactly the rules
 the plugin defines.
 
 `bun test` needs a Postgres and passwordless sudo — the first because the replay
-gate's property is what two databases end up holding, the second because the
+gate's property is what two databases end up holding and the semantic fixtures'
+is what a real migration does to a real row, the second because the
 test-suite gate seals a run in a network namespace and nothing short of taking
 one says whether it holds. The suite looks at `TEST_DATABASE_URL`, or
 localhost:5432, and creates and drops databases there — README's "Gating this
@@ -118,9 +124,9 @@ repo" has the one-liner.
 
 Two runs may share one server, which is what two worktrees under review are.
 Every database either end makes is named for what tells the runs apart: the
-suite's own carry the process that created them, and the two the gates build for
-themselves — `upgrade_path_<digest>` and `backfill_<digest>` — carry the
-checkout they are working on.
+suite's own carry the process that created them, and the three the gates build
+for themselves — `upgrade_path_<digest>`, `semantic_fixtures_<digest>` and
+`backfill_<digest>` — carry the checkout they are working on.
 
 This repo runs its own gates on itself in CI, from the working tree, with three
 exemptions named in `ci.yml`: it cannot extend itself by package name, its CI

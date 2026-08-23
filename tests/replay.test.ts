@@ -117,9 +117,14 @@ async function replay(repo: Repo, upgrade: Event | undefined): Promise<Verdict> 
   return await replayIn(repo.root, upgrade);
 }
 
-/** The gate against a root that is not the repository's, which is what working-directory can be. */
+/**
+ * The gate against a root that is not the repository's, which is what
+ * working-directory can be. No semantic fixtures anywhere in this suite: they
+ * are graded in `semantic-fixtures.test.ts`, and what is under test here is the
+ * replay they ride on.
+ */
 async function replayIn(root: string, upgrade: Event | undefined): Promise<Verdict> {
-  return await replayGate({ root, url: await emptyDatabase(), upgrade });
+  return await replayGate({ root, url: await emptyDatabase(), upgrade, fixtures: "" });
 }
 
 /** git with something on stdin, for the plumbing that builds a tree by hand. */
@@ -682,6 +687,7 @@ describe("replay gate", () => {
         root: shallow,
         url: await emptyDatabase(),
         upgrade: { baseRef: "", before: "" },
+        fixtures: "",
       }),
     );
 

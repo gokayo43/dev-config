@@ -11,6 +11,7 @@ import {
   isObject,
   kindOf,
   oneOf,
+  plainly,
   type Problem,
   readConfig,
   type Verdict,
@@ -238,29 +239,6 @@ interface Changed {
  * crosses slashes on either, so a workspace's element would classify a project
  * nested deeper than any workspace declares.
  */
-/** What a child process is given: names to values, with nothing claimed about which names. */
-type ChildEnvironment = Record<string, string>;
-
-/**
- * The environment a run of Stryker gets: the caller's, less the two ways of
- * asking for colour and the terminal type they are read off.
- *
- * Everything this gate learns about a run it reads out of what that run wrote,
- * and colour is escape codes in the middle of it. `FORCE_COLOR` is worse than
- * unreadable — the bun runner looks for the inspector URL in its child's first
- * lines, and does not find it once they are wrapped, so every mutant comes back
- * as a run that did not finish. A developer who sets it for their own shell
- * would get a red lane and nothing about their code to fix.
- */
-function plainly(environment: Readonly<Record<string, string | undefined>>): ChildEnvironment {
-  const plain: ChildEnvironment = {};
-  for (const [name, value] of Object.entries(environment)) {
-    if (name === "FORCE_COLOR" || name === "CLICOLOR_FORCE" || value === undefined) continue;
-    plain[name] = value;
-  }
-  return { ...plain, NO_COLOR: "1", TERM: "dumb" };
-}
-
 async function changeSet(root: string, rev: string, globs: readonly string[]): Promise<Changed> {
   const diff = await git(root, [
     // Every setting below shapes the text this function then reads back, and

@@ -95,6 +95,9 @@ const NOTHING_SET = {
   TIMESTAMP_ALLOWLIST: "",
   BACKFILL_COMMAND: "",
   BACKFILL_SEED: "",
+  SEMANTIC_FIXTURES: "",
+  PROBE_COMMAND: "",
+  PROBE_TIMEOUT: "",
   MUTATION_LANE: "false",
   MUTATION_FLOOR: "",
   AFFECTED: "false",
@@ -177,6 +180,45 @@ describe("which packages a run is held to", () => {
     expect(output).toContain("::error::capacity-path needs database: true");
     expect(output).toContain("::error::mutation-floor needs mutation-lane: true");
     expect(status).not.toBe(0);
+  });
+
+  // Two inputs ride on another input rather than on the job, so each is asked a
+  // second question here. Both are the same failure the step exists to prevent
+  // from the other side: the job is running, the input was passed, and nothing
+  // would have read it.
+  test("fixtures without the replay they are written into are refused", async () => {
+    const { status, output } = await ran(VALIDATION, MONOREPO, {
+      ...NOTHING_SET,
+      DATABASE: "true",
+      SEMANTIC_FIXTURES: "fixtures",
+    });
+    expect(output).toContain("::error::semantic-fixtures needs upgrade-gate: true");
+    expect(status).not.toBe(0);
+  });
+
+  test("a bound with no command under it is refused", async () => {
+    const { status, output } = await ran(VALIDATION, MONOREPO, {
+      ...NOTHING_SET,
+      DATABASE: "true",
+      PROBE_TIMEOUT: "300",
+    });
+    expect(output).toContain("::error::probe-timeout needs probe-command");
+    expect(status).not.toBe(0);
+  });
+
+  // The clean tree for both: each input beside the one it rides on, with the
+  // job that runs them asked for.
+  test("each of them beside the input it rides on passes", async () => {
+    expect(
+      await ran(VALIDATION, MONOREPO, {
+        ...NOTHING_SET,
+        DATABASE: "true",
+        UPGRADE_GATE: "true",
+        SEMANTIC_FIXTURES: "fixtures",
+        PROBE_COMMAND: "bun run scripts/probe.ts",
+        PROBE_TIMEOUT: "300",
+      }),
+    ).toMatchObject({ status: 0 });
   });
 });
 

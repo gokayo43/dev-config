@@ -1,8 +1,9 @@
 name: Database gate
 description: >-
   Replays the migrations onto the empty Postgres the caller declared, twice —
-  and, where the caller asks for it, from the base ref's migrations as well —
-  boots the app against the result, and ramps it. Every step reads
+  and, where the caller asks for it, from the base ref's migrations as well,
+  with the repo's own legacy rows written into that replay — boots the app
+  against the result, probes it where the repo has one, and ramps it. Every step reads
   DATABASE_URL from the environment — the caller declares the service, so it
   owns the URL, and one value means no two steps can disagree about which
   database was migrated — plus REDIS_URL when the app needs one.
@@ -17,6 +18,14 @@ inputs:
       reaches the schema a fresh one gets. Needs the base ref in the checkout —
       fetch-depth: 0 — and a second database on the declared service.
     default: "false"
+  semantic-fixtures:
+    description: >-
+      A directory of this repo's own holding the rows a deployed database
+      already has, as base-compatible SQL, each with the assertion the current
+      contract makes about them. Written into the base ref's replay and graded
+      after this branch's migrations run over them, which is why it needs
+      upgrade-gate as well.
+    default: ""
   backfill-seed:
     description: >-
       How to put a database into the state this repo's backfill was written for.
@@ -35,6 +44,21 @@ inputs:
   health-url:
     description: The URL to poll until it answers 200.
     required: true
+  probe-command:
+    description: >-
+      A command of the repo's own, run against the booted app after it answers
+      its health route and before the ramp. Runs as shell code, with the app's
+      URL in HEALTH_URL. Exit 0 is a pass; every line it writes to stdout is one
+      problem, since the gate running it cannot know what it was asserting.
+    default: ""
+  probe-timeout:
+    description: >-
+      How many seconds probe-command gets before it is killed. Empty takes the
+      bound probe.ts declares, which is where the number and the argument for it
+      live — a bound is what stops a probe that has wedged from spending the
+      job's whole budget and taking the ramp's evidence with it. Set it with
+      probe-command or not at all.
+    default: ""
   capacity-script:
     description: A k6 script of the repo's own. Empty runs the ramp shipped with this action.
     default: ""
@@ -80,7 +104,7 @@ inputs:
 # What holds them together is the migrated database itself: every step below is
 # rooted in the replay, and the app steps are ordered among themselves — nothing
 # can read a column type before the migrations ran, boot before there is a
-# schema, ramp before the app answers, or count routes before the ramp. The two
+# schema, probe or ramp before the app answers, or count routes before the ramp. The two
 # database steps beside the replay are free of each other and of the rest —
 # reading a column type says nothing about rows, and the backfill check works in
 # a database of its own — which makes this a partial order rather than a chain,
@@ -111,6 +135,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         INPUT_UPGRADE_GATE: ${{ inputs.upgrade-gate }}
+        INPUT_SEMANTIC_FIXTURES: ${{ inputs.semantic-fixtures }}
         INPUT_BASE_REF: ${{ github.base_ref }}
         INPUT_BEFORE: ${{ github.event.before }}
       run: |
@@ -190,6 +215,26 @@ runs:
           fi
           sleep 2
         done
+
+    # Between the boot and the ramp, which is the only place it can ask what it
+    # asks. Health answering 200 says the app starts against this schema; the
+    # route floor below says every route was reached. Neither says an answer was
+    # correct, and a migration that quietly reinterprets a column passes both —
+    # so the repo gets one command here to assert what only it knows.
+    #
+    # Its stdout is the protocol, the way capacity-script's summary is: the gate
+    # owns the running and the repo owns the meaning.
+    - name: The repo's own probe of the booted app
+      if: ${{ inputs.probe-command != '' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_PROBE_COMMAND: ${{ inputs.probe-command }}
+        INPUT_PROBE_TIMEOUT: ${{ inputs.probe-timeout }}
+        INPUT_HEALTH_URL: ${{ inputs.health-url }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/probe.main.ts"
 
     # A number, not a latency threshold. See docs/gates/capacity.md: on a shared
     # runner a latency bound measures the runner, and a gate that fails on that

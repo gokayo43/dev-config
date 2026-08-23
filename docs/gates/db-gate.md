@@ -69,6 +69,67 @@ with:
     public.audit log.at -- the shift board's wall time, not an instant
 ```
 
+## The repo's own probe
+
+`probe-command` is one command of the repo's own, run against the booted app
+after it has answered its health route and before the ramp. A real process, a
+real HTTP client, a real migrated database, no layer stubbed.
+
+It exists because the two floors either side of it cannot ask this question.
+Health answering 200 proves the app **starts** against that schema. The route
+floor proves every route was **reached**. Neither says a single answer was
+_correct_ — so a migration that applies, boots, and serves every route while
+quietly reinterpreting what a column means passes both of them. The upgrade
+gate's semantic fixtures ask that of the data
+([upgrade-path.md](upgrade-path.md)); this asks it of the app's answers, which
+is the only place some of it is visible at all.
+
+What it asserts is the repo's, because only the repo knows what its answers are
+supposed to be. So the contract is the smallest one that can carry a claim this
+gate cannot read:
+
+- **exit 0 is a pass**;
+- **every line the command writes to stdout is one problem.**
+
+`capacity-script` hands a repo the same authorship one step later, and for the
+same reason: the gate owns the running, the repo owns the meaning.
+
+```yaml
+with:
+  probe-command: bun run scripts/probe.ts
+```
+
+The command runs as shell — a pipe or an `&&` means what it says — in the
+project the caller declared, with the app's URL in `HEALTH_URL`, the same name
+the boot step and the ramp use for it. Its environment is the job's, less the two
+ways of asking for colour and the terminal type they are read off: stdout is the
+protocol here, and a problem arriving wrapped in escape codes is a problem
+nobody can match to a route.
+
+A command that fails and prints nothing is still a failure, and the annotation
+then says what the contract was — a red step with an empty explanation is the one
+thing no gate here may produce. Everything the command wrote, stdout and stderr
+both, reaches the log above the annotations.
+
+`probe-timeout` bounds it, in seconds, and empty takes the bound `probe.ts`
+declares — which is where that number and the argument for it live. The probe
+runs against an app that is already up, so it is making requests rather than
+waiting for a boot; the bound is there because a probe that has wedged is
+otherwise indistinguishable from a slow one, and would spend the job's whole
+budget saying so, taking the ramp and every piece of evidence after it down with
+it. A probe killed by the bound is refused naming it: whatever it would have
+written after that is lost, so nothing it was asserting was graded.
+
+### What this cannot catch
+
+- **Anything the repo did not write a probe for.** One or two contract-level
+  probes per critical invariant is what this is sized for, and what is not
+  asserted is not checked.
+- **Anything about the deployed shape.** This is one process on a CI runner
+  against a database built ten seconds ago.
+- **Whether the probe is right.** A probe that exits 0 without asserting
+  anything passes every build, exactly as a test that asserts nothing does.
+
 Once it has booted, the job ramps it and publishes what that measured.
 That is a step of this gate rather than a gate of its own, and it has a page:
 [capacity.md](capacity.md).

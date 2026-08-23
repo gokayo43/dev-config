@@ -865,28 +865,31 @@ jobs:
       database: true
 ```
 
-| Input                 | Default                            | Effect                                                                                                                                                                                                                                                                          |
-| --------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `build`               | `false`                            | Runs `bun run build` before the static gate and before the boot gate.                                                                                                                                                                                                           |
-| `affected`            | `false`                            | Runs the `typecheck` lane over the packages a pull request changed, via turbo's `--affected` with `TURBO_SCM_BASE` set to the pull request's base commit. Needs `turbo.json` at the root and is refused without one; ignored on a push, where `main` stays the full run.        |
-| `database`            | `false`                            | Adds the database job: an empty Postgres, the migrations replayed onto it twice, the app booted against the result, and a k6 ramp over every route it serves. Also makes `db:migrate` part of the repo contract.                                                                |
-| `compose`             | `false`                            | Holds `docker-compose.yml` to the deployment shape.                                                                                                                                                                                                                             |
-| `mutation-lane`       | `false`                            | Mutates the domain files this branch changed and fails on a mutant its own lines left undetected. Reads the pure domain from the `boundaries/elements` entry typed `domain`; needs `@stryker-mutator/core` and `@hughescr/stryker-bun-runner` among the repo's devDependencies. |
-| `mutation-floor`      | `""`                               | The mutation score the changed domain files must hold, as a fraction between 0 and 1. Empty publishes the score and enforces nothing. Needs `mutation-lane: true`.                                                                                                              |
-| `upgrade-gate`        | `false`                            | Also proves that a database upgraded from the base ref's migrations reaches the schema a fresh one gets. Needs `database: true`; for repos whose database is deployed.                                                                                                          |
-| `contract-exemptions` | `""`                               | Repo-contract facts this repo is structurally unable to satisfy, space-separated. A marketing site names `docs-spine`; a repo being wound down names `lifecycle-retire`.                                                                                                        |
-| `stack-allowlist`     | `""`                               | Packages this repo keeps against the stack denylist, as `<package> -- why` entries, one per line; an entry is refused when it carries no reason, when nothing here declares the package any more, or when the denylist has stopped denying it.                                  |
-| `backfill-seed`       | `""`                               | Shell code putting a database into the state this repo's backfill was written for. Set it with `backfill-command` or not at all.                                                                                                                                                |
-| `backfill-command`    | `""`                               | The backfill, as shell code: run twice against the state `backfill-seed` wrote, in a database of the check's own, with the data compared either side of the second run.                                                                                                         |
-| `start-command`       | `bun run start`                    | How the boot gate starts the app.                                                                                                                                                                                                                                               |
-| `health-url`          | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200.                                                                                                                                                                                                                                  |
-| `timestamp-allowlist` | `""`                               | `schema.table.column -- why` entries whose value really is a wall-clock reading rather than an instant, one per line; an entry is refused when it carries no reason, when the schema has no column of that name, or when that column is no longer a wall-clock one.             |
-| `capacity-path`       | `""`                               | Paths to ramp alongside the health route, one per line.                                                                                                                                                                                                                         |
-| `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                                                                                                                      |
-| `db-gate-evidence`    | `db-gate-evidence`                 | The artifact name for the k6 summary, the two route-log snapshots, the backfill check's three data dumps and the app's output, for a matrix that runs more than one leg.                                                                                                        |
-| `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                                                                               |
-| `test-network`        | `""`                               | Why this repo's suite has to reach a real network. Empty runs `bun test` sealed in a network namespace with nothing but loopback in it, so a live call fails where it is written. The reason is the input, and it is read in review like the reason on a lint directive.        |
-| `test-suite-evidence` | `test-suite-evidence`              | The artifact name for the junit report, for a matrix that runs more than one leg.                                                                                                                                                                                               |
+| Input                 | Default                            | Effect                                                                                                                                                                                                                                                                                         |
+| --------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build`               | `false`                            | Runs `bun run build` before the static gate and before the boot gate.                                                                                                                                                                                                                          |
+| `affected`            | `false`                            | Runs the `typecheck` lane over the packages a pull request changed, via turbo's `--affected` with `TURBO_SCM_BASE` set to the pull request's base commit. Needs `turbo.json` at the root and is refused without one; ignored on a push, where `main` stays the full run.                       |
+| `database`            | `false`                            | Adds the database job: an empty Postgres, the migrations replayed onto it twice, the app booted against the result, and a k6 ramp over every route it serves. Also makes `db:migrate` part of the repo contract.                                                                               |
+| `compose`             | `false`                            | Holds `docker-compose.yml` to the deployment shape.                                                                                                                                                                                                                                            |
+| `mutation-lane`       | `false`                            | Mutates the domain files this branch changed and fails on a mutant its own lines left undetected. Reads the pure domain from the `boundaries/elements` entry typed `domain`; needs `@stryker-mutator/core` and `@hughescr/stryker-bun-runner` among the repo's devDependencies.                |
+| `mutation-floor`      | `""`                               | The mutation score the changed domain files must hold, as a fraction between 0 and 1. Empty publishes the score and enforces nothing. Needs `mutation-lane: true`.                                                                                                                             |
+| `upgrade-gate`        | `false`                            | Also proves that a database upgraded from the base ref's migrations reaches the schema a fresh one gets. Needs `database: true`; for repos whose database is deployed.                                                                                                                         |
+| `semantic-fixtures`   | `""`                               | A directory of the repo's own holding the rows a deployed database already has, as base-compatible SQL, each with the assertion the current contract makes about them: written into the base ref's replay and graded after this branch's migrations run over them. Needs `upgrade-gate: true`. |
+| `contract-exemptions` | `""`                               | Repo-contract facts this repo is structurally unable to satisfy, space-separated. A marketing site names `docs-spine`; a repo being wound down names `lifecycle-retire`.                                                                                                                       |
+| `stack-allowlist`     | `""`                               | Packages this repo keeps against the stack denylist, as `<package> -- why` entries, one per line; an entry is refused when it carries no reason, when nothing here declares the package any more, or when the denylist has stopped denying it.                                                 |
+| `backfill-seed`       | `""`                               | Shell code putting a database into the state this repo's backfill was written for. Set it with `backfill-command` or not at all.                                                                                                                                                               |
+| `backfill-command`    | `""`                               | The backfill, as shell code: run twice against the state `backfill-seed` wrote, in a database of the check's own, with the data compared either side of the second run.                                                                                                                        |
+| `start-command`       | `bun run start`                    | How the boot gate starts the app.                                                                                                                                                                                                                                                              |
+| `health-url`          | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200.                                                                                                                                                                                                                                                 |
+| `probe-command`       | `""`                               | A command of the repo's own, run as shell against the booted app after it answers its health route and before the ramp, with the app's URL in `HEALTH_URL`. Exit 0 is a pass; every line it writes to stdout is one problem.                                                                   |
+| `probe-timeout`       | `120`                              | How many seconds `probe-command` gets before it is killed. Empty takes that bound, which `db-gate/probe.ts` declares along with the argument for it. Needs `probe-command`.                                                                                                                    |
+| `timestamp-allowlist` | `""`                               | `schema.table.column -- why` entries whose value really is a wall-clock reading rather than an instant, one per line; an entry is refused when it carries no reason, when the schema has no column of that name, or when that column is no longer a wall-clock one.                            |
+| `capacity-path`       | `""`                               | Paths to ramp alongside the health route, one per line.                                                                                                                                                                                                                                        |
+| `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                                                                                                                                     |
+| `db-gate-evidence`    | `db-gate-evidence`                 | The artifact name for the k6 summary, the two route-log snapshots, the backfill check's three data dumps and the app's output, for a matrix that runs more than one leg.                                                                                                                       |
+| `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                                                                                              |
+| `test-network`        | `""`                               | Why this repo's suite has to reach a real network. Empty runs `bun test` sealed in a network namespace with nothing but loopback in it, so a live call fails where it is written. The reason is the input, and it is read in review like the reason on a lint directive.                       |
+| `test-suite-evidence` | `test-suite-evidence`              | The artifact name for the junit report, for a matrix that runs more than one leg.                                                                                                                                                                                                              |
 
 Both evidence names default to a constant, and an artifact name may be claimed
 once per run — so a caller that runs `check.yml` as a **matrix** has to give each
@@ -937,12 +940,17 @@ workflow-level `env` does not reach the workflow it calls. A scaffolded
 monorepo's `.env` covers a checkout and nothing else, so without this every CI
 run of every one of them was reporting usage counts.
 
-Eight inputs are aimed at steps of the database job — `upgrade-gate`,
-`capacity-path`, `capacity-script`, `db-gate-evidence`, `route-allowlist`,
-`timestamp-allowlist`, `backfill-seed` and `backfill-command` — and each fails
-the run when passed with `database: false`, saying which: being quietly ignored
-is how a ramp somebody asked for turns out never to have run. `mutation-floor`
-is refused without `mutation-lane: true` on the same argument.
+Eleven inputs are aimed at steps of the database job — `upgrade-gate`,
+`semantic-fixtures`, `capacity-path`, `capacity-script`, `db-gate-evidence`,
+`route-allowlist`, `timestamp-allowlist`, `backfill-seed`, `backfill-command`,
+`probe-command` and `probe-timeout` — and each fails the run when passed with
+`database: false`, saying which: being quietly ignored is how a ramp somebody
+asked for turns out never to have run. Two of them ride on another input rather
+than on the job, and are asked a second question for the same reason:
+`semantic-fixtures` is refused without `upgrade-gate: true`, since the rows go
+into the replay that input adds, and `probe-timeout` is refused without
+`probe-command`, since on its own it bounds nothing. `mutation-floor` is refused
+without `mutation-lane: true` on the same argument.
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches
@@ -952,6 +960,18 @@ the live one in `project-template`'s `setup/ci.single.yml` or
 `setup/ci.monorepo.yml`. Renovate's github-actions manager
 reads a job-level `uses:` exactly as it reads a step's, so the pin moves in a PR
 like any other dependency.
+
+`semantic-fixtures` is the one input here that grades **data** rather than
+shape. Everything else the database job does is a comparison of schemas, of
+column types, of route tables or of rows either side of one command — and a
+migration that converges on the right schema while rewriting what a value means
+passes every one of them. The fixtures are the rows a deployed database already
+holds, replayed through the base ref's migrations and then this branch's, with
+the repo's own assertions asking what they now say; `probe-command` is the same
+question asked of the booted app's answers rather than of its tables.
+[docs/gates/upgrade-path.md](docs/gates/upgrade-path.md) and
+[docs/gates/db-gate.md](docs/gates/db-gate.md) carry both, including what neither
+can see.
 
 In order, the pinned workflow runs the gitleaks scan, the declarative gates
 (repo contract, stack denylist, suppression hygiene, shellcheck over the repo's

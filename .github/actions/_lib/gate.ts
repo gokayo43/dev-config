@@ -390,6 +390,34 @@ export function deadEntries(
     .map((subject) => ({ message: message(subject, known.has(subject)) }));
 }
 
+/** What a child process is given: names to values, with nothing claimed about which names. */
+export type ChildEnvironment = Record<string, string>;
+
+/**
+ * The environment for a child whose *output* this repo then reads: the
+ * caller's, less the two ways of asking for colour and the terminal type they
+ * are read off.
+ *
+ * Everything a gate learns about such a run it reads out of what that run
+ * wrote, and colour is escape codes in the middle of it — a score parsed out of
+ * a report, a probe's stdout line taken as the problem it names. `FORCE_COLOR`
+ * is worse than unreadable for a child that is *watched* rather than merely
+ * read: the bun runner looks for the inspector URL in its own child's first
+ * lines, and does not find it once they are wrapped, so every mutant comes back
+ * as a run that did not finish. A developer who sets it for their own shell
+ * would get a red gate and nothing about their code to fix.
+ */
+export function plainly(
+  environment: Readonly<Record<string, string | undefined>>,
+): ChildEnvironment {
+  const plain: ChildEnvironment = {};
+  for (const [name, value] of Object.entries(environment)) {
+    if (name === "FORCE_COLOR" || name === "CLICOLOR_FORCE" || value === undefined) continue;
+    plain[name] = value;
+  }
+  return { ...plain, NO_COLOR: "1", TERM: "dumb" };
+}
+
 /** A git invocation's exit status and what it wrote. */
 export interface Ran {
   readonly ok: boolean;

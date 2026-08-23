@@ -205,6 +205,127 @@ only in where they started, so a legitimate divergence would have to come from a
 migration that is not deterministic — and the fix for that is the migration, not
 an exemption.
 
+## Semantic fixtures
+
+`semantic-fixtures: <dir>` adds a second property to the same replay: **the rows
+a deployed database already holds still mean what this branch says they mean.**
+
+Everything above is a comparison of two schemas, and two schemas converging is
+the whole of what it proves. A migration that rewrites what a _value_ stands for
+converges perfectly and is wrong everywhere. The canonical one is a `timestamp`
+column — digits with no zone attached — converted to `timestamptz` by a
+migration written on a UTC machine:
+
+```sql
+ALTER TABLE "event" ALTER COLUMN "at" TYPE timestamptz USING "at" AT TIME ZONE 'UTC';
+```
+
+Right for every row its author tried it on, and thirteen hours out for every row
+a UTC+13 user wrote. Both spellings of that `USING` clause land on
+`timestamptz`, so `pg_dump --schema-only` cannot tell them apart and the upgrade
+gate passes either. Nothing errors. The rows are simply wrong from that commit
+onwards.
+
+So the fixtures are replayed the way the data actually got there:
+
+1. the base ref's migrations, into a database of this gate's own —
+   `semantic_fixtures_<digest>`, named the way every database here is named;
+2. the repo's fixtures, in filename order, writing the rows a deployed database
+   already holds;
+3. **this branch's** migrations, on top of those rows;
+4. the repo's assertions, asking what those rows now say.
+
+### The rows go in as SQL, never through the app
+
+That is the property the whole gate rests on, and the one shortcut that would
+void it. Application code at HEAD writes rows the way HEAD understands them, so
+a fixture that went through a model, a repository or a seed script would be
+testing the new semantics against themselves — and would agree with any
+migration at all, including the one that moved every row thirteen hours.
+
+A fixture is therefore SQL against **the base ref's schema and nothing else**. A
+column this branch adds is not one a fixture can name, and the database refuses
+it rather than this gate accommodating it: the fixtures run before the branch's
+migrations do, which is what that refusal proves.
+
+### The shape of a fixture
+
+A pair per file, in a directory of the repo's own:
+
+```
+fixtures/
+  01-legacy-events.sql          the rows, as base-compatible SQL
+  01-legacy-events.assert.sql   what the current contract says about them
+```
+
+```sql
+-- 01-legacy-events.sql
+insert into "event" ("id", "at") values (1, '2026-01-01 12:00:00');
+```
+
+```sql
+-- 01-legacy-events.assert.sql
+select 'event ' || "id" || ' is no longer the instant it was written as' as violation
+from "event" where "at" <> timestamptz '2026-01-01 12:00:00+00';
+```
+
+An assertion is **one `select`**, answering no rows when the contract holds and
+one row per violation otherwise, each with a text `violation` column saying what
+is wrong. Empty is the only pass. The column is named rather than positional,
+because a `select *` would have whatever column came first read back as a
+sentence about the data; several statements come back as a list of answers
+rather than as rows, and nothing could say which of them was the verdict — both
+are refused naming the file.
+
+The `NN-` prefix is the order they apply in, and it is load-bearing: a fixture
+may write over the rows an earlier one left, the way a history of real rows
+accumulates. Directory order is a fact about the filesystem, not an order.
+
+The gate refuses, before it builds anything: a directory that is not there, a
+directory with no fixture in it, a fixture with no assertion beside it, an
+assertion with no fixture beside it, and any file in the directory that is
+neither. Each of those is a gate that would otherwise pass by not having looked,
+and every one of them is reported in the same run — one edit to make, one run to
+be told the whole of it.
+
+A fixture may hold as many statements as it needs. The whole file goes to
+Postgres as one query string, and the simple query protocol wraps such a string
+in an implicit transaction, so a fixture applies whole or not at all. One that
+will not apply stops the run at that fixture, because the ones numbered after it
+may have been written against the rows it was meant to leave.
+
+### It needs the upgrade gate
+
+`semantic-fixtures` without `upgrade-gate: true` is refused at the call site and
+again inside the action. The rows are written into the replay of the base ref's
+migrations — without that replay there is nowhere to put them, and an input
+silently ignored is how a gate somebody asked for turns out never to have run. A
+base ref carrying no lineage at all is a notice and a pass, and the notice says
+the fixtures did not run either.
+
+The fixtures get a database of their own rather than sharing the upgrade path's.
+Rows change what a migration does: `ALTER TABLE ... ADD COLUMN ... NOT NULL`
+applies to an empty database and fails on one with a row in it. That failure is
+worth catching — it is the class that only ever shows up on the deploy, and the
+fixtures are exactly what puts rows there to catch it — but it is a different
+question from whether the schemas converge, and answering it in the upgrade
+path's database would mean turning this input on changed the verdict of a gate
+the repo already had.
+
+### What a semantic fixture cannot see
+
+- **Rows nobody wrote a fixture for.** This grades the rows in the directory and
+  no others, the same limit the backfill check has against its seed. The
+  boundary values, the nullable columns, the ambiguous historical spellings and
+  the rows a destructive transformation touches are the ones worth writing, and
+  the directory is where that judgement lives.
+- **Whether the assertion is right.** An assertion that asks nothing hard passes
+  every migration, exactly as a test that asserts nothing does.
+- **Anything outside this database.** A migration that also writes a file,
+  queues a job or calls a third party is graded here only on its rows.
+- **A migration that is not deterministic.** Two runs of this gate see two
+  answers, and only one of them was graded.
+
 ## What it cannot see
 
 Named rather than papered over, because a gate whose limits are undocumented
@@ -221,7 +342,9 @@ checkout with its own dependencies, and that is a bigger machine than this gate
 is. The same blind spot hides the "never applied" refusal from a repo that
 renames its journal table: that check reads the tables drizzle names by default.
 
-**Anything about data.** This is a schema comparison. A migration that backfills
-a column wrongly passes it. Whether a backfill survives being run twice is a
-separate step of the same gate — [db-gate.md](db-gate.md) — and it says nothing
-about whether the backfill is right either.
+**Anything about data, unless the repo wrote a fixture for it.** The comparison
+above is of schemas alone; "Semantic fixtures" is where a repo says what its
+rows are supposed to mean afterwards, and it grades the rows in that directory
+and no others. Whether a backfill survives being run twice is a separate step of
+the same gate — [db-gate.md](db-gate.md) — and it says nothing about whether the
+backfill is right either.

@@ -26,6 +26,7 @@ import {
   scratchDatabase,
   textColumn,
 } from "./database.ts";
+import { semanticFixtures } from "./semantic-fixtures.ts";
 
 /**
  * What a repo's migration history is asked to prove, and the two questions are
@@ -51,6 +52,10 @@ import {
  * minus the tokens that differ per invocation. Two derivations of "the same
  * schema" would be two answers to the question this whole module exists to
  * answer, and the day they disagreed nobody would know which was right.
+ *
+ * A schema is the whole of what either question is about. What the base ref's
+ * replay proves about the *rows* is `semantic-fixtures.ts`, which rides on the
+ * second starting point above and is the only gate here that grades data.
  */
 
 /**
@@ -81,6 +86,13 @@ export interface Replay {
   readonly url: string;
   /** The run's own history, when the upgrade path is being proved as well. */
   readonly upgrade: Event | undefined;
+  /**
+   * The repo's semantic-fixture directory, or empty for the repos that keep
+   * none. It rides on the upgrade path rather than sitting beside it: the rows
+   * are written into a database built from the base ref's migrations, which is
+   * the replay `upgrade` asks for.
+   */
+  readonly fixtures: string;
 }
 
 /**
@@ -496,10 +508,41 @@ async function upgradedSchema(
   }
 }
 
+/**
+ * Two verdicts about one base ref, as the one verdict the step publishes. The
+ * upgrade path asks whether the schema converges and the semantic fixtures ask
+ * what the rows now mean; they are separate questions with separate answers,
+ * and a step that published only the first would have an author fixing one of
+ * two faults per run.
+ */
+function alongside(first: Verdict, second: Verdict): Verdict {
+  const notes = [first.note, second.note].filter((note) => note !== undefined);
+  const logs = [first.log, second.log].filter((log) => log !== undefined);
+  return {
+    ...(notes.length > 0 ? { note: notes.join("; ") } : {}),
+    ...(logs.length > 0 ? { log: logs.join("\n") } : {}),
+    problems: [...first.problems, ...second.problems],
+  };
+}
+
 const REPLAYED =
   "replay: the migrations rebuild the schema from empty, and a second replay leaves it identical";
 
-export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdict> {
+export async function replayGate({ root, url, upgrade, fixtures }: Replay): Promise<Verdict> {
+  // Half of a pair is a caller who asked for this and would not get it. The
+  // fixtures are written into the base ref's replay, so without that replay
+  // there is nowhere to write them — and being quietly ignored is how a gate
+  // somebody asked for turns out never to have run.
+  if (upgrade === undefined && fixtures !== "") {
+    return {
+      problems: [
+        {
+          message: `semantic-fixtures names ${fixtures} and upgrade-gate is false — the fixtures are written into a database built from the base ref's migrations, which is the replay upgrade-gate adds; ask for both or for neither`,
+        },
+      ],
+    };
+  }
+
   await migrate(
     root,
     url,
@@ -533,10 +576,16 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
   const base = await baseRevision(root, upgrade, READS_THE_BASE_REF);
   if ("refused" in base) throw new Error(base.refused);
 
+  // What a run with no base replay owes a caller who also asked for fixtures.
+  // They are written into that replay, so they did not run either, and a gate
+  // that said nothing about it would read as one that had.
+  const norFixtures =
+    fixtures === "" ? "" : `, and neither are the ${fixtures} fixtures written into it`;
+
   const rev = base.rev;
   if (rev === undefined) {
     return {
-      note: `${REPLAYED}; there is no earlier commit to upgrade from, so the upgrade path is not proved for this run`,
+      note: `${REPLAYED}; there is no earlier commit to upgrade from, so the upgrade path is not proved for this run${norFixtures}`,
       problems: [],
     };
   }
@@ -546,7 +595,7 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
   if (problems.length > 0) return { problems };
   if (lineages.length === 0) {
     return {
-      note: `${REPLAYED}; ${from} carries no migration lineage, so the upgrade path is not proved for this run`,
+      note: `${REPLAYED}; ${from} carries no migration lineage, so the upgrade path is not proved for this run${norFixtures}`,
       problems: [],
     };
   }
@@ -561,19 +610,35 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
   }
 
   const diverged = compare(fresh, built.dump);
-  if (diverged === undefined) {
-    return {
-      note: `${REPLAYED}; upgrading a database built from ${from} (${built.replayed.join(", ")}) reaches the same schema`,
-      problems: [],
-    };
-  }
+  const upgraded: Verdict =
+    diverged === undefined
+      ? {
+          note: `${REPLAYED}; upgrading a database built from ${from} (${built.replayed.join(", ")}) reaches the same schema`,
+          problems: [],
+        }
+      : {
+          log: diverged.lines.join("\n"),
+          problems: [
+            {
+              message: `upgrading a database built from ${from} does not reach the schema this branch builds from empty — ${diverged.headline} — the lineage ${from} had already applied has changed under it: a migration was rewritten, or a new one was ordered behind one already applied. An applied migration is never re-read, so no deployed database will ever reach this schema; put the change in a new migration, ordered after every one that has shipped.`,
+            },
+          ],
+        };
 
-  return {
-    log: diverged.lines.join("\n"),
-    problems: [
-      {
-        message: `upgrading a database built from ${from} does not reach the schema this branch builds from empty — ${diverged.headline} — the lineage ${from} had already applied has changed under it: a migration was rewritten, or a new one was ordered behind one already applied. An applied migration is never re-read, so no deployed database will ever reach this schema; put the change in a new migration, ordered after every one that has shipped.`,
-      },
-    ],
-  };
+  if (fixtures === "") return upgraded;
+
+  // Run even where the schemas parted company, rather than behind a passing
+  // upgrade path. The two are different faults with different fixes, and a
+  // schema that has to change is exactly the branch whose author most wants to
+  // be told what it does to the rows as well.
+  return alongside(
+    upgraded,
+    await semanticFixtures({
+      root,
+      url,
+      dir: fixtures,
+      from,
+      atBase: (body) => onTheBaseLineage(root, lineages, body),
+    }),
+  );
 }
