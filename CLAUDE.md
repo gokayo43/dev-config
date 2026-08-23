@@ -104,8 +104,11 @@ a change to a rule usually lands here too.
   than adding to it, which it proves against a config it builds itself and then
   holds every override in the base to — and `action-evidence.test.ts` holds every action
   publishing an artifact to keeping the runner-temp paths its own YAML names.
-  `repo-contract-fixture.ts` is the clean tree the repo contract's two suites
-  share; `journalled-migrator.ts`, `replaying-migrator.ts` and
+  `repo-contract-fixture.ts` is the clean tree the repo contract's three suites
+  share — split the way the gate is: the facts every repo satisfies, the
+  `lifecycle` half in `repo-contract-live.test.ts` (mirroring `live.ts`, since
+  one word deciding whether a whole rule set applies is its own subject), and
+  how a dependency spec is read; `journalled-migrator.ts`, `replaying-migrator.ts` and
   `schema-migrator.ts` are the three `db:migrate` shapes the database gates are
   written for — a journalled one, a hand-rolled runner with no journal, and the
   per-lineage journals a repo with more than one lineage has to have; and `mutation-lane.test.ts` links this repo's own `node_modules` into
@@ -123,7 +126,9 @@ a change to a rule usually lands here too.
   wrote a case for does not exist. `sweep-fixture.ts` serves the pages the
   invariant sweep is driven over and runs one Playwright process across every
   spec: a browser and a server, because every fact that fixture claims is a
-  browser fact.
+  browser fact. `@sinclair/typebox` is a devDependency nothing here imports:
+  it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
+  fixture app's schemas with — is typebox under elysia's re-export.
 - `docs/gates/*.md` — a reference page per gate; `docs/exports/*.md` — one per
   package export. README holds both maps.
 
@@ -148,9 +153,11 @@ second because a limiter's bucket is shared by two processes and its Redis can
 be gone; the third because what the invariant sweep claims is what a browser
 reports; the fourth because the test-suite gate seals a run in a network
 namespace and nothing short of taking one says whether it holds. The suite looks
-at `TEST_DATABASE_URL` or localhost:5432 and creates and drops databases there,
-and at `TEST_REDIS_URL` or localhost:6379, which it **flushes** — README's
-"Gating this repo" has the one-liners, including the browser install.
+at `TEST_DATABASE_URL` or localhost:5432 and creates and drops databases there.
+`TEST_REDIS_URL` has no default and is refused when unset: the conformance suite
+**flushes** what it is given, and a suite that guessed at localhost:6379 on this
+box would wipe whichever stack's Redis was on it. README's "Gating this repo"
+has the one-liners, including the browser install.
 
 Two runs may share one server, which is what two worktrees under review are.
 Every database either end makes is named for what tells the runs apart: the

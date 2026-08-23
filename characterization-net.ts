@@ -89,7 +89,16 @@ export interface Report {
   readonly ran: string[];
   /** Everything wrong, as the sentences a failing test prints. */
   readonly failures: string[];
-  /** The golden files this run wrote. Always empty for an assert. */
+}
+
+/** What a re-baseline answers with: a report, and the one thing only it can say. */
+export interface Rebaseline extends Report {
+  /**
+   * The goldens this run wrote. Empty when nothing changed, which is the whole
+   * point — the diff of a re-baseline is the behaviour delta and nothing else.
+   * It is here rather than on `Report` because an assert never writes, and a
+   * field that is structurally empty in half its uses is one nobody reads.
+   */
   readonly wrote: string[];
 }
 
@@ -155,16 +164,6 @@ function shardOf<Case>(cases: readonly Case[], shard: Shard | undefined): readon
   return cases.filter((_, position) => position % shard.count === shard.index);
 }
 
-/** One case, run through the build path both operations share. */
-interface Fresh {
-  readonly name: string;
-  readonly text: string;
-}
-
-async function freshly<Case, Body>(net: Net<Case, Body>, subject: Case): Promise<Fresh> {
-  return { name: net.nameOf(subject), text: serialize(net.normalize(await net.capture(subject))) };
-}
-
 function summarise(ran: number, failures: number, shard: Shard | undefined): string {
   const of = shard === undefined ? "" : ` (shard ${shard.index + 1} of ${shard.count})`;
   return `characterization net${of}: ${ran} cases, ${failures} failures`;
@@ -183,58 +182,104 @@ function unusable(name: string): string | undefined {
   return undefined;
 }
 
-/**
- * Runs the net against its committed goldens.
- *
- * Unsharded, it also reconciles: a golden file no case claims is a failure. A
- * shard cannot — it sees a fraction of the cases and would call the rest
- * orphans — so a sharded driver unions the shards' `ran` and reconciles from
- * there.
- */
-export async function assertNet<Case, Body>(net: Net<Case, Body>, shard?: Shard): Promise<Report> {
-  const chosen = shardOf(net.cases, shard);
-  const failures: string[] = [];
-  const ran: string[] = [];
+/** What an operation does with one case, once its golden has a usable name and a fresh capture. */
+type Act = (name: string, text: string) => Promise<string[]>;
 
+/** What a pass over the cases found. */
+interface Walked {
+  readonly ran: string[];
+  readonly failures: string[];
+}
+
+/**
+ * One pass over the cases, shared by both operations — which is the whole of
+ * what "one build path" means here. The capture, the normaliser and the
+ * serialiser are called from exactly this line, so a re-baseline recording
+ * something the assert would never compare is not a bug to be refused; it has
+ * no way to happen.
+ *
+ * The name is checked **before** the capture. A capture is a request against the
+ * app, and a case whose golden could never be found is not one to send a request
+ * for.
+ */
+async function walk<Case, Body>(
+  net: Net<Case, Body>,
+  chosen: readonly Case[],
+  act: Act,
+): Promise<Walked> {
+  const ran: string[] = [];
+  const failures: string[] = [];
   for (const subject of chosen) {
-    const { name, text } = await freshly(net, subject);
+    const name = net.nameOf(subject);
     const wrong = unusable(name);
     if (wrong !== undefined) {
       failures.push(wrong);
       continue;
     }
     ran.push(name);
+    failures.push(...(await act(name, serialize(net.normalize(await net.capture(subject))))));
+  }
+  return { ran, failures };
+}
 
+/**
+ * The golden files no case claims. A case that was deleted and a fixture that
+ * was not, which will sit there being green forever.
+ *
+ * Said in one place because it is one rule: both operations ask it, and two
+ * copies of the sentence are two sentences to keep saying the same thing.
+ */
+async function reconcile(dir: string, ran: readonly string[]): Promise<string[]> {
+  const claimed = new Set(ran.map((name) => `${name}${SUFFIX}`));
+  return (await goldensIn(dir))
+    .filter((file) => !claimed.has(file))
+    .map(
+      (file) =>
+        `${file} is a golden no case claims — delete it, or restore the case it belongs to; an unclaimed fixture is green forever and grades nothing`,
+    );
+}
+
+/**
+ * Runs the net against its committed goldens.
+ *
+ * Unsharded, it also reconciles. A shard cannot — it sees a fraction of the
+ * cases and would call the rest orphans — so a sharded driver unions the
+ * shards' `ran` and reconciles from there.
+ */
+export async function assertNet<Case, Body>(net: Net<Case, Body>, shard?: Shard): Promise<Report> {
+  const { ran, failures } = await walk(net, shardOf(net.cases, shard), async (name, text) => {
     const committed = await goldenAt(`${net.dir}/${name}${SUFFIX}`);
     if (committed === undefined) {
-      failures.push(
+      return [
         `${name} has no golden — re-baseline to record what it does today, and review that file as the behaviour it pins`,
-      );
-      continue;
+      ];
     }
     const expected = reNormalized(net.normalize, committed);
     if (expected === undefined) {
-      failures.push(
+      return [
         `${name}'s golden is not a capture — it has to be an object with a numeric \`status\` and a \`body\`; re-baseline it rather than hand-editing it`,
-      );
-      continue;
+      ];
     }
-    if (expected !== text) {
-      failures.push(`${name} does not match its golden.\nexpected:\n${expected}\nactual:\n${text}`);
-    }
-  }
+    return expected === text
+      ? []
+      : [`${name} does not match its golden.\nexpected:\n${expected}\nactual:\n${text}`];
+  });
 
-  if (shard === undefined) {
-    const claimed = new Set(ran.map((name) => `${name}${SUFFIX}`));
-    for (const file of await goldensIn(net.dir)) {
-      if (claimed.has(file)) continue;
-      failures.push(
-        `${file} is a golden no case claims — delete it, or restore the case it belongs to; an unclaimed fixture is green forever and grades nothing`,
-      );
-    }
-  }
+  const unclaimed = shard === undefined ? await reconcile(net.dir, ran) : [];
+  const whole = [...failures, ...unclaimed];
+  return { summary: summarise(ran.length, whole.length, shard), ran, failures: whole };
+}
 
-  return { summary: summarise(ran.length, failures.length, shard), ran, failures, wrote: [] };
+/**
+ * What the summary says a re-baseline did, so the run leaves the blessing
+ * somewhere and not only in whoever typed it. A re-baseline is reviewed as the
+ * behaviour delta it writes, and the sentence that justified writing it belongs
+ * beside the count of what was written.
+ */
+function whatItWrote(wrote: readonly string[], blessing: string): string {
+  if (wrote.length === 0) return "no golden changed";
+  if (blessing === "") return `wrote ${wrote.length} new, none of which needed blessing`;
+  return `wrote ${wrote.length}, blessed: ${JSON.stringify(blessing)}`;
 }
 
 /**
@@ -250,43 +295,31 @@ export async function assertNet<Case, Body>(net: Net<Case, Body>, shard?: Shard)
  */
 export async function rebaselineNet<Case, Body>(
   net: Net<Case, Body>,
-  blessing?: string,
-): Promise<Report> {
-  const failures: string[] = [];
-  const ran: string[] = [];
+  blessing = "",
+): Promise<Rebaseline> {
+  const blessed = blessing.trim();
   const wrote: string[] = [];
-  const blessed = (blessing ?? "").trim() !== "";
   await mkdir(net.dir, { recursive: true });
 
-  for (const subject of net.cases) {
-    const { name, text } = await freshly(net, subject);
-    const wrong = unusable(name);
-    if (wrong !== undefined) {
-      failures.push(wrong);
-      continue;
-    }
-    ran.push(name);
-
+  const { ran, failures } = await walk(net, net.cases, async (name, text) => {
     const path = `${net.dir}/${name}${SUFFIX}`;
     const committed = await goldenAt(path);
-    if (committed === text) continue;
-    if (committed !== undefined && !blessed) {
-      failures.push(
+    if (committed === text) return [];
+    if (committed !== undefined && blessed === "") {
+      return [
         `${name} would change, and this run blessed nothing — re-run naming what makes the new output correct, since overwriting a golden is blessing whatever it used to pin`,
-      );
-      continue;
+      ];
     }
     await writeFile(path, text, "utf8");
     wrote.push(name);
-  }
+    return [];
+  });
 
-  const claimed = new Set(ran.map((name) => `${name}${SUFFIX}`));
-  for (const file of await goldensIn(net.dir)) {
-    if (claimed.has(file)) continue;
-    failures.push(
-      `${file} is a golden no case claims — delete it, or restore the case it belongs to; an unclaimed fixture is green forever and grades nothing`,
-    );
-  }
-
-  return { summary: summarise(ran.length, failures.length, undefined), ran, failures, wrote };
+  const whole = [...failures, ...(await reconcile(net.dir, ran))];
+  return {
+    summary: `${summarise(ran.length, whole.length, undefined)} — ${whatItWrote(wrote, blessed)}`,
+    ran,
+    failures: whole,
+    wrote,
+  };
 }

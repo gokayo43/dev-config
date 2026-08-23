@@ -76,6 +76,10 @@ works as a pattern; `.*` is there when a pattern is wanted.
 The value is the reason, and it is the half a reviewer reads. It is required by
 the type, so an entry can be wrong but never unexplained.
 
+A key that is not a valid pattern fails the test naming the key and the option,
+rather than surfacing as a bare `SyntaxError` out of a fixture nobody knew was
+compiling one.
+
 Being a Playwright option, it can be set once in the config, narrowed per file or
 per test with `test.use({ sweepAllowlist })`, and read back out of the trace.
 

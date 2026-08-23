@@ -15,7 +15,7 @@ import { limiterOn } from "../src/http/ratelimit.ts";
 
 conformsAsLimiter({
   make: limiterOn,
-  redisUrl: process.env.TEST_REDIS_URL ?? "redis://127.0.0.1:6379",
+  redisUrl: required("TEST_REDIS_URL"),
   metered: "/api/summoner/anyone",
 });
 ```
@@ -24,7 +24,10 @@ conformsAsLimiter({
   than its first attempt. A factory rather than a limiter, because two cases need
   a _second_ instance: one against a Redis that is gone, one against the same
   Redis as the first.
-- `redisUrl` is **flushed between cases**. Point it at a throwaway.
+- `redisUrl` is **flushed between cases**. Point it at a throwaway, and read it
+  from an environment variable that is _refused_ when unset rather than
+  defaulted to `localhost:6379` — a default address is how a suite wipes a Redis
+  that four stacks on one box were sharing.
 - `metered` is a path the limiter meters. An exempt one would pass every case
   vacuously, which is what the first case is there to catch.
 

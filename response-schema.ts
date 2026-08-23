@@ -68,7 +68,9 @@ export interface Coverage {
   /** Every route argued out of the invariant. A greenfield API ships this empty. */
   readonly skips: readonly Skip[];
   /**
-   * The number of routes below which the table is not believable. Introspection
+   * The number of routes at or below which the table is not believable — at it
+   * as well as under it, since a floor a table exactly meets is one nobody has
+   * raised since the app stopped growing. Introspection
    * that has broken answers with an empty list, and an empty list satisfies
    * every check here — so the floor is what stops a silent break from reading
    * as full coverage. It is a floor and not a count: set it below what the app

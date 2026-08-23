@@ -18,17 +18,23 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
-import { plainly } from "../.github/actions/_lib/gate.ts";
+import { plainly, required } from "../.github/actions/_lib/gate.ts";
 import { containing } from "./matchers.ts";
 import { type Flaw, FLAWS } from "./house-limiter.ts";
 import { materialise } from "./tree.ts";
 
 /**
- * A throwaway Redis, since the suite flushes it — the same contract this repo's
- * Postgres note carries, and for the same reason. README's "Gating this repo"
- * has the one-liner.
+ * A throwaway Redis, refused rather than defaulted — which is where this parts
+ * company with the Postgres suites beside it. Those create and drop databases
+ * they named themselves, so a default address costs a stranger nothing; the
+ * conformance suite **flushes** what it is pointed at, and a default of
+ * localhost:6379 on a box that runs four stacks is a suite that wipes whichever
+ * one happened to be there.
  */
-const REDIS_URL = Bun.env["TEST_REDIS_URL"] ?? "redis://127.0.0.1:6379";
+const REDIS_URL = required(
+  "TEST_REDIS_URL",
+  'the limiter conformance suite flushes the Redis it is given, so it will not guess at one — point it at a throwaway (README\'s "Gating this repo" has the one-liner)',
+);
 
 /** Any path the fixture limiter meters, which is every path it is given. */
 const METERED = "/api/summoner/anyone";

@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFile, stat, writeFile } from "node:fs/promises";
 
-import { assertNet, type Net, rebaselineNet, type Report } from "../characterization-net.ts";
+import { assertNet, type Net, type Rebaseline, rebaselineNet } from "../characterization-net.ts";
 import { containing } from "./matchers.ts";
 import { materialise, type Tree } from "./tree.ts";
 
@@ -74,7 +74,7 @@ async function golden(dir: string, name: string): Promise<string> {
 }
 
 /** A net recorded once, which is where every case below starts. */
-async function recorded(world: World = CALM): Promise<{ dir: string; report: Report }> {
+async function recorded(world: World = CALM): Promise<{ dir: string; report: Rebaseline }> {
   const dir = await goldens();
   const report = await rebaselineNet(netOver(dir, () => world));
   return { dir, report };
@@ -146,6 +146,22 @@ describe("what the net refuses", () => {
       expect(report.ran).toEqual([]);
     },
   );
+
+  // A capture is a request against the app. A case whose golden could never be
+  // found is not one to send a request for, so the name is checked first.
+  test("a case with an unusable name is never captured", async () => {
+    const dir = await goldens();
+    const asked: string[] = [];
+    const net = netOver(dir, () => CALM, ["nested/name", "alpha"]);
+    await assertNet({
+      ...net,
+      capture: async (subject) => {
+        asked.push(subject);
+        return await net.capture(subject);
+      },
+    });
+    expect(asked).toEqual(["alpha"]);
+  });
 
   test.each([
     ['{ "body": { "greeting": "hello" } }', "an object with no status"],
@@ -304,6 +320,32 @@ describe("every run answers with a summary", () => {
     expect(summary).toBe(
       `characterization net: ${CASES.length} cases, ${failures.length} failures`,
     );
+  });
+
+  // The blessing is what justified overwriting a golden, and a re-baseline is
+  // reviewed as the delta it wrote — so the sentence lands beside the count
+  // rather than only in whoever typed it.
+  test("a blessed re-baseline says what blessed it", async () => {
+    const { dir } = await recorded();
+    const { summary } = await rebaselineNet(
+      netOver(dir, () => ({ ...CALM, greeting: "goodbye" })),
+      "the greeting copy changed in #412",
+    );
+    expect(summary).toContain(
+      `wrote ${CASES.length}, blessed: "the greeting copy changed in #412"`,
+    );
+  });
+
+  // Creating goldens is not blessing anything, and the summary has to say which
+  // of the two happened.
+  test("a first run says it needed no blessing", async () => {
+    const { report } = await recorded();
+    expect(report.summary).toContain(`wrote ${CASES.length} new, none of which needed blessing`);
+  });
+
+  test("a run that changed nothing says so", async () => {
+    const { dir } = await recorded();
+    expect((await rebaselineNet(netOver(dir, () => CALM))).summary).toContain("no golden changed");
   });
 
   test("a shard says which shard it was", async () => {

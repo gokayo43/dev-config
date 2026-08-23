@@ -11,7 +11,7 @@
  * as a rule rather than as a change to the contract.
  */
 import type { Stats } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 
 import {
   baseRevision,
@@ -252,13 +252,13 @@ async function statOf(path: string): Promise<Stats | undefined> {
  * backup script is asking it to perform a ritual over a database it does not
  * have.
  *
- * A job is three files, not one. The script is what runs; the `.timer` and the
- * `.service` beside it are what "periodically" means on the box these repos are
- * deployed to, and they are tracked so that the schedule is something a diff can
+ * A job is three files, not one. The script is what runs; a `.timer` and the
+ * `.service` it activates are what "periodically" means on the box these repos
+ * are deployed to, and they are tracked so the schedule is something a diff can
  * be reviewed against rather than a fact only `systemctl` holds. What the repo
- * cannot say is whether the timer is enabled on the box — that is a `systemctl
- * enable --now` nobody can read out of a checkout, and docs/gates/repo-contract.md
- * names it as the owner's step.
+ * cannot say is whether that timer is enabled — a `systemctl enable --now`
+ * nobody can read out of a checkout, and docs/gates/repo-contract.md names it as
+ * the owner's step.
  */
 const LIVE_DATA_JOBS = [
   ["backup", "an undumped database is one nobody has"],
@@ -271,101 +271,203 @@ const LIVE_DATA_JOBS = [
  * a box that stays up for a month runs it once — which is the state a backup
  * and a rehearsed restore both exist to rule out.
  */
-const RECURRING = ["OnCalendar", "OnUnitActiveSec"] as const;
+const RECURRING: readonly string[] = ["OnCalendar", "OnUnitActiveSec"];
 
-/** One `Key=value` line of a unit file, from the section it was written under. */
+const TIMER = ".timer";
+const SERVICE = ".service";
+
+/** One `Key=value` line of a unit file. */
 interface Directive {
   readonly key: string;
   readonly value: string;
 }
 
+/** A unit file as systemd reads it: every directive under the section it was written in. */
+type Unit = ReadonlyMap<string, readonly Directive[]>;
+
 /**
- * The directives a unit file sets under one section. The section matters rather
- * than decorates: systemd reads `WantedBy` only under `[Install]`, and the same
- * line under `[Timer]` is silently nothing — which is exactly the unit that
- * looks enabled in a diff and refuses `systemctl enable` on the box.
+ * The section matters rather than decorates: systemd reads `WantedBy` only
+ * under `[Install]`, and the same line under `[Timer]` is silently nothing —
+ * which is exactly the unit that looks enabled in a diff and refuses
+ * `systemctl enable` on the box.
+ *
+ * Parsed whole, once, because three questions are asked of one file and a scan
+ * per question is where three answers start disagreeing about what a comment is.
  */
-function directivesIn(text: string, section: string): Directive[] {
-  const wanted = `[${section}]`;
-  let inside = false;
-  const found: Directive[] = [];
+function sectionsOf(text: string): Unit {
+  const sections = new Map<string, Directive[]>();
+  let current: Directive[] | undefined;
   for (const raw of text.split("\n")) {
     const line = raw.trim();
-    if (line.startsWith("[")) {
-      inside = line === wanted;
+    if (line.startsWith("[") && line.endsWith("]")) {
+      current = sections.get(line.slice(1, -1)) ?? [];
+      sections.set(line.slice(1, -1), current);
       continue;
     }
-    if (!inside || line.startsWith("#") || line.startsWith(";")) continue;
+    if (current === undefined || line.startsWith("#") || line.startsWith(";")) continue;
     const at = line.indexOf("=");
     if (at === -1) continue;
-    found.push({ key: line.slice(0, at).trim(), value: line.slice(at + 1).trim() });
+    current.push({ key: line.slice(0, at).trim(), value: line.slice(at + 1).trim() });
   }
-  return found;
+  return sections;
 }
 
-/** What the file holds, or nothing when there is no file — absent is an answer here too. */
-async function textOf(path: string): Promise<string | undefined> {
-  try {
-    return await readFile(path, "utf8");
-  } catch {
-    return undefined;
-  }
+function under(unit: Unit, section: string): readonly Directive[] {
+  return unit.get(section) ?? [];
 }
 
 /**
- * The two units that turn a script into a scheduled job, graded on the three
- * facts that decide whether it ever runs: the timer repeats, the timer can be
- * enabled, and the service it activates is the one that execs this script. A
- * pair that fails any of them is committed decoration, which is worse than an
- * absent one — it reads, in every later diff, as a job somebody set up.
+ * What a service actually runs, by the file name of each command.
+ *
+ * The first whitespace-separated word is the program and everything after it is
+ * arguments, which is the whole difference between a unit that runs the script
+ * and one that only mentions it: `env WRAPPED=backup.sh /usr/bin/true` names it
+ * and never executes it, and `pre-backup.sh` is a different program whose name
+ * ends the same way. A substring test calls both of them a match.
+ *
+ * `-@+!:` before the path are systemd's prefixes — ignore a failure, pass a
+ * different argv[0], adjust privileges — and say how to run the command rather
+ * than what it is. An empty `ExecStart=` is the list reset, so a unit that sets
+ * one after its command runs nothing at all.
+ *
+ * A path with a space in it would need systemd's own quoting rules to read, and
+ * is not a name any checkout in this house has; the cost of being wrong about
+ * one is a refusal that names the file it read.
+ */
+function commandsOf(unit: Unit): string[] {
+  let commands: string[] = [];
+  for (const { key, value } of under(unit, "Service")) {
+    if (key !== "ExecStart") continue;
+    if (value === "") {
+      commands = [];
+      continue;
+    }
+    const [word = ""] = value.split(/\s+/);
+    const program = word.replace(/^[-@+!:]+/, "").replaceAll(/^["']|["']$/g, "");
+    commands.push(program.slice(program.lastIndexOf("/") + 1));
+  }
+  return commands;
+}
+
+/**
+ * Everything under `scripts/`, sorted. Read rather than guarded: this is only
+ * reached once `scripts/<job>.sh` has been found there, so a directory that
+ * will not list is a broken run and belongs in the log as one.
+ */
+async function scriptsIn(root: string): Promise<string[]> {
+  return (await readdir(`${root}/scripts`)).toSorted();
+}
+
+/** One unit file, parsed. Named by the listing above, so a read that fails is that same broken run. */
+async function unitAt(path: string): Promise<Unit> {
+  return sectionsOf(await readFile(path, "utf8"));
+}
+
+/** The stem shared by a unit pair — `postpad-backup` for `postpad-backup.timer`. */
+function stemsOf(entries: readonly string[], suffix: string): string[] {
+  return entries
+    .filter((entry) => entry.endsWith(suffix))
+    .map((entry) => entry.slice(0, -suffix.length));
+}
+
+/**
+ * Whether this timer would ever fire, and whether anyone could turn it on. Two
+ * facts rather than the file's existence: a unit that satisfies neither is
+ * committed decoration, which is worse than an absent one — it reads, in every
+ * later diff, as a job somebody set up.
+ */
+function checkTimer(stem: string, timer: Unit): Problem[] {
+  const path = `scripts/${stem}${TIMER}`;
+  const problems: Problem[] = [];
+  if (!under(timer, "Timer").some(({ key }) => RECURRING.includes(key))) {
+    problems.push({
+      file: path,
+      message: `${path} sets no ${RECURRING.join("= or ")}= under [Timer] — give it a recurring schedule, since a timer that fires once is the run somebody did by hand`,
+    });
+  }
+  if (!under(timer, "Install").some(({ key }) => key === "WantedBy")) {
+    problems.push({
+      file: path,
+      message: `${path} has no WantedBy= under [Install] — add \`WantedBy=timers.target\`, since systemctl enable refuses a unit with no install section and this timer cannot be turned on until it has one`,
+    });
+  }
+  return problems;
+}
+
+/**
+ * The pair that puts this job on a schedule, found through what a service
+ * *runs* rather than through what it is called.
+ *
+ * The name cannot be the fact. systemd's unit namespace is the whole box, so
+ * every stack deployed beside another prefixes — `/opt/postpad/scripts/` holds
+ * `postpad-backup.timer` — and a gate demanding `backup.timer` would be one no
+ * repo on this box could satisfy while remaining installable.
+ *
+ * More than one pair may run one script, a nightly and a weekly say, and the
+ * job is scheduled if any of them schedules it. Where none does, the first is
+ * the one whose problems are reported: a diagnostic that named every candidate
+ * would be a list to work through instead of a file to fix.
  */
 async function checkUnits(root: string, name: string): Promise<Problem[]> {
-  const timerPath = `scripts/${name}.timer`;
-  const servicePath = `scripts/${name}.service`;
-  const [timer, service] = await Promise.all([
-    textOf(`${root}/${timerPath}`),
-    textOf(`${root}/${servicePath}`),
-  ]);
-  const problems: Problem[] = [];
+  const script = `scripts/${name}.sh`;
+  const entries = await scriptsIn(root);
+  const services = await Promise.all(
+    stemsOf(entries, SERVICE).map(async (stem) => ({
+      stem,
+      unit: await unitAt(`${root}/scripts/${stem}${SERVICE}`),
+    })),
+  );
+  const runners = services
+    .filter(({ unit }) => commandsOf(unit).includes(`${name}.sh`))
+    .map(({ stem }) => stem);
 
-  if (timer === undefined) {
-    problems.push({
-      file: timerPath,
-      message: `a live repo owns ${timerPath} — a script nothing runs on a schedule is one that ran the day it was written, and the unit is committed so that the schedule is reviewable rather than a fact only the box holds`,
-    });
-  } else {
-    const timing = directivesIn(timer, "Timer");
-    if (!timing.some(({ key }) => oneOf(RECURRING, key) !== undefined)) {
-      problems.push({
-        file: timerPath,
-        message: `${timerPath} sets no ${RECURRING.join("= or ")}= under [Timer] — give it a recurring schedule, since a timer that fires once is the run somebody did by hand`,
-      });
-    }
-    if (!directivesIn(timer, "Install").some(({ key }) => key === "WantedBy")) {
-      problems.push({
-        file: timerPath,
-        message: `${timerPath} has no WantedBy= under [Install] — add \`WantedBy=timers.target\`, since systemctl enable refuses a unit with no install section and this timer cannot be turned on until it has one`,
-      });
-    }
+  if (runners.length === 0) {
+    return [
+      {
+        file: script,
+        message: `nothing in scripts/ runs ${script} on a schedule — commit a .timer and the .service it activates, under whatever name this repo uses (systemd's unit namespace is the whole box, so \`<repo>-${name}\` is the usual spelling), since a script nothing runs on a schedule is one that ran the day it was written`,
+      },
+    ];
   }
 
-  if (service === undefined) {
-    problems.push({
-      file: servicePath,
-      message: `a live repo owns ${servicePath} — a .timer activates the service of its own name, and without it the schedule points at nothing`,
-    });
-  } else if (
-    !directivesIn(service, "Service").some(
-      ({ key, value }) => key === "ExecStart" && value.includes(`${name}.sh`),
-    )
-  ) {
-    problems.push({
-      file: servicePath,
-      message: `${servicePath} has no ExecStart= running ${name}.sh — point it at the script it is the unit for, since a pair naming something else is a schedule for a job this repo does not have`,
-    });
+  const timed = await Promise.all(
+    runners
+      .filter((stem) => entries.includes(`${stem}${TIMER}`))
+      .map(async (stem) => checkTimer(stem, await unitAt(`${root}/scripts/${stem}${TIMER}`))),
+  );
+  if (timed.length === 0) {
+    const [stem = ""] = runners;
+    return [
+      {
+        file: `scripts/${stem}${SERVICE}`,
+        message: `scripts/${stem}${SERVICE} runs ${name}.sh and no scripts/${stem}${TIMER} activates it — add the timer beside it, since a service nothing activates only ever runs by hand`,
+      },
+    ];
   }
+  return timed.find((problems) => problems.length === 0) === undefined ? (timed[0] ?? []) : [];
+}
 
-  return problems;
+/**
+ * One scheduled job, whole: the program, and the units that make it periodic.
+ * Both halves in one place because "the script is there and nothing runs it" is
+ * one finding about one job rather than two findings that happen to share a name.
+ */
+async function checkJob(root: string, name: string, why: string): Promise<Problem[]> {
+  const script = `scripts/${name}.sh`;
+  const mode = (await statOf(`${root}/${script}`))?.mode;
+  if (mode === undefined) {
+    return [{ file: script, message: `a live repo owns ${script} — ${why}` }];
+  }
+  const problems: Problem[] =
+    (mode & EXECUTABLE) === 0
+      ? [
+          {
+            file: script,
+            message: `${script} is not executable — chmod +x it, since it is run as a program rather than handed to an interpreter`,
+          },
+        ]
+      : [];
+  return [...problems, ...(await checkUnits(root, name))];
 }
 
 /**
@@ -466,25 +568,10 @@ export async function checkLive(
       });
     }
 
-    const found = await Promise.all(
-      LIVE_DATA_JOBS.map(async ([name, why]) => ({
-        path: `scripts/${name}.sh`,
-        why,
-        mode: (await statOf(`${root}/scripts/${name}.sh`))?.mode,
-        units: await checkUnits(root, name),
-      })),
+    const jobs = await Promise.all(
+      LIVE_DATA_JOBS.map(async ([name, why]) => await checkJob(root, name, why)),
     );
-    for (const { path, why, mode, units } of found) {
-      if (mode === undefined) {
-        problems.push({ file: path, message: `a live repo owns ${path} — ${why}` });
-      } else if ((mode & EXECUTABLE) === 0) {
-        problems.push({
-          file: path,
-          message: `${path} is not executable — chmod +x it, since it is run as a program rather than handed to an interpreter`,
-        });
-      }
-      problems.push(...units);
-    }
+    problems.push(...jobs.flat());
   }
 
   if (!all.some(({ value }) => hasSentry(value))) {

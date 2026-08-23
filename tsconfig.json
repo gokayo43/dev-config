@@ -5,12 +5,5 @@
     "allowJs": true,
     "checkJs": true
   },
-  "include": [
-    "*.ts",
-    ".github/actions/**/*.ts",
-    "anti-slop/**/*.js",
-    "tests/**/*.ts",
-    "knip.ts",
-    "knip.base.ts"
-  ]
+  "include": ["*.ts", ".github/actions/**/*.ts", "anti-slop/**/*.js", "tests/**/*.ts"]
 }

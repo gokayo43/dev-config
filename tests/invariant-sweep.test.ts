@@ -74,6 +74,13 @@ const CASES = {
     `  await page.goto("/embedded");`,
     { "/embed\\.js$": "the embed logs a failed beacon on every load; it is not ours to fix" },
   ),
+  // The keys are written by hand in a config file, so a bad one has to say
+  // which key and which option rather than surfacing as a bare SyntaxError.
+  "an allowlist key that is not a pattern says so": spec(
+    "an allowlist key that is not a pattern says so",
+    `  await page.goto("/clean");`,
+    { "(unclosed": "a pattern nobody balanced" },
+  ),
   // ...and an allowlist that names something else does not quietly cover it.
   "an allowlist that matches nothing tolerates nothing": spec(
     "an allowlist that matches nothing tolerates nothing",
@@ -136,6 +143,11 @@ describe("what the sweep catches", () => {
       "an allowlist that matches nothing tolerates nothing",
       "console.error",
       "the embed is unhappy",
+    ],
+    [
+      "an allowlist key that is not a pattern says so",
+      'sweepAllowlist key "(unclosed"',
+      "is not a regular expression",
     ],
   ])("%s", (title, kind, detail) => {
     const { ok, said } = outcome(title);

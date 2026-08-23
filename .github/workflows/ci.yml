@@ -37,9 +37,9 @@ jobs:
 
       # The limiter conformance suite grades a bucket two processes share and a
       # limiter whose Redis is gone, neither of which anything in-process can
-      # stand in for. Published on 6379, which is where the suite looks when
-      # TEST_REDIS_URL says nothing else. It is flushed between cases, so this
-      # instance exists for that suite and nothing else.
+      # stand in for. It is flushed between cases and refuses to guess at an
+      # address, so this instance exists for that suite and nothing else and the
+      # step below names it.
       redis:
         image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
         ports:
@@ -104,6 +104,9 @@ jobs:
       # repo's gate is only as honest as these two lanes.
       - run: bun run check
       - run: bun test
+        env:
+          # No default, deliberately: the conformance suite flushes this one.
+          TEST_REDIS_URL: redis://127.0.0.1:6379
 
       # The k6 ramp this repo ships is the one file its own linter cannot read,
       # so it gets executed instead: both branches, against a stub server.

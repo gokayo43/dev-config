@@ -56,8 +56,15 @@ const REPORTER = "__invariantSweep";
 /** How far past the viewport an element has to reach before it counts, in CSS pixels. */
 const SLACK = 1;
 
+/**
+ * How many class names go into an element's description. Enough to tell two
+ * siblings apart, and short of pasting a utility-CSS class list into a
+ * diagnostic.
+ */
+const CLASSES = 3;
+
 /** How many offending elements a diagnostic names before it stops. */
-const NAMED = 3;
+const OFFENDERS = 3;
 
 /** One invariant, broken once. */
 interface Violation {
@@ -91,7 +98,7 @@ const WATCH = `(() => {
   const describe = (el) => {
     const id = el.id ? "#" + el.id : "";
     const names = typeof el.className === "string" ? el.className.trim() : "";
-    const cls = names ? "." + names.split(/\\s+/).slice(0, ${NAMED}).join(".") : "";
+    const cls = names ? "." + names.split(/\\s+/).slice(0, ${CLASSES}).join(".") : "";
     return el.tagName.toLowerCase() + id + cls;
   };
   const check = () => {
@@ -103,7 +110,7 @@ const WATCH = `(() => {
       return box.width > 0 && box.right > limit + ${SLACK};
     });
     const innermost = past.filter((el) => !past.some((other) => other !== el && el.contains(other)));
-    const named = (innermost.length ? innermost : past).slice(0, ${NAMED}).map(describe).join(", ");
+    const named = (innermost.length ? innermost : past).slice(0, ${OFFENDERS}).map(describe).join(", ");
     const detail = root.scrollWidth + "px of content in a " + limit + "px viewport"
       + (named ? ", reaching past the right edge: " + named : "");
     if (seen.has(detail)) return;
@@ -166,7 +173,19 @@ export const test = base.extend<InvariantSweep>({
   // `provide` rather than Playwright's own `use`: a parameter named `use` reads
   // as a React hook to the linter, and the name is ours to choose.
   page: async ({ page, sweepAllowlist }, provide) => {
-    const allowed = Object.keys(sweepAllowlist).map((pattern) => new RegExp(pattern));
+    const allowed = Object.keys(sweepAllowlist).map((pattern) => {
+      try {
+        return new RegExp(pattern);
+      } catch (cause) {
+        // The keys are written by hand in a config file, and a bad one would
+        // otherwise surface as a bare SyntaxError from a fixture nobody knew
+        // was compiling a pattern.
+        throw new Error(
+          `sweepAllowlist key ${JSON.stringify(pattern)} is not a regular expression — the keys are patterns tested against the URL a violation came from, so a literal URL works as one and an unbalanced \`(\` does not`,
+          { cause },
+        );
+      }
+    });
     const violations: Violation[] = [];
     const record = (violation: Violation): void => {
       if (allowed.some((pattern) => pattern.test(violation.at))) return;

@@ -55,13 +55,13 @@ shape a rule takes when what it grades is only visible from inside the repo — 
 app's own route table, its own limiter, its own browser. Each is in `files` and
 `exports`, and each has a page of its own:
 
-| Export                    | Imported by                    | What it holds                                                                                                                                |
-| ------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `route-log.ts`            | the app, for the capacity ramp | the protocol between an app and the route-coverage floor — [docs/gates/capacity.md](docs/gates/capacity.md)                                  |
-| `invariant-sweep.ts`      | the Playwright specs           | zero console errors and no sideways scroll, on every page a test visits — [docs/exports/invariant-sweep.md](docs/exports/invariant-sweep.md) |
-| `limiter-conformance.ts`  | the rate limiter's own suite   | STACK's rate-limit rule, executable — [docs/exports/limiter-conformance.md](docs/exports/limiter-conformance.md)                             |
-| `response-schema.ts`      | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip — [docs/exports/response-schema.md](docs/exports/response-schema.md)     |
-| `characterization-net.ts` | a golden suite and its updater | the harness rules that keep a large golden net honest — [docs/exports/characterization-net.md](docs/exports/characterization-net.md)         |
+| Export                                                            | Imported by                    | What it holds                                                           |
+| ----------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------- |
+| [`route-log.ts`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the route-coverage floor                |
+| [`invariant-sweep.ts`](docs/exports/invariant-sweep.md)           | the Playwright specs           | zero console errors and no sideways scroll, on every page a test visits |
+| [`limiter-conformance.ts`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                     |
+| [`response-schema.ts`](docs/exports/response-schema.md)           | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip     |
+| [`characterization-net.ts`](docs/exports/characterization-net.md) | a golden suite and its updater | the harness rules that keep a large golden net honest                   |
 
 Gate code is deliberately **not** importable by the repos it gates — a gate in
 `node_modules` runs only if the repo's workflow remembers to, and it moves
@@ -765,12 +765,14 @@ databases, and the checkout being worked on for the two a gate builds for itself
 (`upgrade_path_<digest>` and `backfill_<digest>`).
 
 The limiter conformance suite needs a Redis, since what it grades is a bucket
-shared by two processes and a limiter whose Redis is gone. It looks at
-`TEST_REDIS_URL`, or localhost:6379, and **flushes** whatever it finds there — so
-point it at a throwaway too:
+shared by two processes and a limiter whose Redis is gone. It **flushes** what it
+is given, so unlike the Postgres above it has no default at all: `TEST_REDIS_URL`
+is required and the suite refuses to guess. A default address is how a suite
+wipes the Redis four stacks on one box were sharing.
 
 ```sh
-docker run --rm -d -p 6379:6379 redis:7-alpine
+docker run --rm -d -p 6390:6379 redis:7-alpine
+export TEST_REDIS_URL=redis://127.0.0.1:6390
 ```
 
 The invariant sweep's suite drives a real browser against a real server, because

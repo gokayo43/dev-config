@@ -84,6 +84,10 @@ the cases and would call the rest orphans.
 Two things are deliberately not in this module, because their shape is the
 repo's and shipping a guess would be worse than shipping nothing.
 
+Both are listed in
+[project-template#30](https://github.com/gokayo43/project-template/issues/30) as
+what the scaffold owes; neither exists there today.
+
 ### The sharded driver, and the summary guard
 
 A shard that died wrote no report at all, and that is how a crashed shard reads
@@ -110,7 +114,10 @@ the failure the whole net exists to prevent, arriving through the one door it
 was not watching.
 
 That store belongs to whatever the repo's HTTP client is, and canonicalising a
-request is a fact about that client. `project-template` scaffolds the shape.
+request is a fact about that client, so it is not this package's to ship.
+Nothing scaffolds it yet:
+[project-template#30](https://github.com/gokayo43/project-template/issues/30)
+is where the shape the template owes is written down.
 
 ## Not carried
 

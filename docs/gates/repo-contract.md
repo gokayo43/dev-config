@@ -114,7 +114,7 @@ of.
 | the `check.yml` call passes `upgrade-gate: true`    | the repo owns migrations | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
 | `scripts/backup.sh` exists and is executable        | the repo owns migrations | an undumped database is one nobody has                                                                                                                          |
 | `scripts/restore-drill.sh` exists and is executable | the repo owns migrations | a backup nobody has restored is a backup nobody has                                                                                                             |
-| a `.timer` and a `.service` beside each of them     | the repo owns migrations | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
+| a timer/service pair that runs each of them         | the repo owns migrations | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
 
 Only crash reporting is owed by every live repo. The rest is about a database,
 and half this fleet is a static site with a hostname and no schema — demanding a
@@ -148,11 +148,20 @@ hears.
 Canon says a backup is taken and a restore is rehearsed _periodically_. A script
 is only the program; what makes either of them periodic is a systemd timer on
 the box, and a timer that exists only on the box is a schedule no diff has ever
-been reviewed against and no rebuild reproduces. So a live repo tracks the two
-units beside each script — `scripts/backup.timer` and `scripts/backup.service`,
-`scripts/restore-drill.timer` and `scripts/restore-drill.service` — and the gate
-reads three facts out of them, which are exactly the three that decide whether
-the job ever runs:
+been reviewed against and no rebuild reproduces. So a live repo tracks a
+`.timer` and the `.service` it activates under `scripts/`, per job.
+
+**The names are the repo's.** systemd's unit namespace is the whole box, so
+every stack deployed beside another prefixes — `/opt/postpad/scripts/` holds
+`postpad-backup.timer`, not `backup.timer` — and a gate demanding a fixed
+filename would be one no repo on this box could satisfy while remaining
+installable. What the gate looks for is a **pair**: any `scripts/*.service`
+whose `ExecStart` runs `scripts/<job>.sh`, with a `scripts/*.timer` of the same
+stem beside it. More than one pair may run one script — a nightly and a weekly,
+say — and the job is scheduled if any of them schedules it.
+
+Three facts are then read out of that pair, which are exactly the three that
+decide whether the job ever runs:
 
 - the `.timer` sets `OnCalendar=` or `OnUnitActiveSec=` under `[Timer]`. Not
   `OnBootSec`: a unit that runs once per boot is a startup task, and a box that
@@ -163,22 +172,31 @@ the job ever runs:
   turn on. The section is read rather than the file: the same line under
   `[Timer]` is silently nothing, which is the unit that looks enabled in a diff
   and fails on the box.
-- the `.service` has an `ExecStart=` naming the script it is the unit for. A
-  pair that runs something else is a schedule for a job this repo does not have.
+- the `.service` **runs** the script it is the pair for. The first
+  whitespace-separated word of `ExecStart=` is the program and the rest are
+  arguments, so `env WRAPPED=backup.sh /usr/bin/true` names the script and never
+  executes it, and `pre-backup.sh` is a different program whose name ends the
+  same way; a substring test calls both of them a match. systemd's `-@+!:`
+  prefixes are stripped first, since they say how to run the command rather than
+  what it is, and an empty `ExecStart=` is the list reset — a unit that sets one
+  after its command runs nothing at all.
 
 Both jobs, not just the drill. "The drill has a timer and the backup does not"
 is the same hole from the other side.
 
 **What the repo cannot say is whether the timer is enabled.** `systemctl enable
---now scripts/restore-drill.timer` happens on the box, and no checkout can read
-it — so that is the owner's step, and `project-template` ships the units a repo
-starts from. What the gate closes is the state where nobody ever wrote the
-schedule down.
+--now <repo>-restore-drill.timer` happens on the box, and no checkout can read
+it — so that is the owner's step. What the gate closes is the state where nobody
+ever wrote the schedule down.
 
-The drill those units run restores each repo's real backup files into a
-throwaway database and drops it afterwards. Never a live one:
-`scripts/restore-drill.sh` refuses to restore over the deployed stack's own
-database without `CONFIRM=yes`, and defaults to a throwaway beside it.
+What the gate also cannot say is anything about what the script _does_. It reads
+that a `.service` execs `scripts/restore-drill.sh` and that a `.timer` activates
+that service; whether the drill restores into a throwaway and never into the
+live database is the script's own business, in the repo that owns it. That
+belongs to the scaffold rather than to this gate:
+[project-template#30](https://github.com/gokayo43/project-template/issues/30)
+carries what the template owes here — the `restore-drill` unit pair (it ships
+only `backup`'s today), and the drill dropping its throwaway when it passes.
 
 A field that is absent, or reads anything but those two words, is its own
 problem and the only one reported — a repo that has not said which it is gets
