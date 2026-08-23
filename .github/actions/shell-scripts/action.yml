@@ -1,0 +1,24 @@
+name: Shell scripts
+description: >-
+  Runs shellcheck over every shell script the repository tracks, with the
+  binary pinned by version and archive checksum. actionlint covers the run:
+  blocks inside workflows and nothing else, so a repo's own scripts — the one
+  that pipes a database dump into a bucket, the one that drops a database and
+  carries the guard keeping it off production — were read by no gate.
+
+inputs:
+  working-directory:
+    description: Where the repository root is.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        # shellcheck source=/dev/null
+        . "$GITHUB_ACTION_PATH/../_lib/shellcheck.sh"
+        INPUT_SHELLCHECK="$SHELLCHECK" bun "$GITHUB_ACTION_PATH/shell-scripts.main.ts"

@@ -72,6 +72,10 @@ jobs:
         with:
           fixtures: tests/suppression-hygiene.test.ts
 
+      # This repo's own shell is the three libraries the composites source, and
+      # the gate that reads a consuming repo's scripts reads them here.
+      - uses: ./.github/actions/shell-scripts
+
       - run: bun install --frozen-lockfile
 
       # The gates this repo ships are TypeScript, and their suite is what proves
@@ -129,11 +133,13 @@ jobs:
       # actionlint only reads workflows — handed an action.yml it reports a
       # workflow with no `jobs`. So the composites are checked here for what
       # silently breaks them (a run step with no shell never runs the script it
-      # carries) and their scripts go through the same shellcheck that
-      # actionlint runs over a workflow's.
+      # carries) and the scripts inlined in them go through the pinned
+      # shellcheck, which is the one every gate in this house runs.
       - name: Check the composite actions
         run: |
           set -euo pipefail
+          # shellcheck source=/dev/null
+          . .github/actions/_lib/shellcheck.sh
           mapfile -t actions < <(git ls-files '.github/actions/*/action.y*ml')
           # The ${} below are JS template literals, not shell expansions.
           # shellcheck disable=SC2016
@@ -155,10 +161,11 @@ jobs:
               }
             }
           ' "${actions[@]}"
-          shellcheck --shell=bash "$RUNNER_TEMP"/composite-*.sh
-          # The one shell library the composites source, which the loop above
-          # cannot see because it is not inlined in any run: block.
-          shellcheck --shell=bash .github/actions/_lib/*.sh
+          # --shell=bash because an extracted run: block has no shebang, and
+          # bash is what every `shell: bash` step above declares. The libraries
+          # those blocks source carry a directive of their own and are read by
+          # the shell-scripts gate, which runs over the tracked tree.
+          "$SHELLCHECK" --norc --shell=bash "$RUNNER_TEMP"/composite-*.sh
 
       - name: Validate the Renovate preset
         # Deliberately unpinned: the preset has to hold against the Renovate that runs it today.

@@ -46,8 +46,9 @@ a change to a rule usually lands here too.
   of them moves to `_lib/` when a second action reads it, and not on the
   argument that one might.
   The shell helpers beside them are `pinned-tool.sh` — the verified fetch
-  every pinned binary goes through — and `k6.sh`, which is that fetch plus the
-  one k6 pin, so the three ramps in this house run one binary.
+  every pinned binary goes through — and, on top of it, `k6.sh` and
+  `shellcheck.sh`, each that fetch plus one pin: the three ramps in this house
+  run one k6, and everything here that reads shell reads it with one shellcheck.
   Actions, rather than scripts run out of the package every repo already
   installs: a gate in `node_modules` runs only if the repo's own workflow
   remembers to run it, and it moves whenever the lockfile moves — including on

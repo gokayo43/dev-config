@@ -278,6 +278,11 @@ jobs:
 
       - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
 
+      # Nothing else here reads a repo's own shell. actionlint above covers the
+      # run: blocks inside workflows and stops there, and what is left over is
+      # the set that pipes a dump into a bucket and drops databases.
+      - uses: gokayo43/dev-config/.github/actions/shell-scripts@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
+
       - if: inputs.compose
         uses: gokayo43/dev-config/.github/actions/compose-lint@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
 

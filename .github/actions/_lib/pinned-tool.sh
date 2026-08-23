@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # A released binary, verified against the checksum the caller pinned.
 #
 # The three tools this repo reaches for — gitleaks, actionlint, k6 — are Go

@@ -43,6 +43,7 @@ settings every repo shares; what a single gate asserts, and why, lives beside it
 | `repo-contract`       | [docs/gates/repo-contract.md](docs/gates/repo-contract.md)                                                                                                                          |
 | `stack-gate`          | [docs/gates/stack-gate.md](docs/gates/stack-gate.md)                                                                                                                                |
 | `suppression-hygiene` | [docs/gates/suppression-hygiene.md](docs/gates/suppression-hygiene.md)                                                                                                              |
+| `shell-scripts`       | [docs/gates/shell-scripts.md](docs/gates/shell-scripts.md)                                                                                                                          |
 | `compose-lint`        | [docs/gates/compose-lint.md](docs/gates/compose-lint.md)                                                                                                                            |
 | `db-gate`             | [docs/gates/db-gate.md](docs/gates/db-gate.md), plus [upgrade-path.md](docs/gates/upgrade-path.md) and [capacity.md](docs/gates/capacity.md) for the replay and the ramp it can add |
 | `mutation-lane`       | [docs/gates/mutation-lane.md](docs/gates/mutation-lane.md)                                                                                                                          |
@@ -678,17 +679,20 @@ TOOL_VERSION=v1.2.3
 TOOL_SHA256=<sha256 of the release archive>
 ```
 
-`_lib/k6.sh` is the live one: db-gate's ramp, this repo's own execution of the
-shipped script, and `project-template`'s ramp against a preview stack are three
-callers of one pin, and a ramp is only comparable with another ramp of the same
-k6.
+Two live ones sit there. `_lib/k6.sh`: db-gate's ramp, this repo's own execution
+of the shipped script, and `project-template`'s ramp against a preview stack are
+three callers of one pin, and a ramp is only comparable with another ramp of the
+same k6. `_lib/shellcheck.sh`: the `shell-scripts` gate over a repo's tracked
+scripts, and this repo's own pass over the scripts inlined in its composite
+actions — and a script is only graded the same way twice when the same binary
+read it, since the tool adds checks between releases.
 
 The shape above is illustrative on purpose: this file is not in the manager's
 patterns, so a real version and checksum written here would be the one pin
 nobody moves. The live ones sit in `.github/actions/secret-scan/action.yml`,
-`.github/actions/lint-workflows/action.yml` and `.github/actions/_lib/k6.sh` —
-all of which the patterns cover, and they cover the next tool without touching
-the preset.
+`.github/actions/lint-workflows/action.yml`, `.github/actions/_lib/k6.sh` and
+`.github/actions/_lib/shellcheck.sh` — all of which the patterns cover, and they
+cover the next tool without touching the preset.
 
 One pin does live in this README and is managed: the `GITLEAKS_VERSION=` line in
 the local install snippet below, which carries no checksum and has a second,
@@ -756,7 +760,10 @@ same pins as this one's.
 actionlint only understands workflows: handed an `action.yml` it reports a
 workflow with no `jobs`. So the composites get a pass of their own, asserting
 what silently breaks them — a `run` step with no `shell` never runs the script
-it carries — and their scripts go through the same shellcheck.
+it carries — and the scripts inlined in them go through the pinned shellcheck,
+with `--shell=bash` because an extracted `run:` block has no shebang. The shell
+libraries those blocks source are not extracted from anything, and are read by
+the `shell-scripts` gate along with every other `*.sh` in the tree.
 
 actionlint is also silent on a floating tag, so the action carries a second step
 that reads every `uses:` in the workflows, in the composite actions, and in
@@ -929,8 +936,8 @@ reads a job-level `uses:` exactly as it reads a step's, so the pin moves in a PR
 like any other dependency.
 
 In order, the pinned workflow runs the gitleaks scan, the declarative gates
-(repo contract, stack denylist, suppression hygiene, and the compose lint when
-asked), `bun install`, the optional build, `format:check`, `lint`, `typecheck`,
+(repo contract, stack denylist, suppression hygiene, shellcheck over the repo's
+own scripts, and the compose lint when asked), `bun install`, the optional build, `format:check`, `lint`, `typecheck`,
 `knip`, the test suite, the assertion that the suite ran, and — where the repo
 asks for it — the mutation lane over the domain files this branch changed.
 Everything from
@@ -943,8 +950,8 @@ rather than after a full dependency resolution.
 
 The steps that are shell or a script rather than a `bun run` live in
 `.github/actions/` as composite actions — `secret-scan`, `repo-contract`,
-`stack-gate`, `suppression-hygiene`, `compose-lint`, `test-suite`, `db-gate`,
-`lint-workflows` — so the workflow above and any
+`stack-gate`, `suppression-hygiene`, `shell-scripts`, `compose-lint`,
+`test-suite`, `db-gate`, `lint-workflows` — so the workflow above and any
 repo that has to run the same thing outside it share one copy.
 `check.yml` references them by full path and SHA rather than `./`: inside a
 called workflow a relative `uses:` resolves against the _caller's_ checkout, and
@@ -1046,8 +1053,8 @@ nobody reads.
 
 ### Where each gate is written down
 
-`repo-contract`, `stack-gate`, `suppression-hygiene`, `lint-workflows` and
-`compose-lint` run in the static job; `db-gate` is the database job, and the
+`repo-contract`, `stack-gate`, `suppression-hygiene`, `shell-scripts`,
+`lint-workflows` and `compose-lint` run in the static job; `db-gate` is the database job, and the
 capacity ramp is a step of it. Each has its page under
 [`docs/gates/`](docs/gates/), listed in the table at the top of this file.
 
