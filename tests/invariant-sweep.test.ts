@@ -26,7 +26,7 @@ function spec(title: string, body: string, allowlist?: Record<string, string>): 
   return `import { expect } from "@playwright/test";
 import { test } from ${SWEEP};
 
-${use}test(${JSON.stringify(title)}, async ({ page }) => {
+${use}test(${JSON.stringify(title)}, async ({ page, context }) => {
 ${body}
 });
 `;
@@ -81,6 +81,64 @@ const CASES = {
     `  await page.goto("/clean");`,
     { "(unclosed": "a pattern nobody balanced" },
   ),
+  // A `//# sourceURL=` comment is a claim any script can make about itself, and
+  // the console repeats the claim. Honouring it unchecked lets an inline script
+  // of *ours* wear a vendor's name and land in the vendor's allowlist bucket.
+  "our own error cannot wear a vendor's name": spec(
+    "our own error cannot wear a vendor's name",
+    `  await page.goto("/forged-source");`,
+    { "cdn\\.vendor": "the vendor embed logs a failed beacon on every load" },
+  ),
+  // A frame from another origin calling the bridge: it can neither invent a
+  // violation nor choose which bucket one lands in.
+  "a frame cannot report a violation for the page carrying it": spec(
+    "a frame cannot report a violation for the page carrying it",
+    `  await page.goto("/hostile-frame");\n  await page.waitForTimeout(300);`,
+  ),
+  // An embed's own thrown error is the embed's, and the allowlist has to be able
+  // to reach it by the embed's address rather than by the page's.
+  "an embed's thrown error is attributed to the embed": spec(
+    "an embed's thrown error is attributed to the embed",
+    `  await page.goto("/frame-throws");\n  await page.waitForTimeout(300);`,
+    { "throws\\.html$": "the embed throws on load; it is not ours to fix" },
+  ),
+  // A page that navigates out from under the flush still gets its verdict.
+  "a page that navigates on a timer still reports what it measured": spec(
+    "a page that navigates on a timer still reports what it measured",
+    `  await page.goto("/self-navigating");\n  await page.waitForTimeout(200);`,
+  ),
+  // Opened in a tab of its own: a page fixture never sees it, and a context one
+  // does.
+  "a popup is swept like any other page": spec(
+    "a popup is swept like any other page",
+    `  await page.goto("/popup");\n  const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);\n  await popup.waitForLoadState();`,
+  ),
+  // A real violation whose description is hostile: the page writes the escape
+  // codes and the workflow command, and the annotation must carry neither.
+  "a violation's own text cannot carry an escape or a workflow command": spec(
+    "a violation's own text cannot carry an escape or a workflow command",
+    `  await page.goto("/noisy-overflow");\n  await page.waitForTimeout(200);`,
+  ),
+  // Overflow that arrives with an image's bytes, long after load and without a
+  // single change to the DOM.
+  "overflow that arrives with a subresource is swept": spec(
+    "overflow that arrives with a subresource is swept",
+    `  await page.goto("/late-image");\n  await page.waitForTimeout(700);`,
+  ),
+  // The keys are regular expressions and nothing anchors them, so a page name
+  // is a prefix of its neighbour's. Pinned in both directions, because the
+  // alternative — anchoring a key that happens to contain no metacharacter —
+  // would anchor exactly the keys that are not URLs, every real one having a dot.
+  "an unanchored key reaches the page next door": spec(
+    "an unanchored key reaches the page next door",
+    `  await page.goto("/cleanish");`,
+    { "/clean": "the clean page's own embed" },
+  ),
+  "an anchored key stops at the page it names": spec(
+    "an anchored key stops at the page it names",
+    `  await page.goto("/cleanish");`,
+    { "/clean$": "the clean page's own embed" },
+  ),
   // ...and an allowlist that names something else does not quietly cover it.
   "an allowlist that matches nothing tolerates nothing": spec(
     "an allowlist that matches nothing tolerates nothing",
@@ -125,6 +183,18 @@ describe("what the sweep lets through", () => {
   test("an allowlisted embed's console error is tolerated", () => {
     expect(outcome("an allowlisted embed's console error is tolerated").ok).toBe(true);
   });
+
+  // Playwright hands a pageerror no frame, so the embed's own throw is placed by
+  // the URL in its stack. This passing is what says the allowlist could reach it
+  // by the embed's address: keyed on the page's, the pattern would not match.
+  // Documented, not fixed: the keys are unanchored regular expressions.
+  test("an unanchored key reaches the page next door", () => {
+    expect(outcome("an unanchored key reaches the page next door").ok).toBe(true);
+  });
+
+  test("an embed's thrown error is attributed to the embed", () => {
+    expect(outcome("an embed's thrown error is attributed to the embed").ok).toBe(true);
+  });
 });
 
 describe("what the sweep catches", () => {
@@ -144,6 +214,23 @@ describe("what the sweep catches", () => {
       "console.error",
       "the embed is unhappy",
     ],
+    ["our own error cannot wear a vendor's name", "console.error", "this one is ours"],
+    [
+      "an anchored key stops at the page it names",
+      "console.error",
+      "the almost-clean page is unhappy",
+    ],
+    [
+      "a page that navigates on a timer still reports what it measured",
+      "overflow",
+      "in a 800px viewport",
+    ],
+    [
+      "a popup is swept like any other page",
+      "console.error",
+      "a request this page depends on failed",
+    ],
+    ["overflow that arrives with a subresource is swept", "overflow", "img#slow"],
     [
       "an allowlist key that is not a pattern says so",
       'sweepAllowlist key "(unclosed"',
@@ -154,6 +241,52 @@ describe("what the sweep catches", () => {
     expect(ok).toBe(false);
     expect(said).toContain(kind);
     expect(said).toContain(detail);
+  });
+
+  // A frame from another origin can call the bridge — nothing stops it — so what
+  // has to hold is that nothing it says survives: not the violation it invented,
+  // not the bucket it chose, and not the escape codes or workflow command it
+  // wrote into the sentence. The page's own overflow is still reported, which is
+  // how a run that dropped everything is told from one that dropped the forgery.
+  test("nothing a frame invents reaches the failure", () => {
+    const { ok, said } = outcome("a frame cannot report a violation for the page carrying it");
+    expect(ok).toBe(false);
+    expect(said).toContain("overflow at");
+    expect(said).toContain("div#wide");
+    for (const forged of ["forged", "cdn.vendor", "a frame wrote this"]) {
+      expect(said).not.toContain(forged);
+    }
+  });
+
+  // The sentence in a violation is the page's, and a CI annotation prints it. No
+  // control character survives, which is what makes both attacks inert: an ANSI
+  // escape needs its ESC, and a `::error::` workflow command needs a line of its
+  // own. The `::error` text itself remains, mid-sentence, where it is inert —
+  // and asserting it away would be asserting something this does not do.
+  test("no control character a page wrote reaches the annotation", () => {
+    const { ok, said } = outcome(
+      "a violation's own text cannot carry an escape or a workflow command",
+    );
+    expect(ok).toBe(false);
+    // The runner colours its own diff, so the line is stripped of *that* before
+    // anything is asserted about what the page managed to write.
+    const [line = ""] = said
+      // oxlint-disable-next-line eslint/no-control-regex -- the control character is the subject: this strips the runner's own colouring so the assertions below are about what the page managed to write
+      .replaceAll(/\u001b\[[0-9;]*m/g, "")
+      .split("\n")
+      .filter((each) => each.includes("overflow at"));
+    const detail = line.slice(line.indexOf("— ") + 2);
+
+    expect(detail).toContain("div#wide");
+    // `[31m` survives as plain text, which is precisely what says the ESC in
+    // front of it was taken out by the fixture: had it survived, the strip above
+    // would have removed the whole sequence and left nothing to find.
+    expect(detail).toContain("[31m");
+    // The newline is gone, so the workflow command cannot begin a line — which is
+    // the only thing that would make it one. It is text where it sits, and
+    // asserting it away would be asserting something this does not do.
+    expect(detail).not.toContain("\n");
+    expect(detail.indexOf("::error")).toBeGreaterThan(0);
   });
 
   // The diagnostic names the element, because "something is 800px too wide" is

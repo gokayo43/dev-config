@@ -33,6 +33,7 @@ export const FLAWS = [
   "keeps-the-bucket-in-the-process",
   "reads-then-writes",
   "fails-open",
+  "keys-on-the-path",
 ] as const;
 
 export type Flaw = (typeof FLAWS)[number];
@@ -166,14 +167,17 @@ export function houseLimiter(redisUrl: string, flaw?: Flaw): Limiter {
   /** Only the in-process variant reads this; a real limiter keeps nothing here. */
   const inProcess = new Map<string, Bucket>();
 
-  return async ({ headers, socketIp }) => {
+  return async ({ headers, path, socketIp }) => {
     if (flaw === "admits-everything") return ADMITTED;
     if (flaw === "refuses-everything") return REFUSED;
 
     // The hole the two exempting flaws open. The chain ends in a sentinel, so a
     // correct key is never empty and this never fires for the house build.
-    const key = clientKey(headers, socketIp, flaw);
-    if (key === "") return ADMITTED;
+    const caller = clientKey(headers, socketIp, flaw);
+    if (caller === "") return ADMITTED;
+    // A bucket per route reads as caution and is the absence of a limit: on any
+    // API with a path parameter it is a bucket per parameter value.
+    const key = flaw === "keys-on-the-path" ? `${path}:${caller}` : caller;
 
     if (flaw === "keeps-the-bucket-in-the-process") {
       const bucket = inProcess.get(key) ?? { tokens: CAP, seen: Date.now() };

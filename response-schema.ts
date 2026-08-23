@@ -54,11 +54,23 @@ export interface Skip {
  * it structurally, so `app.routes` goes in with no cast — which matters more
  * than it looks: a cast is what lets an introspection that has stopped
  * answering keep type-checking.
+ *
+ * **Two places hold a response schema, and both enforce it.** A schema written
+ * on the route itself lands in `hooks.response`; one written on a `guard` or a
+ * `group` lands in `hooks.standaloneValidator[].response`, and Elysia validates
+ * and cleans against it identically — a field the schema omits is stripped from
+ * the body on the wire either way. A gate reading only the first calls every
+ * grouped route undeclared, and no skip cause fits a route that *is* declared.
  */
 export interface RouteEntry {
   readonly method: string;
   readonly path: string;
-  readonly hooks?: { readonly response?: unknown } | undefined;
+  readonly hooks?:
+    | {
+        readonly response?: unknown;
+        readonly standaloneValidator?: readonly { readonly response?: unknown }[] | undefined;
+      }
+    | undefined;
 }
 
 /** What is being graded, and the two things only the repo can say about it. */
@@ -84,8 +96,16 @@ function key({ method, path }: { readonly method: string; readonly path: string 
   return `${method} ${path}`;
 }
 
+/**
+ * Whether anything pins this route's body. Both places, because both are
+ * enforcement: `guard({ response })` and `group(path, { response })` put the
+ * schema in the standalone list rather than on the route, and Elysia cleans
+ * against it just the same.
+ */
 function declares({ hooks }: RouteEntry): boolean {
-  return hooks?.response !== undefined;
+  if (hooks === undefined) return false;
+  if (hooks.response !== undefined) return true;
+  return (hooks.standaloneValidator ?? []).some(({ response }) => response !== undefined);
 }
 
 /**

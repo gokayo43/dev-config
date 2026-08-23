@@ -104,6 +104,9 @@ export interface Rebaseline extends Report {
 
 const SUFFIX = ".json";
 
+/** The longest a file name may be, in bytes, on every filesystem this house runs on. */
+const NAME_LIMIT = 255;
+
 /**
  * A capture as its golden file reads. The one serialiser: what is written is
  * what is compared, so nothing about the golden's shape is decided twice.
@@ -158,6 +161,22 @@ function reNormalized<Body>(
   return serialize(normalize({ status, body }));
 }
 
+/**
+ * Why this shard is not one, or nothing when it is. A count of zero makes
+ * `position % 0` a NaN that equals no index, and an index past the count owns
+ * nothing — either way the run covers no cases, reports no failures and reads
+ * as green, which is the shape a mistyped CI matrix takes.
+ */
+function unsharded({ index, count }: Shard): string | undefined {
+  if (!Number.isInteger(count) || count < 1) {
+    return `shard count ${count} is not a positive whole number — a run split into no shards covers no cases and reports no failures`;
+  }
+  if (!Number.isInteger(index) || index < 0 || index >= count) {
+    return `shard index ${index} is not one of the ${count} shards — indexes are zero-based, so the last is ${count - 1}, and one past the end owns nothing and passes`;
+  }
+  return undefined;
+}
+
 /** The slice of the run this shard owns: every case whose position is its own, in order. */
 function shardOf<Case>(cases: readonly Case[], shard: Shard | undefined): readonly Case[] {
   if (shard === undefined) return cases;
@@ -179,7 +198,44 @@ function unusable(name: string): string | undefined {
   if (name.includes("/") || name.includes("\\")) {
     return `the golden name ${JSON.stringify(name)} has a path separator in it — goldens live in one flat directory, and a nested one is a file the orphan check can never account for`;
   }
+  // A NUL ends the string every filesystem call passes down, so a name carrying
+  // one writes a file under a shorter name than the one this run reconciles
+  // against — an orphan on the next run and a case nothing grades on this one.
+  if (name.includes("\0")) {
+    return `the golden name ${JSON.stringify(name)} has a NUL in it — the filesystem would cut the name short of what this run reconciles against`;
+  }
+  // 255 bytes is where every filesystem this house runs on stops accepting a
+  // name, and it is bytes rather than characters: one emoji is four of them.
+  const bytes = Buffer.byteLength(`${name}${SUFFIX}`, "utf8");
+  if (bytes > NAME_LIMIT) {
+    return `the golden name ${JSON.stringify(name)} is ${bytes} bytes with its suffix, past the ${NAME_LIMIT} a filename may be — shorten what \`nameOf\` builds, or hash the tail of it`;
+  }
   return undefined;
+}
+
+/**
+ * Golden names claimed by more than one case. Two cases sharing a name is one
+ * golden file, so the second silently grades against the first's capture — and
+ * where the two happen to agree, the net reports both as covered and neither is.
+ * Asked of every case, never of a shard's slice: a collision is a property of
+ * the whole list, and a shard holding one of the pair would see nothing wrong.
+ */
+function collisions<Case>(cases: readonly Case[], nameOf: (subject: Case) => string): string[] {
+  const seen = new Map<string, number>();
+  const clashes = new Map<string, number[]>();
+  for (const [position, subject] of cases.entries()) {
+    const name = nameOf(subject);
+    const first = seen.get(name);
+    if (first === undefined) {
+      seen.set(name, position);
+      continue;
+    }
+    clashes.set(name, [...(clashes.get(name) ?? [first]), position]);
+  }
+  return [...clashes].map(
+    ([name, positions]) =>
+      `cases ${positions.join(", ")} all name the golden ${JSON.stringify(name)} — one file cannot pin ${positions.length} behaviours, so all but the first are graded against a capture that is not theirs`,
+  );
 }
 
 /** What an operation does with one case, once its golden has a usable name and a fresh capture. */
@@ -247,6 +303,12 @@ async function reconcile(dir: string, ran: readonly string[]): Promise<string[]>
  * shards' `ran` and reconciles from there.
  */
 export async function assertNet<Case, Body>(net: Net<Case, Body>, shard?: Shard): Promise<Report> {
+  const mistyped = shard === undefined ? undefined : unsharded(shard);
+  if (mistyped !== undefined) {
+    return { summary: summarise(0, 1, shard), ran: [], failures: [mistyped] };
+  }
+
+  const clashes = collisions(net.cases, net.nameOf);
   const { ran, failures } = await walk(net, shardOf(net.cases, shard), async (name, text) => {
     const committed = await goldenAt(`${net.dir}/${name}${SUFFIX}`);
     if (committed === undefined) {
@@ -266,7 +328,7 @@ export async function assertNet<Case, Body>(net: Net<Case, Body>, shard?: Shard)
   });
 
   const unclaimed = shard === undefined ? await reconcile(net.dir, ran) : [];
-  const whole = [...failures, ...unclaimed];
+  const whole = [...clashes, ...failures, ...unclaimed];
   return { summary: summarise(ran.length, whole.length, shard), ran, failures: whole };
 }
 
@@ -301,10 +363,16 @@ export async function rebaselineNet<Case, Body>(
   const wrote: string[] = [];
   await mkdir(net.dir, { recursive: true });
 
+  const clashes = collisions(net.cases, net.nameOf);
   const { ran, failures } = await walk(net, net.cases, async (name, text) => {
     const path = `${net.dir}/${name}${SUFFIX}`;
     const committed = await goldenAt(path);
-    if (committed === text) return [];
+    // Re-normalised, exactly as the assert path compares it. Bytes would make a
+    // golden that today's normaliser agrees with — one minified, or with CRLFs,
+    // or written before the serialiser's spacing changed — read as a behaviour
+    // change, so a green net could not take a new case without inventing a
+    // blessing for every old one.
+    if (committed !== undefined && reNormalized(net.normalize, committed) === text) return [];
     if (committed !== undefined && blessed === "") {
       return [
         `${name} would change, and this run blessed nothing — re-run naming what makes the new output correct, since overwriting a golden is blessing whatever it used to pin`,
@@ -315,7 +383,7 @@ export async function rebaselineNet<Case, Body>(
     return [];
   });
 
-  const whole = [...failures, ...(await reconcile(net.dir, ran))];
+  const whole = [...clashes, ...failures, ...(await reconcile(net.dir, ran))];
   return {
     summary: `${summarise(ran.length, whole.length, undefined)} — ${whatItWrote(wrote, blessed)}`,
     ran,

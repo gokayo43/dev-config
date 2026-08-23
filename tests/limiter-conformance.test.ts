@@ -36,8 +36,11 @@ const REDIS_URL = required(
   'the limiter conformance suite flushes the Redis it is given, so it will not guess at one — point it at a throwaway (README\'s "Gating this repo" has the one-liner)',
 );
 
-/** Any path the fixture limiter meters, which is every path it is given. */
-const METERED = "/api/summoner/anyone";
+/**
+ * Two paths the fixture limiter meters, which is every path it is given. Two,
+ * because one caller's budget must not be one budget per URL.
+ */
+const METERED = ["/api/summoner/anyone", "/api/summoner/someone-else"] as const;
 
 const HERE = import.meta.dir;
 
@@ -115,6 +118,7 @@ const CAUGHT_BY = {
     "a header the caller controls cannot override the one the edge stamps",
   "fails-open": "a limiter whose Redis is gone refuses",
   "reads-then-writes": "attempts racing on one key never over-admit",
+  "keys-on-the-path": "one caller's budget is not one per URL",
 } satisfies Readonly<Record<Flaw, string>>;
 
 describe("the limiter conformance suite", () => {

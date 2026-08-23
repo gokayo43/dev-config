@@ -1,8 +1,8 @@
 # The invariant sweep
 
 `@gokayo43/dev-config/invariant-sweep.ts` exports one thing: `test`, which is
-`@playwright/test`'s own `test` with the `page` fixture replaced by a watched
-one. A repo swaps its import and every spec it already has is swept:
+`@playwright/test`'s own `test` with the **browser context** replaced by one
+that watches every page it opens. A repo swaps its import and every spec it already has is swept:
 
 ```ts
 import { test } from "@gokayo43/dev-config/invariant-sweep.ts";
@@ -50,9 +50,41 @@ execution context mid-measurement — the honest handling of which is to swallow
 the rejection, turning "every page" into "every page the spec was slow enough to
 let us look at", silently.
 
-The fixture's teardown waits two animation frames before it asserts, so a spec
-that ends the instant `goto` resolves is not asserted against a report that had
-not arrived yet.
+The fixture is the **context** and not the page for the last row: a popup is a
+page the context opened and the spec may never name, so a `page` fixture cannot
+reach it at all.
+
+The teardown waits two animation frames on every open page before it asserts, so
+a spec that ends the instant `goto` resolves is not asserted against a report
+that had not arrived yet. A page that navigates on a timer destroys the context
+that flush runs in; that one rejection is caught, and the verdict is given on
+what was collected — letting it through would replace the list the sweep spent
+the whole test building with a message about the flush.
+
+## What a page is allowed to say about itself
+
+A page is not a trusted narrator, and two of these invariants are reported _by_
+the page.
+
+The bridge takes **one string** and nothing else. The `kind` is always
+`overflow`, the URL is the one Playwright says that frame is at, and a report
+from anything but the top frame is dropped — so a cross-origin iframe cannot
+invent a violation for the page carrying it, nor choose which allowlist bucket
+one lands in. The string is stripped of every control character, which is what
+makes an ANSI escape inert (it needs its `ESC`) and a `::error::` workflow
+command inert (it needs a line of its own). The `::error` text itself survives,
+mid-sentence, where it is exactly text.
+
+The same reasoning decides where a console error is attributed. The console
+reports the _script's_ URL, and a script's URL is whatever its `//# sourceURL=`
+comment claims — so an inline script of ours can wear a vendor's name and land
+in the vendor's bucket. A claimed URL is therefore honoured only when a document
+or script **actually loaded** from it in this page: a fact about responses the
+browser received, which no page can write.
+
+A `pageerror` arrives with no frame, so its origin is read out of the stack and
+honoured on those same terms. That is what lets an embed's own thrown error be
+allowlisted by the embed's address rather than by the page's.
 
 ## The allowlist
 
@@ -104,6 +136,13 @@ had to visit every allowlisted page.
   scrolling sideways inside its own box is the embed's business, and its
   `documentElement` is not the page.
 - **`console.warn`, and any other level.** Errors only.
+- **Graceful empty states**, which testing.md names alongside the other two.
+  They are not expressible here: what a page should show when it has no data is
+  a per-page contract — a heading, a call to action, the absence of a spinner —
+  and there is no property of _any_ page that says it. A repo asserts it in the
+  spec that put the page in that state, which is where the contract is known.
+- **Another stack's copy of a URL.** The allowlist matches text; two deployments
+  of one app share every path.
 - **A page that only overflows under an interaction the spec never performs.**
   That is the spec's own assertion to make; this is a floor under what every
   spec already does.

@@ -231,7 +231,7 @@ describe("what going live requires", () => {
     test.each(JOBS)("%s's service without its timer is refused", async (job) => {
       expect(await live(without(LIVE, `scripts/${UNITS}${job}.timer`))).toEqual([
         containing(
-          `scripts/${UNITS}${job}.service runs ${job}.sh and no scripts/${UNITS}${job}.timer activates it`,
+          `scripts/${UNITS}${job}.service runs ${job}.sh and no timer under scripts/ activates it`,
         ),
       ]);
     });
@@ -262,6 +262,67 @@ describe("what going live requires", () => {
       expect(await live(decoy)).toEqual([
         containing("nothing in scripts/ runs scripts/backup.sh on a schedule"),
       ]);
+    });
+
+    // The path is the fact, not the file name at the end of it. A checkout
+    // cannot know where it will be deployed, so what it can assert is the
+    // trailing segments — which is enough to refuse a program that is not this
+    // repo's script at all.
+    test.each([
+      ["/usr/local/bin/backup.sh", "a program of the same name somewhere on PATH"],
+      ["/opt/clean/lib/backup.sh", "the same name outside scripts/"],
+    ])("an ExecStart of %p is not this repo's script (%s)", async (command) => {
+      const wrong: Tree = { ...LIVE, ...unitsFor("backup", `${UNITS}backup`, command) };
+      expect(await live(wrong)).toEqual([containing("which is not this repo's scripts/backup.sh")]);
+    });
+
+    // A shell in between is what decides the exit status systemd reads, so a
+    // failing drill can come back green.
+    test("a shell running the script is not the script", async () => {
+      const wrapped: Tree = {
+        ...LIVE,
+        ...unitsFor("backup", `${UNITS}backup`, "/bin/sh -c /opt/clean/scripts/backup.sh"),
+      };
+      expect(await live(wrapped)).toEqual([
+        containing("runs /bin/sh with scripts/backup.sh as an argument"),
+      ]);
+    });
+
+    // What a checkout can catch about a unit copied from the stack next door:
+    // the two jobs stop agreeing about where this repo lives.
+    test("units that disagree about where the repo is deployed are refused", async () => {
+      const mixed: Tree = {
+        ...LIVE,
+        ...unitsFor(
+          "restore-drill",
+          `${UNITS}restore-drill`,
+          "/opt/other-stack/scripts/restore-drill.sh",
+        ),
+      };
+      expect(await live(mixed)).toEqual([containing("disagree about where this repo is deployed")]);
+    });
+
+    // systemd merges a drop-in over the unit; this gate reads only the unit, so
+    // a schedule hidden in one is a schedule no diff of the unit shows.
+    test("a drop-in directory is refused rather than read", async () => {
+      const dropped: Tree = {
+        ...LIVE,
+        [`scripts/${UNITS}backup.timer.d/schedule.conf`]: "[Timer]\nOnCalendar=daily\n",
+      };
+      expect(await live(dropped)).toEqual([containing("is a drop-in directory")]);
+    });
+
+    // `[Timer] Unit=` is a pairing systemd honours, so a gate that only matched
+    // stems would call a working schedule missing.
+    test("a timer pointed at another unit with Unit= is honoured", async () => {
+      const crossed: Tree = {
+        ...without(LIVE, `scripts/${UNITS}backup.timer`),
+        [`scripts/nightly.timer`]: timerUnit("nightly").replace(
+          "[Timer]",
+          `[Timer]\nUnit=${UNITS}backup.service`,
+        ),
+      };
+      expect(await live(crossed)).toEqual([]);
     });
 
     // systemd reads `-@+!:` before the path as flags on how to run it, so a unit
@@ -345,6 +406,47 @@ describe("what going live requires", () => {
       const broken = "[Unit]\nDescription=x\n\n[Timer]\nOnCalendar=*-*-* 04:10:00\n";
       expect(await live({ ...both, [`scripts/${UNITS}backup.timer`]: broken })).toEqual([]);
     });
+  });
+
+  // What a repo owns is a fact of its tree, not of a script name. postpad calls
+  // the same script `migrate`, and under a rule keyed on `db:migrate` that
+  // spelling made it owe nothing at all: no backups, no rehearsed restore, no
+  // upgrade gate, silently, because of a colon.
+  test.each([
+    ["scripts", { migrate: "drizzle-kit migrate" }, undefined],
+    ["a drizzle config anywhere in the tree", {}, "packages/database/drizzle.config.ts"],
+    ["a migration in the tree", {}, "drizzle/0000_init.sql"],
+  ])("a live repo that owns a database by %s owes all of it", async (_, scripts, file) => {
+    const renamed = manifestWith((contents) => {
+      contents.lifecycle = "live";
+      contents.dependencies = { "@sentry/bun": "10.24.0" };
+      contents.scripts = { ...scripts, test: "bun test" };
+    });
+    const tree: Tree = {
+      ...without(without(LIVE, BACKUP), RESTORE_DRILL),
+      "package.json": renamed["package.json"] ?? "",
+      ...(file === undefined ? {} : { [file]: "-- schema\n" }),
+    };
+    expect(await live(tree, { database: false })).toEqual([
+      containing("must pass `database: true`"),
+      containing("a live repo owns scripts/backup.sh"),
+      containing("a live repo owns scripts/restore-drill.sh"),
+    ]);
+  });
+
+  // ...and a live repo with no database anywhere in it still owes none of that.
+  test("a repo with no schema and no migration script owes none of it", async () => {
+    const none = manifestWith((contents) => {
+      contents.lifecycle = "live";
+      contents.dependencies = { "@sentry/astro": "10.24.0" };
+      contents.scripts = { test: "bun test" };
+    });
+    const tree: Tree = {
+      ...without(without(LIVE, BACKUP), RESTORE_DRILL),
+      "package.json": none["package.json"] ?? "",
+      ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
+    };
+    expect(await live(tree, { database: false })).toEqual([]);
   });
 
   test("something in the repo has to report its crashes", async () => {

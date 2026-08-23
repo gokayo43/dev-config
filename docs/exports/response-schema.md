@@ -24,6 +24,14 @@ test("every route declares a response schema", () => {
 what lets an introspection Elysia has renamed keep type-checking while answering
 nothing.
 
+**Two places hold a response schema, and both are read.** A schema written on
+the route lands in `hooks.response`; one written by a `guard` or a `group` lands
+in `hooks.standaloneValidator[].response`, and Elysia validates and cleans
+against it identically — the field a schema omits is stripped from the body on
+the wire either way. A gate reading only the first calls every grouped route
+undeclared, and there is no structural cause a skip could name for a route that
+_is_ declared, so a grouped API would be unfixable.
+
 ## Why this is enforcement, not documentation
 
 Elysia's `response` **validates**, and under `normalize` it **cleans**. A field

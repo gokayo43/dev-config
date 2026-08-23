@@ -13,10 +13,17 @@ still holds after a refactor.
 import { conformsAsLimiter } from "@gokayo43/dev-config/limiter-conformance.ts";
 import { limiterOn } from "../src/http/ratelimit.ts";
 
+const REDIS_URL = process.env["TEST_REDIS_URL"];
+if (REDIS_URL === undefined) {
+  throw new Error(
+    "TEST_REDIS_URL is not set — this suite flushes the Redis it is given, so it will not guess at one",
+  );
+}
+
 conformsAsLimiter({
   make: limiterOn,
-  redisUrl: required("TEST_REDIS_URL"),
-  metered: "/api/summoner/anyone",
+  redisUrl: REDIS_URL,
+  metered: ["/api/summoner/one", "/api/summoner/two"],
 });
 ```
 
@@ -57,11 +64,18 @@ anyone else's, and a limiter that cannot reach its Redis refuses.**
 
 A limiter runs on the request hot path, so a decision that arrives in seconds is
 a stalled request rather than a refused one. There is a third way to get this
-wrong beside open and closed, and it is the easy one to ship: Bun's
-`RedisClient` retries a dead address ten times with backoff before it reports
-anything, so a limiter left on the default answers after about half a minute. A
-house limiter therefore sets `maxRetries: 0` (or a small budget with a timeout
-around it), and this suite gives the refusal two seconds — three orders of
+wrong beside open and closed, and it is the easy one to ship: a client left on
+its default reconnect budget answers _eventually_. Bun's `RedisClient` retries a
+dead address ten times with backoff — about half a minute, measured — and
+`ioredis`, which the fleet's one live limiter uses, queues commands offline and
+retries by default too. So the knob is per client and both have one:
+
+| client              | what to set                                                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| Bun's `RedisClient` | `maxRetries: 0` (with `autoReconnect: false`), or a small budget under a timeout                     |
+| `ioredis`           | `maxRetriesPerRequest: 0` (or a small number) and `enableOfflineQueue: false`, plus `connectTimeout` |
+
+This suite gives the refusal two seconds — three orders of
 magnitude more than a refused connection to a local port needs, so what it fails
 is a hang and never a slow machine.
 
@@ -88,9 +102,16 @@ one caller and by every process serving them. The state that must never be
 representable is more admitted attempts against one key, inside one refill
 window, than the cap — which is exactly what a concurrent read-then-write
 produces, and why the house implementation is one Lua script rather than a GET
-and a SET. The suite drives it with genuinely overlapping attempts and **proves
-the overlap happened**, because a race test whose requests never interleave
-passes against the code it exists to fail.
+and a SET. The suite drives it with genuinely overlapping attempts and **proves the overlap
+happened**.
+
+What that proof is about is worth being exact on: it says the attempts were in
+flight together — a fact about this harness, and the thing a race test silently
+loses when its requests turn out to have been sequential. It says nothing about
+whether the limiter serialised them internally, and it does not need to: a
+limiter that funnels every attempt through one connection has still been raced
+from the caller's side, which is the side an over-admit would arrive from. The
+invariant under test is the admitted count.
 
 Two things it does not claim to grade. A crash between the bucket's write and its
 expiry leaks a key that outlives its window — atomic as far as any caller can

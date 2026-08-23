@@ -73,8 +73,9 @@ a change to a rule usually lands here too.
   `files` and `exports`, and each is here rather than in an action for the same
   reason: what it grades is only visible from inside the repo. `route-log.ts` is
   the protocol between an app and the route-coverage floor;
-  `invariant-sweep.ts` is a Playwright fixture that watches every page a spec
-  visits; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
+  `invariant-sweep.ts` replaces Playwright's browser context with one that
+  watches every page it opens, popups included, and trusts a page for one
+  sanitised sentence and nothing else; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
   block a repo's limiter has to pass; `response-schema.ts` grades an Elysia
   app's own route table; `characterization-net.ts` is the harness under a golden
   suite. Their pages are `docs/exports/`.
@@ -119,7 +120,8 @@ a change to a rule usually lands here too.
   runs it over fixture suites of its own. It needs passwordless sudo, because
   what it is grading is a network namespace.
   The exports' suites are the same shape once more. `house-limiter.ts` is
-  STACK's limiter plus every named way of building a wrong one, and
+  STACK's limiter plus every named way of building a wrong one — a bucket in the
+  process, a key that includes the path, a chain read in the wrong order — and
   `limiter-conformance.test.ts` spawns a `bun test` per build and asserts that
   the house one passes and that each flaw fails the case paired with it — a
   pairing the compiler requires to be total, so a wrong implementation nobody

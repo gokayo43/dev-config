@@ -87,8 +87,16 @@ export interface Subject {
   readonly make: (redisUrl: string) => Limiter;
   /** A throwaway Redis. **The suite flushes it between cases.** */
   readonly redisUrl: string;
-  /** A path this limiter meters — an exempt one would pass every case below vacuously. */
-  readonly metered: string;
+  /**
+   * **Two** paths this limiter meters, and they must be different URLs.
+   *
+   * One would be enough for every case about headers, and that is exactly the
+   * hole: a limiter keyed `rl:${path}:${ip}` passes all of them while handing
+   * one caller a fresh budget per URL, which on any API with path parameters is
+   * no budget at all. Both are held to being metered, so an exempt second path
+   * fails the floor rather than the case that would look like a real defect.
+   */
+  readonly metered: readonly [string, string];
 }
 
 /**
@@ -193,21 +201,30 @@ function peakOverlap(spans: readonly Span[]): number {
  * which is the whole of what a repo writes:
  *
  * ```ts
- * conformsAsLimiter({ make: limiterOn, redisUrl: THROWAWAY, metered: "/api/summoner/x" });
+ * conformsAsLimiter({
+ *   make: limiterOn,
+ *   redisUrl: THROWAWAY,
+ *   metered: ["/api/summoner/one", "/api/summoner/two"],
+ * });
  * ```
  */
 export function conformsAsLimiter({ make, redisUrl, metered }: Subject): void {
-  const at = (caller: Caller): Attempt => arriving(metered, caller);
+  const [first, second] = metered;
+  const at = (caller: Caller, path: string = first): Attempt => arriving(path, caller);
 
   describe("as a rate limiter", () => {
     let limiter: Limiter;
-    /** What one caller gets on this path, measured rather than declared. */
+    /** What one caller gets on the first path, measured rather than declared. */
     let cap = 0;
+    /** And on the second, so an exempt one is caught here rather than downstream. */
+    let alsoCap = 0;
 
     beforeAll(async () => {
       limiter = make(redisUrl);
       await flush(redisUrl);
       cap = await untilRefused(limiter, () => at({ cf: "203.0.113.1" }));
+      await flush(redisUrl);
+      alsoCap = await untilRefused(limiter, () => at({ cf: "203.0.113.1" }, second));
     });
 
     // The floor under every case below. A limiter that admits everything passes
@@ -219,10 +236,28 @@ export function conformsAsLimiter({ make, redisUrl, metered }: Subject): void {
       expect(cap).toBeLessThan(BOUND);
     });
 
+    // Both paths, because the case below spends on one and expects to be
+    // refused on the other. A second path nobody meters would fail that case
+    // and look like a keying defect.
+    test("and the second path is metered too", () => {
+      expect(alsoCap).toBeGreaterThan(0);
+      expect(alsoCap).toBeLessThan(BOUND);
+    });
+
     test("a second caller has a budget of its own", async () => {
       await flush(redisUrl);
       await untilRefused(limiter, () => at({ cf: "203.0.113.2" }));
       expect(await admits(limiter, at({ cf: "203.0.113.3" }))).toBe(true);
+    });
+
+    // The budget is the caller's, not the caller's *per URL*. A limiter keyed on
+    // the path hands out one bucket per route — and on any API with a path
+    // parameter, one per parameter value, which is no limit at all. Every
+    // header case above passes against it.
+    test("one caller's budget is not one per URL", async () => {
+      await flush(redisUrl);
+      await untilRefused(limiter, () => at({ cf: "203.0.113.9" }));
+      expect(await admits(limiter, at({ cf: "203.0.113.9" }, second))).toBe(false);
     });
 
     // A bucket that lives in the process is a bucket per container, and the
@@ -309,7 +344,14 @@ export function conformsAsLimiter({ make, redisUrl, metered }: Subject): void {
     );
 
     // The race the Lua script exists for. Every attempt is launched before any
-    // has answered, and the overlap is asserted rather than assumed.
+    // has answered, and that the attempts really did overlap is asserted rather
+    // than assumed.
+    //
+    // What `peakOverlap` proves is a fact about this harness — that the calls
+    // were in flight together — and not one about the limiter's own
+    // serialisation: a limiter that funnels them through one connection has
+    // still been raced from the caller's side, which is the side an over-admit
+    // would arrive from. The invariant under test is the admitted count.
     test("attempts racing on one key never over-admit", async () => {
       await flush(redisUrl);
       const spans: Span[] = [];

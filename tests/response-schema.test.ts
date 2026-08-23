@@ -8,20 +8,30 @@
 import { describe, expect, test } from "bun:test";
 import { Elysia, t } from "elysia";
 
-import { responseSchemaGaps, type Skip } from "../response-schema.ts";
+import { responseSchemaGaps, type RouteEntry, type Skip } from "../response-schema.ts";
 import { containing } from "./matchers.ts";
 
 /**
- * Four routes and the four states a route can be in: declared, undeclared,
- * carrying a hook that is not a response schema, and framework-owned.
+ * The states a route can be in, one route each: declared on the route, declared
+ * by a `guard`, declared by a `group`, undeclared, and undeclared while carrying
+ * some other hook.
+ *
+ * The last three exist because the fact is `hooks.response` **or**
+ * `hooks.standaloneValidator[].response`, and only a real Elysia app can say
+ * which of those a guard writes to.
  */
 const app = new Elysia()
   .get("/health", () => ({ ok: true }), { response: t.Object({ ok: t.Boolean() }) })
-  .get("/presets/:id", () => ({ id: "1" }), { response: t.Object({ id: t.String() }) })
   .get("/report.csv", () => "a,b\n")
-  .post("/import", () => ({ queued: true }), { beforeHandle: () => undefined });
+  .post("/import", () => ({ queued: true }), { beforeHandle: () => undefined })
+  .guard({ response: t.Object({ id: t.String() }) }, (guarded) =>
+    guarded.get("/presets/:id", () => ({ id: "1" })),
+  )
+  .group("/admin", { response: t.Object({ ok: t.Boolean() }) }, (grouped) =>
+    grouped.get("/stats", () => ({ ok: true })),
+  );
 
-const FLOOR = 3;
+const FLOOR = 4;
 
 /** The one skip the fixture app legitimately owes — its hand-serialised CSV body. */
 const CSV: Skip = {
@@ -29,6 +39,14 @@ const CSV: Skip = {
   path: "/report.csv",
   cause: "hand-serialized",
   why: "the handler returns a built CSV document, so the only declarable schema is t.String()",
+};
+
+/** The other legitimate skip the fixture app owes — its streamed upload body. */
+const IMPORT: Skip = {
+  method: "POST",
+  path: "/import",
+  cause: "binary",
+  why: "the handler streams the uploaded bytes straight back",
 };
 
 function gaps(skips: readonly Skip[], floor = FLOOR): string[] {
@@ -63,6 +81,35 @@ describe("what a composed Elysia app has to satisfy", () => {
     const only = gaps([CSV]);
     expect(only).toHaveLength(1);
     expect(only[0]).toContain("POST /import");
+  });
+});
+
+// Elysia enforces a guard's or a group's `response` exactly as it enforces one
+// written on the route: the field a schema omits is stripped from the body on
+// the wire. A gate reading only `hooks.response` calls both undeclared, and
+// there is no structural cause a skip could name for a route that *is*
+// declared — so every grouped route in a real API would be unfixable.
+describe("where a response schema is written", () => {
+  test.each([
+    ["GET /health", "on the route itself"],
+    ["GET /presets/:id", "by a guard with a callback"],
+    ["GET /admin/stats", "by a group"],
+  ])("%s is declared — %s", (at) => {
+    expect(gaps([CSV, IMPORT]).join("\n")).not.toContain(at);
+  });
+
+  test("a route with no schema anywhere is the only one left undeclared", () => {
+    expect(gaps([CSV])).toEqual([containing("POST /import declares no `response`")]);
+  });
+
+  // The two locations are different keys, and reading the wrong one is how a
+  // guard's schema goes unseen: Elysia leaves `hooks.response` undefined on a
+  // guarded route and puts the schema in the standalone list beside it.
+  test("a guarded route leaves hooks.response undefined, which is why both are read", () => {
+    const routes: readonly RouteEntry[] = app.routes;
+    const guarded = routes.find((route) => route.path === "/presets/:id");
+    expect(guarded?.hooks?.response).toBeUndefined();
+    expect(guarded?.hooks?.standaloneValidator?.[0]?.response).toBeDefined();
   });
 });
 

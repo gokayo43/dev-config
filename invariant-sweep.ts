@@ -15,9 +15,9 @@
  *
  * ## Where the checking happens, and why it is not in the test process
  *
- * The console and the page's own errors arrive as events, so those are the
- * easy half. Overflow is a measurement, and a measurement has to happen
- * somewhere, at some moment. Two designs that do not work:
+ * The console and the page's own errors arrive as events, so those are the easy
+ * half. Overflow is a measurement, and a measurement has to happen somewhere,
+ * at some moment. Two designs that do not work:
  *
  * - **After each `goto`.** A test that navigates by clicking a link never calls
  *   `goto`, and those pages would go unswept while the fixture claimed to sweep
@@ -34,21 +34,32 @@
  * route change that never fires `load` is caught by the same observer as
  * everything else.
  *
- * ## The allowlist
+ * ## The fixture is the context, not the page
  *
- * `sweepAllowlist` maps a URL pattern to the reason that URL is tolerated —
- * a third-party embed logging into our console is the case it exists for, and
- * naming a whole page is the blunter version of the same thing. It is a
- * Playwright option, so a repo can set it once in `playwright.config.ts`,
- * narrow it per file with `test.use`, and see it in the trace.
+ * Everything is installed on the browser **context**, so a page the spec never
+ * held a reference to — a `target="_blank"` popup, an OAuth window — is swept
+ * like any other. A `page` fixture cannot see those at all: they are pages the
+ * context opened and the spec may never name.
  *
- * A stale entry is not failed here, deliberately: the allowlist is consulted per
- * run, and a run that did not visit the embedded page did not use its entry —
- * which is normal rather than rot. The ratchet that drains itself is the one
- * whose whole population is in front of it at once, which is what
- * `response-schema.ts` has and this does not.
+ * ## What the page is allowed to say about itself
+ *
+ * A page is not a trusted narrator. The bridge takes **one string** from it and
+ * nothing else: the `kind` is always `overflow`, and the URL is the one
+ * Playwright says that frame is at. Reports from anything but the top frame are
+ * dropped, so a cross-origin iframe cannot invent a violation for the page
+ * carrying it, and the string itself is stripped of control characters — which
+ * is what stops an embed writing ANSI escapes or a `::error::` workflow command
+ * into somebody's CI annotation.
+ *
+ * The same reasoning decides which URL a console error is attributed to. The
+ * console reports the script's URL, and a script's URL is whatever its
+ * `//# sourceURL=` comment claims — so an inline script of ours can wear a
+ * vendor's name and land in the vendor's allowlist bucket. A claimed URL is
+ * therefore honoured only when a document or script **actually loaded** from it
+ * in this page, which is a fact about responses the browser received and not
+ * one any page can write.
  */
-import { expect, test as base } from "@playwright/test";
+import { expect, type Page, test as base } from "@playwright/test";
 
 /** The name the page-side script calls, and the name the fixture exposes. One constant, two ends. */
 const REPORTER = "__invariantSweep";
@@ -66,17 +77,33 @@ const CLASSES = 3;
 /** How many offending elements a diagnostic names before it stops. */
 const OFFENDERS = 3;
 
+/** How much of a page's own sentence reaches the failure message. */
+const DETAIL_LIMIT = 300;
+
+/** What Playwright says when the page navigated out from under an evaluate. */
+const DESTROYED = "Execution context was destroyed";
+
+/** The resource kinds whose URLs a violation may be attributed to. */
+const ADDRESSABLE = new Set(["document", "script"]);
+
 /** One invariant, broken once. */
 interface Violation {
   readonly kind: "console.error" | "pageerror" | "overflow";
   /**
-   * Where it came *from*: the script's URL for a console error, the page's for
-   * everything else. The source rather than the page, because the case the
-   * allowlist exists for is a third-party embed on a page of ours.
+   * Where it came *from*: the script's URL for a console error, the frame's for
+   * everything else — and only ever a URL the browser reported loading. The
+   * source rather than the page, because the case the allowlist exists for is a
+   * third-party embed on a page of ours.
    */
   readonly at: string;
   readonly detail: string;
 }
+
+/**
+ * Two frames, as an expression rather than a function for the same reason
+ * `WATCH` is one: there is no DOM lib here to type `requestAnimationFrame` with.
+ */
+const FLUSH = "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))";
 
 /**
  * The measuring, as source rather than as a function, for two reasons that both
@@ -85,12 +112,14 @@ interface Violation {
  * `tsconfig`, and typing the browser here to write eight lines of it would put
  * `lib: ["DOM"]` into everything that imports the fixture.
  *
- * Three moments, deduplicated: when the document loads, when its fonts settle
- * (a webfont swapping in is a reflow, and a reflow is where overflow appears),
- * and on the next frame after anything in the tree changes — which is what
- * covers a client-rendered route change that fires no `load` at all. The top
- * frame only: an iframe scrolling sideways inside its own box is the embed's
- * business, and `documentElement` there is not the page.
+ * Four moments, deduplicated: when the document loads, when its fonts settle (a
+ * webfont swapping in is a reflow, and a reflow is where overflow appears),
+ * when any subresource finishes loading (an image's bytes carry its width, and
+ * nothing in the DOM has to change when they arrive), and on the next frame
+ * after anything in the tree changes — which is what covers a client-rendered
+ * route change that fires no `load` at all. The top frame only: an iframe
+ * scrolling sideways inside its own box is the embed's business, and
+ * `documentElement` there is not the page.
  */
 const WATCH = `(() => {
   if (window.top !== window) return;
@@ -115,7 +144,7 @@ const WATCH = `(() => {
       + (named ? ", reaching past the right edge: " + named : "");
     if (seen.has(detail)) return;
     seen.add(detail);
-    window.${REPORTER}({ kind: "overflow", at: location.href, detail: detail });
+    window.${REPORTER}(detail);
   };
   let queued = false;
   const soon = () => {
@@ -126,6 +155,9 @@ const WATCH = `(() => {
   if (document.fonts) document.fonts.ready.then(soon);
   if (document.readyState === "complete") soon();
   else window.addEventListener("load", soon);
+  // Capture phase: a subresource's own load event does not bubble, and an
+  // image's bytes are what carry its width.
+  document.addEventListener("load", soon, true);
   // \`document\` and not \`documentElement\`: an init script runs before the
   // document has an element, and observing a null target throws — which the
   // page then reports through this very fixture as an error of its own.
@@ -136,22 +168,42 @@ const WATCH = `(() => {
   });
 })();`;
 
-/**
- * Two frames, as an expression rather than a function for the same reason
- * `WATCH` is one: there is no DOM lib here to type `requestAnimationFrame` with.
- */
-const FLUSH = "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))";
-
 /** The option a repo sets, declared so `test.use({ sweepAllowlist })` type-checks. */
 export interface InvariantSweep {
   /**
    * URLs whose console errors, page errors and overflow this run tolerates,
    * each against the reason it is tolerated. The key is a **regular
-   * expression** tested against the URL — a literal URL works as one, and
-   * `.*` is there when a pattern is wanted — and the value is why, which is
-   * the half a reviewer reads.
+   * expression** tested against the URL, and it is **unanchored** — `"/checkout"`
+   * also matches `/checkout-v2`, so write `"/checkout$"` when a page name is
+   * meant. The value is why, which is the half a reviewer reads.
    */
   sweepAllowlist: Record<string, string>;
+}
+
+/**
+ * The characters a terminal reads as instructions rather than as text: C0 and
+ * the newline among them, DEL, and the C1 range some terminals still take as
+ * escape sequences.
+ */
+// oxlint-disable-next-line eslint/no-control-regex -- the control characters are the subject: this expression is the whole of what stops a page writing an ANSI escape or a line break into a CI annotation
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/g;
+
+/**
+ * One line, printable, and no longer than a sentence.
+ *
+ * A page writes this string and a CI annotation prints it, so every control
+ * character goes: an ANSI escape would colour somebody's log, and a newline is
+ * what a `::error::` workflow command needs in order to start a line of its own.
+ */
+function sanitized(detail: unknown): string {
+  const text = typeof detail === "string" ? detail : "";
+  const printable = text.replaceAll(CONTROL, " ").replaceAll(/\s+/g, " ").trim();
+  return printable.length > DETAIL_LIMIT ? `${printable.slice(0, DETAIL_LIMIT)}…` : printable;
+}
+
+/** The first http(s) URL a stack names, which is the script the error came out of. */
+function scriptIn(stack: string | undefined): string | undefined {
+  return /https?:\/\/[^\s)]+?(?=:\d+:\d+|\s|\)|$)/.exec(stack ?? "")?.[0];
 }
 
 function describe({ kind, at, detail }: Violation): string {
@@ -159,8 +211,33 @@ function describe({ kind, at, detail }: Violation): string {
 }
 
 /**
- * `@playwright/test`'s `test`, with `page` replaced by one that is watched. A
- * repo swaps its import and every spec it already has is swept:
+ * Gives one page the chance to report what it has measured, and never costs the
+ * assertion.
+ *
+ * A report crosses from the page on the frame after the check runs, so a spec
+ * that ends the instant `goto` resolves would be asserted against an empty list
+ * — the sweep's answer would depend on how long the spec happened to take. Two
+ * frames: the first lets a pending check run, the second lets a check that
+ * frame scheduled land.
+ *
+ * A page that navigates on a timer destroys the context this runs in, and a page
+ * the spec closed has none. Both are pages with nothing left to drain, and
+ * letting either throw here would replace the sweep's verdict — the list it
+ * spent the whole test collecting — with a message about the flush.
+ */
+async function drain(page: Page): Promise<void> {
+  if (page.isClosed()) return;
+  try {
+    await page.evaluate(FLUSH);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes(DESTROYED)) throw error;
+  }
+}
+
+/**
+ * Playwright's `test`, with the browser context replaced by one that watches
+ * every page it opens. A repo swaps its import and every spec it already has is
+ * swept:
  *
  * ```ts
  * import { test } from "@gokayo43/dev-config/invariant-sweep.ts";
@@ -170,9 +247,7 @@ function describe({ kind, at, detail }: Violation): string {
 export const test = base.extend<InvariantSweep>({
   sweepAllowlist: [{}, { option: true }],
 
-  // `provide` rather than Playwright's own `use`: a parameter named `use` reads
-  // as a React hook to the linter, and the name is ours to choose.
-  page: async ({ page, sweepAllowlist }, provide) => {
+  context: async ({ context, sweepAllowlist }, provide) => {
     const allowed = Object.keys(sweepAllowlist).map((pattern) => {
       try {
         return new RegExp(pattern);
@@ -186,40 +261,66 @@ export const test = base.extend<InvariantSweep>({
         );
       }
     });
+
     const violations: Violation[] = [];
+    /** Every URL the browser actually loaded a document or a script from. */
+    const fetched = new Set<string>();
+
     const record = (violation: Violation): void => {
       if (allowed.some((pattern) => pattern.test(violation.at))) return;
       violations.push(violation);
     };
 
-    // Exposed before the init script is added, because the script the next
-    // navigation runs calls it in its first frame.
-    await page.exposeFunction(REPORTER, record);
-    await page.addInitScript(WATCH);
+    /**
+     * The URL to attribute this to: what was claimed, but only where the browser
+     * reports having loaded it. A `//# sourceURL=` comment is a claim any script
+     * can make about itself, and honouring it unchecked lets an inline script of
+     * ours land in a vendor's allowlist bucket.
+     */
+    const from = (claimed: string | undefined, page: Page): string =>
+      claimed !== undefined && fetched.has(claimed) ? claimed : page.url();
 
-    page.on("console", (message) => {
-      if (message.type() !== "error") return;
-      // The script's URL where the browser knows one, so an embed's noise is
-      // allowlistable by the embed's own address rather than by ours.
-      record({
-        kind: "console.error",
-        at: message.location().url || page.url(),
-        detail: message.text(),
+    const watch = (page: Page): void => {
+      page.on("response", (response) => {
+        if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
       });
-    });
-    page.on("pageerror", (error) => {
-      record({ kind: "pageerror", at: page.url(), detail: error.message });
-    });
+      page.on("console", (message) => {
+        if (message.type() !== "error") return;
+        record({
+          kind: "console.error",
+          at: from(message.location().url, page),
+          detail: sanitized(message.text()),
+        });
+      });
+      page.on("pageerror", (error) => {
+        // Playwright hands a `pageerror` no frame, so where it came from is read
+        // out of the stack — and honoured on the same terms as any other claimed
+        // URL. That is what lets an embed's own thrown error be allowlisted by
+        // the embed's address rather than by the page carrying it.
+        record({
+          kind: "pageerror",
+          at: from(scriptIn(error.stack), page),
+          detail: sanitized(error.message),
+        });
+      });
+    };
 
-    await provide(page);
+    // Exposed before the init script is added, because the script the next
+    // navigation runs calls it in its first frame. A *binding* rather than a
+    // plain exposed function: a binding is told which frame called it, and a
+    // page is not a trusted narrator — the frame's own URL and the fixed
+    // `overflow` kind are the harness's, and only the sentence is the page's.
+    await context.exposeBinding(REPORTER, ({ frame, page }, detail: unknown) => {
+      if (frame !== page.mainFrame()) return;
+      record({ kind: "overflow", at: frame.url(), detail: sanitized(detail) });
+    });
+    await context.addInitScript(WATCH);
+    context.on("page", watch);
+    for (const open of context.pages()) watch(open);
 
-    // A report crosses from the page on the frame after the check runs, so a
-    // spec that ends the instant `goto` resolves would be asserted against an
-    // empty list — the sweep's answer would depend on how long the spec
-    // happened to take. Two frames: the first lets a pending check run, the
-    // second lets a check that frame scheduled land. Nothing is left to drain
-    // when the spec closed the page itself, which is a thing specs do.
-    if (!page.isClosed()) await page.evaluate(FLUSH);
+    await provide(context);
+
+    await Promise.all(context.pages().map(async (page) => await drain(page)));
 
     expect(
       violations.map(describe),

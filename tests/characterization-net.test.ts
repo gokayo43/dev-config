@@ -137,7 +137,7 @@ describe("what the net refuses", () => {
     expect(report.failures).toEqual([containing("omega.json is a golden no case claims")]);
   });
 
-  test.each(["", "nested/name", "back\\slash"])(
+  test.each(["", "nested/name", "back\\slash", "cut\u0000short", "x".repeat(252)])(
     "a golden name that cannot be a file in one directory (%p) fails",
     async (name) => {
       const dir = await goldens();
@@ -184,6 +184,57 @@ describe("what the net refuses", () => {
   });
 });
 
+// Two cases sharing a name is one golden file. Where their captures happen to
+// agree — the common case, since a name collision usually means the two cases
+// differ in something the name drops — the net reports both as covered, and one
+// of them is graded against a capture that is not its own.
+describe("two cases cannot share one golden", () => {
+  test("a name collision is refused, naming every case that claims it", async () => {
+    const dir = await goldens();
+    const collided = {
+      ...netOver(dir, () => CALM, ["alpha", "beta", "gamma"]),
+      nameOf: () => "one",
+    };
+    expect((await assertNet(collided)).failures[0]).toContain(
+      'cases 0, 1, 2 all name the golden "one"',
+    );
+  });
+
+  // A shard holding one half of a colliding pair sees nothing wrong, so the
+  // question is asked of every case rather than of the slice.
+  test("a shard is told about a collision it cannot see", async () => {
+    const dir = await goldens();
+    const collided = { ...netOver(dir, () => CALM, ["alpha", "beta"]), nameOf: () => "one" };
+    expect((await assertNet(collided, { index: 0, count: 2 })).failures[0]).toContain(
+      "all name the golden",
+    );
+  });
+
+  test("and a re-baseline refuses it too, rather than writing one file for three", async () => {
+    const dir = await goldens();
+    const collided = { ...netOver(dir, () => CALM, ["alpha", "beta"]), nameOf: () => "one" };
+    expect((await rebaselineNet(collided)).failures[0]).toContain("all name the golden");
+  });
+});
+
+describe("a shard has to be one", () => {
+  test.each([
+    [{ index: 0, count: 0 }, "shard count 0 is not a positive whole number"],
+    [{ index: 0, count: -1 }, "shard count -1 is not a positive whole number"],
+    [{ index: 2, count: 2 }, "shard index 2 is not one of the 2 shards"],
+    [{ index: -1, count: 3 }, "shard index -1 is not one of the 3 shards"],
+    [{ index: 0.5, count: 3 }, "shard index 0.5 is not one of the 3 shards"],
+  ])("%p is refused rather than covering nothing and passing", async (shard, said) => {
+    const { dir } = await recorded();
+    const report = await assertNet(
+      netOver(dir, () => CALM),
+      shard,
+    );
+    expect(report.failures).toEqual([containing(said)]);
+    expect(report.ran).toEqual([]);
+  });
+});
+
 describe("the committed golden is re-normalised, not trusted", () => {
   // Hand-written with the volatile field still in it, as a golden recorded
   // before the normaliser learned about that field would be. Comparing bytes
@@ -203,6 +254,28 @@ describe("the committed golden is re-normalised, not trusted", () => {
 });
 
 describe("re-baselining an existing net", () => {
+  // The assert path re-normalises the committed golden; the re-baseline has to
+  // compare the same way. Byte comparison makes a golden today's normaliser
+  // agrees with — minified, CRLF, written before the serialiser's spacing
+  // changed — read as a behaviour change, so a green net could not take a new
+  // case without inventing a blessing for every old one.
+  test("a golden the assert path calls equal is not rewritten either", async () => {
+    const dir = await goldens();
+    const minified = `${JSON.stringify({
+      status: CALM.status,
+      body: { greeting: CALM.greeting, name: "alpha", [VOLATILE]: SETTLED },
+    })}\n`;
+    await writeFile(`${dir}/alpha.json`, minified, "utf8");
+
+    const net = netOver(dir, () => CALM, ["alpha"]);
+    expect((await assertNet(net)).failures).toEqual([]);
+
+    const report = await rebaselineNet(netOver(dir, () => CALM, ["alpha", "zeta"]));
+    expect(report.failures).toEqual([]);
+    expect(report.wrote).toEqual(["zeta"]);
+    expect(await golden(dir, "alpha")).toBe(minified);
+  });
+
   // The diff of a re-baseline has to be exactly the behaviour delta, and a file
   // rewritten byte-for-byte is a line of noise in it.
   test("a golden that would not change is not written", async () => {

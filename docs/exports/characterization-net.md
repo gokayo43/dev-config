@@ -52,9 +52,14 @@ keys: both sides of every comparison come out of the same normaliser and the
 same `JSON.stringify`, so there is no ordering left for a canonicaliser to
 reconcile.
 
-**3. A golden is written only when it changed.** A re-baseline's diff is then
-exactly the behaviour delta — the only thing that makes reviewing golden diffs
-like code possible at all.
+**3. A golden is written only when it changed** — _changed_ meaning what the
+assert path means by it. Both compare through the same re-normalisation, so a
+committed golden today's normaliser agrees with (minified, CRLF, written before
+the serialiser's spacing changed) is left exactly as it is. Comparing bytes here
+instead would make every such file read as a behaviour change, and a green net
+could not take a new case without inventing a blessing for every old one. A
+re-baseline's diff is then exactly the behaviour delta — the only thing that
+makes reviewing golden diffs like code possible at all.
 
 **4. Changing an existing golden needs a blessing.** `rebaselineNet(net, why)`
 refuses every change when `why` is empty, and writes nothing. Creating a golden
@@ -71,6 +76,17 @@ round to — 12% of one, in the suite these rules were read off.
 `assertNet(net, { index, count })` covers the cases whose position is its own, in
 order, so a run at any parallelism — including one shard, and including the
 serial fallback — covers exactly the same cases.
+
+**6a. A golden name belongs to one case.** Two cases whose `nameOf` agree share
+one file, and where their captures agree the net reports both as covered and
+grades neither — two cases, one golden, no failures. The whole case list is
+scanned for collisions before anything is captured, including on a shard, since
+a shard holding one of a pair sees nothing wrong.
+
+**6b. A shard has to be one.** A count of zero makes `position % 0` a NaN that
+equals no index; an index past the count owns nothing. Either covers no cases,
+reports no failures and reads as green, which is the shape a mistyped CI matrix
+takes — so both are refused.
 
 **7. Orphans fail.** A golden file no case claims is a case that was deleted and
 a fixture that was not, and it will sit there being green forever. An unsharded

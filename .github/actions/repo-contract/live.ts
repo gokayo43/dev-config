@@ -24,6 +24,7 @@ import {
   oneOf,
   type Problem,
   record,
+  repoFiles,
 } from "../_lib/gate.ts";
 import { CI_WORKFLOW } from "./ci-workflow.ts";
 
@@ -211,24 +212,58 @@ function notDeclared({ found, is }: Declared): Problem[] {
 }
 
 /**
- * Whether the repo owns a database, asked of the repo rather than of the
- * caller. `db:migrate` is the entry point every database gate here drives, so
- * a workspace that declares one owns migrations.
- *
- * Every manifest, not just the root — a monorepo keeps its migrations in the
- * workspace that owns the schema, and the root's script is a passthrough to it.
- * Asking only the root would put two edits between a live repo and no database
- * rules at all: drop the `database` input, then delete a passthrough that now
- * looks like dead weight.
- *
- * It matters that none of this is the `database` input. That input says which
- * CI job runs, and it lives in the very file the live rules are about — so
- * keying off it would let a live repo shed its backup script, its rehearsed
- * restore and its upgrade gate by deleting one line from its own workflow,
- * which is the opposite of what a contract is for.
+ * The entry point every database gate here drives. A repo that owns a schema
+ * and does not expose this has a schema nothing replays.
  */
-function ownsDatabase(all: readonly Manifest[]): boolean {
-  return all.some(({ value }) => record(value["scripts"])["db:migrate"] !== undefined);
+const MIGRATE = "db:migrate";
+
+/**
+ * The other name a migration script goes by. `db:migrate` is what this house
+ * asks for; `migrate` is what drizzle-kit's own template writes and what two
+ * repos on this box actually run, and a rule that only knew the first would let
+ * a live repo owe nothing at all by having spelled it the common way.
+ */
+const ALSO_MIGRATE = "migrate";
+
+/**
+ * A schema in the tree, in the shapes this house writes one. Git pathspecs, so
+ * the listing is what a scaffolder has just written as well as what is
+ * committed, and `*` crosses directories — a monorepo keeps its migrations in
+ * the workspace that owns them.
+ */
+const SCHEMA_IN_THE_TREE = [
+  "*drizzle.config.*",
+  "drizzle/*.sql",
+  "*/drizzle/*.sql",
+  "migrations/*.sql",
+  "*/migrations/*.sql",
+] as const;
+
+/**
+ * Whether the repo owns a database, asked of the repo rather than of the caller
+ * — and asked of the *tree* rather than of a script name.
+ *
+ * The name alone was the hole. `db:migrate` is what this house asks for, and a
+ * repo that spelled it `migrate` — drizzle-kit's own template does, and so does
+ * the one live repo on this box with the most data — answered "no" and owed
+ * nothing: no backups, no rehearsed restore, no upgrade gate, silently, because
+ * of a colon. So the question is now asked of everything that says a schema
+ * exists, and the answer names which witness found it, so a repo that genuinely
+ * has no database can argue with something concrete.
+ *
+ * It matters that none of this is the `database` input. That input says which CI
+ * job runs, and it lives in the very file the live rules are about — so keying
+ * off it would let a live repo shed its backup script, its rehearsed restore and
+ * its upgrade gate by deleting one line from its own workflow.
+ */
+async function ownsDatabase(root: string, all: readonly Manifest[]): Promise<string | undefined> {
+  const named = all.find(({ value }) => {
+    const scripts = record(value["scripts"]);
+    return scripts[MIGRATE] !== undefined || scripts[ALSO_MIGRATE] !== undefined;
+  });
+  if (named !== undefined) return `${named.file} runs migrations`;
+  const [found] = await repoFiles(root, SCHEMA_IN_THE_TREE);
+  return found === undefined ? undefined : `${found} is a schema this repo migrates`;
 }
 
 /**
@@ -316,46 +351,88 @@ function under(unit: Unit, section: string): readonly Directive[] {
   return unit.get(section) ?? [];
 }
 
+/** One `ExecStart=` as systemd would run it: the program, and every word of it. */
+interface Command {
+  /** The first word, with systemd's prefixes and any quoting taken off. */
+  readonly program: string;
+  /** Every word, so a script named as an *argument* can be told from one that is run. */
+  readonly words: readonly string[];
+}
+
 /**
- * What a service actually runs, by the file name of each command.
+ * systemd's prefix characters sit before the path and say how to run the
+ * command — ignore a failure, pass a different argv[0], adjust privileges —
+ * rather than what it is.
+ */
+function unprefixed(word: string): string {
+  return word.replace(/^[-@+!:]+/, "").replaceAll(/^["']|["']$/g, "");
+}
+
+/**
+ * What a service actually runs.
  *
- * The first whitespace-separated word is the program and everything after it is
- * arguments, which is the whole difference between a unit that runs the script
- * and one that only mentions it: `env WRAPPED=backup.sh /usr/bin/true` names it
- * and never executes it, and `pre-backup.sh` is a different program whose name
- * ends the same way. A substring test calls both of them a match.
- *
- * `-@+!:` before the path are systemd's prefixes — ignore a failure, pass a
- * different argv[0], adjust privileges — and say how to run the command rather
- * than what it is. An empty `ExecStart=` is the list reset, so a unit that sets
- * one after its command runs nothing at all.
+ * The first word is the program and everything after it is arguments, which is
+ * the whole difference between a unit that runs the script and one that only
+ * mentions it: `env WRAPPED=backup.sh /usr/bin/true` names it and never
+ * executes it, and `/bin/sh -c '…/backup.sh'` runs a shell. An empty
+ * `ExecStart=` is the list reset, so a unit that sets one after its command runs
+ * nothing at all.
  *
  * A path with a space in it would need systemd's own quoting rules to read, and
  * is not a name any checkout in this house has; the cost of being wrong about
  * one is a refusal that names the file it read.
  */
-function commandsOf(unit: Unit): string[] {
-  let commands: string[] = [];
+function commandsOf(unit: Unit): Command[] {
+  let commands: Command[] = [];
   for (const { key, value } of under(unit, "Service")) {
     if (key !== "ExecStart") continue;
     if (value === "") {
       commands = [];
       continue;
     }
-    const [word = ""] = value.split(/\s+/);
-    const program = word.replace(/^[-@+!:]+/, "").replaceAll(/^["']|["']$/g, "");
-    commands.push(program.slice(program.lastIndexOf("/") + 1));
+    const words = value.split(/\s+/).map(unprefixed);
+    commands.push({ program: words[0] ?? "", words });
   }
   return commands;
 }
 
 /**
- * Everything under `scripts/`, sorted. Read rather than guarded: this is only
- * reached once `scripts/<job>.sh` has been found there, so a directory that
- * will not list is a broken run and belongs in the log as one.
+ * Whether this program *is* the repo's own script.
+ *
+ * The trailing path segments, because a checkout cannot know where it will be
+ * deployed: the unit on the box says `/opt/postpad/scripts/backup.sh` and the
+ * gate is looking at `/home/runner/work/postpad/postpad`. So `scripts/<job>.sh`
+ * as whole segments is the most a checkout can honestly assert — which refuses
+ * `/usr/local/bin/backup.sh` and `pre-backup.sh`, and cannot by itself refuse
+ * another stack's copy of the same relative path. What catches *that* is the
+ * two jobs having to agree about where this repo lives; see `deployedAt`.
+ */
+function isScript(program: string, script: string): boolean {
+  const written = program.replace(/^\.\//, "");
+  return written === script || written.endsWith(`/${script}`);
+}
+
+/**
+ * The directory a unit runs this repo out of — everything before `scripts/`.
+ * Two jobs pointing at different ones is a unit copied from the stack next door,
+ * which is the one wrong-location mistake a checkout can actually catch.
+ */
+function deployedAt(program: string): string {
+  return program.slice(0, program.lastIndexOf("/scripts/") + 1);
+}
+
+/**
+ * Everything under `scripts/`, sorted, or nothing where the directory is not
+ * there — which is a live repo that owns a database and has written none of
+ * this yet, and is told so by name a few lines later. Reading it before that
+ * point is what makes the empty answer real rather than defensive.
  */
 async function scriptsIn(root: string): Promise<string[]> {
-  return (await readdir(`${root}/scripts`)).toSorted();
+  try {
+    return (await readdir(`${root}/scripts`)).toSorted();
+  } catch {
+    return [];
+  }
 }
 
 /** One unit file, parsed. Named by the listing above, so a read that fails is that same broken run. */
@@ -395,6 +472,69 @@ function checkTimer(stem: string, timer: Unit): Problem[] {
 }
 
 /**
+ * Which service a timer activates. Its own stem by default, and whatever
+ * `[Timer] Unit=` names when it names one — a timer pointed at another unit is
+ * a pairing systemd honours, so a gate that only knew about matching stems
+ * would call a working schedule missing.
+ */
+function activates(stem: string, timer: Unit): string {
+  const named = under(timer, "Timer").find(({ key }) => key === "Unit")?.value;
+  if (named === undefined || named === "") return stem;
+  return named.endsWith(SERVICE) ? named.slice(0, -SERVICE.length) : named;
+}
+
+/** One service under `scripts/`, parsed, with the stem it was filed under. */
+interface Service {
+  readonly stem: string;
+  readonly commands: readonly Command[];
+}
+
+/**
+ * What is wrong with a service that mentions the script without running it —
+ * or nothing, where it does run it or does not mention it at all. Each of these
+ * is a unit somebody wrote on purpose, so each gets a sentence of its own
+ * rather than the "nothing runs it" that is true of a repo with no units.
+ */
+function misruns({ stem, commands }: Service, script: string, name: string): string | undefined {
+  const path = `scripts/${stem}${SERVICE}`;
+  const wrapped = commands.find(({ words }) =>
+    words.slice(1).some((word) => isScript(word, script)),
+  );
+  if (wrapped !== undefined) {
+    return `${path} runs ${wrapped.program} with ${script} as an argument — the program has to be the script itself, since a shell in between is what decides the exit status systemd reads`;
+  }
+  const elsewhere = commands.find(({ program }) => program.endsWith(`/${name}.sh`));
+  if (elsewhere !== undefined) {
+    return `${path} runs ${elsewhere.program}, which is not this repo's ${script} — a unit naming a copy somewhere else on the box is a schedule for somebody else's data`;
+  }
+  return undefined;
+}
+
+/**
+ * Drop-in directories, which systemd merges over a unit and this gate does not
+ * read. A repo that put its schedule in one has a schedule no diff of the unit
+ * file shows.
+ *
+ * Asked of the directory once rather than of each job: a drop-in is one mistake,
+ * and reporting it per job would put two annotations on one edit.
+ */
+function dropIns(entries: readonly string[]): Problem[] {
+  return entries
+    .filter((entry) => entry.endsWith(`${TIMER}.d`) || entry.endsWith(`${SERVICE}.d`))
+    .map((entry) => ({
+      file: `scripts/${entry}`,
+      message: `scripts/${entry} is a drop-in directory, and this gate reads only the unit file it would be merged over — put the schedule in the unit itself, since a fact split across two files is one a diff of either does not show`,
+    }));
+}
+
+/** What a job's units came to: what is wrong with them, and where they say the repo lives. */
+interface Scheduled {
+  readonly problems: Problem[];
+  /** The directory a working pair runs the script out of, where one was found. */
+  readonly root: string | undefined;
+}
+
+/**
  * The pair that puts this job on a schedule, found through what a service
  * *runs* rather than through what it is called.
  *
@@ -408,43 +548,77 @@ function checkTimer(stem: string, timer: Unit): Problem[] {
  * the one whose problems are reported: a diagnostic that named every candidate
  * would be a list to work through instead of a file to fix.
  */
-async function checkUnits(root: string, name: string): Promise<Problem[]> {
+async function checkUnits(
+  root: string,
+  entries: readonly string[],
+  name: string,
+): Promise<Scheduled> {
   const script = `scripts/${name}.sh`;
-  const entries = await scriptsIn(root);
-  const services = await Promise.all(
-    stemsOf(entries, SERVICE).map(async (stem) => ({
-      stem,
-      unit: await unitAt(`${root}/scripts/${stem}${SERVICE}`),
-    })),
+  const services = new Map<string, Service>(
+    await Promise.all(
+      stemsOf(entries, SERVICE).map(
+        async (stem): Promise<[string, Service]> => [
+          stem,
+          { stem, commands: commandsOf(await unitAt(`${root}/scripts/${stem}${SERVICE}`)) },
+        ],
+      ),
+    ),
   );
-  const runners = services
-    .filter(({ unit }) => commandsOf(unit).includes(`${name}.sh`))
-    .map(({ stem }) => stem);
+  const timers = await Promise.all(
+    stemsOf(entries, TIMER).map(async (stem) => {
+      const timer = await unitAt(`${root}/scripts/${stem}${TIMER}`);
+      return { stem, timer, service: services.get(activates(stem, timer)) };
+    }),
+  );
 
-  if (runners.length === 0) {
-    return [
-      {
-        file: script,
-        message: `nothing in scripts/ runs ${script} on a schedule — commit a .timer and the .service it activates, under whatever name this repo uses (systemd's unit namespace is the whole box, so \`<repo>-${name}\` is the usual spelling), since a script nothing runs on a schedule is one that ran the day it was written`,
-      },
-    ];
+  const runs = (service: Service | undefined): Command | undefined =>
+    service?.commands.find(({ program }) => isScript(program, script));
+
+  const pairs = timers.filter(({ service }) => runs(service) !== undefined);
+  const problems: Problem[] = [];
+
+  if (pairs.length === 0) {
+    // A service that does run it, with no timer pointing at it: the unit exists
+    // and only ever runs by hand.
+    const orphaned = [...services.values()].find((service) => runs(service) !== undefined);
+    if (orphaned !== undefined) {
+      return {
+        problems: [
+          ...problems,
+          {
+            file: `scripts/${orphaned.stem}${SERVICE}`,
+            message: `scripts/${orphaned.stem}${SERVICE} runs ${name}.sh and no timer under scripts/ activates it — add one beside it, or point an existing timer at it with \`Unit=\`, since a service nothing activates only ever runs by hand`,
+          },
+        ],
+        root: undefined,
+      };
+    }
+    // A unit that mentions the script and does not run it, which is a mistake
+    // with a name rather than an absence.
+    const [wrong] = [...services.values()]
+      .map((service) => misruns(service, script, name))
+      .filter((said) => said !== undefined);
+    return {
+      problems: [
+        ...problems,
+        {
+          file: wrong === undefined ? script : "scripts",
+          message:
+            wrong ??
+            `nothing in scripts/ runs ${script} on a schedule — commit a .timer and the .service it activates, under whatever name this repo uses (systemd's unit namespace is the whole box, so \`<repo>-${name}\` is the usual spelling), since a script nothing runs on a schedule is one that ran the day it was written`,
+        },
+      ],
+      root: undefined,
+    };
   }
 
-  const timed = await Promise.all(
-    runners
-      .filter((stem) => entries.includes(`${stem}${TIMER}`))
-      .map(async (stem) => checkTimer(stem, await unitAt(`${root}/scripts/${stem}${TIMER}`))),
-  );
-  if (timed.length === 0) {
-    const [stem = ""] = runners;
-    return [
-      {
-        file: `scripts/${stem}${SERVICE}`,
-        message: `scripts/${stem}${SERVICE} runs ${name}.sh and no scripts/${stem}${TIMER} activates it — add the timer beside it, since a service nothing activates only ever runs by hand`,
-      },
-    ];
-  }
-  return timed.find((problems) => problems.length === 0) === undefined ? (timed[0] ?? []) : [];
+  const graded = pairs.map(({ stem, timer }) => checkTimer(stem, timer));
+  const working = graded.findIndex((each) => each.length === 0);
+  const found = pairs[working === -1 ? 0 : working];
+  return {
+    problems: [...problems, ...(working === -1 ? (graded[0] ?? []) : [])],
+    root: working === -1 ? undefined : deployedAt(runs(found?.service)?.program ?? ""),
+  };
 }
 
 /**
@@ -452,11 +626,19 @@ async function checkUnits(root: string, name: string): Promise<Problem[]> {
  * Both halves in one place because "the script is there and nothing runs it" is
  * one finding about one job rather than two findings that happen to share a name.
  */
-async function checkJob(root: string, name: string, why: string): Promise<Problem[]> {
+async function checkJob(
+  root: string,
+  entries: readonly string[],
+  name: string,
+  why: string,
+): Promise<Scheduled> {
   const script = `scripts/${name}.sh`;
   const mode = (await statOf(`${root}/${script}`))?.mode;
   if (mode === undefined) {
-    return [{ file: script, message: `a live repo owns ${script} — ${why}` }];
+    return {
+      problems: [{ file: script, message: `a live repo owns ${script} — ${why}` }],
+      root: undefined,
+    };
   }
   const problems: Problem[] =
     (mode & EXECUTABLE) === 0
@@ -467,7 +649,8 @@ async function checkJob(root: string, name: string, why: string): Promise<Proble
           },
         ]
       : [];
-  return [...problems, ...(await checkUnits(root, name))];
+  const scheduled = await checkUnits(root, entries, name);
+  return { problems: [...problems, ...scheduled.problems], root: scheduled.root };
 }
 
 /**
@@ -528,7 +711,7 @@ export async function checkLive(
   asked: Asked,
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
-  const owned = ownsDatabase(all);
+  const owned = await ownsDatabase(root, all);
 
   // Everything about a database is owed exactly when the repo owns one — read
   // from its own migration entry point, never from the workflow input, which
@@ -538,11 +721,10 @@ export async function checkLive(
   // A repo that owns a schema and runs no job over it is that same hole from
   // the other side: the rules would apply and every one of them would be
   // unenforceable, since the gate proving an upgrade never runs.
-  if (owned && !asked.database) {
+  if (owned !== undefined && !asked.database) {
     problems.push({
       file: CI_WORKFLOW,
-      message:
-        "a live repo that owns migrations must pass `database: true` to check.yml — nothing replays this schema otherwise, and the upgrade gate below has no job to run in",
+      message: `a live repo that owns migrations must pass \`database: true\` to check.yml — ${owned}, nothing replays it otherwise, and the upgrade gate below has no job to run in`,
     });
   }
 
@@ -551,7 +733,7 @@ export async function checkLive(
   // without `database: true`, so asking a live site with no database for it
   // would be this contract demanding the one config the shared workflow
   // rejects.
-  if (owned) {
+  if (owned !== undefined) {
     // Read off the call rather than out of the file's text, for the reason the
     // pin is: the fact is "this job asks check.yml for the upgrade gate", and a
     // repo can spell those words in a comment, in a second job, or in a
@@ -568,10 +750,24 @@ export async function checkLive(
       });
     }
 
+    const entries = await scriptsIn(root);
+    problems.push(...dropIns(entries));
     const jobs = await Promise.all(
-      LIVE_DATA_JOBS.map(async ([name, why]) => await checkJob(root, name, why)),
+      LIVE_DATA_JOBS.map(async ([name, why]) => await checkJob(root, entries, name, why)),
     );
-    problems.push(...jobs.flat());
+    problems.push(...jobs.flatMap(({ problems: each }) => each));
+
+    // The one wrong location a checkout can catch. A unit copied from the stack
+    // next door keeps its neighbour's path, and the two jobs then disagree about
+    // where this repo lives — which nothing else here can see, since a checkout
+    // has no idea what directory it will be deployed into.
+    const roots = [...new Set(jobs.map(({ root: at }) => at).filter((at) => at !== undefined))];
+    if (roots.length > 1) {
+      problems.push({
+        file: "scripts",
+        message: `the data jobs' units disagree about where this repo is deployed — ${roots.join(" and ")} — so at least one of them is scheduling another stack's copy of the script`,
+      });
+    }
   }
 
   if (!all.some(({ value }) => hasSentry(value))) {

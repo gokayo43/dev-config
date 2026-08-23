@@ -29,55 +29,162 @@ function html(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>fixture</title><style>body{margin:0}</style></head><body>${body}</body></html>`;
 }
 
+/** How long the slow subresource takes, in ms — long past `load` and past two frames. */
+const LATE = 400;
+
 /**
  * What the fixture server answers, by path. Each page is one invariant broken
- * one way, or a page that breaks none.
+ * one way, or a page that breaks none. `embed` is the *other* origin's, which
+ * is what makes a cross-origin frame cross-origin.
  */
-const PAGES = {
-  "/clean": {
-    type: "text/html",
-    body: html(`<p>nothing wrong here</p><a href="/overflow">go</a>`),
-  },
-  "/overflow": {
-    type: "text/html",
-    body: html(
-      `<div id="wide" style="width:${TOO_WIDE}px;height:10px;background:#333"></div><a href="/clean">back</a>`,
-    ),
-  },
-  "/console": {
-    type: "text/html",
-    body: html(`<script>console.error("a request this page depends on failed")</script>`),
-  },
-  "/throws": { type: "text/html", body: html(`<script>window.nothing.atAll()</script>`) },
-  // The console error arrives from a script of its own, which is what lets the
-  // allowlist name a third-party embed rather than the page carrying it.
-  "/embedded": { type: "text/html", body: html(`<script src="/embed.js"></script>`) },
-  "/embed.js": { type: "text/javascript", body: `console.error("the embed is unhappy")` },
-  // Overflow that appears after the document has loaded and without a
-  // navigation: an SPA route change, or anything that renders on the client.
-  "/late": {
-    type: "text/html",
-    body: html(
-      `<script>setTimeout(() => { const d = document.createElement("div"); d.style.cssText = "width:${TOO_WIDE}px;height:10px"; document.body.append(d); }, 50)</script>`,
-    ),
-  },
-};
+function pagesFor(embed: string): Map<string, { readonly type: string; readonly body: string }> {
+  return new Map(
+    Object.entries({
+      "/clean": {
+        type: "text/html",
+        body: html(`<p>nothing wrong here</p><a href="/overflow">go</a>`),
+      },
+      "/overflow": {
+        type: "text/html",
+        body: html(
+          `<div id="wide" style="width:${TOO_WIDE}px;height:10px;background:#333"></div><a href="/clean">back</a>`,
+        ),
+      },
+      "/console": {
+        type: "text/html",
+        body: html(`<script>console.error("a request this page depends on failed")</script>`),
+      },
+      "/throws": { type: "text/html", body: html(`<script>window.nothing.atAll()</script>`) },
+      // The console error arrives from a script of its own, which is what lets the
+      // allowlist name a third-party embed rather than the page carrying it.
+      "/embedded": { type: "text/html", body: html(`<script src="/embed.js"></script>`) },
+      "/embed.js": { type: "text/javascript", body: `console.error("the embed is unhappy")` },
+      // Overflow that appears after the document has loaded and without a
+      // navigation: an SPA route change, or anything that renders on the client.
+      "/late": {
+        type: "text/html",
+        body: html(
+          `<script>setTimeout(() => { const d = document.createElement("div"); d.style.cssText = "width:${TOO_WIDE}px;height:10px"; document.body.append(d); }, 50)</script>`,
+        ),
+      },
+      // Our own console error, wearing the vendor's name. `sourceURL` is a
+      // comment: any script can claim any URL, and the console reports the claim.
+      "/forged-source": {
+        type: "text/html",
+        body: html(
+          `<script>console.error("this one is ours");\n//# sourceURL=https://cdn.vendor/vendor-embed.js</script>`,
+        ),
+      },
+      // A frame from another origin, calling the fixture's own reporting bridge —
+      // beside a real violation of the top page's, so a run that dropped both
+      // cannot be told from one that dropped only the forgery.
+      "/hostile-frame": {
+        type: "text/html",
+        body: html(
+          `<iframe src="${embed}/forge.html" style="width:10px;height:10px"></iframe><div id="wide" style="width:${TOO_WIDE}px;height:10px"></div>`,
+        ),
+      },
+      // A frame from another origin that throws, so the error is not the top page's.
+      "/frame-throws": {
+        type: "text/html",
+        body: html(`<iframe src="${embed}/throws.html" style="width:10px;height:10px"></iframe>`),
+      },
+      // Navigates out from under any measurement the runner tries to take.
+      "/self-navigating": {
+        type: "text/html",
+        body: html(
+          `<script>setTimeout(() => { location.href = "/self-navigating?n=" + Date.now(); }, 25)</script><div id="wide" style="width:${TOO_WIDE}px;height:10px"></div>`,
+        ),
+      },
+      // A real, top-frame violation whose *description* carries what a page
+      // should not be able to put into a CI annotation: an ANSI escape, a
+      // newline, and a workflow command.
+      "/noisy-overflow": {
+        type: "text/html",
+        body: html(
+          `<div id="wide" style="width:${TOO_WIDE}px;height:10px"></div><script>document.getElementById("wide").className = String.fromCharCode(27) + "[31m" + String.fromCharCode(10) + "::error title=x::y";</script>`,
+        ),
+      },
+      // Overflow that arrives with the bytes of a subresource, well after load.
+      "/late-image": { type: "text/html", body: html(`<img id="slow" src="/slow.svg" alt="">`) },
+      // Opened in a tab of its own, which is a page no `page` fixture ever sees.
+      "/popup": {
+        type: "text/html",
+        body: html(`<a id="open" href="/console" target="_blank">open</a>`),
+      },
+      // Two page names, one a prefix of the other: what an unanchored pattern
+      // cannot tell apart.
+      "/cleanish": {
+        type: "text/html",
+        body: html(`<script>console.error("the almost-clean page is unhappy")</script>`),
+      },
+    }),
+  );
+}
 
-/** The same pages, keyed the way a request arrives: any path at all, most of them not ours. */
-const SERVED = new Map(Object.entries(PAGES));
+/** The other origin: a second server, so a frame from it is genuinely cross-origin. */
+function embedding(): { origin: string; stop: () => Promise<void> } {
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/forge.html") {
+        // Everything a page should not be able to put into a test's failure
+        // message: a violation it invented, an ANSI escape, and a GitHub
+        // workflow command. Built with fromCharCode so the escape survives every
+        // layer of quoting between here and the browser.
+        const forged = [
+          `const esc = String.fromCharCode(27);`,
+          `window.__invariantSweep({`,
+          `  kind: "console.error",`,
+          `  at: "https://cdn.vendor/vendor-embed.js",`,
+          `  detail: esc + "[31mforged" + esc + "[0m" + String.fromCharCode(10) + "::error title=forged::a frame wrote this",`,
+          `});`,
+        ].join("");
+        return new Response(html(`<script>${forged}</script>`), {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      if (path === "/throws.html") {
+        return new Response(html(`<script>window.nothing.atAll()</script>`), {
+          headers: { "content-type": "text/html" },
+        });
+      }
+      return new Response("no such fixture page", { status: 404 });
+    },
+  });
+  return {
+    origin: server.url.origin,
+    stop: async () => {
+      await server.stop(true);
+    },
+  };
+}
 
 export interface Serving {
   readonly origin: string;
   readonly stop: () => Promise<void>;
 }
 
-/** The fixture pages on a port nobody chose, so two runs on one box never collide. */
+/** The fixture pages on ports nobody chose, so two runs on one box never collide. */
 export function serving(): Serving {
+  const other = embedding();
+  const pages = pagesFor(other.origin);
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    fetch(request) {
-      const page = SERVED.get(new URL(request.url).pathname);
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/slow.svg") {
+        // Bytes that arrive long after `load`, carrying the width with them.
+        await Bun.sleep(LATE);
+        return new Response(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="${TOO_WIDE}" height="10"><rect width="100%" height="100%" fill="#333"/></svg>`,
+          { headers: { "content-type": "image/svg+xml" } },
+        );
+      }
+      const page = pages.get(path);
       if (page === undefined) return new Response("no such fixture page", { status: 404 });
       return new Response(page.body, { headers: { "content-type": page.type } });
     },
@@ -86,6 +193,7 @@ export function serving(): Serving {
     origin: server.url.origin,
     stop: async () => {
       await server.stop(true);
+      await other.stop();
     },
   };
 }

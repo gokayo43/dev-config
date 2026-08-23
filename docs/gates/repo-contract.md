@@ -110,11 +110,11 @@ of.
 | What `"live"` requires                              | When                     | Why it cannot wait                                                                                                                                              |
 | --------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | a Sentry SDK among what the workspace ships         | always                   | a failure only the user sees is one nobody fixes                                                                                                                |
-| the `check.yml` call passes `database: true`        | the repo owns migrations | nothing replays the schema otherwise, and the gate below has no job to run in                                                                                   |
-| the `check.yml` call passes `upgrade-gate: true`    | the repo owns migrations | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
-| `scripts/backup.sh` exists and is executable        | the repo owns migrations | an undumped database is one nobody has                                                                                                                          |
-| `scripts/restore-drill.sh` exists and is executable | the repo owns migrations | a backup nobody has restored is a backup nobody has                                                                                                             |
-| a timer/service pair that runs each of them         | the repo owns migrations | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
+| the `check.yml` call passes `database: true`        | the repo owns a database | nothing replays the schema otherwise, and the gate below has no job to run in                                                                                   |
+| the `check.yml` call passes `upgrade-gate: true`    | the repo owns a database | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
+| `scripts/backup.sh` exists and is executable        | the repo owns a database | an undumped database is one nobody has                                                                                                                          |
+| `scripts/restore-drill.sh` exists and is executable | the repo owns a database | a backup nobody has restored is a backup nobody has                                                                                                             |
+| a timer/service pair that runs each of them         | the repo owns a database | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
 
 Only crash reporting is owed by every live repo. The rest is about a database,
 and half this fleet is a static site with a hostname and no schema — demanding a
@@ -124,13 +124,22 @@ reason than symmetry: `check.yml` **refuses** `upgrade-gate: true` without
 `database: true`, so asking for it there would be this contract demanding the
 one configuration the shared workflow rejects.
 
-**"Owns migrations" is read from the repo, never from the `database` input.**
-The signal is a `db:migrate` script, which is the entry point every database
-gate here drives. That input says which CI job runs, and it lives in the very
-file these rules are about — so keying off it would let a live repo shed its
-backup script, its rehearsed restore and its upgrade gate by deleting one line
-of its own workflow. A repo that owns migrations and passes `database: false` is
-told so by name rather than quietly excused.
+**"Owns a database" is a fact of the tree, never a script name and never the
+`database` input.** Four witnesses, any one of them enough: a script called
+`db:migrate`, a script called `migrate`, a `drizzle.config.*` anywhere in the
+workspace, or a `.sql` under a `drizzle/` or `migrations/` directory. The
+diagnostic names the witness it found, so a repo that genuinely has no database
+has something concrete to argue with.
+
+A script name alone was the hole, and it was a wide one: `db:migrate` is what
+this house asks for, `migrate` is what drizzle-kit's own template writes — and
+what the live repo on this box with the most data actually runs. Under the old
+rule that spelling answered "no" and the repo owed **nothing**: no backups, no
+rehearsed restore, no upgrade gate, silently, because of a colon. The `database` input says which CI job runs, and it lives in
+the very file these rules are about — so keying off it would let a live repo
+shed its backup script, its rehearsed restore and its upgrade gate by deleting
+one line of its own workflow. A repo that owns a database and passes
+`database: false` is told so by name rather than quietly excused.
 
 Any `@sentry/*` package satisfies the first, in any manifest in the workspace,
 and only among what that manifest ships — `dependencies` and
@@ -175,11 +184,36 @@ decide whether the job ever runs:
 - the `.service` **runs** the script it is the pair for. The first
   whitespace-separated word of `ExecStart=` is the program and the rest are
   arguments, so `env WRAPPED=backup.sh /usr/bin/true` names the script and never
-  executes it, and `pre-backup.sh` is a different program whose name ends the
-  same way; a substring test calls both of them a match. systemd's `-@+!:`
-  prefixes are stripped first, since they say how to run the command rather than
-  what it is, and an empty `ExecStart=` is the list reset — a unit that sets one
-  after its command runs nothing at all.
+  executes it, and `/bin/sh -c '…/backup.sh'` runs a shell — which is what then
+  decides the exit status systemd reads, so a failing drill comes back green.
+  `pre-backup.sh` is a different program whose name ends the same way. A
+  substring test calls every one of those a match. systemd's `-@+!:` prefixes
+  are stripped first, since they say how to run the command rather than what it
+  is, and an empty `ExecStart=` is the list reset — a unit that sets one after
+  its command runs nothing at all.
+
+  The **path** matters as well as the name: `/usr/local/bin/backup.sh` is not
+  this repo's script. What is checked is the trailing segments, `scripts/<job>.sh`,
+  because that is the most a checkout can honestly assert — the unit on the box
+  says `/opt/postpad/scripts/backup.sh` and the gate is looking at
+  `/home/runner/work/postpad/postpad`, so "is this path inside the repo" has no
+  answer here. What it cannot catch on its own is another stack's copy of the
+  same relative path; see below.
+
+A timer may point at a service of a different name with `[Timer] Unit=`, which
+systemd honours and so does this — a gate matching only stems would call a
+working schedule missing.
+
+**Drop-in directories are refused rather than read.** A `*.timer.d/` beside a
+unit is merged over it by systemd and ignored here, so a schedule living in one
+is a schedule no diff of the unit file shows.
+
+**The two jobs have to agree about where the repo lives.** A unit copied from
+the stack next door keeps its neighbour's path, and that is the one wrong
+location a checkout _can_ catch: `backup` pointing at `/opt/postpad/scripts/`
+and `restore-drill` at `/opt/other/scripts/` means one of them is scheduling
+somebody else's data. Nothing else here can see it, since a checkout has no idea
+what directory it will be deployed into.
 
 Both jobs, not just the drill. "The drill has a timer and the backup does not"
 is the same hole from the other side.
