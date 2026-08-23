@@ -17,8 +17,9 @@ on:
         default: false
       affected:
         description: >-
-          Run the build and typecheck lanes over the packages a pull request changed rather
-          than the whole graph — turbo's `--affected`. For monorepos: needs turbo.json at
+          Run the typecheck lane over the packages a pull request changed rather than the
+          whole graph — turbo's `--affected`. The build never narrows: generated sources
+          feed the whole-repo lint and knip lanes. For monorepos: needs turbo.json at
           the repository root, and is refused without one. Ignored on a push, where
           --affected selects nothing and main is the full run.
         type: boolean
