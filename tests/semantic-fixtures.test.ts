@@ -463,6 +463,109 @@ describe("the fixture directory", () => {
   });
 });
 
+/**
+ * The class the CTE wrapper and the row-count rule exist to make
+ * unrepresentable: a pair that looks like a fixture, runs without error, and
+ * asserts nothing. Every case here was **green** before, against the Auckland
+ * migration that moves every row thirteen hours — which is the wrong
+ * implementation each of them kills.
+ */
+describe("a pair that asserts nothing", () => {
+  test(
+    "an assertion that is an insert rather than a select is refused",
+    async () => {
+      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+        [`${FIXTURES}/01-legacy-events.sql`]: LEGACY_ROW,
+        [`${FIXTURES}/01-legacy-events.assert.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
+      });
+
+      expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
+      expect(messages(verdict)[0]).toContain("does not have a RETURNING clause");
+    },
+    TIMEOUT,
+  );
+
+  // The sharpest member: a `delete` answered `[]` exactly as an empty select
+  // does, so the pair passed *and* took the next pair's rows with it — the
+  // second assertion then found nothing to report either.
+  test(
+    "an assertion that deletes is refused, and the next pair's rows survive it",
+    async () => {
+      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+        [`${FIXTURES}/01-first.sql`]: LEGACY_ROW,
+        [`${FIXTURES}/01-first.assert.sql`]: `delete from "event";\n`,
+        [`${FIXTURES}/02-second.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
+        [`${FIXTURES}/02-second.assert.sql`]: STILL_NOON_UTC,
+      });
+
+      expect(messages(verdict)).toEqual([
+        containing("01-first.assert.sql is not an assertion this can read"),
+        containing("event 1 is no longer the instant it was written as"),
+        containing("event 2 is no longer the instant it was written as"),
+      ]);
+    },
+    TIMEOUT,
+  );
+
+  // The one write the wrapper cannot see. A nested data-modifying CTE is
+  // refused by the wrapper itself — Postgres wants those at the top level — but
+  // a plain `select` calling a VOLATILE function that writes parses cleanly and
+  // has the same effect. The read-only session is what refuses it, which is why
+  // both are here rather than either.
+  test(
+    "an assertion whose function writes is refused by the read-only session",
+    async () => {
+      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+        [`${FIXTURES}/01-legacy-events.sql`]:
+          `create function "wipe"() returns integer as $$ begin delete from "event"; return 1; end; $$ language plpgsql volatile;\n` +
+          LEGACY_ROW,
+        [`${FIXTURES}/01-legacy-events.assert.sql`]: `select 'gone ' || "wipe"() as violation;\n`,
+      });
+
+      expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
+      expect(messages(verdict)[0]).toContain("read-only transaction");
+    },
+    TIMEOUT,
+  );
+
+  test.each([
+    ["an empty fixture", ""],
+    ["a fixture that is only a comment", "-- the rows go here one day\n"],
+    [
+      "a fixture whose insert matches nothing",
+      `insert into "event" select * from "event" where false;\n`,
+    ],
+  ])(
+    "%s writes no rows and is refused",
+    async (_written, fixture) => {
+      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+        [`${FIXTURES}/01-legacy-events.sql`]: fixture,
+        [`${FIXTURES}/01-legacy-events.assert.sql`]: STILL_NOON_UTC,
+      });
+
+      expect(messages(verdict)).toEqual([
+        containing(`${FIXTURES}/01-legacy-events.sql wrote no rows`),
+      ]);
+    },
+    TIMEOUT,
+  );
+
+  // A fixture that only reads has written nothing whatever row count the driver
+  // reports for it, which is why the command tag decides rather than the count.
+  test(
+    "a fixture that only selects has written nothing",
+    async () => {
+      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+        [`${FIXTURES}/01-legacy-events.sql`]: `select 1;\n`,
+        [`${FIXTURES}/01-legacy-events.assert.sql`]: STILL_NOON_UTC,
+      });
+
+      expect(messages(verdict)).toEqual([containing("wrote no rows")]);
+    },
+    TIMEOUT,
+  );
+});
+
 describe("what an assertion has to be", () => {
   async function asserting(assertion: string): Promise<Verdict> {
     return await ran([READS_THEM_AS_UTC], {
@@ -508,6 +611,147 @@ describe("what an assertion has to be", () => {
 
       expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
       expect(messages(verdict)[0]).toContain(`column "nope" does not exist`);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("what an assertion answers with", () => {
+  // A row whose `violation` is NULL is a fault in the assertion — but reading
+  // each row as text *threw* on it, and the throw took the real violations
+  // found before it. Collected now, so both reach the author.
+  test(
+    "real violations before a null one are not lost with it",
+    async () => {
+      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+        [`${FIXTURES}/01-legacy-events.sql`]:
+          LEGACY_ROW + `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
+        [`${FIXTURES}/01-legacy-events.assert.sql`]:
+          `select case when "id" = 1 then 'event 1 moved' else null end::text as violation\n` +
+          `from "event" where "at" <> timestamptz '2026-01-01 12:00:00+00' order by "id";\n`,
+      });
+
+      expect(messages(verdict)).toEqual([
+        containing("event 1 moved"),
+        containing("whose `violation` is not text"),
+      ]);
+      expect(messages(verdict)[1]).toContain("(1 of 2)");
+    },
+    TIMEOUT,
+  );
+
+  // The fixture wrote rows into that table a moment earlier, so a table that is
+  // gone is a fact about this branch's migration rather than about the SQL in
+  // the assertion. Telling the author their assertion is unreadable sends them
+  // to the wrong file.
+  test(
+    "a table this branch's migration dropped names the migration, not the assertion",
+    async () => {
+      const verdict = await ran(
+        [{ tag: "0001_drop", when: 2_000, sql: `DROP TABLE "event";\n` }],
+        NOON_UTC_FIXTURE,
+      );
+
+      expect(messages(verdict)).toEqual([
+        containing("asks about event, which this branch's migrations left the database without"),
+      ]);
+      expect(messages(verdict)[0]).toContain("not something a migration may drop");
+    },
+    TIMEOUT,
+  );
+
+  // The limit of the case above, said out loud: this gate grades the questions
+  // the repo asked, so an assertion that stops asking about the dropped table
+  // has nothing left to fail on. What a dropped table did to the rows is the
+  // fixture author's to assert, not something the gate can infer.
+  test(
+    "an assertion that asks only about a surviving table passes, by design",
+    async () => {
+      const verdict = await ran(
+        [
+          {
+            tag: "0001_drop",
+            when: 2_000,
+            sql: `DROP TABLE "event";\nCREATE TABLE "record" ("id" integer PRIMARY KEY NOT NULL);\n`,
+          },
+        ],
+        {
+          [`${FIXTURES}/01-legacy-events.sql`]: LEGACY_ROW,
+          [`${FIXTURES}/01-legacy-events.assert.sql`]: `select 'record left over' as violation from "record";\n`,
+        },
+      );
+
+      expect(messages(verdict)).toEqual([]);
+    },
+    TIMEOUT,
+  );
+
+  // The default decoder substitutes U+FFFD, which reaches the database as data
+  // and comes back as a violation about a row the migration never touched — a
+  // finding manufactured by the reader. Refused at the file instead.
+  test(
+    "a fixture that is not UTF-8 is refused rather than repaired",
+    async () => {
+      const repo = await repoWith([READS_THEM_AS_UTC], NOON_UTC_FIXTURE);
+      // A latin-1 'é' inside the string literal, written after the commit.
+      await Bun.write(
+        join(repo.root, FIXTURES, "01-legacy-events.sql"),
+        new Uint8Array([
+          ...new TextEncoder().encode(
+            `insert into "event" values (1, '2026-01-01 12:00:00'); -- caf`,
+          ),
+          0xe9,
+          10,
+        ]),
+      );
+      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+      const verdict = await replayGate({
+        root: repo.root,
+        url: await emptyDatabase(),
+        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+        fixtures: FIXTURES,
+      });
+
+      expect(messages(verdict)).toEqual([containing("is not UTF-8")]);
+      expect(messages(verdict)[0]).toContain("comes back as a violation");
+    },
+    TIMEOUT,
+  );
+
+  // The same rule on the other half of the pair. An assertion is read after the
+  // fixtures have already been written, so it is refused per file and the
+  // fixtures beside it are still graded.
+  test(
+    "an assertion that is not UTF-8 is refused, and its neighbours are still graded",
+    async () => {
+      const repo = await repoWith([READS_THEM_AS_AUCKLAND], {
+        [`${FIXTURES}/01-broken.sql`]: LEGACY_ROW,
+        [`${FIXTURES}/01-broken.assert.sql`]: STILL_NOON_UTC,
+        [`${FIXTURES}/02-fine.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
+        [`${FIXTURES}/02-fine.assert.sql`]: STILL_NOON_UTC,
+      });
+      await Bun.write(
+        join(repo.root, FIXTURES, "01-broken.assert.sql"),
+        new Uint8Array([
+          ...new TextEncoder().encode(`select 'caf`),
+          0xe9,
+          ...new TextEncoder().encode(`' as violation;`),
+          10,
+        ]),
+      );
+      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+      const verdict = await replayGate({
+        root: repo.root,
+        url: await emptyDatabase(),
+        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+        fixtures: FIXTURES,
+      });
+
+      expect(messages(verdict)).toEqual([
+        containing("01-broken.assert.sql is not UTF-8"),
+        containing("event 1 is no longer the instant it was written as"),
+        containing("event 2 is no longer the instant it was written as"),
+      ]);
     },
     TIMEOUT,
   );

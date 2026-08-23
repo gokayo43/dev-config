@@ -154,6 +154,74 @@ function messages({ problems }: Verdict): string[] {
   return problems.map(({ message }) => message);
 }
 
+/**
+ * A repo whose lineages each keep their own journal — the shape a repo with
+ * more than one has to be in, since one journal table for two lineages is one
+ * high-water mark for both.
+ */
+const PER_SCHEMA = new URL("./schema-migrator.ts", import.meta.url).pathname;
+
+describe("a lineage this branch stops migrating", () => {
+  /**
+   * The clock is the whole of the case. `drizzle-kit` keys every migration on
+   * the millisecond it was generated, so two lineages written on two machines
+   * landing on one value is a coincidence rather than a fault — and the gate
+   * used to flatten every journal table into one set of clocks before asking
+   * whether a lineage had been applied. Under that reading the second row below
+   * was **green**: `extra` was accounted for by a clock that belonged to
+   * `drizzle`, on a branch that had stopped migrating `extra` at all and so
+   * stranded every deployed database carrying it.
+   *
+   * A journal vouches for one lineage now, so both rows refuse.
+   */
+  test.each([
+    ["a clock of its own", 3_000],
+    ["a clock the other lineage already has", 1_000],
+  ])(
+    "is refused when its journal has %s",
+    async (_label, when) => {
+      const repo = await history(
+        {
+          ...scripted(`bun run ${PER_SCHEMA} ./drizzle ./extra`),
+          ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
+          ...lineage("extra", { ...CREATES_NOTE, when }),
+        },
+        {
+          // db:migrate stops naming ./extra. The directory is still here, and a
+          // database deployed from the base ref still holds what it built.
+          ...scripted(`bun run ${PER_SCHEMA} ./drizzle`),
+          ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
+          ...lineage("extra", { ...CREATES_NOTE, when }),
+        },
+      );
+
+      expect(messages(await replay(repo, pushedOver(repo.revs[0] ?? "")))).toEqual([
+        containing("extra is in"),
+      ]);
+      expect(messages(await replay(repo, pushedOver(repo.revs[0] ?? "")))[0]).toContain(
+        "never applied it",
+      );
+    },
+    60_000,
+  );
+
+  // The other side of the same rule: both lineages still named, each with its
+  // own journal, is the repo that is fine — and a matcher that refused whenever
+  // two clocks collided would have broken it.
+  test("two lineages a branch still migrates are both accounted for", async () => {
+    const tree = {
+      ...scripted(`bun run ${PER_SCHEMA} ./drizzle ./extra`),
+      ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
+      ...lineage("extra", { ...CREATES_NOTE, when: 1_000 }),
+    };
+    const repo = await history(tree, tree);
+
+    const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toContain("reaches the same schema");
+  }, 60_000);
+});
+
 describe("replay gate", () => {
   test("a history that rebuilds the schema from empty, twice, passes", async () => {
     const repo = await history({

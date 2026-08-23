@@ -3,8 +3,8 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import type { Problem, Verdict } from "../_lib/gate.ts";
-import { databaseIn, migrate, rows, scratchDatabase, textIn } from "./database.ts";
+import { type ConfigObject, type Problem, record, type Verdict } from "../_lib/gate.ts";
+import { databaseIn, migrate, rows, scratchDatabase } from "./database.ts";
 
 /**
  * What the upgrade path cannot see, asked directly: **the rows a deployed
@@ -180,6 +180,62 @@ function reasonIn(failure: unknown): string {
 }
 
 /**
+ * A fixture file as text, refusing the bytes rather than repairing them.
+ *
+ * The default decoder substitutes U+FFFD for anything that is not UTF-8, which
+ * is the worst of the three possible answers: a stray latin-1 byte inside a
+ * string literal becomes a replacement character, the row is written with it,
+ * and the assertion reports a violation about data the *decoder* mangled. The
+ * author is then sent to read a migration that is fine. Inside a comment the
+ * same byte changes nothing at all and the run goes green over a file nobody
+ * can round-trip.
+ */
+async function textOf(
+  path: string,
+  named: string,
+): Promise<{ readonly text: string } | { readonly problem: Problem }> {
+  const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+  try {
+    return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+  } catch {
+    return {
+      problem: {
+        file: named,
+        message: `${named} is not UTF-8 — the bytes are decoded strictly here rather than repaired, because a byte replaced with U+FFFD reaches the database as data and comes back as a violation about a row the migration never touched; save the file as UTF-8`,
+      },
+    };
+  }
+}
+
+/** The command tags that mean a statement wrote something. Everything else read. */
+const WRITING = new Set(["INSERT", "UPDATE", "DELETE", "MERGE", "COPY"]);
+
+/**
+ * How many rows a fixture wrote, by what Postgres reported for each statement
+ * in it. `Bun.SQL` answers a single statement with the result carrying its own
+ * `count` and `command`, and a file of several with one such result per
+ * statement — so both shapes are the same fold.
+ *
+ * The command tag, not the count alone: a `select` reports a count too, and a
+ * fixture that only reads has written nothing whatever that number says.
+ */
+function rowsWritten(answered: unknown): number {
+  const own = writtenBy(answered);
+  if (own > 0) return own;
+  const held = record(answered);
+  return Object.values(held).reduce<number>((total, one) => total + writtenBy(one), 0);
+}
+
+function writtenBy(result: unknown): number {
+  const held = record(result);
+  const command = held["command"];
+  const count = held["count"];
+  return typeof command === "string" && WRITING.has(command) && typeof count === "number"
+    ? count
+    : 0;
+}
+
+/**
  * The rows a deployed database holds, written into one built from the base
  * ref's migrations. Stops at the first fixture that will not apply, because a
  * numbered fixture may be written against the rows an earlier one left: running
@@ -193,19 +249,61 @@ function reasonIn(failure: unknown): string {
  */
 async function write(db: SQL, { at, dir, pairs }: Fixtures, from: string): Promise<Problem[]> {
   for (const { fixture } of pairs) {
+    const named = `${dir}/${fixture}`;
+    const read = await textOf(join(at, fixture), named);
+    if ("problem" in read) return [read.problem];
+    let answered: unknown;
     try {
-      await db.unsafe(await Bun.file(join(at, fixture)).text());
+      answered = await db.unsafe(read.text);
     } catch (failure) {
       return [
         {
-          file: `${dir}/${fixture}`,
-          message: `${dir}/${fixture} did not apply to a database built from ${from}'s migrations — ${reasonIn(failure)}. A semantic fixture writes rows a deployed database already holds, so it may name only what ${from}'s schema had; a column this branch adds is what the assertion beside it is for.`,
+          file: named,
+          message: `${named} did not apply to a database built from ${from}'s migrations — ${reasonIn(failure)}. A semantic fixture writes rows a deployed database already holds, so it may name only what ${from}'s schema had; a column this branch adds is what the assertion beside it is for.`,
+        },
+      ];
+    }
+    // A fixture that wrote nothing is the same silence as no fixture at all: the
+    // assertion beside it then asks the current contract about no rows, comes
+    // back empty, and the run is green over a migration nobody tested. An empty
+    // file, a file of comments, and an `insert ... select` that matched nothing
+    // are one fault with one answer.
+    if (rowsWritten(answered) === 0) {
+      return [
+        {
+          file: named,
+          message: `${named} wrote no rows — a semantic fixture is the rows a deployed database already holds, and an assertion over a table nothing was written to comes back empty whatever this branch's migrations did to it; write the rows the assertion beside it is about`,
         },
       ];
     }
   }
   return [];
 }
+
+/**
+ * An assertion as this runs it: the repo's own text, made structurally into the
+ * one thing an assertion is allowed to be.
+ *
+ * The wrapper is not decoration — it is what makes the invalid state
+ * unrepresentable. An `.assert.sql` that is an `insert`, a `delete` or a
+ * `create table` answers `[]` through the driver in exactly the way an empty
+ * select does, so an author who wrote the wrong half of the pair got "every
+ * assertion coming back empty" over data that was wrong, and a `delete` took
+ * the next fixture's rows with it. Inside a CTE none of those parse; one that
+ * does parse — a data-modifying CTE — has no `RETURNING` clause and is refused
+ * by name; and the outer `select "violation"` refuses a select that has no such
+ * column instead of reading whatever came first.
+ *
+ * The trailing semicolon goes because a statement terminator inside the
+ * parentheses is a syntax error, and the body keeps its own newlines so that a
+ * trailing `--` comment ends where its author ended it.
+ */
+function asked(text: string): string {
+  return `with __assertion as (\n${text.trim().replace(/;\s*$/u, "")}\n) select "violation" from __assertion`;
+}
+
+/** What Postgres says about a table that is not there, and the name it names. */
+const NO_SUCH_RELATION = /relation "([^"]+)" does not exist/u;
 
 /**
  * What the repo's own assertions say about those rows once this branch's
@@ -217,27 +315,66 @@ async function graded(db: SQL, { at, dir, pairs }: Fixtures, from: string): Prom
   const found: Problem[] = [];
   for (const { fixture, assertion } of pairs) {
     const file = `${dir}/${assertion}`;
+    const read = await textOf(join(at, assertion), file);
+    if ("problem" in read) {
+      found.push(read.problem);
+      continue;
+    }
+    let answered: readonly ConfigObject[];
     try {
-      const answered = await rows(db, await Bun.file(join(at, assertion)).text());
-      found.push(
-        ...answered.map((row, index) => ({
-          file,
-          message: `${textIn(row, VIOLATION, `${file} row ${index}`)} — ${file} says so about a row ${dir}/${fixture} wrote into a database built from ${from}, after this branch's migrations ran over it. Fix the migration that produced it: a deployed database is full of rows like these, and the schema converging says nothing about what they now mean.`,
-        })),
-      );
+      answered = await rows(db, asked(read.text));
     } catch (failure) {
-      // Three shapes arrive here as one, and the answer to all three is the
-      // same sentence: SQL the database refused, a script of several statements
-      // whose answer is a list of answers rather than rows, and a select whose
-      // rows carry no `violation` to read. Each is a file to go back to, and
-      // one mistake earns one diagnostic.
+      found.push(unreadable(file, `${dir}/${fixture}`, from, reasonIn(failure)));
+      continue;
+    }
+    // Collected rather than mapped, because a row whose `violation` is NULL is
+    // a fault in the assertion and the rows around it are still findings about
+    // the data. Throwing on the null one — which is what reading each row as
+    // text does — threw the real violations away with it.
+    const nulls: number[] = [];
+    for (const [index, row] of answered.entries()) {
+      const said = row[VIOLATION];
+      if (typeof said === "string") {
+        found.push({
+          file,
+          message: `${said} — ${file} says so about a row ${dir}/${fixture} wrote into a database built from ${from}, after this branch's migrations ran over it. Fix the migration that produced it: a deployed database is full of rows like these, and the schema converging says nothing about what they now mean.`,
+        });
+      } else {
+        nulls.push(index);
+      }
+    }
+    if (nulls.length > 0) {
       found.push({
         file,
-        message: `${file} is not an assertion this can read — ${reasonIn(failure)}. An assertion is one \`select\` over the migrated schema: no rows when the contract holds, and one row per violation otherwise, each with a text \`${VIOLATION}\` column saying what is wrong.`,
+        message: `${file} answered ${nulls.length} row${nulls.length === 1 ? "" : "s"} (${nulls.join(", ")} of ${answered.length}) whose \`${VIOLATION}\` is not text — every row an assertion answers is a violation, and one that cannot say what is wrong with it is a row the assertion should not have selected; guard it, or make the column say something`,
       });
     }
   }
   return found;
+}
+
+/**
+ * An assertion the database would not run, said as the fault it actually is.
+ *
+ * A table that is not there is the one shape worth separating: the fixture
+ * wrote rows into it a moment ago, so this branch's migrations dropped or
+ * renamed it — which is a fact about the migration, not about the assertion,
+ * and telling the author their SQL is unreadable sends them to the wrong file.
+ * An assertion asking after a table the fixtures never wrote to is not this
+ * case and reads as what it is.
+ */
+function unreadable(file: string, fixture: string, from: string, reason: string): Problem {
+  const missing = NO_SUCH_RELATION.exec(reason);
+  if (missing !== null) {
+    return {
+      file,
+      message: `${file} asks about ${missing[1]}, which this branch's migrations left the database without — ${fixture} wrote rows into a database built from ${from} and they are gone. A table a deployed database holds is not something a migration may drop without saying where the rows went; if it was renamed, the assertion follows it, and if the rows were meant to move, assert that they arrived.`,
+    };
+  }
+  return {
+    file,
+    message: `${file} is not an assertion this can read — ${reason}. An assertion is one \`select\` over the migrated schema: no rows when the contract holds, and one row per violation otherwise, each with a text \`${VIOLATION}\` column saying what is wrong.`,
+  };
 }
 
 /**
@@ -274,6 +411,13 @@ export async function gradeFixtures(
       return { problems: [{ message: reasonIn(failure) }] };
     }
 
+    // Nothing an assertion does may reach the data, and this is the half of that
+    // the CTE wrapper cannot cover: Postgres lets a data-modifying CTE inside a
+    // `with`, so `with __a as (delete from event returning 'x' as violation)`
+    // would parse, select, and take the next fixture's rows. Read-only from
+    // here on, and the database refuses it by name — the fixtures are all
+    // written by now, so nothing legitimate is left to write.
+    await db.unsafe(`set session characteristics as transaction read only`);
     const violations = await graded(db, fixtures, from);
     const each = fixtures.pairs.length === 1 ? "fixture" : "fixtures";
     return violations.length > 0

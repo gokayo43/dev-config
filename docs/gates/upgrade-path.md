@@ -271,11 +271,41 @@ from "event" where "at" <> timestamptz '2026-01-01 12:00:00+00';
 
 An assertion is **one `select`**, answering no rows when the contract holds and
 one row per violation otherwise, each with a text `violation` column saying what
-is wrong. Empty is the only pass. The column is named rather than positional,
-because a `select *` would have whatever column came first read back as a
-sentence about the data; several statements come back as a list of answers
-rather than as rows, and nothing could say which of them was the verdict — both
-are refused naming the file.
+is wrong. Empty is the only pass.
+
+That is true by construction rather than by convention. The gate runs the text
+wrapped as `with __assertion as (<your select>) select "violation" from
+__assertion`, in a session that is read-only from the moment the fixtures have
+been written. Between them the two refuse every way an `.assert.sql` could fail
+to be an assertion:
+
+- an `insert`, `delete` or `create table` does not parse inside a CTE, and one
+  that does — a data-modifying CTE — is refused for having no `RETURNING`
+  clause or for not being at the top level;
+- a `select` with no `violation` column fails on the column rather than having
+  whatever came first read back as a sentence about the data;
+- several statements do not parse at all, so nothing has to guess which of the
+  answers was the verdict;
+- a `select` calling a function that writes — the one write a wrapper cannot
+  see — is refused by the read-only session.
+
+This matters more than it looks. All of those used to answer `[]` through the
+driver in exactly the way an empty select does, so an author who wrote the wrong
+half of the pair got "every assertion coming back empty" over data that was
+wrong — and a `delete` in one assertion took the next fixture's rows with it.
+
+**Every fixture must write at least one row**, counted from what Postgres
+reports for each statement in it and from the command tag, so that a `select`
+does not count as writing. An empty file, a file of nothing but comments, and an
+`insert ... select` that matched nothing are one fault: the assertion beside
+them then asks the current contract about no rows, comes back empty, and the run
+is green over a migration nobody tested.
+
+Both files are decoded as **strict UTF-8** and refused rather than repaired if
+they are not. The default decoder substitutes U+FFFD, which reaches the database
+as data and comes back as a violation about a row the migration never touched —
+a finding manufactured by the reader, sending its author to a migration that is
+fine.
 
 The `NN-` prefix is the order they apply in, and it is load-bearing: a fixture
 may write over the rows an earlier one left, the way a history of real rows
@@ -337,7 +367,12 @@ both diverges and breaks its rows reports both in one run.
   the rows a destructive transformation touches are the ones worth writing, and
   the directory is where that judgement lives.
 - **Whether the assertion is right.** An assertion that asks nothing hard passes
-  every migration, exactly as a test that asserts nothing does.
+  every migration, exactly as a test that asserts nothing does. The shape is
+  enforced; the question is not. An assertion that stops asking about a table
+  this branch dropped, and asks about a surviving one instead, passes — what a
+  dropped table did to the rows is the fixture author's to assert. (A table the
+  fixture _wrote into_ and the branch then dropped is caught, and named as the
+  migration's fault rather than the assertion's.)
 - **Anything outside this database.** A migration that also writes a file,
   queues a job or calls a third party is graded here only on its rows.
 - **A migration that is not deterministic.** Two runs of this gate see two

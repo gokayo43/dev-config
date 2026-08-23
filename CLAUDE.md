@@ -95,7 +95,10 @@ a change to a rule usually lands here too.
   holds every override in the base to — and `action-evidence.test.ts` holds every action
   publishing an artifact to keeping the runner-temp paths its own YAML names.
   `repo-contract-fixture.ts` is the clean tree the repo contract's two suites
-  share, and `mutation-lane.test.ts` links this repo's own `node_modules` into
+  share; `journalled-migrator.ts`, `replaying-migrator.ts` and
+  `schema-migrator.ts` are the three `db:migrate` shapes the database gates are
+  written for — a journalled one, a hand-rolled runner with no journal, and the
+  per-lineage journals a repo with more than one lineage has to have; and `mutation-lane.test.ts` links this repo's own `node_modules` into
   each fixture and runs Stryker for real — a stubbed mutation run would prove
   nothing about the tool that gate exists to drive. `test-suite.test.ts` is the
   same argument one level down: that gate is a shell script rather than a

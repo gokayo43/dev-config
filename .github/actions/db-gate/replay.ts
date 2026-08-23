@@ -111,11 +111,19 @@ async function schemaOf(url: string, of: string): Promise<Dump> {
 
 /**
  * The migrations a database records as applied, by the clock drizzle keys them
- * on. Read from every `__drizzle_migrations` in the database, whichever schema
- * holds it, because a repo with more than one lineage has to give each its own
- * journal table or they would share one high-water mark.
+ * on — **one set per journal table**, never merged.
+ *
+ * A repo with more than one lineage has to give each its own journal table or
+ * they would share one high-water mark, so the tables are what the lineages are
+ * matched against. Flattening them into one set is what made a clock collision
+ * between two lineages read as a lineage applied: `drizzle` and `extra` are
+ * generated on different machines and `drizzle-kit` keys each migration on the
+ * millisecond it was written, so two of them landing on one value is a
+ * coincidence rather than a fault — and under a merged set that coincidence
+ * turned a branch that had stopped migrating `extra` from a refusal into a
+ * pass, with every deployed database that carried it stranded.
  */
-async function appliedIn(url: string): Promise<Set<number>> {
+async function journalsIn(url: string): Promise<Set<number>[]> {
   const db = new SQL(url);
   try {
     const schemas = await textColumn(
@@ -123,19 +131,64 @@ async function appliedIn(url: string): Promise<Set<number>> {
       `select table_schema from information_schema.tables where table_name = '__drizzle_migrations'`,
       "table_schema",
     );
-    const applied = new Set<number>();
+    const journals: Set<number>[] = [];
     for (const table_schema of schemas) {
       const journal = await numberColumn(
         db,
         `select created_at from "${table_schema.replaceAll('"', '""')}"."__drizzle_migrations"`,
         "created_at",
       );
-      for (const created of journal) applied.add(created);
+      journals.push(new Set(journal));
     }
-    return applied;
+    return journals;
   } finally {
     await db.close();
   }
+}
+
+/**
+ * The lineages no journal in the database can account for.
+ *
+ * A journal vouches for **one** lineage, which is the whole of the fix and the
+ * fact a merged set threw away: a repo's journal table per lineage means one
+ * table is the record of one lineage having run, so a database holding a single
+ * journal cannot have applied two. Exact matches are taken first — a journal
+ * holding precisely a lineage's clocks is that lineage's and nothing else's —
+ * and only then is a journal allowed to account for a lineage it merely
+ * contains, which is what a deploy caught midway through one looks like.
+ *
+ * A lineage whose journal has no entries at all is not asked about: there is
+ * nothing of it on a database at that ref, so nothing was stranded.
+ */
+function unaccountedFor(
+  asked: readonly { readonly dir: string; readonly clocks: number[] }[],
+  journals: readonly Set<number>[],
+): string[] {
+  const claimed = new Set<number>();
+  const journalFor = (clocks: readonly number[], exactly: boolean): number =>
+    journals.findIndex(
+      (journal, at) =>
+        !claimed.has(at) &&
+        clocks.every((clock) => journal.has(clock)) &&
+        (!exactly || journal.size === clocks.length),
+    );
+
+  const carried = asked.filter(({ clocks }) => clocks.length > 0);
+  const unmatched = new Map(carried.map(({ dir, clocks }) => [dir, clocks]));
+  // Exact matches over every lineage first, then containment over what is left.
+  // Taking them in one pass would let a journal that merely contains the first
+  // lineage's clocks be spent on it, leaving the lineage it is actually the
+  // record of with nothing to match — a refusal naming the wrong directory.
+  for (const exactly of [true, false]) {
+    for (const [dir, clocks] of new Map(unmatched)) {
+      const at = journalFor(clocks, exactly);
+      if (at >= 0) {
+        claimed.add(at);
+        unmatched.delete(dir);
+      }
+    }
+  }
+  return carried.filter(({ dir }) => unmatched.has(dir)).map(({ dir }) => dir);
 }
 
 /** The clocks a lineage's journal names — what the migrator records when it applies one. */
@@ -208,13 +261,11 @@ async function bothHalves(
         `bun run db:migrate failed replaying ${from}'s migrations into ${databaseIn(semantic.url)}, the database the semantic fixtures are written into — ${replayed}`,
       );
     }
-    return await appliedIn(upgrade);
+    return await journalsIn(upgrade);
   });
 
   const asked = lineages.map((lineage) => ({ dir: lineage.dir, clocks: clocksIn(lineage) }));
-  const unapplied = asked
-    .filter(({ clocks }) => clocks.length > 0 && !clocks.some((clock) => applied.has(clock)))
-    .map(({ dir }) => dir);
+  const unapplied = unaccountedFor(asked, applied);
   if (unapplied.length > 0) return { unapplied };
 
   await migrate(

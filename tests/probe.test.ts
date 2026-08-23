@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { publish, type Verdict } from "../.github/actions/_lib/gate.ts";
 import {
   APP_URL,
+  appUrlFrom,
   DEFAULT_SECONDS,
   probeGate,
   secondsFrom,
@@ -154,6 +155,36 @@ describe("the post-boot probe", () => {
     expect(verdict.note).toContain("did not finish");
   }, 15_000);
 
+  /**
+   * The four shapes that defeated the bound, and the reason the shell is run
+   * under `setsid`.
+   *
+   * bash *execs* a single simple command, so killing the process bun spawned
+   * took the `sleep 30` above with it and every bound looked like it worked. A
+   * pipeline, a subshell, a background job and a command that forks a child of
+   * its own are not exec'd — the children survive the shell, keep the write end
+   * of the stdout pipe open, and the read of that pipe never sees EOF. The
+   * wrong implementation does not fail these cases: it **hangs** in them, which
+   * is why each carries a bound well under what the unfixed code took.
+   */
+  test.each([
+    ["a pipeline", "sleep 30 | cat"],
+    ["a subshell", "( sleep 30 )"],
+    ["a background job", "sleep 30 & wait"],
+    ["a command that forks a child", `bun -e 'Bun.spawnSync(["sleep", "30"])'`],
+  ])(
+    "%s that outlives its shell is killed inside the bound",
+    async (_written, command) => {
+      const started = Date.now();
+      const verdict = await ran(command, 2);
+
+      expect(messages(verdict)).toEqual([containing("was still running after 2s and was killed")]);
+      expect(messages(verdict)[0]).toContain("along with everything it had started");
+      expect(Date.now() - started).toBeLessThan(12_000);
+    },
+    20_000,
+  );
+
   // A probe that has already answered must not hold the step open for the rest
   // of its bound: the timer is cleared, so this returns in about the time the
   // command took rather than in the two minutes it was allowed.
@@ -196,6 +227,33 @@ describe("the post-boot probe", () => {
     expect(messages(verdict)).toEqual(["b", "piped"]);
   });
 
+  // The environment already asks every child not to colour, and a probe that
+  // colours unconditionally writes the escapes anyway — they would arrive
+  // inside the annotation as the literal bytes `ESC[31m`, against a route name
+  // nobody can now search for.
+  test("a probe that colours its output anyway does not colour the annotations", async () => {
+    const verdict = await ran(
+      String.raw`printf '\033[31mGET /presets/1 answered 500\033[0m\n'; exit 1`,
+    );
+
+    expect(messages(verdict)).toEqual(["GET /presets/1 answered 500"]);
+    // The log keeps what the command actually wrote; only the annotation is stripped.
+    expect(verdict.log).toContain("\u001B[31m");
+  });
+
+  // Four thousand annotations render as neither a list nor a page. A probe that
+  // dumps a log is a program reporting something else, and the whole of it is
+  // on the log either way.
+  test("a probe that writes a great many lines annotates the first of them and says so", async () => {
+    const verdict = await ran(`seq 1 200; exit 1`);
+
+    expect(verdict.problems).toHaveLength(51);
+    expect(messages(verdict)[0]).toBe("1");
+    expect(messages(verdict)[49]).toBe("50");
+    expect(messages(verdict)[50]).toContain("wrote 200 lines to stdout and the first 50 are above");
+    expect(verdict.log).toContain("200");
+  });
+
   test("the command runs in the project the caller declared", async () => {
     const root = await materialise({ "marker.txt": "here" });
     const verdict = await ran("ls marker.txt; exit 1", DEFAULT_SECONDS, root);
@@ -219,6 +277,19 @@ describe("the post-boot probe", () => {
   });
 });
 
+describe("where the probe is pointed", () => {
+  // Required by the action and defaulted by the workflow, so empty is a caller
+  // who wrote an empty string. Running the repo's assertions against no app and
+  // reporting what they said is worse than stopping.
+  test("an empty health-url is refused rather than handed over as one", () => {
+    expect(() => appUrlFrom("")).toThrow("health-url is empty");
+  });
+
+  test("a URL is handed over as it was written", () => {
+    expect(appUrlFrom(URL_OF_THE_APP)).toBe(URL_OF_THE_APP);
+  });
+});
+
 describe("the bound the probe is given", () => {
   test("a caller that named none gets the one this gate declares", () => {
     expect(secondsFrom("")).toBe(DEFAULT_SECONDS);
@@ -231,6 +302,19 @@ describe("the bound the probe is given", () => {
   // Refused rather than defaulted, for the reason `upgrade-gate`'s two words
   // are: a spelling that quietly became some other number would kill a probe
   // under a bound nobody wrote, and its author would go looking at the app.
+  // The arithmetic the ceiling exists for: `setTimeout` holds its delay in a
+  // signed 32-bit integer, so 2147484s overflows to 1ms and the probe is killed
+  // the instant it starts — under a diagnostic saying it ran too long. A caller
+  // writing a very large number means "effectively no bound" and would get the
+  // tightest one there is.
+  test.each([3601, 2_147_484, 999_999_999])("%p seconds is longer than this takes", (written) => {
+    expect(() => secondsFrom(String(written))).toThrow("longer than the 3600s this takes");
+  });
+
+  test("the bound the ceiling allows is still a bound", () => {
+    expect(secondsFrom("3600")).toBe(3600);
+  });
+
   test.each(["thirty", "1.5", "0", "-5", "30s", " 30"])(
     "%p is not a bound and is refused rather than read as one",
     (written) => {

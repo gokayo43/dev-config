@@ -121,13 +121,35 @@ Everything the command wrote, stdout and stderr both, reaches the log above the
 annotations.
 
 `probe-timeout` bounds it, in seconds, and empty takes the bound `probe.ts`
-declares — 120 seconds today — which is where that number and the argument for it live. The probe
+declares — 120 seconds today — which is where that number and the argument for
+it live. An hour is the most it takes: `setTimeout` holds its delay in a signed
+32-bit integer, so a bound at or above 2147484 seconds overflows to a
+millisecond and kills the probe the instant it starts, under a diagnostic saying
+it ran too long. The probe
 runs against an app that is already up, so it is making requests rather than
 waiting for a boot; the bound is there because a probe that has wedged is
 otherwise indistinguishable from a slow one, and would spend the job's whole
 budget saying so, taking the ramp and every piece of evidence after it down with
 it. A probe killed by the bound is refused naming it: whatever it would have
 written after that is lost, so nothing it was asserting was graded.
+
+**The bound takes everything the probe started.** The command runs under
+`setsid` (util-linux, on every runner this gate targets), so its shell is a process-group leader and the kill addresses the
+group. That is not a detail: bash only _execs_ a command that is one simple
+command, so a pipeline, a subshell, a background job or a command that forks a
+child of its own leaves children behind when the shell alone is killed — and
+those children still hold the write end of the stdout pipe, so the step reading
+it never sees the end of the output. A bound that hangs is worse than no bound,
+because the job's whole timeout goes with nothing said. A probe meaning to leave
+something running behind it will not: that is the trade a bound is.
+
+Its output is capped at fifty annotations, with a line saying how many there
+were. A probe is one or two contract-level assertions per invariant, so an
+honest one is nowhere near that; four thousand annotations render as neither a
+list nor a page, and the whole output is on the log either way. Escape sequences
+are stripped from a line before it becomes an annotation — the environment
+already asks every child here not to colour, but a probe that colours
+unconditionally would otherwise put `ESC[31m` inside the annotation.
 
 The step runs when **either** input is set, and a `probe-timeout` with no
 `probe-command` under it is refused — a bound on nothing is an input somebody
