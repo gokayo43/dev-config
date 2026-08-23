@@ -43,7 +43,10 @@ runs:
         TEST_NETWORK: ${{ inputs['test-network'] }}
       run: |
         set -euo pipefail
-        suite=(bun test --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml")
+        # --coverage here rather than `[test] coverage` in the graded repo's
+        # bunfig, which is what makes the floor a CI gate instead of a tax on
+        # every run its author makes: docs/gates/test-suite.md.
+        suite=(bun test --coverage --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml")
         seal=()
 
         # Trimmed, the way every allowlist entry in this repo is trimmed before

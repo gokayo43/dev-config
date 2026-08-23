@@ -9,12 +9,14 @@ minimumReleaseAge = 604800 # 7 days, in seconds
 saveExact = true
 
 [test]
-coverage = true
 # A floor, not a target: it catches "shipped without tests", it is not something
 # to chase. Bun exits non-zero on a breach WITHOUT printing why — a `bun test`
 # that reports every test passing and still fails is this — and it applies the
 # threshold to EVERY FILE, not to the total, so the floor sits below the
 # least-covered file rather than below the summary line.
+#
+# Declared here, applied by the `--coverage` CI passes and by nothing local:
+# docs/gates/test-suite.md.
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
 # Two things here execute only inside a spawned process, so the runner

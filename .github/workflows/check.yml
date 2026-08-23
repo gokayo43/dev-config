@@ -65,11 +65,8 @@ on:
       contract-exemptions:
         description: >-
           Repo-contract facts this repo is structurally unable to satisfy, space-separated
-          (config-lineage, ci-call, docs-spine, lifecycle-retire, nested-config, secrets). A
-          marketing site names docs-spine; a repo being wound down names lifecycle-retire; a
-          repo whose subtree is a scaffold rather than its own source — the oxlint config
-          under it is a file copied into a new repo, not a second config for this one —
-          names nested-config.
+          (config-lineage, ci-call, docs-spine, lifecycle-retire, secrets). A marketing site
+          names docs-spine; a repo being wound down names lifecycle-retire.
         type: string
         default: ""
       stack-allowlist:

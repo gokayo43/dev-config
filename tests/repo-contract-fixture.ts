@@ -45,7 +45,7 @@ const MANIFEST: PackageJson = {
 
 const THRESHOLD = "{ lines = 0.75, functions = 0.75 }";
 
-const BUNFIG = `[install]\nminimumReleaseAge = 604800\nsaveExact = true\n\n[test]\ncoverage = true\ncoverageThreshold = ${THRESHOLD}\n`;
+const BUNFIG = `[install]\nminimumReleaseAge = 604800\nsaveExact = true\n\n[test]\ncoverageThreshold = ${THRESHOLD}\n`;
 
 export const CLEAN: Tree = {
   "package.json": JSON.stringify(MANIFEST),

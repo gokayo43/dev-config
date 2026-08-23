@@ -37,6 +37,8 @@ interface Run {
    * write to, and the suite is green either way.
    */
   readonly reportUid: number | undefined;
+  /** The junit the run wrote, or nothing when it never got that far. */
+  readonly report: string | undefined;
 }
 
 /** What the run left at that path, or nothing when it never got that far. */
@@ -66,7 +68,13 @@ async function ran(tree: Tree, network = ""): Promise<Run> {
     new Response(proc.stderr).text(),
   ]);
   const status = await proc.exited;
-  return { status, output: out + err, reportUid: await ownerOf(join(root, "junit.xml")) };
+  const report = Bun.file(join(root, "junit.xml"));
+  return {
+    status,
+    output: out + err,
+    reportUid: await ownerOf(join(root, "junit.xml")),
+    report: (await report.exists()) ? await report.text() : undefined,
+  };
 }
 
 const REACHES: Tree = {
@@ -216,6 +224,75 @@ describe("the sealed lane", () => {
     proc.kill("SIGTERM");
     await proc.exited;
     expect(await settles(marker, (count) => count === 0)).toBe(0);
+  });
+});
+
+/**
+ * A repo's coverage floor and a module the suite barely touches. The floor is
+ * per-file, so this one file decides the run; the bunfig is the fixture's own
+ * because a tree with none is a tree bun collects over and floors at nothing.
+ */
+function floored(covered: boolean, collection = ""): Tree {
+  return {
+    "bunfig.toml": `[test]\n${collection}coverageThreshold = { lines = 0.9, functions = 0.9 }\ncoverageSkipTestFiles = true\n`,
+    "lib.ts": `export function reached(): number {
+  return 1;
+}
+
+export function unreached(n: number): number {
+  const doubled = n * 2;
+  const shifted = doubled - 3;
+  return shifted;
+}
+`,
+    "lib.test.ts": `import { expect, test } from "bun:test";
+import { reached, unreached } from "./lib.ts";
+
+test("reached", () => {
+  expect(reached()).toBe(1);
+});
+${
+  covered
+    ? `
+test("unreached", () => {
+  expect(unreached(2)).toBe(1);
+});
+`
+    : ""
+}`,
+  };
+}
+
+// The step is what applies a repo's declared floor — the argument is in
+// docs/gates/test-suite.md — so the wrong implementation is the one that runs
+// the suite without --coverage, which the under-covered tree below passes with
+// every test green. Graded through the report the run wrote rather than the
+// console: what makes the first case the coverage floor and not some other
+// failure is that the run's own record says nothing in it failed.
+describe("the coverage floor the repo declares", () => {
+  test("a suite under the floor fails, with nothing failing", async () => {
+    const { status, report } = await ran(floored(false));
+    // Anchored on the root element, the way the step's own greps are: a
+    // per-file <testsuite> line carries its own failure count.
+    expect(report).toMatch(/<testsuites [^>]* failures="0"/);
+    expect(status).not.toBe(0);
+  });
+
+  test("and the same tree passes once the floor is met", async () => {
+    expect(await ran(floored(true))).toMatchObject({ status: 0 });
+  });
+
+  // Why the repo contract refuses `[test] coverage` outright rather than only
+  // the `true` spelling. bun takes the bunfig key over the command line, so
+  // `false` beats the --coverage above it: the tree the first case fails comes
+  // back green here, under the same floor, over the same uncovered function.
+  // Nothing in this step can see that — the argv is identical and the run is
+  // honestly green — so the gate is the contract's refusal, and this case is
+  // what proves that refusal is load-bearing rather than tidiness.
+  test("a bunfig that vetoes collection takes the floor with it", async () => {
+    const { status, report } = await ran(floored(false, "coverage = false\n"));
+    expect(report).toMatch(/<testsuites [^>]* failures="0"/);
+    expect(status).toBe(0);
   });
 });
 

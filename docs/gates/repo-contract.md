@@ -14,7 +14,7 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `typescript` major ≥ 7                                                                                          | the shared tsconfig is written against TypeScript 7                                               |
 | `oxlint-tsgolint` present, when `.oxlintrc.json` extends the base                                               | without it oxlint runs the base's type-aware rules over nothing and reports clean                 |
 | `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`   | a repo that stopped inheriting stops inheriting silently                                          |
-| `bunfig.toml` declares `minimumReleaseAge`, `saveExact`, `[test] coverage`, and a floor a run can fail          | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
+| `bunfig.toml` declares `minimumReleaseAge`, `saveExact`, and a coverage floor a run can fail                    | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
 | every rule, category and option `.oxlintrc.json` switches off carries a reason on the line above it             | a switch-off nobody wrote a reason for reads the same as one added to get a run green             |
 | `.oxlintrc.json` `extends` the shared base and nothing else, and no oxlint config sits below the root           | a second config is read after the root's and wins over it, in a file this gate never opens        |
 | `lefthook.yml` runs a staged gitleaks scan pre-commit and typecheck + tests pre-push                            | the hooks are the half of the gate that runs before a push                                        |
@@ -32,14 +32,35 @@ live somewhere the gate never opens.
 
 **The coverage floor is graded by what bun does with it, not by whether it is
 there.** It has to be a number above 0, or a table whose every key is one of the
-three floors bun reads — `lines`, `functions`, `statements` — each above 0, and
-`[test] coverage` has to be `true` beside it. Bun enforces none of the other
-ways of writing one: a floor at or below zero, an empty table, and a key it does
-not recognise are all ignored in silence, and with coverage off or absent the
-threshold is not applied at all — a file at 25% passes a floor of 0.99 (probed,
-bun 1.4.0). The shared `bun test` passes no `--coverage`, so that one line is
-what turns collection on. An unrecognised key is refused rather than skipped for
-the same reason `0` is: it is a floor its author believes is being applied.
+three floors bun reads — `lines`, `functions`, `statements` — each above 0. Bun
+enforces none of the other ways of writing one: a floor at or below zero, an
+empty table, and a key it does not recognise are all ignored in silence (probed,
+bun 1.4.0). An unrecognised key is refused rather than skipped for the same
+reason `0` is: it is a floor its author believes is being applied.
+
+Two keys are graded and the rest of `[test]` is the repo's own: the threshold
+above, and `coverage`, which must be **absent**. Either spelling of it is
+refused, because each moves the decision of where the floor is applied out of
+CI and into the repo — `true` collects on every run its author makes, so a
+scoped `bun test <file>` exits 1 with nothing failing; `false` wins over the
+`--coverage` CI passes (probed, bun 1.4.0 and 1.3.11), leaving a declared
+threshold applied to nothing at all. The second is the one worth refusing
+loudly: that repo passes this gate, reports a floor, and is graded by nothing.
+[test-suite](test-suite.md) has the argument and the flag that applies the floor
+instead.
+
+`coveragePathIgnorePatterns` is deliberately not graded, though it can excuse a
+file from the floor as surely as a low threshold can. Each entry is a line in
+the repo's own bunfig with its reason beside it, which is where review already
+reads it — the same bargain a lint directive gets. A gate deciding which files
+may be excused would be deciding it once, centrally, for repos whose reasons it
+cannot see.
+
+**The hedge that leaves:** a repo exempt from `ci-call` does not call
+`check.yml`, so nothing applies its floor unless its own workflow passes
+`--coverage` by hand — and this gate cannot see that it did. This repo is the
+case, and its `ci.yml` passes the flag; `dev-config#58` is where the wider
+question of what else that hand-rolled step drops is answered.
 
 **A switch-off carries a reason, and the reason is owed per switch-off.** What
 is graded is every entry under `rules`, under any `overrides[].rules`, under
@@ -416,19 +437,7 @@ with:
 | `ci-call`          | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to             |
 | `docs-spine`       | the glossary and `CLAUDE.md`                                                                                                                            |
 | `lifecycle-retire` | the comparison with the base ref's `lifecycle`, for a repo being deliberately wound down — not the field itself, and refused once it is waiving nothing |
-| `nested-config`    | the refusal of an oxlint config below the root, for a repo whose subtree is a scaffold rather than its own source                                       |
 | `secrets`          | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                               |
-
-`nested-config` has exactly one case today, and it is worth naming because the
-rule it waives is otherwise right: `project-template` carries
-`setup/monorepo/root/.oxlintrc.json`, which is not a nested config at all but
-the _source_ of a scaffolded monorepo's root config — a file copied into a new
-repo, where it becomes the one config that repo has. It sits beside a `knip.ts`
-that the template's own `oxlint` run does lint, so the gate is reading it
-correctly and refusing it correctly; what is wrong is only that this repo's
-subtree is a scaffold rather than source of its own. A repo naming this
-exemption is saying that, and nothing else — a genuine second config in a
-genuine subtree is refused the same as before.
 
 Every exemption is echoed as a `::notice` in the run, and a name outside the
 table fails rather than waiving anything — a typo cannot quietly turn a check

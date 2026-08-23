@@ -66,7 +66,7 @@ jobs:
       # This repo runs its own gates on itself, from the working tree. A gate
       # its author's repo cannot pass is a gate nobody should be asked to.
       #
-      # Four facts here are structural rather than unfinished: the configs
+      # Five facts here are structural rather than unfinished: the configs
       # inherit from this repo's own bases by relative path because a package
       # cannot extend itself by name, CI is this file rather than a call into
       # check.yml because a commit cannot pin its own SHA, there is no
@@ -75,6 +75,15 @@ jobs:
       # pure domain layer for one to mutate. Its suite drives that gate against
       # fixture repositories instead, which is the only place it can be run
       # honestly here.
+      #
+      # The fifth is the test-suite action, which the step below substitutes for
+      # rather than uses. Its seal puts the run in a network namespace, and the
+      # Postgres and Redis this suite needs are service containers on the host's
+      # loopback, which that namespace does not reach. Substituting drops three
+      # guarantees every other repo gets — the seal itself, the junit report,
+      # and the two greps over it that refuse a skipped test and an
+      # assertion-free one — so this repo is the one repo not held to them.
+      # dev-config#58 is where that is answered.
       - uses: ./.github/actions/repo-contract
         with:
           exemptions: config-lineage ci-call secrets
@@ -103,7 +112,10 @@ jobs:
       # each one refuses a violating tree and passes a clean one. Every other
       # repo's gate is only as honest as these two lanes.
       - run: bun run check
-      - run: bun test
+      # `--coverage` by hand: it is the one guarantee of the substituted action
+      # this step does keep, and without it the floor above it declares is
+      # applied to nothing. docs/gates/test-suite.md.
+      - run: bun test --coverage
         env:
           # No default, deliberately: the conformance suite flushes this one.
           TEST_REDIS_URL: redis://127.0.0.1:6379

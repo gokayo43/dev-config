@@ -1,7 +1,8 @@
 # The test suite
 
 `bun test`, run so that a green suite means something: the run happened, no test
-skipped, no test asserted nothing, and nothing in it reached a live host.
+skipped, no test asserted nothing, nothing in it reached a live host, and the
+coverage floor the repo declares was actually applied to it.
 
 ## The unit lane
 
@@ -93,6 +94,34 @@ against `bunfig.toml`'s `coverageThreshold`, so splitting the suite into a
 sealed run and an open one would grade each half against the whole floor and
 fail both — a lane split that costs the coverage gate is not a lane split worth
 having.
+
+## The coverage floor
+
+The step runs `bun test --coverage`, and that flag is what makes a repo's
+`coverageThreshold` a gate: bun reads the threshold only while it is collecting,
+and a repo that declares one and never collects has the field without the floor
+— a file at 25% passes a floor of 0.99 (probed, bun 1.4.0 and 1.3.11).
+
+The flag lives here rather than as `[test] coverage` in the repo's own bunfig,
+which is the other way to turn collection on, because bun has no per-run way
+back off one. As a repo-local default it applies the per-file floor to every
+run anybody makes, and a scoped `bun test <file>` then exits 1 with nothing
+failing — over the files that run loaded but was never pointed at, which is most
+of them. The narrow check somebody runs while working is red whatever the code
+says, which is how a floor teaches people to ignore it. A floor is a gate on the
+run CI makes; it is not a tax on every run made on the way there.
+
+So the [repo contract](repo-contract.md) refuses `[test] coverage` in a repo's
+own bunfig — the key, not one spelling of it. `true` is the harm above. `false`
+is the worse one, and it is not symmetrical with leaving the key out: bun takes
+the bunfig over the command line, so `coverage = false` **wins over the
+`--coverage` this step passes** and no coverage is collected at all (probed, bun
+1.4.0 and 1.3.11 — a file at 25% under a floor of 0.9, no table printed, exit
+0). That repo declares a floor, satisfies the contract's threshold rule, and is
+graded by nothing; nothing in this step can tell it apart from a repo that
+passed, because the argv is the same and the run is honestly green. The repo
+declares the floor; this step is what applies it; the key is how a repo would
+take that decision back, in either direction.
 
 ## The run the report proves happened
 

@@ -138,8 +138,12 @@ a change to a rule usually lands here too.
 
 ```sh
 bun run check   # format:check + lint + typecheck + knip
-bun test        # the gate suites, coverage-floored
+bun test        # the gate suites
 ```
+
+Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
+`--coverage` applies it, so `bun test --coverage` is the run CI makes —
+`docs/gates/test-suite.md`.
 
 `anti-slop/**` sits outside that floor, in `bunfig.toml`: its rules run inside a
 spawned oxlint and never execute in the test process, so the runner instruments

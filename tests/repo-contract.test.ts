@@ -85,7 +85,6 @@ describe("repo contract", () => {
     ).toEqual([
       containing("minimumReleaseAge"),
       containing("saveExact"),
-      containing("[test] coverage must be true"),
       containing("coverageThreshold"),
     ]);
   });
@@ -113,18 +112,28 @@ describe("repo contract", () => {
     expect(await contract(withThreshold(threshold))).toEqual([]);
   });
 
-  // A threshold bun never applies is not a floor. With coverage off or absent
-  // bun exits 0 on a file far under it, and the shared `bun test` passes no
-  // `--coverage` — so the bunfig line is the only thing that turns it on, and
-  // the wrong implementation is the one that grades the threshold alone.
+  // Collection belongs to the run CI makes — docs/gates/test-suite.md. Three
+  // wrong implementations are graded here, one per row. Asking for the bunfig
+  // line refuses row 1. Grading only `true` passes row 2, which is the worse
+  // tree of the two: bun takes `coverage = false` over CI's --coverage
+  // (probed, 1.4.0 and 1.3.11), so that repo declares a floor, satisfies this
+  // gate, and is graded by nothing. Not grading the key at all passes row 3,
+  // whose author's every scoped run is red instead.
   test.each([
-    ["coverage disabled", "coverage = false\n"],
-    ["coverage absent", ""],
-  ])("a coverage floor with %s is refused", async (_what, line) => {
+    ["says nothing about collection", "", []],
+    [
+      "vetoes the collection CI asks for",
+      "coverage = false\n",
+      [containing("[test] coverage decides where the floor is applied")],
+    ],
+    [
+      "collects, flooring every run its author makes",
+      "coverage = true\n",
+      [containing("[test] coverage decides where the floor is applied")],
+    ],
+  ])("a floored bunfig that %s", async (_what, line, expected) => {
     const bunfig = `[install]\nminimumReleaseAge = 604800\nsaveExact = true\n\n[test]\n${line}coverageThreshold = { lines = 0.75, functions = 0.75 }\n`;
-    expect(await contract({ ...CLEAN, "bunfig.toml": bunfig })).toEqual([
-      containing("[test] coverage must be true"),
-    ]);
+    expect(await contract({ ...CLEAN, "bunfig.toml": bunfig })).toEqual(expected);
   });
 
   // `Bun.TOML.parse` throws, so a bunfig nobody can read used to leave the step
@@ -680,33 +689,16 @@ describe("a second place lint config can come from", () => {
     ["src/.oxlintrc.json", '{ "rules": {} }'],
     ["apps/web/.oxlintrc.jsonc", '{ "rules": {} }'],
     ["packages/ui/oxlint.config.ts", "export default {};\n"],
+    // A scaffold's source reads like the one honest exception — this is the
+    // file `project-template` copies into a new repo, where it becomes that
+    // repo's root config — and is refused anyway, because no run ever grades
+    // that tree: the template's CI points this gate at the scaffold its setup
+    // produced, where `setup/` is gone.
+    ["setup/monorepo/root/.oxlintrc.json", '{ "rules": {} }'],
   ])("a config at %s is refused", async (path, body) => {
     expect(await contract({ ...CLEAN, [path]: body })).toEqual([
       containing("replaces the root's rules for its subtree"),
     ]);
-  });
-
-  // The one legitimate nested config in the fleet is a scaffold's: the file
-  // `project-template` copies into a new repo, where it becomes that repo's
-  // root config. The gate reads it correctly and refuses it correctly, so what
-  // the exemption says is that this subtree is a scaffold rather than source.
-  test("nested-config waives the refusal, and waives nothing else", async () => {
-    const scaffold = { ...CLEAN, "setup/monorepo/root/.oxlintrc.json": '{ "rules": {} }' };
-    expect(await contract(scaffold)).toEqual([
-      containing("replaces the root's rules for its subtree"),
-    ]);
-    expect(await contract(scaffold, { exemptions: ["nested-config"] })).toEqual([]);
-    // The root's own facts are still graded under it — the exemption is about
-    // where a config may sit, never about what any config may say.
-    expect(
-      await contract(
-        {
-          ...scaffold,
-          ".oxlintrc.json": `{\n  "extends": ["./node_modules/@gokayo43/dev-config/oxlint.base.json"],\n  "rules": {\n    "no-console": "off"\n  }\n}`,
-        },
-        { exemptions: ["nested-config"] },
-      ),
-    ).toEqual([containing("no-console is turned off with no reason")]);
   });
 
   test("the root's own config is not mistaken for a nested one", async () => {

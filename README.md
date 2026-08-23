@@ -610,12 +610,17 @@ each repo:
 
 ```toml
 [test]
-coverage = true
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
 ```
 
-`bun test` exits non-zero below the threshold, which is what makes it a gate
+The threshold is declared here and applied by the `--coverage` the
+[test-suite](docs/gates/test-suite.md) action passes — which is also why
+`[test] coverage` in a repo's own bunfig is refused rather than merely
+unnecessary — either spelling, since `false` vetoes CI's flag outright; that
+page has the argument.
+
+The CI run exits non-zero below the threshold, which is what makes it a gate
 rather than a report. Two properties of it cost a probe to discover: the breach
 is not printed — a run that reports every test passing and still exits 1 is
 this — and the threshold is applied to **every file**, not to the total. So the

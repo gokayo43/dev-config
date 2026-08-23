@@ -39,7 +39,6 @@ const EXEMPTIONS = {
   "ci-call": "CI is a call into the shared check.yml",
   "docs-spine": "the repo has a domain worth a glossary and agents worth briefing",
   "lifecycle-retire": "the repo still carries the people its lifecycle says it does",
-  "nested-config": "the only oxlint config in the repo is the one at its root",
   secrets: "the repo has an environment to shape",
 } as const;
 
@@ -420,15 +419,11 @@ async function checkBunfig(root: string): Promise<Problem[]> {
   if (install["saveExact"] !== true) {
     problems.push({ file: "bunfig.toml", message: "[install] saveExact must be true" });
   }
-  // The threshold is inert unless coverage is collected: with `coverage` false
-  // or absent, bun exits 0 on a file far under the floor (probed, bun 1.4.0),
-  // and nothing puts it back — the shared `bun test` runs with no `--coverage`
-  // flag, so this line is the only thing that turns it on.
-  if (test["coverage"] !== true) {
+  if (test["coverage"] !== undefined) {
     problems.push({
       file: "bunfig.toml",
       message:
-        "[test] coverage must be true — bun applies coverageThreshold only when it is collecting coverage, and `bun test` is run with no --coverage flag",
+        "[test] coverage decides where the floor is applied and belongs to CI, not to the repo — delete the key: `true` collects on every run its author makes, so a scoped `bun test <file>` exits 1 with nothing failing, and `false` wins over CI's --coverage, leaving the threshold below applied to nothing",
     });
   }
   if (!floorsCoverage(test["coverageThreshold"])) {
@@ -690,7 +685,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
       lifecycleAtBase(root, contract.event),
       checkLockfiles(root),
       checkLineage(root, rootManifest.value, reading, exempt("config-lineage")),
-      exempt("nested-config") ? none : checkNestedConfigs(root),
+      checkNestedConfigs(root),
       reading.then(checkOffReasons),
       checkBunfig(root),
       checkLefthook(root),
