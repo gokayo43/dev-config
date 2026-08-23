@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 import { type ConfigObject, configObjects, record } from "../.github/actions/_lib/gate.ts";
 import { BASE, lintAt, oxlint } from "./lint-fixture.ts";
+import { CLEAN, contract } from "./repo-contract-fixture.ts";
 import { materialise } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -193,5 +194,44 @@ export function round(value: User): User {
 
     const reported = await lintAt(root);
     expect(reported.map(({ code }) => code)).toContain("typescript(no-unsafe-type-assertion)");
+  });
+});
+
+/**
+ * The base is the file every repo's `.oxlintrc.json` inherits, and it switches
+ * rules off itself — so it is graded by the rule it makes those repos keep,
+ * through the walker the contract actually runs rather than a reading of it.
+ * A base that could not pass its own gate is a rule the fleet would learn to
+ * treat as advisory.
+ */
+const shipped = await Bun.file(join(REPO, "oxlint.base.json")).text();
+
+describe("the base against the rule it makes every repo keep", () => {
+  /** The base with the reason directly above one of its switch-offs taken out. */
+  function withoutReasonFor(rule: string): string {
+    const lines = shipped.split("\n");
+    const at = lines.findIndex((line) => line.trim().startsWith(`"${rule}"`));
+    let first = at;
+    while (first > 0 && (lines[first - 1] ?? "").trim().startsWith("//")) first -= 1;
+    lines.splice(first, at - first);
+    return lines.join("\n");
+  }
+
+  test("carries a reason for every switch-off in it", async () => {
+    const problems = await contract({ ...CLEAN, ".oxlintrc.json": shipped });
+    expect(problems.filter((message) => message.includes("turned off"))).toEqual([]);
+  });
+
+  // The half that makes the half above mean something. Asserting only that a
+  // file draws no findings is a test a walker returning nothing at all passes,
+  // and this base holds four switch-offs for it to find.
+  test("and is graded by the walker that would find one missing", async () => {
+    const problems = await contract({
+      ...CLEAN,
+      ".oxlintrc.json": withoutReasonFor("oxc/no-map-spread"),
+    });
+    expect(problems.filter((message) => message.includes("turned off"))).toEqual([
+      "oxc/no-map-spread is turned off with no reason — add the reason above the entry",
+    ]);
   });
 });

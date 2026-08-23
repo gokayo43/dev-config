@@ -1,15 +1,18 @@
 import {
+  type ConfigFile,
   type ConfigObject,
   DEPENDENCY_FIELDS,
   type Event,
   isIgnored,
   isList,
+  isObject,
   isTracked,
   manifests,
   type Problem,
   readConfig,
   record,
   repoFiles,
+  withoutComments,
 } from "../_lib/gate.ts";
 import { checkPins, isExactVersion } from "../_lib/dependency-specs.ts";
 import { CI_WORKFLOW } from "./ci-workflow.ts";
@@ -36,6 +39,7 @@ const EXEMPTIONS = {
   "ci-call": "CI is a call into the shared check.yml",
   "docs-spine": "the repo has a domain worth a glossary and agents worth briefing",
   "lifecycle-retire": "the repo still carries the people its lifecycle says it does",
+  "nested-config": "the only oxlint config in the repo is the one at its root",
   secrets: "the repo has an environment to shape",
 } as const;
 
@@ -70,9 +74,224 @@ async function checkLockfiles(root: string): Promise<Problem[]> {
   }));
 }
 
+/**
+ * Where a switch-off is written: the name it switches off, and the line it is
+ * on (counted from zero).
+ */
+interface OffSite {
+  readonly name: string;
+  readonly line: number;
+}
+
+/**
+ * A block whose members can silence a rule, and what silencing looks like in
+ * it. The path has array indices dropped, so one entry covers every override.
+ *
+ * `rules` and `categories` are switched off by oxlint's `AllowWarnDeny`, whose
+ * schema documents `"allow"` as the synonym of `"off"` and `0` as the number
+ * that means it — each also legal as the head of an array carrying the rule's
+ * options. `options` is a different vocabulary with the same effect:
+ * `typeAware: false` takes every type-aware rule in the base with it, which is
+ * twelve rules at `error`, and `bun run lint` passes no flag that would put
+ * them back. `overrides` carries no `categories` and no `options` of its own
+ * (oxlint's `OxlintOverride`).
+ *
+ * `globals` and a rule's own options object are why this is a path rather than
+ * a key: both hold members whose value is legitimately `"off"` or `false`, and
+ * neither silences anything.
+ */
+const SWITCHES = new Map([
+  ["rules", silencesRule],
+  ["overrides.rules", silencesRule],
+  ["categories", silencesRule],
+  ["options", silencesOption],
+]);
+
+/** The JSON string starting at `at`, decoded, and the index just past its closing quote. */
+function stringAt(text: string, at: number): { readonly value: string; readonly end: number } {
+  let index = at + 1;
+  while (index < text.length) {
+    if (text[index] === "\\") {
+      index += 2;
+      continue;
+    }
+    if (text[index] === '"') {
+      const end = index + 1;
+      // Decoded rather than sliced, so the file has one spelling of each name
+      // and each setting: `"off"` is a string oxlint reads as `off`,
+      // and a gate comparing raw bytes reads it as something else entirely.
+      const decoded = JSON.parse(text.slice(at, end)) as unknown;
+      return { value: typeof decoded === "string" ? decoded : "", end };
+    }
+    index += 1;
+  }
+  return { value: "", end: text.length };
+}
+
+function skipSpace(text: string, from: number): number {
+  let index = from;
+  while (index < text.length && (text[index] ?? "").trim() === "") index += 1;
+  return index;
+}
+
+/** Whether the setting written at `at` switches its rule or category off. */
+function silencesRule(text: string, at: number): boolean {
+  const start = text[at] === "[" ? skipSpace(text, at + 1) : at;
+  if (text[start] === '"') {
+    const { value } = stringAt(text, start);
+    return value === "off" || value === "allow";
+  }
+  if (text[start] !== "0") return false;
+  const after = text[skipSpace(text, start + 1)] ?? "";
+  return after === "," || after === "}" || after === "]";
+}
+
+/** Whether the option written at `at` switches a body of rules off. */
+function silencesOption(text: string, at: number): boolean {
+  return text.startsWith("false", at);
+}
+
+/** The line `at` falls on, counted from zero. */
+function lineOf(text: string, at: number): number {
+  let line = 0;
+  for (let index = 0; index < at; index += 1) if (text[index] === "\n") line += 1;
+  return line;
+}
+
+/** What one walk of a config's text found: where it silences something, and how crowded each line is. */
+interface Walk {
+  readonly sites: OffSite[];
+  /**
+   * How many entries of a silencing block each line carries. Only those are
+   * counted: an options object hanging off a rule that is staying on is not
+   * something a reason could be about, so it cannot make one ambiguous.
+   */
+  readonly entries: Map<number, number>;
+}
+
+/**
+ * Every switch-off in the config, found in one walk of its comment-blanked
+ * text. One walk because off-ness has to be decided once: a pass that collected
+ * names from the parse and then searched the text for them decides it twice, in
+ * two dialects, and the two answers drift the first time a spelling is added.
+ * The walk carries the path it is inside, which is what tells a `rules` block
+ * from `globals` without asking the parse anything.
+ */
+function walkConfig(blanked: string): Walk {
+  const sites: OffSite[] = [];
+  const entries = new Map<number, number>();
+  const path: string[] = [];
+  let key: string | undefined;
+  let index = 0;
+  while (index < blanked.length) {
+    const char = blanked[index];
+    if (char === '"') {
+      const { value, end } = stringAt(blanked, index);
+      const colon = skipSpace(blanked, end);
+      if (blanked[colon] !== ":") {
+        index = end;
+        continue;
+      }
+      const line = lineOf(blanked, index);
+      const setting = skipSpace(blanked, colon + 1);
+      const silences = SWITCHES.get(path.filter((step) => step !== "").join("."));
+      if (silences !== undefined) {
+        entries.set(line, (entries.get(line) ?? 0) + 1);
+        if (silences(blanked, setting)) sites.push({ name: value, line });
+      }
+      key = value;
+      index = setting;
+      continue;
+    }
+    if (char === "{" || char === "[") {
+      path.push(key ?? "");
+      key = undefined;
+    } else if (char === "}" || char === "]") {
+      path.pop();
+      key = undefined;
+    }
+    index += 1;
+  }
+  return { sites, entries };
+}
+
+/**
+ * The comment lines directly above `line`, as the prose in them. Comment syntax
+ * is stripped rather than trusted, because `//` and `/**\/` are a comment that
+ * says nothing — the same empty waiver `allowlistFrom` already refuses, in the
+ * other dialect a repo writes reasons in.
+ */
+function reasonAbove(
+  written: readonly string[],
+  stripped: readonly string[],
+  line: number,
+): string {
+  const prose: string[] = [];
+  for (let above = line - 1; above >= 0; above -= 1) {
+    const text = written[above] ?? "";
+    if (text.trim() === "" || (stripped[above] ?? "").trim() !== "") break;
+    prose.push(
+      text
+        .trim()
+        .replace(/^\/\*/, "")
+        .replace(/\*\/$/, "")
+        .replace(/^\/\//, "")
+        .replace(/^\*+/, "")
+        .trim(),
+    );
+  }
+  return prose.join(" ").trim();
+}
+
+/**
+ * The reason beside every rule, category and option the config switches off.
+ * Tightening a rule or reconfiguring it argues for itself in what it now
+ * demands; switching one off argues nothing, and a switch-off with no reason
+ * beside it is indistinguishable a year later from one added to get a run
+ * green.
+ *
+ * The reason is owed per switch-off, not per line, so a switch-off sharing its
+ * line with any other entry is refused outright: a comment above two entries
+ * says nothing about which of them it excuses, and a reader cannot recover the
+ * difference. Read out of the text rather than the parse, because the parse is
+ * precisely what drops the comment.
+ */
+function checkOffReasons(oxlintrc: ConfigFile): Problem[] {
+  if (oxlintrc.text === undefined) return [];
+  const blanked = withoutComments(oxlintrc.text);
+  const written = oxlintrc.text.split("\n");
+  const stripped = blanked.split("\n");
+  const { sites, entries } = walkConfig(blanked);
+  return sites.flatMap(({ name, line }) => {
+    const crowded = (entries.get(line) ?? 0) > 1;
+    if (!crowded && reasonAbove(written, stripped, line) !== "") return [];
+    const why = crowded
+      ? "shares its line with another entry — one switch-off per line, its reason above"
+      : "is turned off with no reason — add the reason above the entry";
+    return [{ file: ".oxlintrc.json", line: line + 1, message: `${name} ${why}` }];
+  });
+}
+
+/**
+ * oxlint reads the nearest config to the file it is linting, so a config in a
+ * subdirectory REPLACES the root's rules for that whole subtree rather than
+ * adding to them — an empty one turns the base off wherever it sits. There is
+ * no diagnostic a reader of the root config could get from it, so the file is
+ * refused instead of followed.
+ */
+async function checkNestedConfigs(root: string): Promise<Problem[]> {
+  const found = await repoFiles(root, ["*/.oxlintrc.*", "*/oxlint.config.*"]);
+  return found.map((file) => ({
+    file,
+    message:
+      "a config below the root replaces the root's rules for its subtree, not adds to them — state the difference in the root's `overrides` instead",
+  }));
+}
+
 async function checkLineage(
   root: string,
   contents: ConfigObject,
+  reading: Promise<ConfigFile>,
   exempt: boolean,
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
@@ -90,12 +309,24 @@ async function checkLineage(
     });
   }
 
-  const oxlintrc = await readConfig(root, ".oxlintrc.json");
+  const oxlintrc = await reading;
   problems.push(...oxlintrc.problems);
   if (oxlintrc.contents !== undefined) {
-    const inherits = extendsList(oxlintrc.contents["extends"]).some((entry) =>
-      entry.endsWith(`${DEV_CONFIG}/oxlint.base.json`),
-    );
+    const targets = extendsList(oxlintrc.contents["extends"]);
+    const inherits = targets.some((entry) => entry.endsWith(`${DEV_CONFIG}/oxlint.base.json`));
+    // A second target is read after the base and wins over it, so anything it
+    // switches off is switched off in a file this gate never opens. Refused
+    // rather than followed: one file to read is the property that makes every
+    // rule below checkable, and `overrides` is where a per-directory difference
+    // already belongs. Graded even under `config-lineage`, which waives WHERE a
+    // config inherits from and never how many places it inherits from.
+    if (targets.length > 1) {
+      problems.push({
+        file: ".oxlintrc.json",
+        message:
+          "extends must name the shared base and nothing else — the gate reads .oxlintrc.json; put the override there",
+      });
+    }
     if (!inherits && !exempt) {
       problems.push({
         file: ".oxlintrc.json",
@@ -138,6 +369,33 @@ async function checkLineage(
   return problems;
 }
 
+/** The three floors bun reads out of the table form; it ignores every other key in silence. */
+const COVERAGE_FLOORS = ["lines", "functions", "statements"];
+
+const NEEDS_COVERAGE_FLOOR = `[test] coverageThreshold must be a floor a run can fail — a number above 0, or a table of ${COVERAGE_FLOORS.join(
+  ", ",
+)} floors above 0`;
+
+/**
+ * Whether the declared threshold can fail a run. Bun takes a number or a table
+ * of the floors above and enforces none of the other ways of writing one: a
+ * floor at or below zero, an empty table, and a key outside those three are all
+ * ignored in silence (bun 1.4.0). So `coverageThreshold = 0` and
+ * `{ line = 0.9 }` are both a declared threshold no run can breach — which is
+ * the coverage gate absent, wearing the field that says it is there.
+ */
+function floorsCoverage(threshold: unknown): boolean {
+  if (typeof threshold === "number") return threshold > 0;
+  if (!isObject(threshold)) return false;
+  const floors = Object.entries(threshold);
+  return (
+    floors.length > 0 &&
+    floors.every(
+      ([name, floor]) => COVERAGE_FLOORS.includes(name) && typeof floor === "number" && floor > 0,
+    )
+  );
+}
+
 async function checkBunfig(root: string): Promise<Problem[]> {
   // The same read every other config here gets, in the dialect this one is
   // written in. `Bun.TOML.parse` throws on a malformed file, and a bare throw
@@ -162,12 +420,19 @@ async function checkBunfig(root: string): Promise<Problem[]> {
   if (install["saveExact"] !== true) {
     problems.push({ file: "bunfig.toml", message: "[install] saveExact must be true" });
   }
-  if (test["coverageThreshold"] === undefined) {
+  // The threshold is inert unless coverage is collected: with `coverage` false
+  // or absent, bun exits 0 on a file far under the floor (probed, bun 1.4.0),
+  // and nothing puts it back — the shared `bun test` runs with no `--coverage`
+  // flag, so this line is the only thing that turns it on.
+  if (test["coverage"] !== true) {
     problems.push({
       file: "bunfig.toml",
       message:
-        "[test] coverageThreshold must declare the coverage floor — it is what makes bun test a gate",
+        "[test] coverage must be true — bun applies coverageThreshold only when it is collecting coverage, and `bun test` is run with no --coverage flag",
     });
+  }
+  if (!floorsCoverage(test["coverageThreshold"])) {
+    problems.push({ file: "bunfig.toml", message: NEEDS_COVERAGE_FLOOR });
   }
   return problems;
 }
@@ -410,22 +675,31 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   // `upgrade-gate: true` to.
   const call = exempt("ci-call") ? { asked: undefined, problems: [] } : await checkCall(root);
 
+  // One read of .oxlintrc.json, two subjects asking about it — where it
+  // inherits from, and whether every switch-off in it carries a reason. Awaited
+  // in the batch rather than before it, so the second subject is a member of
+  // the batch like any other.
+  const reading = readConfig(root, ".oxlintrc.json");
+
   const none = Promise.resolve<Problem[]>([]);
-  const [base, lockfiles, lineage, bunfig, lefthook, secrets, docs, live] = await Promise.all([
-    // Nothing else in this batch reads the base ref, and it is the one entry
-    // that spawns a process per question — so it runs beside them rather than
-    // ahead of them.
-    lifecycleAtBase(root, contract.event),
-    checkLockfiles(root),
-    checkLineage(root, rootManifest.value, exempt("config-lineage")),
-    checkBunfig(root),
-    checkLefthook(root),
-    exempt("secrets") ? none : checkSecrets(root),
-    exempt("docs-spine") ? none : checkDocs(root),
-    declared.is === "live"
-      ? checkLive(root, all.read, { database: contract.database, call: call.asked })
-      : none,
-  ]);
+  const [base, lockfiles, lineage, nested, offReasons, bunfig, lefthook, secrets, docs, live] =
+    await Promise.all([
+      // Nothing else in this batch reads the base ref, and it is the one entry
+      // that spawns a process per question — so it runs beside them rather than
+      // ahead of them.
+      lifecycleAtBase(root, contract.event),
+      checkLockfiles(root),
+      checkLineage(root, rootManifest.value, reading, exempt("config-lineage")),
+      exempt("nested-config") ? none : checkNestedConfigs(root),
+      reading.then(checkOffReasons),
+      checkBunfig(root),
+      checkLefthook(root),
+      exempt("secrets") ? none : checkSecrets(root),
+      exempt("docs-spine") ? none : checkDocs(root),
+      declared.is === "live"
+        ? checkLive(root, all.read, { database: contract.database, call: call.asked })
+        : none,
+    ]);
 
   // Spelled out rather than flattened from the batch, because the order is the
   // thing being decided here — it is what a reader of a failing run sees, and
@@ -438,6 +712,8 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     ...checkPins(all.read),
     ...lockfiles,
     ...lineage,
+    ...nested,
+    ...offReasons,
     ...bunfig,
     ...lefthook,
     ...secrets,

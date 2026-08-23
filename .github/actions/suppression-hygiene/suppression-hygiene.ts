@@ -19,6 +19,18 @@ const DIRECTIVE =
   /(?:\/\/|\/\*)\s*(?:(?:oxlint|eslint)-disable(?:-next-line|-line)?|Stryker disable)\b/;
 
 /**
+ * Whether the directive on this line actually says why. The separator alone is
+ * not a reason: a line ending `-- ` satisfies a test for the marker and tells
+ * the next reader exactly what no comment at all would. The same bar
+ * `allowlistFrom` holds a waiver to, in the other dialect a suppression is
+ * written in.
+ */
+function saysWhy(line: string): boolean {
+  const [, ...reason] = line.split(REASON);
+  return reason.join(REASON).trim() !== "";
+}
+
+/**
  * Files that park work in the tree. The queue is GitHub issues, in the repo the
  * work belongs to: a list nobody can label, assign or close is deletion that
  * feels responsible.
@@ -44,7 +56,7 @@ export async function suppressionHygiene({ root, fixtures }: Scope): Promise<Pro
     if (exempt.has(file)) continue;
     const lines = (await Bun.file(`${root}/${file}`).text()).split("\n");
     lines.forEach((line, index) => {
-      if (!DIRECTIVE.test(line) || line.includes(REASON)) return;
+      if (!DIRECTIVE.test(line) || saysWhy(line)) return;
       problems.push({
         file,
         message: `line ${index + 1}: a lint directive without a '${REASON.trim()} reason' is a suppressed bug — say what the rule cannot know`,

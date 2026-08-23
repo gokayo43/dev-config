@@ -10,7 +10,6 @@
 // under `node_modules` (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING), and this
 // directory is inside `node_modules` for every repo that consumes it. `tsc`
 // still checks it here — `checkJs` in this repo's tsconfig.
-/* oxlint-disable anti-slop/no-shape-in-symbol-names -- the rule named for the word it bans is imported here under its own name, rather than under one spelled around itself */
 /** @import { Plugin } from "@oxlint/plugins" */
 
 import {
@@ -21,10 +20,8 @@ import {
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.js";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.js";
 import { noRealTimersRule } from "./rules/no-real-timers.js";
-import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.js";
 import { noObjectParametersRule, noUnknownParametersRule } from "./rules/parameter-types.js";
 import { noReflectApplyRule, noReflectGetRule } from "./rules/reflect.js";
-import { noShapeInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.js";
 import { noUnknownReturnsRule } from "./rules/no-unknown-returns.js";
 import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases.js";
 import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.js";
@@ -42,8 +39,6 @@ const antiSlop = {
     "no-real-timers": noRealTimersRule,
     "no-reflect-apply": noReflectApplyRule,
     "no-reflect-get": noReflectGetRule,
-    "no-runtime-typeof": noRuntimeTypeofRule,
-    "no-shape-in-symbol-names": noShapeInSymbolNamesRule,
     "no-unknown-parameters": noUnknownParametersRule,
     "no-unknown-returns": noUnknownReturnsRule,
     "no-unknown-type-aliases": noUnknownTypeAliasesRule,

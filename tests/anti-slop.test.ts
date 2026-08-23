@@ -16,7 +16,7 @@ const REPO = dirname(import.meta.dir);
  */
 describe("the harness", () => {
   const THROWING = `const rule = { create() { return { Program() { throw new Error("thrown"); } }; } };
-export default { meta: { name: "anti-slop" }, rules: { "no-runtime-typeof": rule } };
+export default { meta: { name: "anti-slop" }, rules: { "no-reflect-get": rule } };
 `;
 
   /** What a run was refused with, or the fact that it was not refused at all. */
@@ -32,7 +32,7 @@ export default { meta: { name: "anti-slop" }, rules: { "no-runtime-typeof": rule
       plugins: [],
       categories: { correctness: "off" },
       jsPlugins: [{ name: "anti-slop", specifier: "./throws.js" }],
-      rules: { "anti-slop/no-runtime-typeof": "error" },
+      rules: { "anti-slop/no-reflect-get": "error" },
     });
 
     // oxlint reports the throw against the file it was linting, so the harness
@@ -434,95 +434,6 @@ export const value = R.get(owner, key);`,
       source: `${REFLECT}const { get: read } = Reflect;
 export const value = read(owner, key);`,
       reports: ["Replace `Reflect.get`"],
-    },
-  ],
-
-  "no-runtime-typeof": [
-    {
-      name: "a typeof narrowing an input instead of decoding it",
-      source: `declare function useName(name: string): void;
-export function apply(input: string | number): void {
-  if (typeof input === "string") useName(input);
-}`,
-      reports: ["3:7"],
-    },
-    {
-      name: "a decoded input needs no narrowing",
-      source: `declare function useName(name: string): void;
-export function apply(name: string): void {
-  useName(name);
-}`,
-      reports: [],
-    },
-    {
-      name: "a typeof in type position is not a runtime check",
-      source: `declare const settings: { readonly retries: number };
-export type Settings = typeof settings;`,
-      reports: [],
-    },
-  ],
-
-  "no-shape-in-symbol-names": [
-    {
-      name: "a type named for the word",
-      source: `export interface UserShape {
-  readonly id: string;
-}`,
-      reports: ["UserShape"],
-    },
-    {
-      name: "the thing named by what it is",
-      source: `export interface User {
-  readonly id: string;
-}`,
-      reports: [],
-    },
-    {
-      name: "the word as data is not a symbol name",
-      source: `export const message = "the shape of the payload";`,
-      reports: [],
-    },
-    {
-      name: "case does not change what a name says",
-      source: `export const SHAPE_OF_IT = 1;`,
-      reports: ["SHAPE_OF_IT"],
-    },
-    {
-      name: "a property key is a name someone reads too",
-      source: `export const payload = { shapeOf: 1 };`,
-      reports: ["shapeOf"],
-    },
-    {
-      // zod's `.shape` is its documented API and `shapeRendering` is an SVG
-      // attribute. Upstream refuses both, and at `error` fleet-wide the only
-      // remedy is a disable per site — for a name the repo never chose.
-      name: "a property read on a value the file does not own is not the file's name",
-      source: `import { schema, svg } from "./foreign.ts";
-
-export function apply(): string[] {
-  svg.style.shapeRendering = "crispEdges";
-  return Object.keys(schema.shape);
-}`,
-      reports: [],
-    },
-    {
-      name: "an imported name is named once, where it is bound",
-      source: `import { shapeIt } from "./foreign.ts";
-
-export const run = shapeIt;`,
-      reports: ["shapeIt"],
-    },
-    {
-      // The property is the foreign one; the binding beside it is the name this
-      // file chose, and `const { shape: identity }` is the fix available to it.
-      name: "a name bound out of a foreign property is still a name the file chose",
-      source: `import { schema } from "./foreign.ts";
-
-export function read(): unknown {
-  const { shape } = schema;
-  return shape;
-}`,
-      reports: ["shape"],
     },
   ],
 

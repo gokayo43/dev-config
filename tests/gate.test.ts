@@ -51,6 +51,20 @@ describe("annotations", () => {
     expect(lines).toEqual(["::error file=package.json::packageManager must read bun@<version>"]);
   });
 
+  // GitHub reads the properties after `::error ` as one comma-separated list,
+  // so a separator that is not a comma makes `file=x line=5` a single property
+  // named `file` whose value ends in a space — an annotation on no file at all.
+  test("a problem carrying a line annotates that line of that file", () => {
+    const { lines, restore } = captureLog();
+    report([
+      { file: ".oxlintrc.json", line: 5, message: "no-console is turned off with no reason" },
+    ]);
+    restore();
+    expect(lines).toEqual([
+      "::error file=.oxlintrc.json,line=5::no-console is turned off with no reason",
+    ]);
+  });
+
   test("a problem with no file is still an error", () => {
     const { lines, restore } = captureLog();
     report([{ message: "issue #4 carries no state label" }]);

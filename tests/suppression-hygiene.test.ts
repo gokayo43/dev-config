@@ -25,6 +25,19 @@ describe("suppression hygiene", () => {
     expect(await hygiene(CLEAN)).toEqual([]);
   });
 
+  // The separator alone is not a reason. A gate testing for the marker rather
+  // than for what follows it accepts a directive that tells the next reader
+  // exactly what no comment at all would — the same empty waiver
+  // `allowlistFrom` already refuses in the other dialect a reason is written in.
+  test.each([
+    ["nothing after it", "// oxlint-disable-next-line no-empty -- "],
+    ["only spaces after it", "// oxlint-disable-next-line no-empty --    "],
+  ])("a directive with the separator and %s is refused", async (_what, line) => {
+    expect(await hygiene({ ...CLEAN, "src/index.ts": `${line}\nif (x) {\n}\n` })).toEqual([
+      containing("src/index.ts: line 1"),
+    ]);
+  });
+
   test.each([
     ["oxlint", "// oxlint-disable-next-line typescript/no-unnecessary-condition"],
     ["eslint", "// eslint-disable-next-line no-empty"],

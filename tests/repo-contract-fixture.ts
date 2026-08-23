@@ -43,6 +43,10 @@ const MANIFEST: PackageJson = {
   },
 };
 
+const THRESHOLD = "{ lines = 0.75, functions = 0.75 }";
+
+const BUNFIG = `[install]\nminimumReleaseAge = 604800\nsaveExact = true\n\n[test]\ncoverage = true\ncoverageThreshold = ${THRESHOLD}\n`;
+
 export const CLEAN: Tree = {
   "package.json": JSON.stringify(MANIFEST),
   "tsconfig.json": JSON.stringify({ extends: "@gokayo43/dev-config/tsconfig.base.json" }),
@@ -51,8 +55,7 @@ export const CLEAN: Tree = {
   }),
   "knip.ts":
     'import { base } from "@gokayo43/dev-config/knip.base.ts";\nexport default { ...base };\n',
-  "bunfig.toml":
-    "[install]\nminimumReleaseAge = 604800\nsaveExact = true\n\n[test]\ncoverage = true\ncoverageThreshold = { lines = 0.75, functions = 0.75 }\n",
+  "bunfig.toml": BUNFIG,
   "lefthook.yml":
     "pre-commit:\n  commands:\n    secrets:\n      run: gitleaks git --staged --redact --no-banner .\n\npre-push:\n  commands:\n    typecheck:\n      run: bun run typecheck\n    test:\n      run: bun test\n",
   ".gitignore": "node_modules\n.env\n.env.*\n!.env.example\n!.env.enc\n",
@@ -95,4 +98,9 @@ export function withSpec(name: string, spec: string): Tree {
   return manifestWith((contents) => {
     contents.devDependencies[name] = spec;
   });
+}
+
+/** The clean tree with a different coverage floor written into its bunfig. */
+export function withThreshold(threshold: string): Tree {
+  return { ...CLEAN, "bunfig.toml": BUNFIG.replace(THRESHOLD, threshold) };
 }

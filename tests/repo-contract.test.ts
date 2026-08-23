@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test";
 
 import { repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { containing } from "./matchers.ts";
-import { CLEAN, contract, DEFAULTS, manifestWith, PIN, withSpec } from "./repo-contract-fixture.ts";
+import {
+  CLEAN,
+  contract,
+  DEFAULTS,
+  manifestWith,
+  PIN,
+  withSpec,
+  withThreshold,
+} from "./repo-contract-fixture.ts";
 import { materialise, type Tree, without } from "./tree.ts";
 
 describe("repo contract", () => {
@@ -77,7 +85,45 @@ describe("repo contract", () => {
     ).toEqual([
       containing("minimumReleaseAge"),
       containing("saveExact"),
+      containing("[test] coverage must be true"),
       containing("coverageThreshold"),
+    ]);
+  });
+
+  // A floor was checked for being declared, and `0` is declared. Bun enforces
+  // nothing for a floor at or below zero, an empty table, or a key outside the
+  // three it reads — it ignores each in silence (bun 1.4.0) — so the wrong
+  // implementation here is the one that reads the field's presence instead of
+  // what bun does with its value, and every case below passes it.
+  test.each([
+    ["0", "0"],
+    ["a table of zeroes", "{ lines = 0, functions = 0 }"],
+    ["an empty table", "{  }"],
+    ["a floor bun does not read", "{ line = 0.9 }"],
+  ])("a coverage floor that is %s is refused", async (_what, threshold) => {
+    expect(await contract(withThreshold(threshold))).toEqual([
+      containing("coverageThreshold must be a floor a run can fail"),
+    ]);
+  });
+
+  test.each([
+    ["a number above 0", "0.75"],
+    ["a table of floors above 0", "{ lines = 0.75, statements = 0.9 }"],
+  ])("a coverage floor that is %s passes", async (_what, threshold) => {
+    expect(await contract(withThreshold(threshold))).toEqual([]);
+  });
+
+  // A threshold bun never applies is not a floor. With coverage off or absent
+  // bun exits 0 on a file far under it, and the shared `bun test` passes no
+  // `--coverage` — so the bunfig line is the only thing that turns it on, and
+  // the wrong implementation is the one that grades the threshold alone.
+  test.each([
+    ["coverage disabled", "coverage = false\n"],
+    ["coverage absent", ""],
+  ])("a coverage floor with %s is refused", async (_what, line) => {
+    const bunfig = `[install]\nminimumReleaseAge = 604800\nsaveExact = true\n\n[test]\n${line}coverageThreshold = { lines = 0.75, functions = 0.75 }\n`;
+    expect(await contract({ ...CLEAN, "bunfig.toml": bunfig })).toEqual([
+      containing("[test] coverage must be true"),
     ]);
   });
 
@@ -328,5 +374,342 @@ describe("contract exemptions", () => {
     expect(await contract(CLEAN, { exemptions: ["docs_spine"] })).toEqual([
       containing("'docs_spine' is not a contract fact"),
     ]);
+  });
+});
+
+// An `off` is the one override that argues nothing for itself: it says a rule
+// the repo inherits does not apply here, and leaves the next reader no way to
+// tell that from a rule switched off to get a run green. Tightening one or
+// reconfiguring it argues in what it now demands, and is not gated.
+describe("a base rule the repo turns off", () => {
+  /** The clean tree with an oxlint config written out in full, comments and all. */
+  function withConfig(body: string): Tree {
+    return {
+      ...CLEAN,
+      ".oxlintrc.json": `{
+  "extends": ["./node_modules/@gokayo43/dev-config/oxlint.base.json"],
+${body}
+}`,
+    };
+  }
+
+  const NO_REASON = containing("no-console is turned off with no reason");
+
+  const REASON = "// The gates read files nobody typechecks, and a console line is the report.";
+
+  test("with nothing above it, it is refused", async () => {
+    expect(await contract(withConfig(`  "rules": {\n    "no-console": "off"\n  }`))).toEqual([
+      NO_REASON,
+    ]);
+  });
+
+  // The wrong implementation reads "there is a line above it" rather than "that
+  // line is a comment", and another rule's entry is the line it waves through.
+  test("with another entry above it, it is refused", async () => {
+    expect(
+      await contract(
+        withConfig(`  "rules": {\n    "no-debugger": "error",\n    "no-console": "off"\n  }`),
+      ),
+    ).toEqual([NO_REASON]);
+  });
+
+  // "Immediately above" is the whole convention: a reason a blank line away is
+  // a reason for whatever used to be between them.
+  test("with the reason a blank line away, it is refused", async () => {
+    expect(
+      await contract(withConfig(`  "rules": {\n    ${REASON}\n\n    "no-console": "off"\n  }`)),
+    ).toEqual([NO_REASON]);
+  });
+
+  test("with the reason written immediately above it, it passes", async () => {
+    expect(
+      await contract(withConfig(`  "rules": {\n    ${REASON}\n    "no-console": "off"\n  }`)),
+    ).toEqual([]);
+  });
+
+  // The reason is prose, and prose is written in either spelling of a comment.
+  test("a block comment is a reason like any other", async () => {
+    expect(
+      await contract(
+        withConfig(
+          `  "rules": {\n    /* A console line is the gate's report. */\n    "no-console": "off"\n  }`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // The wrong implementation gates every override rather than the one that
+  // argues nothing, and turns "this repo demands more than the base" into work.
+  test("a rule tightened or reconfigured needs no reason", async () => {
+    expect(
+      await contract(
+        withConfig(
+          `  "rules": {\n    "no-console": "error",\n    "no-debugger": "warn",\n    "max-lines": ["error", { "max": 400 }]\n  }`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // oxlint takes a setting as a bare string or as the head of an array carrying
+  // the rule's options; the wrong implementation reads only the first.
+  test("the array spelling of off is the same off", async () => {
+    const entry = `"no-console": ["off", { "allow": ["error"] }]`;
+    expect(await contract(withConfig(`  "rules": {\n    ${entry}\n  }`))).toEqual([NO_REASON]);
+    expect(await contract(withConfig(`  "rules": {\n    ${REASON}\n    ${entry}\n  }`))).toEqual(
+      [],
+    );
+  });
+
+  // `AllowWarnDeny` documents `"allow"` as the synonym of `"off"` and `0` as
+  // the number that means it, and oxlint honours all three (probed against
+  // 1.78). A check that knew only the word `off` would pass a rule switched off
+  // in either of the other two spellings, in silence, which is the whole
+  // failure this gate exists to stop.
+  test.each([
+    ['"allow"', `"no-console": "allow"`],
+    ["0", `"no-console": 0`],
+    ['["allow", …]', `"no-console": ["allow", { "allow": ["error"] }]`],
+    ["[0]", `"no-console": [0]`],
+  ])("the %s spelling of off is the same off", async (_what, entry) => {
+    expect(await contract(withConfig(`  "rules": {\n    ${entry}\n  }`))).toEqual([NO_REASON]);
+    expect(await contract(withConfig(`  "rules": {\n    ${REASON}\n    ${entry}\n  }`))).toEqual(
+      [],
+    );
+  });
+
+  // The on-spellings, including the two numbers, so the gate cannot pass by
+  // demanding a reason for every entry it meets.
+  test("a rule left on in any spelling needs no reason", async () => {
+    expect(
+      await contract(
+        withConfig(
+          `  "rules": {\n    "no-console": "deny",\n    "no-debugger": 2,\n    "no-empty": 1\n  }`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // A category switched off takes every rule in it with it, which is a bigger
+  // silence than any single entry and was the one this gate first missed.
+  test("a category switched off carries a reason too", async () => {
+    expect(await contract(withConfig(`  "categories": {\n    "correctness": "off"\n  }`))).toEqual([
+      containing("correctness is turned off with no reason"),
+    ]);
+    expect(
+      await contract(
+        withConfig(
+          `  "categories": {\n    // Every rule in it is stated by name below.\n    "correctness": "allow"\n  }`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // `GlobalValue` is its own vocabulary and `"off"` is one of its words, so a
+  // check that searched the file for the word rather than walking to the block
+  // would demand a reason for declaring a global. The same for the options
+  // object hanging off a rule that IS on.
+  test("an off that is not a rule being switched off is left alone", async () => {
+    expect(
+      await contract(
+        withConfig(
+          `  "globals": {\n    "structuredClone": "off"\n  },\n  "rules": {\n    "no-restricted-syntax": ["error", { "selector": "x", "message": "off" }]\n  }`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // An override block is where a rule is most often switched off — for one
+  // directory, or one file kind — so a check that read only the top level would
+  // grade every place but the one an off is usually written.
+  test("an off inside an override block is read too", async () => {
+    const block = (reason: string): string =>
+      `  "overrides": [\n    {\n      "files": ["scripts/**"],\n      "rules": {\n${reason}        "no-console": "off"\n      }\n    }\n  ]`;
+    expect(await contract(withConfig(block("")))).toEqual([NO_REASON]);
+    expect(
+      await contract(withConfig(block(`        // A script's output is its interface.\n`))),
+    ).toEqual([]);
+  });
+  // A `\"` inside a string ends nothing. A walk that read it as the closing
+  // quote reads the rest of the file shifted by one string — every path wrong
+  // and every switch-off after it missed, silently.
+  test("an escaped quote inside a string does not end it", async () => {
+    const quoted = String.raw`"no-restricted-syntax": ["error", { "message": "say \"}\" here" }]`;
+    expect(
+      await contract(withConfig(`  "rules": {\n    ${quoted},\n    "no-console": "off"\n  }`)),
+    ).toEqual([NO_REASON]);
+  });
+
+  // A gate that names the file and not the line makes the reader search a
+  // config that may hold a hundred rules; `report` writes `line=` beside
+  // `file=` so the annotation lands on the entry itself.
+  test("the finding names the line the entry sits on", async () => {
+    const root = await materialise(
+      withConfig(`  "rules": {\n    "no-debugger": "error",\n    "no-console": "off"\n  }`),
+      [".env.example"],
+    );
+    expect(
+      (await repoContract(root, DEFAULTS))
+        .filter(({ message }) => message.includes("turned off"))
+        .map(({ file, line }) => `${file ?? ""}:${line ?? 0}`),
+    ).toEqual([".oxlintrc.json:5"]);
+  });
+  // A reason is owed per switch-off, not per line: a comment above two entries
+  // says nothing about which of them it excuses, and no reader can recover the
+  // difference. So a switch-off sharing its line with any other entry is
+  // refused outright, which is the state that makes the ambiguity
+  // unrepresentable rather than merely discouraged.
+  test("a second entry on the line takes the reason's meaning with it", async () => {
+    expect(
+      await contract(
+        withConfig(
+          `  "rules": {\n    ${REASON}\n    "no-console": "off", "no-debugger": "off"\n  }`,
+        ),
+      ),
+    ).toEqual([
+      containing("no-console shares its line with another entry"),
+      containing("no-debugger shares its line with another entry"),
+    ]);
+  });
+
+  // The boundary of the rule above, stated as its own case: what makes a line
+  // ambiguous is a second thing a reason could be about, and the `"rules"` key
+  // itself is not one. A lone switch-off written inline is unambiguous, and
+  // refusing it would be a formatting mandate rather than this rule.
+  test("a lone switch-off written inline is unambiguous and passes", async () => {
+    expect(await contract(withConfig(`  ${REASON}\n  "rules": { "no-console": "off" }`))).toEqual(
+      [],
+    );
+  });
+
+  // The predicate this replaces was a filter over the line, so one comment
+  // excused however many switch-offs were written under it.
+  test("ten switch-offs behind one comment are ten findings", async () => {
+    const entries = Array.from({ length: 10 }, (_, at) => `"unicorn/r${at}": "off"`).join(", ");
+    expect(
+      await contract(withConfig(`  "rules": {\n    ${REASON}\n    ${entries}\n  }`)),
+    ).toHaveLength(10);
+  });
+
+  // A comment that says nothing is the empty waiver `allowlistFrom` already
+  // refuses; a gate that took the comment's existence for a reason asks for a
+  // token, not an argument.
+  test.each(["//", "//   ", "/**/", "/*   */", "/* */", "//\n    //"])(
+    "an empty comment (%j) is not a reason",
+    async (empty) => {
+      expect(
+        await contract(withConfig(`  "rules": {\n    ${empty}\n    "no-console": "off"\n  }`)),
+      ).toEqual([NO_REASON]);
+    },
+  );
+
+  // A block comment carried over several lines is one reason, and the line
+  // directly above the entry is its last — which on its own says nothing.
+  test("a reason spread over several comment lines is still a reason", async () => {
+    expect(
+      await contract(
+        withConfig(
+          `  "rules": {\n    /*\n     * The gates read files nobody typechecks.\n     */\n    "no-console": "off"\n  }`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  // oxlint decodes the config before it reads a setting out of it, so a gate
+  // comparing raw bytes disagrees with the linter about the same file.
+  test("an escaped spelling of off is the same off", async () => {
+    const escaped = String.raw`"no-console": "\u006ff\u0066"`;
+    expect(await contract(withConfig(`  "rules": {\n    ${escaped}\n  }`))).toEqual([NO_REASON]);
+    expect(await contract(withConfig(`  "rules": {\n    ${REASON}\n    ${escaped}\n  }`))).toEqual(
+      [],
+    );
+  });
+
+  // `typeAware: false` takes every type-aware rule in the base with it — twelve
+  // at `error` — and `bun run lint` passes no flag that puts them back.
+  test("type-aware linting left on needs no reason", async () => {
+    expect(
+      await contract(withConfig(`  "options": { "typeAware": true },\n  "rules": {}`)),
+    ).toEqual([]);
+  });
+
+  test("turning type-aware linting off carries a reason like any switch-off", async () => {
+    const off = `  "options": {\n    "typeAware": false\n  },\n  "rules": {}`;
+    expect(await contract(withConfig(off))).toEqual([
+      containing("typeAware is turned off with no reason"),
+    ]);
+    expect(
+      await contract(
+        withConfig(
+          `  "options": {\n    // tsgolint is not installable on this runner yet.\n    "typeAware": false\n  },\n  "rules": {}`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+});
+
+// A rule switched off in a file this gate never opens is switched off just the
+// same. Both of these replace what the root config says rather than adding to
+// it, and neither leaves the root config a reader could get the answer from.
+describe("a second place lint config can come from", () => {
+  test("a second extends target is refused", async () => {
+    expect(
+      await contract({
+        ...CLEAN,
+        ".oxlintrc.json": JSON.stringify({
+          extends: ["./node_modules/@gokayo43/dev-config/oxlint.base.json", "./lint-relax.json"],
+        }),
+        "lint-relax.json": JSON.stringify({ rules: { "no-console": "off" } }),
+      }),
+    ).toEqual([containing("extends must name the shared base and nothing else")]);
+  });
+
+  // `config-lineage` waives WHERE a config inherits from. How many places it
+  // inherits from is a different fact, and the exemption does not reach it.
+  test("config-lineage does not waive the second target", async () => {
+    const own = {
+      ...CLEAN,
+      ".oxlintrc.json": JSON.stringify({ extends: ["./oxlint.base.json", "./lint-relax.json"] }),
+      "lint-relax.json": JSON.stringify({ rules: {} }),
+    };
+    expect(await contract(own, { exemptions: ["config-lineage"] })).toEqual([
+      containing("extends must name the shared base and nothing else"),
+    ]);
+  });
+
+  test.each([
+    ["src/.oxlintrc.json", '{ "rules": {} }'],
+    ["apps/web/.oxlintrc.jsonc", '{ "rules": {} }'],
+    ["packages/ui/oxlint.config.ts", "export default {};\n"],
+  ])("a config at %s is refused", async (path, body) => {
+    expect(await contract({ ...CLEAN, [path]: body })).toEqual([
+      containing("replaces the root's rules for its subtree"),
+    ]);
+  });
+
+  // The one legitimate nested config in the fleet is a scaffold's: the file
+  // `project-template` copies into a new repo, where it becomes that repo's
+  // root config. The gate reads it correctly and refuses it correctly, so what
+  // the exemption says is that this subtree is a scaffold rather than source.
+  test("nested-config waives the refusal, and waives nothing else", async () => {
+    const scaffold = { ...CLEAN, "setup/monorepo/root/.oxlintrc.json": '{ "rules": {} }' };
+    expect(await contract(scaffold)).toEqual([
+      containing("replaces the root's rules for its subtree"),
+    ]);
+    expect(await contract(scaffold, { exemptions: ["nested-config"] })).toEqual([]);
+    // The root's own facts are still graded under it — the exemption is about
+    // where a config may sit, never about what any config may say.
+    expect(
+      await contract(
+        {
+          ...scaffold,
+          ".oxlintrc.json": `{\n  "extends": ["./node_modules/@gokayo43/dev-config/oxlint.base.json"],\n  "rules": {\n    "no-console": "off"\n  }\n}`,
+        },
+        { exemptions: ["nested-config"] },
+      ),
+    ).toEqual([containing("no-console is turned off with no reason")]);
+  });
+
+  test("the root's own config is not mistaken for a nested one", async () => {
+    expect(await contract(CLEAN)).toEqual([]);
   });
 });

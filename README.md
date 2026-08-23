@@ -152,12 +152,15 @@ adding to them, which is why the base names every plugin it wants including the
 defaults `oxc`, `unicorn` and `typescript`. Across `extends` the arrays are
 unioned, so a repo that adds `plugins` of its own keeps the base's.
 
-Three rules the base switches off: `no-await-in-loop` (a sequential loop is
+Four rules the base switches off: `no-await-in-loop` (a sequential loop is
 usually the correct one here, and the fan-out it asks for is a design call about
-shared state the rule cannot see — the reason in full sits beside the entry),
-`react/react-in-jsx-scope` (the automatic JSX runtime imports nothing), and
-`oxc/no-map-spread`, whose advice is to mutate in place — wrong for the
-copy-on-write style these codebases are written in.
+shared state the rule cannot see), `react/react-in-jsx-scope` (the automatic JSX
+runtime imports nothing), `oxc/no-map-spread` (its advice is to mutate in place,
+wrong for the copy-on-write style these codebases are written in), and
+`unicorn/consistent-function-scoping`, in the test-file override alone (a helper
+one describe uses belongs inside it). The reason in full sits beside each entry,
+which is where the repo contract requires it — see
+[the repo contract](docs/gates/repo-contract.md).
 
 ### The escape hatches, and their price
 
@@ -326,8 +329,6 @@ base:
 | `no-unknown-returns`         | a declared return of `unknown` or `Promise<unknown>`                   |
 | `no-reflect-apply`           | `Reflect.apply`, which launders past a typed call                      |
 | `no-reflect-get`             | `Reflect.get`, which answers `any` for a property read                 |
-| `no-runtime-typeof`          | a runtime `typeof` — parse at the boundary instead                     |
-| `no-shape-in-symbol-names`   | "shape" in a name the file declares                                    |
 
 Where a ported rule overlapped oxlint's own `typescript/no-unsafe-type-assertion`
 — which the base denies through `suspicious` — both were run over the same
@@ -460,19 +461,13 @@ the choke rules above stay per-repo. There is nowhere else for it to go
 either. The base enables every rule this plugin defines, and the suite requires
 those two sets to be equal, so the plugin has no opt-in half to put it in.
 
-Two rules answer differently from upstream, both because a rule at `error`
-across the fleet must refuse something the author can change:
+One rule answers differently from upstream, because a rule at `error` across
+the fleet must refuse something the author can change:
 
 - **`no-known-value-widening`** does not call an anonymous object type a
   widening when it names exactly the keys of the literal below it. Upstream
   does, and its only escapes are deleting the return type or inventing a name
   for it — the opposite of what this repo asks for everywhere else.
-- **`no-shape-in-symbol-names`** fires where a name is chosen — declarations,
-  parameters, the properties a file writes out, the local a name is imported
-  under — and not on property reads of values the file does not own. Upstream
-  visits every identifier, which refuses `schema.shape` (zod's documented API,
-  and zod is the fleet's pick) and `svg.shapeRendering`, and offers a per-site
-  disable as the only remedy.
 
 Two facts about how it is wired, both load-bearing:
 
@@ -484,7 +479,7 @@ Two facts about how it is wired, both load-bearing:
   and this directory is inside `node_modules` for every repo that consumes it.
   `tsc` still checks it in this repo, through `checkJs` and JSDoc types.
 
-`tests/anti-slop.test.ts` drives the eleven with the real binary: a block of cases
+`tests/anti-slop.test.ts` drives the nine with the real binary: a block of cases
 per rule — alias chains, shadowed built-ins, type parameters bound by default,
 permuted between two aliases and named for the aliases they shadow, the scope a
 binding resolves in, and the clean tree each of those has to leave alone — plus

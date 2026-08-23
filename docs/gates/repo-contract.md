@@ -14,13 +14,85 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `typescript` major ≥ 7                                                                                          | the shared tsconfig is written against TypeScript 7                                               |
 | `oxlint-tsgolint` present, when `.oxlintrc.json` extends the base                                               | without it oxlint runs the base's type-aware rules over nothing and reports clean                 |
 | `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`   | a repo that stopped inheriting stops inheriting silently                                          |
-| `bunfig.toml` declares `minimumReleaseAge`, `saveExact`, and a `[test] coverageThreshold`                       | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
+| `bunfig.toml` declares `minimumReleaseAge`, `saveExact`, `[test] coverage`, and a floor a run can fail          | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
+| every rule, category and option `.oxlintrc.json` switches off carries a reason on the line above it             | a switch-off nobody wrote a reason for reads the same as one added to get a run green             |
+| `.oxlintrc.json` `extends` the shared base and nothing else, and no oxlint config sits below the root           | a second config is read after the root's and wins over it, in a file this gate never opens        |
 | `lefthook.yml` runs a staged gitleaks scan pre-commit and typecheck + tests pre-push                            | the hooks are the half of the gate that runs before a push                                        |
 | `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern | a blanket `.env.*` rule silently deletes the two files that have to ship                          |
 | `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                 | the docs spine                                                                                    |
 | `db:migrate` exists, when `database: true`                                                                      | the database gate replays migrations through it                                                   |
 | a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                           | a tag is a name someone else can repoint                                                          |
 | `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                | it is what every rule under "Going live" below reconfigures off                                   |
+
+## What decides which rules run
+
+The gate reads one lint config and one bunfig, so the contract's job is to make
+those two files the whole answer. Each rule below closes a way the answer could
+live somewhere the gate never opens.
+
+**The coverage floor is graded by what bun does with it, not by whether it is
+there.** It has to be a number above 0, or a table whose every key is one of the
+three floors bun reads — `lines`, `functions`, `statements` — each above 0, and
+`[test] coverage` has to be `true` beside it. Bun enforces none of the other
+ways of writing one: a floor at or below zero, an empty table, and a key it does
+not recognise are all ignored in silence, and with coverage off or absent the
+threshold is not applied at all — a file at 25% passes a floor of 0.99 (probed,
+bun 1.4.0). The shared `bun test` passes no `--coverage`, so that one line is
+what turns collection on. An unrecognised key is refused rather than skipped for
+the same reason `0` is: it is a floor its author believes is being applied.
+
+**A switch-off carries a reason, and the reason is owed per switch-off.** What
+is graded is every entry under `rules`, under any `overrides[].rules`, under
+`categories`, and under `options` — a category switched off takes every rule in
+it, and `options.typeAware: false` takes the twelve type-aware rules the base
+sets at `error`, with no flag in `bun run lint` to put them back. Tightening a
+rule or reconfiguring it argues its case in what the rule now demands; switching
+one off argues nothing.
+
+A comment above a line says nothing about which of that line's entries it
+excuses, so a switch-off sharing its line with another entry a reason could be
+about is refused outright rather than guessed at: one switch-off per line, its
+reason above. A lone switch-off written inline is unambiguous and passes — what
+is counted is a second thing a reason could be for, not a second token. And the
+reason has to say something: `//` and `/**/` are comments that argue exactly
+what no comment would, and are refused at the same bar `allowlistFrom` holds a
+waiver to.
+
+**Off is three spellings, not one.** A rule's setting is oxlint's
+`AllowWarnDeny`, whose schema documents `"allow"` as the synonym of `"off"` and
+`0` as the number that means it — any of the three also legal as the head of an
+array carrying the rule's options. The config's strings are decoded before they
+are compared, so `"\u006ff\u0066"` is the same switch-off as `"off"`: oxlint
+decodes before it reads a setting, and a gate comparing raw bytes disagrees with
+the linter about the file in front of both of them.
+
+**One config, not a chain of them.** `extends` names the shared base and nothing
+else, and no `.oxlintrc.*` or `oxlint.config.*` may sit below the repository
+root. Both are ways a rule ends up switched off in a file this gate never opens:
+a second `extends` target is read after the base and wins over it, and oxlint
+resolves the config nearest the file it is linting, so a config in a
+subdirectory REPLACES the root's rules for that whole subtree rather than adding
+to them — an empty one turns the base off wherever it sits. Neither is followed,
+because a per-directory difference already has a home the gate can read:
+`overrides` in the root config. The `config-lineage` exemption waives _where_ a
+config inherits from and never how many places it inherits from.
+
+`ignorePatterns` is deliberately not graded, and the honest reason is not that it
+is a different kind of setting — it silences every rule for the paths it names,
+exactly as a switch-off does. It is left out because it is legible in the diff
+the way a lint directive is: a path appearing in that list is a line a reviewer
+reads as the waiver it is, whereas the settings above hide the same effect
+behind a word (`"allow"`, `0`, `false`) or behind a second file. If that stops
+being true — a glob broad enough that nobody reads it as a waiver — it belongs
+under the same rule as the rest.
+
+The comment is read out of the file's text, because the parse the rest of this
+gate runs on is exactly what drops it. Off-ness is decided once, in a single
+walk of that text: the walk carries the path it is inside, which is what tells a
+`rules` block from a `globals` block, where `"off"` is a legitimate value of a
+different vocabulary. `oxlint.base.json` follows the same convention for its own
+switch-offs, and is held to this rule by a test that strips one of its reasons
+and requires exactly that finding back.
 
 The knip case is the one that reads as arbitrary and is not: knip resolves
 `knip.json` before `knip.ts`, and a JSON config cannot import anything. A repo
@@ -344,7 +416,19 @@ with:
 | `ci-call`          | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to             |
 | `docs-spine`       | the glossary and `CLAUDE.md`                                                                                                                            |
 | `lifecycle-retire` | the comparison with the base ref's `lifecycle`, for a repo being deliberately wound down — not the field itself, and refused once it is waiving nothing |
+| `nested-config`    | the refusal of an oxlint config below the root, for a repo whose subtree is a scaffold rather than its own source                                       |
 | `secrets`          | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                               |
+
+`nested-config` has exactly one case today, and it is worth naming because the
+rule it waives is otherwise right: `project-template` carries
+`setup/monorepo/root/.oxlintrc.json`, which is not a nested config at all but
+the _source_ of a scaffolded monorepo's root config — a file copied into a new
+repo, where it becomes the one config that repo has. It sits beside a `knip.ts`
+that the template's own `oxlint` run does lint, so the gate is reading it
+correctly and refusing it correctly; what is wrong is only that this repo's
+subtree is a scaffold rather than source of its own. A repo naming this
+exemption is saying that, and nothing else — a genuine second config in a
+genuine subtree is refused the same as before.
 
 Every exemption is echoed as a `::notice` in the run, and a name outside the
 table fails rather than waiving anything — a typo cannot quietly turn a check

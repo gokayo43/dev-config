@@ -6,11 +6,15 @@
 
 import { appendFile } from "node:fs/promises";
 
-/** One violation, addressed to the file that has to change. */
-export interface Problem {
-  readonly file?: string;
-  readonly message: string;
-}
+/**
+ * One violation, addressed to the file that has to change. A line without a
+ * file is unrepresentable: GitHub attaches `line=` to the file the annotation
+ * names, so one on its own points at nothing and is silently dropped.
+ */
+export type Problem = { readonly message: string } & (
+  | { readonly file: string; readonly line?: number }
+  | { readonly file?: undefined; readonly line?: undefined }
+);
 
 /**
  * A message as a workflow command carries it.
@@ -51,11 +55,11 @@ function property(value: string): string {
  */
 export function report(problems: readonly Problem[]): void {
   for (const problem of problems) {
-    console.log(
-      problem.file === undefined
-        ? `::error::${commanded(problem.message)}`
-        : `::error file=${property(problem.file)}::${commanded(problem.message)}`,
-    );
+    const where = [
+      ...(problem.file === undefined ? [] : [`file=${property(problem.file)}`]),
+      ...(problem.line === undefined ? [] : [`line=${problem.line}`]),
+    ].join(",");
+    console.log(`::error${where === "" ? "" : ` ${where}`}::${commanded(problem.message)}`);
   }
   if (problems.length > 0) process.exitCode = 1;
 }
@@ -567,6 +571,8 @@ export async function repoFiles(root: string, pathspecs: readonly string[]): Pro
 
 interface Parsed<T> {
   readonly file: string;
+  /** The bytes the value was decoded from, for a gate that has to read what the parse drops. */
+  readonly text: string;
   readonly value: T;
 }
 
@@ -607,13 +613,15 @@ export type Dialect = keyof typeof DIALECTS;
  * declares `allowComments` and `allowTrailingCommas` while TypeScript has
  * always taken both — so a gate that refused the reason it asked for would be
  * refusing a valid file. Blanked rather than deleted so a parse error still
- * points at the character it is about.
+ * points at the character it is about — and so a line that has something in the
+ * file and nothing here is exactly a comment, which is how the repo contract
+ * finds the reason written above an override.
  *
  * A scan rather than a regex, because `//` inside a string is data: the
  * `$schema` line at the top of these files is a URL, and a stripper that ate it
  * would turn a working config into the failure it was written to prevent.
  */
-function withoutComments(text: string): string {
+export function withoutComments(text: string): string {
   const kept: string[] = [];
   const commas: number[] = [];
   let index = 0;
@@ -696,7 +704,8 @@ export async function parseEach(
   const results = await Promise.all(
     files.map(async (file) => {
       try {
-        return { file, value: parse(await Bun.file(`${root}/${file}`).text()) };
+        const text = await Bun.file(`${root}/${file}`).text();
+        return { file, text, value: parse(text) };
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         return { file, problem: { file, message: `is not valid ${dialect}: ${detail}` } };
@@ -730,9 +739,9 @@ export async function configObjects(
   const parsed = await parseEach(root, files, dialect);
   const read: Manifest[] = [];
   const problems = [...parsed.problems];
-  for (const { file, value } of parsed.read) {
+  for (const { file, text, value } of parsed.read) {
     if (isObject(value)) {
-      read.push({ file, value });
+      read.push({ file, text, value });
     } else {
       problems.push({
         file,
@@ -746,6 +755,12 @@ export async function configObjects(
 export interface ConfigFile {
   /** Undefined whenever there is nothing to grade — `problems` says which of the two reasons. */
   readonly contents: ConfigObject | undefined;
+  /**
+   * The file as it is written, present exactly when `contents` is. A parse
+   * answers what the config says; the text is the only thing that still holds
+   * what a reader wrote beside it.
+   */
+  readonly text: string | undefined;
   readonly problems: readonly Problem[];
 }
 
@@ -765,10 +780,15 @@ export async function readConfig(
   dialect: Dialect = "JSON with comments",
 ): Promise<ConfigFile> {
   if (!(await Bun.file(`${root}/${file}`).exists())) {
-    return { contents: undefined, problems: [{ file, message: `${file} is missing` }] };
+    return {
+      contents: undefined,
+      text: undefined,
+      problems: [{ file, message: `${file} is missing` }],
+    };
   }
   const batch = await configObjects(root, [file], dialect);
-  return { contents: batch.read[0]?.value, problems: batch.problems };
+  const read = batch.read[0];
+  return { contents: read?.value, text: read?.text, problems: batch.problems };
 }
 
 // Every package.json in the repo, root and workspaces alike. A git pathspec

@@ -65,9 +65,17 @@
     "max-depth": ["warn", { "max": 4 }],
     "complexity": ["warn", { "max": 20 }],
     "import/no-cycle": "error",
+    // The automatic JSX runtime compiles JSX with no React binding in scope, so
+    // there is nothing here for the rule to ask to be imported. A repo on the
+    // classic runtime is the one that needs it, and is the one that would turn
+    // it back on for itself.
     "react/react-in-jsx-scope": "off",
     "react/rules-of-hooks": "error",
     "react/exhaustive-deps": "warn",
+    // Its fix is to mutate the accumulator in place rather than spread into it.
+    // That is right for a measured hot loop and wrong as a default for the
+    // copy-on-write style these codebases are written in, where a fresh object
+    // per step is what makes the step safe to reason about.
     "oxc/no-map-spread": "off",
     "typescript/await-thenable": "error",
     "typescript/no-floating-promises": "error",
@@ -87,8 +95,6 @@
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
-    "anti-slop/no-runtime-typeof": "error",
-    "anti-slop/no-shape-in-symbol-names": "error",
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
