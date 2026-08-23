@@ -1,17 +1,51 @@
-import { type ConfigObject, isList, type Problem, record } from "../_lib/gate.ts";
+import { type ConfigObject, isList, type Problem, REASON, record } from "../_lib/gate.ts";
 
 const MIGRATE = "migrate";
 const OPT_OUT = "x-no-healthcheck";
 const HOST_NETWORK_OPT_OUT = "x-host-network";
 
-function checkHealthcheck(name: string, service: ConfigObject, file: string): Problem[] {
+/**
+ * The healthcheck waiver, which is a path to the test that asserts the service
+ * can never answer one — optionally with the house ` -- reason` after it, the
+ * way every allowlist entry here carries prose beside its subject.
+ *
+ * A path rather than the prose it used to be. What the key waives is a claim
+ * about a service's runtime, and a lint cannot check a runtime — but it can
+ * insist the claim belongs to something that can. Prose alone passed whatever
+ * anybody typed: one waiver in the fleet read "the runtime exits the process on
+ * a failure the loop cannot recover from", which was false, and the gate took
+ * it. Naming the test moves the claim somewhere a run either agrees with or
+ * does not.
+ */
+function waivedBy(service: ConfigObject): string | undefined {
+  const value = service[OPT_OUT];
+  if (typeof value !== "string") return undefined;
+  const [path = ""] = value.split(REASON);
+  const named = path.trim();
+  return named === "" ? undefined : named;
+}
+
+async function checkHealthcheck(
+  name: string,
+  service: ConfigObject,
+  file: string,
+  root: string,
+): Promise<Problem[]> {
   if (service["healthcheck"] !== undefined) return [];
-  const reason = service[OPT_OUT];
-  if (typeof reason === "string" && reason.trim() !== "") return [];
+  const named = waivedBy(service);
+  if (named === undefined) {
+    return [
+      {
+        file,
+        message: `${name} has no healthcheck — add one, or waive it with ${OPT_OUT}: "<path to the test asserting it can never answer one>${REASON}<why>"`,
+      },
+    ];
+  }
+  if (await Bun.file(`${root}/${named}`).exists()) return [];
   return [
     {
       file,
-      message: `${name} has no healthcheck — add one, or ${OPT_OUT}: "<why this service can never answer one>"`,
+      message: `${name}'s ${OPT_OUT} names ${named}, which is not a file in this repo — write the test that asserts this service can never answer a healthcheck, and point the waiver at it`,
     },
   ];
 }
@@ -89,23 +123,29 @@ function checkMigrateService(services: ConfigObject, file: string): Problem[] {
   ];
 }
 
-export function composeLint(file: string, text: string): Problem[] {
+/**
+ * `root` is the repository the compose file sits in, which the healthcheck
+ * waiver reads: the test it names is the whole of what makes that waiver a
+ * claim rather than a sentence.
+ */
+export async function composeLint(root: string, file: string, text: string): Promise<Problem[]> {
   const services = record(record(Bun.YAML.parse(text))["services"]);
   if (Object.keys(services).length === 0) {
     return [{ file, message: "the compose file declares no services" }];
   }
 
-  return [
-    ...checkMigrateService(services, file),
-    ...Object.entries(services).flatMap(([name, value]) => {
+  const perService = await Promise.all(
+    Object.entries(services).map(async ([name, value]) => {
       const service = record(value);
       return [
-        ...checkHealthcheck(name, service, file),
+        ...(await checkHealthcheck(name, service, file, root)),
         ...checkMemoryCap(name, service, file),
         ...checkPorts(name, service, file),
         ...checkNetworkMode(name, service, file),
         ...checkMigrationOrder(name, service, file),
       ];
     }),
-  ];
+  );
+
+  return [...checkMigrateService(services, file), ...perService.flat()];
 }

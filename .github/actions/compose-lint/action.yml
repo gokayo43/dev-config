@@ -1,9 +1,11 @@
 name: Compose lint
 description: >-
   Holds a compose file to the deployment shape this box runs: every port bound
-  to the loopback behind nginx, every service memory-capped and probed, and a
-  one-shot migrate service every app waits on. These are the properties nobody
-  notices missing until the night the box is under load.
+  to the loopback behind nginx, every service memory-capped and probed — or
+  waived by the test that asserts it can never be probed — and a one-shot
+  migrate service every app waits on. These are the properties nobody notices
+  missing until the night the box is under load. docs/gates/compose-lint.md is
+  the reference.
 
 inputs:
   working-directory:

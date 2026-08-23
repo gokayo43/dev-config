@@ -3,7 +3,8 @@ import { composeLint } from "./compose-lint.ts";
 
 await entry(async () => {
   const read = inputs("working-directory", "file");
+  const root = read["working-directory"];
   const file = read["file"];
 
-  report(composeLint(file, await Bun.file(`${read["working-directory"]}/${file}`).text()));
+  report(await composeLint(root, file, await Bun.file(`${root}/${file}`).text()));
 });
