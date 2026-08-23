@@ -1,19 +1,21 @@
-import type { SQL } from "bun";
+import { SQL } from "bun";
 import { resolve } from "node:path";
 
 import { type ConfigObject, isList, isObject, kindOf, notice } from "../_lib/gate.ts";
 
 /**
  * Not a gate. What the gates in this directory that build a database of their
- * own share: where they put it, how they run the repo's own commands against
- * it, how they read one back as text, and the single derivation of "these two
- * came out the same".
+ * own share: the database itself — made, handed over and dropped again by
+ * `inScratchDatabase` — how they run the repo's own commands against it, how
+ * they read one back as text, and the single derivation of "these two came out
+ * the same".
  *
- * Two of them do this — the upgrade path, which builds the schema a deployed
- * database reaches, and the backfill check, which builds the state a backfill
- * is written for. Two derivations of "the same" would be two answers to the
- * question both of them exist to ask, and the day they disagreed nobody would
- * know which was right.
+ * Three of them do this — the upgrade path, which builds the schema a deployed
+ * database reaches; the semantic fixtures, which build the rows a deployed
+ * database holds; and the backfill check, which builds the state a backfill is
+ * written for. Two derivations of "the same" would be two answers to the
+ * question they exist to ask, and the day they disagreed nobody would know
+ * which was right.
  */
 
 /**
@@ -160,6 +162,43 @@ export async function discard(server: SQL, database: string): Promise<void> {
     );
   }
   await server.close();
+}
+
+/**
+ * A database of this run's own on the caller's service, for the length of
+ * `body`, and gone again whichever way `body` went.
+ *
+ * The three gates that build one all want the same four lines around it, and
+ * the two reasons they want them are the whole of why this exists rather than
+ * being written out three times.
+ *
+ * **Its own database, not the declared one.** The app boots against the
+ * database the caller declared, and its claim is that it met a database this
+ * job's migrations built and nothing else — so a gate that wrote rows into it,
+ * or upgraded it from somewhere, would be quietly changing what the boot step
+ * proves.
+ *
+ * **Dropped before it is created, as well as after.** A run killed between the
+ * two ends leaves a database behind, and the next run of this gate from this
+ * checkout derives the same name — see `scratchDatabase` — so it finds it and
+ * reclaims it. Without the leading drop that run would fail instead, over a
+ * name its author never chose.
+ */
+export async function inScratchDatabase<T>(
+  url: string,
+  root: string,
+  purpose: string,
+  body: (own: string) => Promise<T>,
+): Promise<T> {
+  const database = scratchDatabase(root, purpose);
+  const server = new SQL(url);
+  try {
+    await server.unsafe(`drop database if exists "${database}" with (force)`);
+    await server.unsafe(`create database "${database}"`);
+    return await body(beside(url, database));
+  } finally {
+    await discard(server, database);
+  }
 }
 
 /**

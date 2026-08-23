@@ -281,9 +281,10 @@ The `NN-` prefix is the order they apply in, and it is load-bearing: a fixture
 may write over the rows an earlier one left, the way a history of real rows
 accumulates. Directory order is a fact about the filesystem, not an order.
 
-The gate refuses, before it builds anything: a directory that is not there, a
-directory with no fixture in it, a fixture with no assertion beside it, an
-assertion with no fixture beside it, and any file in the directory that is
+The directory is read **before the gate builds anything** — beside the input
+guard, ahead of the first migrator run. It refuses a directory that is not
+there, a directory with no fixture in it, a fixture with no assertion beside it,
+an assertion with no fixture beside it, and any file in the directory that is
 neither. Each of those is a gate that would otherwise pass by not having looked,
 and every one of them is reported in the same run — one edit to make, one run to
 be told the whole of it.
@@ -303,6 +304,8 @@ silently ignored is how a gate somebody asked for turns out never to have run. A
 base ref carrying no lineage at all is a notice and a pass, and the notice says
 the fixtures did not run either.
 
+### Two databases, one rollback
+
 The fixtures get a database of their own rather than sharing the upgrade path's.
 Rows change what a migration does: `ALTER TABLE ... ADD COLUMN ... NOT NULL`
 applies to an empty database and fails on one with a row in it. That failure is
@@ -311,6 +314,20 @@ fixtures are exactly what puts rows there to catch it — but it is a different
 question from whether the schemas converge, and answering it in the upgrade
 path's database would mean turning this input on changed the verdict of a gate
 the repo already had.
+
+The **rollback**, though, happens once. Both databases are created up front,
+both take the base ref's migrations inside a single rollback of the lineage, and
+they part company only afterwards — the rows into one, this branch's migrations
+onto each. Rolling the lineage back is the part of this gate that moves files
+around in the author's checkout, so running it twice would double the window in
+which a killed process leaves the base ref's migrations sitting in the working
+tree, and would replay a history this run has already replayed.
+
+And every way this half can fail comes back as a **verdict**, not as a thrown
+error — including the branch's migrator refusing the rows. That refusal is a
+finding of this gate, and a throw would carry it out past the upgrade path's own
+verdict, losing whatever that had already found about the schema. A branch that
+both diverges and breaks its rows reports both in one run.
 
 ### What a semantic fixture cannot see
 

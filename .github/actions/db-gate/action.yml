@@ -48,8 +48,9 @@ inputs:
     description: >-
       A command of the repo's own, run against the booted app after it answers
       its health route and before the ramp. Runs as shell code, with the app's
-      URL in HEALTH_URL. Exit 0 is a pass; every line it writes to stdout is one
-      problem, since the gate running it cannot know what it was asserting.
+      URL in HEALTH_URL. Its stdout is the verdict: every line it writes there
+      is one problem, whatever it exits with, since the gate running it cannot
+      know what it was asserting.
     default: ""
   probe-timeout:
     description: >-
@@ -224,8 +225,12 @@ runs:
     #
     # Its stdout is the protocol, the way capacity-script's summary is: the gate
     # owns the running and the repo owns the meaning.
+    #
+    # Either input selects it, so that a caller who set only the bound is told
+    # so rather than ignored — the condition the backfill check is written with,
+    # for the same reason.
     - name: The repo's own probe of the booted app
-      if: ${{ inputs.probe-command != '' }}
+      if: ${{ inputs.probe-command != '' || inputs.probe-timeout != '' }}
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { SQL } from "bun";
 
 import type { Problem, Verdict } from "../_lib/gate.ts";
-import { beside, databaseIn, discard, migrate, rows, scratchDatabase, textIn } from "./database.ts";
+import { databaseIn, migrate, rows, scratchDatabase, textIn } from "./database.ts";
 
 /**
  * What the upgrade path cannot see, asked directly: **the rows a deployed
@@ -18,10 +18,6 @@ import { beside, databaseIn, discard, migrate, rows, scratchDatabase, textIn } f
  * UTC+13. Nothing errors, the schemas match, and the gate that exists to catch
  * a divergent upgrade passes it.
  *
- * So this replays the base ref's migrations, writes rows the way a deployed
- * database already holds them, applies this branch's migrations on top, and
- * asks the repo's own assertions what those rows now say.
- *
  * **The rows go in as SQL, never through the app.** That is the property the
  * whole gate rests on and the one shortcut that would void it: application code
  * at HEAD writes rows the way HEAD understands them, so a fixture that went
@@ -31,18 +27,24 @@ import { beside, databaseIn, discard, migrate, rows, scratchDatabase, textIn } f
  * fixture can name, and a fixture that names one is refused by the database
  * rather than accommodated here.
  *
+ * The base replay is not here. `replay.ts` owns the databases and the one
+ * rollback of the lineage that fills them, because it is already doing that for
+ * the schema half — and the rollback is the part of this gate that moves files
+ * around in the checkout, so doing it twice would run the risky half twice. Two
+ * questions here, and they are the two only this can answer: what a fixture
+ * directory *is*, and what its rows say once the branch's migrations have run
+ * over them.
+ *
  * What it cannot see is in docs/gates/upgrade-path.md, under "What a semantic
  * fixture cannot see".
  */
 
-/**
- * The database the fixtures are replayed in, beside the one the caller
- * declared. `database.ts` says why it is derived rather than fixed, and
- * replay.ts and backfill.ts name their own the same way: the purpose string
- * belongs to the gate that has one.
- */
+/** What `database.ts` derives this gate's own database name from. */
+export const PURPOSE = "semantic_fixtures";
+
+/** The name that derivation produces, so a suite can say the gate left none behind. */
 export function fixtureDatabase(root: string): string {
-  return scratchDatabase(root, "semantic_fixtures");
+  return scratchDatabase(root, PURPOSE);
 }
 
 /**
@@ -63,38 +65,20 @@ interface Pair {
   readonly assertion: string;
 }
 
-export interface SemanticFixtures {
-  /** Where the repo's own migrator runs — the project the caller declared. */
-  readonly root: string;
-  /** The database that job declared: the server this builds its own beside. */
-  readonly url: string;
-  /** The fixture directory, relative to `root`, as the input names it. */
-  readonly dir: string;
-  /** The base ref, abbreviated the way every diagnostic about it names it. */
-  readonly from: string;
-  /**
-   * Runs `body` with every migration lineage rolled back to what the base ref
-   * carried. Injected rather than imported, because the one thing that knows
-   * how to do that also has to call this — and a gate importing the gate that
-   * calls it is a cycle whichever way the arrow is drawn.
-   */
-  readonly atBase: (body: () => Promise<void>) => Promise<void>;
-}
-
 /**
- * Where the fixtures are, and the two words every diagnostic about one needs:
- * the directory as the *input* spells it, which is what an author goes back to,
- * and the commit the rows are supposed to have come from. One value rather than
- * three arguments, because two of the three are paths that differ only in which
- * one a reader would go looking for.
+ * A fixture directory that has been read and found gradeable, carried from the
+ * refusal that reads it to the replay that runs it.
+ *
+ * Both spellings of the directory travel together because the diagnostics need
+ * both: the path on disk to open, and the path as `semantic-fixtures` names it,
+ * which is what an author goes back to.
  */
-interface Where {
+export interface Fixtures {
   /** The directory on disk. */
   readonly at: string;
   /** The same directory as `semantic-fixtures` names it. */
   readonly dir: string;
-  /** The base ref, abbreviated the way every diagnostic here abbreviates it. */
-  readonly from: string;
+  readonly pairs: readonly Pair[];
 }
 
 /** A fixture's name without the suffix that says which half of the pair it is. */
@@ -103,20 +87,28 @@ function stem(name: string, suffix: string): string {
 }
 
 /**
- * The pairs the directory holds, or everything wrong with it. Read whole and
- * graded whole, rather than a file at a time: a directory with three unpaired
+ * The pairs the directory holds, or everything wrong with it.
+ *
+ * Read before the gate builds anything — `replayGate` calls this beside its own
+ * input guard, ahead of the first migrator run. A directory nobody can grade is
+ * a mistake at the call site, and paying for two databases and a rollback of
+ * the lineage to say so would put the slowest possible answer on the cheapest
+ * possible mistake.
+ *
+ * Graded whole rather than a file at a time: a directory with three unpaired
  * fixtures is one edit to make, and three runs to be told about it is the
  * round-trip every diagnostic in this repo is written to avoid.
  *
  * Sorted by name, and the `NN-` prefix is what that buys: a fixture may write
- * the row an earlier one left, the way a history of real rows accumulates, and
- * the order the files are applied in has to be the order a reader sees.
- * Directory order is not an order — it is a fact about the filesystem.
+ * over the rows an earlier one left, the way a history of real rows
+ * accumulates, and the order they are applied in has to be the order a reader
+ * sees. Directory order is a fact about the filesystem, not an order.
  */
-async function pairsIn(
-  at: string,
+export async function fixturesIn(
+  root: string,
   dir: string,
-): Promise<{ readonly pairs: Pair[] } | { readonly problems: Problem[] }> {
+): Promise<Fixtures | { readonly problems: Problem[] }> {
+  const at = join(root, dir);
   let names: string[];
   try {
     names = (await readdir(at)).toSorted();
@@ -174,6 +166,8 @@ async function pairsIn(
   if (problems.length > 0) return { problems };
 
   return {
+    at,
+    dir,
     pairs: written.map((name) => ({
       fixture: name,
       assertion: `${stem(name, FIXTURE)}${ASSERTION}`,
@@ -197,22 +191,20 @@ function reasonIn(failure: unknown): string {
  * transaction — so a fixture applies whole or not at all, and a half-written
  * one is not a state anything downstream can be run against.
  */
-async function write(
-  db: SQL,
-  { at, dir, from }: Where,
-  pairs: readonly Pair[],
-): Promise<Problem | undefined> {
+async function write(db: SQL, { at, dir, pairs }: Fixtures, from: string): Promise<Problem[]> {
   for (const { fixture } of pairs) {
     try {
       await db.unsafe(await Bun.file(join(at, fixture)).text());
     } catch (failure) {
-      return {
-        file: `${dir}/${fixture}`,
-        message: `${dir}/${fixture} did not apply to a database built from ${from}'s migrations — ${reasonIn(failure)}. A semantic fixture writes rows a deployed database already holds, so it may name only what ${from}'s schema had; a column this branch adds is what the assertion beside it is for.`,
-      };
+      return [
+        {
+          file: `${dir}/${fixture}`,
+          message: `${dir}/${fixture} did not apply to a database built from ${from}'s migrations — ${reasonIn(failure)}. A semantic fixture writes rows a deployed database already holds, so it may name only what ${from}'s schema had; a column this branch adds is what the assertion beside it is for.`,
+        },
+      ];
     }
   }
-  return undefined;
+  return [];
 }
 
 /**
@@ -221,11 +213,7 @@ async function write(
  * the first that finds something: they are independent questions about one
  * database, and an author fixing a migration wants every row it got wrong.
  */
-async function graded(
-  db: SQL,
-  { at, dir, from }: Where,
-  pairs: readonly Pair[],
-): Promise<Problem[]> {
+async function graded(db: SQL, { at, dir, pairs }: Fixtures, from: string): Promise<Problem[]> {
   const found: Problem[] = [];
   for (const { fixture, assertion } of pairs) {
     const file = `${dir}/${assertion}`;
@@ -252,66 +240,49 @@ async function graded(
   return found;
 }
 
-export async function semanticFixtures({
-  root,
-  url,
-  dir,
-  from,
-  atBase,
-}: SemanticFixtures): Promise<Verdict> {
-  const where: Where = { at: join(root, dir), dir, from };
-  const read = await pairsIn(where.at, dir);
-  // Read before anything is built. A directory nobody can grade is a fault in
-  // the call site, and paying for a database and a replay to say so would put
-  // the slowest possible answer on the cheapest possible mistake.
-  if ("problems" in read) return { problems: read.problems };
-
-  const database = fixtureDatabase(root);
-  const own = beside(url, database);
-  const server = new SQL(url);
+/**
+ * The fixtures against a database `replay.ts` has already replayed the base
+ * ref's migrations into: the rows go in, this branch's migrations run over
+ * them, and the repo's own assertions grade what is left.
+ *
+ * Everything that can go wrong here comes back as a `Verdict`, including the
+ * branch's migrator refusing the rows. That refusal is a *finding of this gate*
+ * — a migration that applies to a database the migrations have just built and
+ * not to one carrying data is the class only these fixtures put rows there to
+ * catch — and a throw would carry it out past the upgrade path's own verdict,
+ * losing whatever that had already found about the schema. Two faults in one
+ * branch have to reach their author in one run.
+ */
+export async function gradeFixtures(
+  root: string,
+  url: string,
+  fixtures: Fixtures,
+  from: string,
+): Promise<Verdict> {
+  const db = new SQL(url);
   try {
-    // A database of this run's own on the caller's service, for the reason the
-    // upgrade path and the backfill check each make one: the app boots against
-    // the declared database a few steps later, and legacy rows have no business
-    // being in it. Dropped first as well as last, because a run killed between
-    // the two ends otherwise leaves the next one failing over a name its author
-    // never chose.
-    await server.unsafe(`drop database if exists "${database}" with (force)`);
-    await server.unsafe(`create database "${database}"`);
-    await atBase(async () => {
-      await migrate(
-        root,
-        own,
-        `bun run db:migrate failed replaying ${from}'s migrations into ${databaseIn(own)}, the database the semantic fixtures are written into — every lineage directory was rolled back to what ${from} carried, so the statement the output above names is that commit's rather than this branch's`,
-      );
-    });
+    const refused = await write(db, fixtures, from);
+    if (refused.length > 0) return { problems: refused };
 
-    const db = new SQL(own);
     try {
-      const refused = await write(db, where, read.pairs);
-      if (refused !== undefined) return { problems: [refused] };
-
       await migrate(
         root,
-        own,
-        `bun run db:migrate failed applying this branch's migrations onto ${databaseIn(own)}, a database built from ${from} and holding the rows ${dir} wrote — the output above names the statement; it applies to a database the migrations have just built and not to one that already has rows in it, which every deployed database does`,
+        url,
+        `bun run db:migrate failed applying this branch's migrations onto ${databaseIn(url)}, a database built from ${from} and holding the rows ${fixtures.dir} wrote — the output above names the statement; it applies to a database the migrations have just built and not to one that already has rows in it, which every deployed database does`,
       );
-
-      const violations = await graded(db, where, read.pairs);
-      const each = read.pairs.length === 1 ? "fixture" : "fixtures";
-      return violations.length > 0
-        ? { problems: violations }
-        : {
-            note: `semantic fixtures: ${read.pairs.length} ${each} written into a database built from ${from} and migrated by this branch, with every assertion coming back empty`,
-            problems: [],
-          };
-    } finally {
-      // Before the drop below, which terminates it: a connection closed by the
-      // server on its way out reports that instead of whatever the gate was
-      // ending on.
-      await db.close();
+    } catch (failure) {
+      return { problems: [{ message: reasonIn(failure) }] };
     }
+
+    const violations = await graded(db, fixtures, from);
+    const each = fixtures.pairs.length === 1 ? "fixture" : "fixtures";
+    return violations.length > 0
+      ? { problems: violations }
+      : {
+          note: `semantic fixtures: ${fixtures.pairs.length} ${each} written into a database built from ${from} and migrated by this branch, with every assertion coming back empty`,
+          problems: [],
+        };
   } finally {
-    await discard(server, database);
+    await db.close();
   }
 }

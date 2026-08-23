@@ -101,7 +101,8 @@ on:
         description: >-
           A command of the repo's own, run against the booted app after it answers its
           health route and before the ramp, as shell code with the app's URL in
-          HEALTH_URL. Exit 0 is a pass; every line it writes to stdout is one problem.
+          HEALTH_URL. Its stdout is the verdict: every line it writes there is one
+          problem, whatever it exits with.
         type: string
         default: ""
       probe-timeout:
@@ -216,33 +217,28 @@ jobs:
           # dependencies in the same workspace the token would sit in.
           persist-credentials: false
 
-      # Every input below is aimed at a step of something the caller did not
-      # ask to run, so passing one is a request that would otherwise be ignored
-      # in silence — and a gate nobody notices is off is the worst kind. Eleven
-      # belong to the database job: a repo that has written out the routes it
-      # wants ramped, or the reasons a route cannot be, has said plainly that it
-      # expects a ramp. Two of the eleven are also aimed at each other —
-      # `semantic-fixtures` needs the replay `upgrade-gate` adds, and
-      # `probe-timeout` bounds a `probe-command` — so each is asked twice here,
-      # once about the job and once about the input it rides on. Then the
-      # mutation lane's floor, which bounds a score only that step measures, and
+      # Every input named below is aimed at a step of something the caller may
+      # not have asked to run, so passing one is a request that would otherwise
+      # be ignored in silence — and a gate nobody notices is off is the worst
+      # kind. Eleven belong to the database job: a repo that has written out the
+      # routes it wants ramped, or the reasons a route cannot be, has said
+      # plainly that it expects a ramp. Two of the eleven are also aimed at each
+      # other — `semantic-fixtures` needs the replay `upgrade-gate` adds, and
+      # `probe-timeout` bounds a `probe-command` — so each is asked twice, once
+      # about the job and once about the input it rides on. Then the mutation
+      # lane's floor, which bounds a score only that step measures, and
       # `affected`, which needs a turbo to hand the flag to — the one condition
-      # here that is a fact about the tree rather than about the inputs, which is
-      # why the step runs after the checkout. One step for all of them, so a
-      # caller that got two wrong reads two annotations rather than one and then
-      # the next run's.
-      - if: >-
-          ${{ (!inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
-          || inputs.capacity-script != '' || inputs['db-gate-evidence'] != ''
-          || inputs.route-allowlist != '' || inputs.timestamp-allowlist != ''
-          || inputs.backfill-command != '' || inputs.backfill-seed != ''
-          || inputs['semantic-fixtures'] != '' || inputs['probe-command'] != ''
-          || inputs['probe-timeout'] != ''))
-          || (!inputs['upgrade-gate'] && inputs['semantic-fixtures'] != '')
-          || (inputs['probe-command'] == '' && inputs['probe-timeout'] != '')
-          || (!inputs['mutation-lane'] && inputs['mutation-floor'] != '')
-          || inputs.affected }}
-        env:
+      # here that is a fact about the tree rather than about the inputs, which
+      # is why the step runs after the checkout.
+      #
+      # The step has no `if:`. It had one, restating every condition its body
+      # tests, and two statements of one rule is two places for it to be wrong:
+      # a condition added below and forgotten above is a guard that silently
+      # stops running, which is exactly the failure this whole step exists to
+      # prevent. The body is the rule. The cost is one always-green step on
+      # every run of every repo, which is a few seconds of a bash function that
+      # never fires.
+      - env:
           DATABASE: ${{ inputs.database }}
           UPGRADE_GATE: ${{ inputs.upgrade-gate }}
           CAPACITY_PATH: ${{ inputs.capacity-path }}

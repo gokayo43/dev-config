@@ -1,12 +1,10 @@
-import { SQL } from "bun";
-
 import type { Verdict } from "../_lib/gate.ts";
 import {
-  beside,
   compare,
-  discard,
+  databaseIn,
   type Dump,
   dumpOf,
+  inScratchDatabase,
   migrate,
   scratchDatabase,
   shell,
@@ -40,8 +38,11 @@ import {
  * its own the same way: the purpose string belongs to the gate that has one.
  */
 export function backfillDatabase(root: string): string {
-  return scratchDatabase(root, "backfill");
+  return scratchDatabase(root, PURPOSE);
 }
+
+/** What `database.ts` derives this gate's own database name from. */
+const PURPOSE = "backfill";
 
 export interface Evidence {
   /** The state the seed wrote — what the backfill was graded against. */
@@ -219,17 +220,8 @@ export async function backfillGate({
     };
   }
 
-  const database = backfillDatabase(root);
-  const own = beside(url, database);
-  const server = new SQL(url);
-  try {
-    // A database of this run's own on the caller's service, rather than the one
-    // it declared: the seed writes rows, and the app the later steps boot has
-    // to meet the database its migrations built and nothing else. Dropped first
-    // as well as last, because a run killed between the two ends otherwise
-    // leaves the next one failing over a name its author never chose.
-    await server.unsafe(`drop database if exists "${database}" with (force)`);
-    await server.unsafe(`create database "${database}"`);
+  return await inScratchDatabase(url, root, PURPOSE, async (own) => {
+    const database = databaseIn(own);
     await migrate(
       root,
       own,
@@ -286,7 +278,5 @@ export async function backfillGate({
       note: `backfill: \`${command}\` leaves the same data when it runs a second time over the state \`${seed}\` writes`,
       problems: [],
     };
-  } finally {
-    await discard(server, database);
-  }
+  });
 }

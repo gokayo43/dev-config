@@ -14,6 +14,8 @@ await entry(async () => {
       // input. A second way of naming the app would be a second thing to get
       // wrong about which app the probe was talking to.
       url: read["health-url"],
+      // Read before the command is looked at, so that a bound nobody can parse
+      // is refused whether or not there is a probe to run under it.
       seconds: secondsFrom(read["probe-timeout"]),
     }),
   );

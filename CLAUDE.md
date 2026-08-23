@@ -34,17 +34,21 @@ a change to a rule usually lands here too.
   `repo-contract/live.ts` is what the word "live" derives — everything a repo
   owes because it carries people — beside the contract every repo satisfies
   whether or not anyone is on the other end.
-  `db-gate/semantic-fixtures.ts` is another: what the base ref's replay proves
-  about a _schema_ and what it proves about the _rows_ are two subjects, and the
-  second is the only gate here that grades data. What more than
+  `db-gate` holds three beside its replay: `semantic-fixtures.ts`, since what
+  the base ref's replay proves about a _schema_ and what it proves about the
+  _rows_ are two subjects and the second is the only gate here that grades data;
+  `base-lineage.ts`, the lineage as the base ref carried it and the rollback that
+  puts a checkout back onto one, which both of those need and neither is about;
+  and `capacity.ts` for the ramp. What more than
   one **action** reads lives in `_lib/`: `gate.ts` — which is where `plainly`
   sits, the environment a child whose output a gate reads is given, now that two
   actions spawn one — and `dependency-specs.ts` —
   the version grammar the repo contract grades every spec by and the stack
   denylist asks which package a spec installs. What two gates of one action
   share stays in that action's directory instead — `db-gate/database.ts`, the
-  database those gates build for themselves and the one derivation of "these
-  two dumps came out the same", and `repo-contract/ci-workflow.ts`, the one
+  scratch database its three data gates each build for themselves and the one
+  derivation of "these two dumps came out the same", and
+  `repo-contract/ci-workflow.ts`, the one
   path both halves of that contract have an opinion about and neither owns. Any
   of them moves to `_lib/` when a second action reads it, and not on the
   argument that one might.

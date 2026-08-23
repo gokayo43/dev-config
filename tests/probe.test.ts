@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Verdict } from "../.github/actions/_lib/gate.ts";
+import { publish, type Verdict } from "../.github/actions/_lib/gate.ts";
 import {
   APP_URL,
   DEFAULT_SECONDS,
@@ -10,6 +10,27 @@ import {
 
 import { containing } from "./matchers.ts";
 import { materialise } from "./tree.ts";
+
+/**
+ * What `publish` writes to stdout for a verdict, which is the step's whole
+ * observable output: GitHub reads those lines as commands. Captured rather than
+ * inspected field by field, so a case can assert what a reader sees instead of
+ * how the verdict happened to spell it.
+ */
+async function published(verdict: Verdict): Promise<string[]> {
+  const lines: string[] = [];
+  // oxlint-disable-next-line no-console -- stdout is the protocol under test, and capturing it is the only way to read what the step publishes
+  const wrote = console.log;
+  // oxlint-disable-next-line no-console -- the same
+  console.log = (line: unknown) => void lines.push(String(line));
+  try {
+    await publish(verdict);
+  } finally {
+    // oxlint-disable-next-line no-console -- the same
+    console.log = wrote;
+  }
+  return lines;
+}
 
 /**
  * Real processes, because the whole of what this gate does is run one and read
@@ -34,12 +55,35 @@ function messages({ problems }: Verdict): string[] {
 }
 
 describe("the post-boot probe", () => {
-  test("a command that exits 0 is a pass, and says which command passed", async () => {
+  test("a command that exits 0 and says nothing is a pass", async () => {
     const verdict = await ran("true");
 
     expect(messages(verdict)).toEqual([]);
     expect(verdict.note).toContain("came back clean against the booted app");
-    expect(verdict.log).toBeUndefined();
+  });
+
+  // What the step actually writes, rather than which field the verdict happens
+  // to carry it in: a probe that wrote nothing must publish its notice and not
+  // a bare `::notice::` or an empty line standing for output nobody produced.
+  test("a silent pass publishes its notice and nothing else", async () => {
+    expect(await published(await ran("true"))).toEqual([containing("::notice::probe:")]);
+  });
+
+  // The contract's whole point, and the case the exit status hides. A probe
+  // runner that collects failures and reports them at the end, or a `set +e`
+  // somebody added while debugging, prints exactly what is broken and exits 0 —
+  // and the wrong implementation reads the status first and calls it clean.
+  test("a command that names violations and then exits 0 has still named them", async () => {
+    const verdict = await ran(
+      `printf '%s\n' 'GET /presets/1 answered 500' 'POST /presets accepted a dup'; exit 0`,
+    );
+
+    expect(messages(verdict)).toEqual([
+      "GET /presets/1 answered 500",
+      "POST /presets accepted a dup",
+    ]);
+    expect(verdict.note).toContain("reported 2 problems");
+    expect(verdict.note).not.toContain("came back clean");
   });
 
   // The contract the whole hook rests on: the repo owns the meaning, so each
@@ -157,6 +201,21 @@ describe("the post-boot probe", () => {
     const verdict = await ran("ls marker.txt; exit 1", DEFAULT_SECONDS, root);
 
     expect(messages(verdict)).toEqual(["marker.txt"]);
+  });
+  // Half a pair is a caller who wrote an input nothing would have read. The
+  // step is selected by either input precisely so that this can be said out
+  // loud rather than skipped in silence.
+  test("a bound with no command under it is refused", async () => {
+    const verdict = await probeGate({
+      root: ".",
+      command: "",
+      url: URL_OF_THE_APP,
+      seconds: 300,
+    });
+
+    expect(messages(verdict)).toEqual([
+      containing("probe-timeout is set to 300s and probe-command is empty"),
+    ]);
   });
 });
 

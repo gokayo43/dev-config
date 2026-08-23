@@ -7,7 +7,7 @@ import { SQL } from "bun";
 import type { Verdict } from "../.github/actions/_lib/gate.ts";
 import { beside, rows } from "../.github/actions/db-gate/database.ts";
 import { replayGate, upgradeDatabase } from "../.github/actions/db-gate/replay.ts";
-import { fixtureDatabase, semanticFixtures } from "../.github/actions/db-gate/semantic-fixtures.ts";
+import { fixtureDatabase } from "../.github/actions/db-gate/semantic-fixtures.ts";
 
 import { containing } from "./matchers.ts";
 import { lineage, type Migration, migratesFrom } from "./lineage.ts";
@@ -59,6 +59,13 @@ const READS_THEM_AS_AUCKLAND: Migration = {
   sql: `ALTER TABLE "event" ALTER COLUMN "at" TYPE timestamptz USING "at" AT TIME ZONE 'Pacific/Auckland';\n`,
 };
 
+/**
+ * The same migration as CREATES_EVENT, edited after it had already been
+ * applied. A deployed database keeps the column-less table; a rebuild gets this
+ * one — which is the divergence the upgrade path exists to refuse.
+ */
+const EVENT_WITH_TAG = `CREATE TABLE "event" (\n\t"id" integer PRIMARY KEY NOT NULL,\n\t"at" timestamp NOT NULL,\n\t"tag" text\n);\n`;
+
 /** A migration that cannot apply to a table with rows in it, which every deployed one has. */
 const DEMANDS_A_KIND: Migration = {
   tag: "0001_kind",
@@ -70,6 +77,13 @@ const DEMANDS_A_KIND: Migration = {
 const ADDS_A_KIND: Migration = {
   ...DEMANDS_A_KIND,
   sql: `ALTER TABLE "event" ADD COLUMN "kind" text;\n`,
+};
+
+/** A second lineage's own table, for the case about one this branch stops naming. */
+const CREATES_NOTE: Migration = {
+  tag: "0000_note",
+  when: 1_500,
+  sql: `CREATE TABLE "note" (\n\t"id" integer PRIMARY KEY NOT NULL\n);\n`,
 };
 
 const FIXTURES = "fixtures";
@@ -147,14 +161,6 @@ function messages({ problems }: Verdict): string[] {
   return problems.map(({ message }) => message);
 }
 
-/** What the gate threw, as the text a case can read. A rejection is the diagnostic here. */
-async function refusal(running: Promise<Verdict>): Promise<string> {
-  return await running.then(
-    () => "the gate returned a verdict instead of refusing",
-    (error: unknown) => String(error),
-  );
-}
-
 /** Every database on the server, so a case can say the gate left none of its own behind. */
 async function present(name: string): Promise<boolean> {
   const server = new SQL(SERVER);
@@ -230,11 +236,51 @@ describe("the semantic-fixture gate", () => {
   test(
     "a migration that cannot apply to a database with rows in it says which rows",
     async () => {
-      const said = await refusal(ran([DEMANDS_A_KIND]));
+      const verdict = await ran([DEMANDS_A_KIND]);
 
-      expect(said).toContain("failed applying this branch's migrations onto");
-      expect(said).toContain(`holding the rows ${FIXTURES} wrote`);
-      expect(said).toContain("not to one that already has rows in it");
+      expect(messages(verdict)).toEqual([
+        containing("failed applying this branch's migrations onto"),
+      ]);
+      expect(messages(verdict)[0]).toContain(`holding the rows ${FIXTURES} wrote`);
+      expect(messages(verdict)[0]).toContain("not to one that already has rows in it");
+      // Graded, not thrown: the upgrade path's own verdict is still in the
+      // envelope beside it.
+      expect(verdict.note).toContain("reaches the same schema");
+    },
+    TIMEOUT,
+  );
+
+  // The whole reason a migrator refusal is a verdict rather than a throw. This
+  // branch carries two independent faults — an already-applied migration edited
+  // under the upgrade path, and a new one that cannot meet rows — and an author
+  // has to be told about both in one run. A throw out of the fixture half
+  // carries the schema half's finding away with it: the wrong implementation
+  // here reports only the migrator, and the divergence vanishes.
+  test(
+    "a branch that both diverges and breaks its rows reports both faults",
+    async () => {
+      const repo = await history(
+        { ...migratesFrom(MIGRATOR, "drizzle"), ...lineage("drizzle", CREATES_EVENT) },
+        {
+          ...migratesFrom(MIGRATOR, "drizzle"),
+          // The applied migration, edited: fresh and upgraded part company.
+          ...lineage("drizzle", { ...CREATES_EVENT, sql: EVENT_WITH_TAG }, DEMANDS_A_KIND),
+          ...NOON_UTC_FIXTURE,
+        },
+      );
+      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+      const verdict = await replayGate({
+        root: repo.root,
+        url: await emptyDatabase(),
+        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+        fixtures: FIXTURES,
+      });
+
+      expect(messages(verdict)).toEqual([
+        containing("does not reach the schema this branch builds from empty"),
+        containing("failed applying this branch's migrations onto"),
+      ]);
+      expect(messages(verdict)[1]).toContain(`holding the rows ${FIXTURES} wrote`);
     },
     TIMEOUT,
   );
@@ -328,24 +374,19 @@ describe("the semantic-fixture gate", () => {
 });
 
 /**
- * The directory read, which happens before anything is built — so these cases
- * need no database at all, and the swap they are handed refuses to run. A gate
- * that paid for a replay before noticing its fixtures were unpaired would put
- * the slowest possible answer on the cheapest possible mistake, and this stub
- * is what says it does not.
+ * The directory cases drive the whole gate, because the whole gate is what has
+ * to refuse them cheaply. `replayGate` reads the directory beside its own input
+ * guard, ahead of the first migrator run — so a case here needs no database,
+ * and the bogus URL below is what says so: reaching a database at all would
+ * fail these outright rather than quietly costing a replay.
  */
-function neverReplays(): Promise<void> {
-  throw new Error("the base lineage was replayed before the fixture directory was read");
-}
-
 async function reading(fixtures: Tree, dir: string = FIXTURES): Promise<Verdict> {
   const repo = await history({ ...migratesFrom(MIGRATOR, "drizzle"), ...fixtures });
-  return await semanticFixtures({
+  return await replayGate({
     root: repo.root,
-    url: SERVER,
-    dir,
-    from: "abc1234",
-    atBase: neverReplays,
+    url: "postgres://nobody@127.0.0.1:1/no-database-should-be-reached",
+    upgrade: { baseRef: "", before: "" },
+    fixtures: dir,
   });
 }
 
@@ -410,12 +451,11 @@ describe("the fixture directory", () => {
   test("a directory holding no fixture is refused rather than passed", async () => {
     const repo = await history({ ...migratesFrom(MIGRATOR, "drizzle") });
     await mkdir(join(repo.root, FIXTURES), { recursive: true });
-    const verdict = await semanticFixtures({
+    const verdict = await replayGate({
       root: repo.root,
-      url: SERVER,
-      dir: FIXTURES,
-      from: "abc1234",
-      atBase: neverReplays,
+      url: "postgres://nobody@127.0.0.1:1/no-database-should-be-reached",
+      upgrade: { baseRef: "", before: "" },
+      fixtures: FIXTURES,
     });
 
     expect(messages(verdict)).toEqual([containing("which holds no fixture")]);
@@ -493,6 +533,42 @@ describe("what the fixtures ride on", () => {
   // A base ref from before there were migrations has no replay to write into,
   // and a run that said only "the upgrade path is not proved" would read as one
   // where the fixtures had passed.
+  // The third branch that cannot reach the fixtures, and the one that reports
+  // problems rather than a note: the base replay stopped short of a lineage, so
+  // nothing was written into it. Silence here would read as fixtures that ran
+  // and passed.
+  test(
+    "a lineage this branch's migrator never applies says the fixtures did not run either",
+    async () => {
+      const repo = await history(
+        {
+          ...migratesFrom(MIGRATOR, "drizzle", "extra"),
+          ...lineage("drizzle", CREATES_EVENT),
+          ...lineage("extra", CREATES_NOTE),
+        },
+        {
+          // The branch stops naming `extra`, so the base lineage it carried is
+          // never applied and the upgrade path cannot be built.
+          ...migratesFrom(MIGRATOR, "drizzle"),
+          ...lineage("drizzle", CREATES_EVENT, READS_THEM_AS_UTC),
+          ...lineage("extra", CREATES_NOTE),
+          ...NOON_UTC_FIXTURE,
+        },
+      );
+      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+      const verdict = await replayGate({
+        root: repo.root,
+        url: await emptyDatabase(),
+        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+        fixtures: FIXTURES,
+      });
+
+      expect(messages(verdict)).toEqual([containing("never applied it")]);
+      expect(verdict.note).toContain(`neither are the ${FIXTURES} fixtures written into it`);
+    },
+    TIMEOUT,
+  );
+
   test(
     "a base ref with no lineage says the fixtures did not run either",
     async () => {

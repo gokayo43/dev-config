@@ -15,10 +15,20 @@ import { plainly, type Problem, type Verdict } from "../_lib/gate.ts";
  * knows what its answers are supposed to be.
  *
  * That makes the contract the smallest one that can carry a claim this gate
- * cannot read: **exit 0 is a pass, and every line the command writes to stdout
- * is one problem.** `capacity-script` hands a repo the same authorship one step
- * later, and for the same reason — the gate owns the running, the repo owns the
- * meaning.
+ * cannot read: **stdout is the verdict.** Every line the command writes there
+ * is one problem, whatever it exits with, and a command that exits non-zero
+ * having written nothing is a failure the gate has to word for itself.
+ *
+ * Stdout rather than the exit status, because the status is the half a probe
+ * gets wrong. A runner that collects failures and reports them at the end, a
+ * shell function whose last command happened to succeed, a `set +e` somebody
+ * added while debugging: each of those prints exactly what is broken and then
+ * exits 0. Reading the status first would make this gate's answer depend on the
+ * one thing about a repo's own program it cannot see, and the failure mode is
+ * silence over an app that said out loud what was wrong with it.
+ *
+ * `capacity-script` hands a repo the same authorship one step later, and for
+ * the same reason — the gate owns the running, the repo owns the meaning.
  */
 
 /** The one variable the probe is given, spelled as the boot step and the ramp both spell it. */
@@ -83,13 +93,22 @@ function saidIn(output: string): string[] {
     .filter((line) => line !== "");
 }
 
-/** Everything the command wrote, in the order a reader met it, or nothing when it wrote nothing. */
-function wrote(out: string, err: string): { readonly log: string } | Record<string, never> {
-  const both = `${out}${err}`.trimEnd();
-  return both === "" ? {} : { log: both };
-}
-
 export async function probeGate({ root, command, url, seconds }: Probe): Promise<Verdict> {
+  // Half of a pair is a caller who asked for something and would not get it —
+  // the same refusal `backfillGate` makes, and the reason this step runs when
+  // *either* input is set rather than only when the command is. A bound with
+  // no command under it bounds nothing, and being quietly ignored is how an
+  // input somebody wrote turns out never to have been read.
+  if (command === "") {
+    return {
+      problems: [
+        {
+          message: `probe-timeout is set to ${seconds}s and probe-command is empty — the bound is on that command, and there is no probe here for it to bound`,
+        },
+      ],
+    };
+  }
+
   // A controller of this function's own rather than the `timeout` option, so
   // that "the bound fired" is something it can *read* — nothing else aborts
   // this signal. Inferring it from the exit instead would be wrong about the
@@ -130,7 +149,7 @@ export async function probeGate({ root, command, url, seconds }: Probe): Promise
   if (stopping.signal.aborted) {
     return {
       note: "probe: the command did not finish",
-      ...wrote(out, err),
+      log: `${out}${err}`.trimEnd(),
       problems: [
         {
           message: `probe-command (\`${command}\`) was still running after ${seconds}s and was killed — whatever it writes after that is lost, so nothing it was asserting was graded; make the probe answer inside the bound, or raise probe-timeout and say why the app needs that long`,
@@ -139,32 +158,35 @@ export async function probeGate({ root, command, url, seconds }: Probe): Promise
     };
   }
 
-  if (status === 0) {
+  const log = `${out}${err}`.trimEnd();
+
+  // Read before the status, and independently of it: a probe that names two
+  // broken invariants and then exits 0 has still named them.
+  const said: Problem[] = saidIn(out).map((line) => ({ message: line }));
+
+  // A command that fails and says nothing is still a failure, and a red step
+  // with an empty explanation is the one thing no gate here may produce. The
+  // annotation then says what the repo's own contract was and what to write.
+  if (said.length === 0 && status !== 0) {
+    said.push({
+      message: `probe-command (\`${command}\`) exited ${status} and wrote nothing to stdout — a failing probe names each invariant it broke on a line of its own, since the gate running it cannot know what it was asserting`,
+    });
+  }
+
+  if (said.length === 0) {
     return {
       note: `probe: \`${command}\` came back clean against the booted app`,
-      ...wrote(out, err),
+      log,
       problems: [],
     };
   }
 
-  const said: readonly Problem[] = saidIn(out).map((line) => ({ message: line }));
-  // A command that fails and says nothing is still a failure, and a red step
-  // with an empty explanation is the one thing no gate here may produce. The
-  // annotation then says what the repo's own contract was and what to write.
-  const problems: Problem[] =
-    said.length > 0
-      ? [...said]
-      : [
-          {
-            message: `probe-command (\`${command}\`) exited ${status} and wrote nothing to stdout — a failing probe names each invariant it broke on a line of its own, since the gate running it cannot know what it was asserting`,
-          },
-        ];
   return {
     // Counted off what is annotated rather than off what the command wrote, so
     // that the line above the annotations and the annotations themselves cannot
     // say different things about the same run.
-    note: `probe: \`${command}\` reported ${problems.length} problem${problems.length === 1 ? "" : "s"}`,
-    ...wrote(out, err),
-    problems,
+    note: `probe: \`${command}\` reported ${said.length} problem${said.length === 1 ? "" : "s"}`,
+    log,
+    problems: said,
   };
 }

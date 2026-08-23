@@ -88,8 +88,19 @@ What it asserts is the repo's, because only the repo knows what its answers are
 supposed to be. So the contract is the smallest one that can carry a claim this
 gate cannot read:
 
-- **exit 0 is a pass**;
-- **every line the command writes to stdout is one problem.**
+- **stdout is the verdict** — every line the command writes there is one
+  problem, whatever it exits with;
+- **a command that exits non-zero having written nothing** is a failure the gate
+  words for itself, because a red step with an empty explanation is the one
+  thing no gate here may produce.
+
+Stdout rather than the exit status, because the status is the half a probe gets
+wrong. A runner that collects failures and reports them at the end, a shell
+function whose last command happened to succeed, a `set +e` somebody added while
+debugging: each of those prints exactly what is broken and then exits 0. Reading
+the status first would make the gate's answer depend on the one thing about a
+repo's own program it cannot see, and the failure mode is silence over an app
+that said out loud what was wrong with it.
 
 `capacity-script` hands a repo the same authorship one step later, and for the
 same reason: the gate owns the running, the repo owns the meaning.
@@ -106,19 +117,21 @@ ways of asking for colour and the terminal type they are read off: stdout is the
 protocol here, and a problem arriving wrapped in escape codes is a problem
 nobody can match to a route.
 
-A command that fails and prints nothing is still a failure, and the annotation
-then says what the contract was — a red step with an empty explanation is the one
-thing no gate here may produce. Everything the command wrote, stdout and stderr
-both, reaches the log above the annotations.
+Everything the command wrote, stdout and stderr both, reaches the log above the
+annotations.
 
 `probe-timeout` bounds it, in seconds, and empty takes the bound `probe.ts`
-declares — which is where that number and the argument for it live. The probe
+declares — 120 seconds today — which is where that number and the argument for it live. The probe
 runs against an app that is already up, so it is making requests rather than
 waiting for a boot; the bound is there because a probe that has wedged is
 otherwise indistinguishable from a slow one, and would spend the job's whole
 budget saying so, taking the ramp and every piece of evidence after it down with
 it. A probe killed by the bound is refused naming it: whatever it would have
 written after that is lost, so nothing it was asserting was graded.
+
+The step runs when **either** input is set, and a `probe-timeout` with no
+`probe-command` under it is refused — a bound on nothing is an input somebody
+wrote that nothing would have read.
 
 ### What this cannot catch
 
