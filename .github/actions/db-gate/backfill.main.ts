@@ -1,6 +1,5 @@
-import { entry, inputs, required } from "../_lib/gate.ts";
+import { entry, inputs, publish, required } from "../_lib/gate.ts";
 import { backfillGate } from "./backfill.ts";
-import { reportVerdict } from "./verdict.ts";
 
 await entry(async () => {
   const read = inputs(
@@ -9,6 +8,7 @@ await entry(async () => {
     "seeded-data",
     "first-data",
     "second-data",
+    "step-summary",
   );
 
   // The service the calling job declared, from the environment it owns. This
@@ -21,7 +21,7 @@ await entry(async () => {
     "the backfill check builds its own database on the service the calling job declared",
   );
 
-  reportVerdict(
+  await publish(
     await backfillGate({
       // The action ran this from the project it was pointed at, and both
       // commands are the repo's own, run the way the repo would run them.
@@ -35,5 +35,6 @@ await entry(async () => {
         second: read["second-data"],
       },
     }),
+    read["step-summary"],
   );
 });

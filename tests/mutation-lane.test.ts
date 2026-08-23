@@ -2,7 +2,8 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
-import { type Lane, mutationLane } from "../.github/actions/mutation-lane/mutation-lane.ts";
+import type { Verdict } from "../.github/actions/_lib/gate.ts";
+import { mutationLane } from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { containing } from "./matchers.ts";
 import { git, history, type Tree, under, without } from "./tree.ts";
 
@@ -144,7 +145,7 @@ interface Run {
 async function lane(
   trees: readonly Tree[],
   { floor = "", installed = true, configured = [] }: Run = {},
-): Promise<Lane> {
+): Promise<Verdict> {
   return (await laneIn(trees, { floor, installed, configured })).verdict;
 }
 
@@ -152,14 +153,14 @@ async function lane(
 async function laneIn(
   trees: readonly Tree[],
   { floor = "", installed = true, configured = [] }: Run = {},
-): Promise<{ verdict: Lane; root: string }> {
+): Promise<{ verdict: Verdict; root: string }> {
   const { root } = await history(...trees);
   if (installed) await symlink(NODE_MODULES, join(root, "node_modules"));
   for (const [name, value] of configured) await git(root, ["config", "--local", name, value]);
   return { verdict: await mutationLane({ root, event: { baseRef: "", before: "" }, floor }), root };
 }
 
-function messages({ problems }: Lane): string[] {
+function messages({ problems }: Verdict): string[] {
   return problems.map(({ file, message }) => `${file ?? ""}: ${message}`);
 }
 

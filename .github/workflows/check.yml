@@ -34,7 +34,8 @@ on:
       mutation-lane:
         description: >-
           Mutate the domain files this branch changed and fail on a mutant its own lines
-          left undetected — for repos whose pure domain is declared as a boundaries element.
+          left undetected — for repos whose pure domain is declared as a boundaries
+          element. docs/gates/mutation-lane.md is where it is argued.
         type: boolean
         default: false
       mutation-floor:

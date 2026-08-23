@@ -4,10 +4,9 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
-import type { Event } from "../.github/actions/_lib/gate.ts";
+import type { Event, Verdict } from "../.github/actions/_lib/gate.ts";
 import { beside, rows } from "../.github/actions/db-gate/database.ts";
 import { replayGate, upgradeDatabase } from "../.github/actions/db-gate/replay.ts";
-import type { Verdict } from "../.github/actions/db-gate/verdict.ts";
 
 import { containing } from "./matchers.ts";
 import { lineage, type Migration, migratesFrom, scripted } from "./lineage.ts";
@@ -159,8 +158,8 @@ describe("replay gate", () => {
     const verdict = await replay(repo, undefined);
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.divergence).toEqual([]);
-    expect(verdict.summary).toContain("a second replay leaves it identical");
+    expect(verdict.log).toBeUndefined();
+    expect(verdict.note).toContain("a second replay leaves it identical");
   });
 
   // The shape the whole gate leads with: a migration that only applies to a
@@ -201,8 +200,8 @@ describe("replay gate", () => {
     expect(messages(verdict)).toEqual([
       containing("replaying the migrations a second time changed the schema"),
     ]);
-    expect(verdict.summary).toBeUndefined();
-    expect(verdict.divergence.join("\n")).toContain("thing_id_check1");
+    expect(verdict.note).toBeUndefined();
+    expect(verdict.log ?? "").toContain("thing_id_check1");
   });
 
   // Green on a tree whose rewritten migration the upgrade path would refuse, so
@@ -216,7 +215,7 @@ describe("replay gate", () => {
     const verdict = await replay(repo, undefined);
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.summary).toBe(
+    expect(verdict.note).toBe(
       "replay: the migrations rebuild the schema from empty, and a second replay leaves it identical",
     );
   });
@@ -232,9 +231,9 @@ describe("replay gate", () => {
     const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.divergence).toEqual([]);
-    expect(verdict.summary).toContain("reaches the same schema");
-    expect(verdict.summary).toContain("drizzle");
+    expect(verdict.log).toBeUndefined();
+    expect(verdict.note).toContain("reaches the same schema");
+    expect(verdict.note).toContain("drizzle");
   });
 
   // The same column, added by editing the migration that had already been
@@ -251,8 +250,8 @@ describe("replay gate", () => {
       containing("does not reach the schema this branch builds from empty"),
     ]);
     expect(messages(verdict)[0]).toContain("put the change in a new migration");
-    expect(verdict.summary).toBeUndefined();
-    expect(verdict.divergence.join("\n")).toContain("slug");
+    expect(verdict.note).toBeUndefined();
+    expect(verdict.log ?? "").toContain("slug");
   });
 
   // A migration whose journal clock sits behind one the base ref had already
@@ -275,7 +274,7 @@ describe("replay gate", () => {
     expect(messages(verdict)).toEqual([
       containing("does not reach the schema this branch builds from empty"),
     ]);
-    expect(verdict.divergence.join("\n")).toContain("slug");
+    expect(verdict.log ?? "").toContain("slug");
   });
 
   // The lineage the base ref names is the one that has to be replayed. Reading
@@ -329,7 +328,7 @@ describe("replay gate", () => {
     const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.summary).toContain("reaches the same schema");
+    expect(verdict.note).toContain("reaches the same schema");
   });
 
   // A lineage is replayed by replacing its directory, so the project root being
@@ -425,7 +424,7 @@ describe("replay gate", () => {
     );
 
     expect(verdicts.map(messages)).toEqual([[], []]);
-    for (const verdict of verdicts) expect(verdict.summary).toContain("reaches the same schema");
+    for (const verdict of verdicts) expect(verdict.note).toContain("reaches the same schema");
     expect(upgradeDatabase(one.root)).not.toBe(upgradeDatabase(other.root));
   });
 
@@ -447,7 +446,7 @@ describe("replay gate", () => {
     const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.summary).toContain("reaches the same schema");
+    expect(verdict.note).toContain("reaches the same schema");
   });
 
   test("a pull request upgrades from where the branch left the base", async () => {
@@ -463,7 +462,7 @@ describe("replay gate", () => {
     const verdict = await replay(repo, { baseRef: "main", before: "" });
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.summary).toContain((repo.revs[0] ?? "").slice(0, 7));
+    expect(verdict.note).toContain((repo.revs[0] ?? "").slice(0, 7));
   });
 
   // No `before` and no base ref is a merge queue or a workflow_dispatch: the
@@ -488,7 +487,7 @@ describe("replay gate", () => {
     const verdict = await replay(repo, { baseRef: "", before: "" });
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.summary).toContain("no earlier commit to upgrade from");
+    expect(verdict.note).toContain("no earlier commit to upgrade from");
   });
 
   test("a base ref that carries no lineage has nothing to upgrade from", async () => {
@@ -499,7 +498,7 @@ describe("replay gate", () => {
     const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.summary).toContain("carries no migration lineage");
+    expect(verdict.note).toContain("carries no migration lineage");
   });
 
   // A lineage the base ref carried, still on disk, and no longer named by the
@@ -559,7 +558,7 @@ describe("replay gate", () => {
     const verdict = await replayIn(join(repo.root, "apps/api"), pushedOver(repo.revs[0] ?? ""));
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.summary).toContain("carries no migration lineage");
+    expect(verdict.note).toContain("carries no migration lineage");
   });
 
   // Every git read on this path answers or refuses. A checkout that is not a

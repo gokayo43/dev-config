@@ -5,13 +5,13 @@ import { join } from "node:path";
 
 import { SQL } from "bun";
 
+import type { Verdict } from "../.github/actions/_lib/gate.ts";
 import {
   backfillDatabase,
   backfillGate,
   type Evidence,
 } from "../.github/actions/db-gate/backfill.ts";
 import { rows, textColumn } from "../.github/actions/db-gate/database.ts";
-import type { Verdict } from "../.github/actions/db-gate/verdict.ts";
 
 import { containing } from "./matchers.ts";
 import { lineage, type Migration, migratesFrom } from "./lineage.ts";
@@ -199,8 +199,8 @@ describe("the backfill check", () => {
     const { verdict } = await ran(GUARDED);
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.divergence).toEqual([]);
-    expect(verdict.summary).toContain("leaves the same data when it runs a second time");
+    expect(verdict.log).toBeUndefined();
+    expect(verdict.note).toContain("leaves the same data when it runs a second time");
   });
 
   // The shape principles.md is written against: an insert with no guard. Run
@@ -213,9 +213,9 @@ describe("the backfill check", () => {
       containing("running the backfill a second time changed the data"),
     ]);
     expect(messages(verdict)[0]).toContain("guard each statement on the state it produces");
-    expect(verdict.summary).toBeUndefined();
-    expect(verdict.divergence.join("\n")).toContain("backfilled 1");
-    expect(verdict.divergence.join("\n")).toContain("the data after a second backfill");
+    expect(verdict.note).toBeUndefined();
+    expect(verdict.log ?? "").toContain("backfilled 1");
+    expect(verdict.log ?? "").toContain("the data after a second backfill");
   });
 
   // The most likely false positive: an unguarded UPDATE. It rewrites every row
@@ -227,7 +227,7 @@ describe("the backfill check", () => {
     const { verdict } = await ran(`update "thing" set "slug" = lower("name")`);
 
     expect(messages(verdict)).toEqual([]);
-    expect(verdict.summary).toContain("leaves the same data");
+    expect(verdict.note).toContain("leaves the same data");
   });
 
   // `--inserts` puts raw newlines inside string literals, so a comparison cut
@@ -246,7 +246,7 @@ describe("the backfill check", () => {
     expect(messages(verdict)).toEqual([
       containing("running the backfill a second time changed the data"),
     ]);
-    expect(verdict.divergence.join("\n")).toContain("A\nD");
+    expect(verdict.log ?? "").toContain("A\nD");
   });
 
   // The same class from the other side: the second run drops a blank line from

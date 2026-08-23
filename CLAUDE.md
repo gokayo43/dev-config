@@ -39,8 +39,9 @@ a change to a rule usually lands here too.
   denylist asks which package a spec installs. What two gates of one action
   share stays in that action's directory instead — `db-gate/database.ts`, the
   database those gates build for themselves and the one derivation of "these
-  two dumps came out the same", `db-gate/verdict.ts`, what they report and
-  how their entry points say it, and `repo-contract/ci-workflow.ts`, the one
+  two dumps came out the same", `db-gate/verdict.ts`, the claim and the refusal
+  those two build and the invariant that only one of them carries a note, and
+  `repo-contract/ci-workflow.ts`, the one
   path both halves of that contract have an opinion about and neither owns. Any
   of them moves to `_lib/` when a second action reads it, and not on the
   argument that one might.
@@ -149,14 +150,14 @@ After tagging, bump `project-template`'s pins: `setup/ci.single.yml` and
 Write the check as `.github/actions/<name>/<name>.ts`, exporting a function that
 answers with the problems the step reports, and takes whatever it reads — a
 root path, injected fetchers — as arguments. `Problem[]` is the whole answer for
-a gate that only refuses; one that also publishes returns a shape of its own
-holding that list — db-gate's replay carries the divergence behind its verdict,
-its ramp the table it appends to the run summary, and the mutation lane both,
-plus whatever the run wrote. The `*.main.ts` is what turns each field into the
-thing that carries it: an annotation, a `::notice`, a step summary, the log. The entry point is a separate `<name>.main.ts` that
+a gate that only refuses; one that also publishes answers with `_lib`'s
+`Verdict` — the note for the log, the table for the run summary, whatever the
+run wrote, and the problems — and its entry point hands that whole to
+`publish()`, which is the one place the order of those writes is decided. The
+entry point is a separate `<name>.main.ts` that
 `action.yml` runs: it hands its whole body to `entry()`, so that a throw reaches
 the log as an annotation rather than a stack trace, reads the inputs through
-`inputs()`, which throws on a missing one, and calls `report()`. Splitting them
+`inputs()`, which throws on a missing one, and calls `report()` or `publish()`. Splitting them
 is what lets the coverage floor mean something, since nothing can drive an entry
 point from a test.
 

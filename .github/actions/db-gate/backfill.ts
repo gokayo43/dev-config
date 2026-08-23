@@ -1,5 +1,6 @@
 import { SQL } from "bun";
 
+import type { Verdict } from "../_lib/gate.ts";
 import {
   beside,
   compare,
@@ -10,7 +11,7 @@ import {
   scratchDatabase,
   shell,
 } from "./database.ts";
-import { passed, refused, type Verdict } from "./verdict.ts";
+import { passed, refused } from "./verdict.ts";
 
 /**
  * What a backfill is asked to prove: **running it a second time leaves what the

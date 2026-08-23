@@ -115,7 +115,7 @@ runs:
         INPUT_BEFORE: ${{ github.event.before }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/replay.main.ts"
+        INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bun "$GITHUB_ACTION_PATH/replay.main.ts"
 
     # The database that has just been migrated is the authority on its own
     # column types — an ORM's `timestamp` is a hint — so it is asked directly.
@@ -147,7 +147,7 @@ runs:
         INPUT_SECOND_DATA: ${{ runner.temp }}/backfill-second.rows
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/backfill.main.ts"
+        INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bun "$GITHUB_ACTION_PATH/backfill.main.ts"
 
     # Migrations applying is half of it; the app running against the schema they
     # produced is the other half. Health answers 200 only once the process is up
@@ -266,7 +266,7 @@ runs:
         INPUT_ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
       run: |
         set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/route-coverage.main.ts"
+        INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bun "$GITHUB_ACTION_PATH/route-coverage.main.ts"
 
     # Everything the steps above wrote into the runner, which is deleted with
     # the runner. A step that failed on the way to a number is exactly when its

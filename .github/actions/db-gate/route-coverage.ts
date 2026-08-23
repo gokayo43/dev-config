@@ -1,5 +1,12 @@
 import { EVERY_METHOD, type Route, type RouteLog, type Served } from "../../../route-log.ts";
-import { type Allowlist, isList, isObject, kindOf, type Problem } from "../_lib/gate.ts";
+import {
+  type Allowlist,
+  isList,
+  isObject,
+  kindOf,
+  type Problem,
+  type Verdict,
+} from "../_lib/gate.ts";
 
 /**
  * The gate's half of the route-coverage floor. The protocol it reads — the
@@ -109,20 +116,6 @@ function routeFrom(entry: string): Route | undefined {
 }
 
 /**
- * Not `_lib/gate.ts`'s `Verdict`, which it otherwise resembles. A verdict's
- * summary is the claim the gate established, so it is absent when there is none
- * — what happened is the problems. This summary is a measurement of the floor,
- * and it earns the same line of log either way: "5 of 10 routes exercised by the
- * ramp" is what a reader wants most on the run that failed. Folding the two
- * would mean dropping the count from exactly those runs.
- */
-export interface Coverage {
-  /** One line for the log, so a step that passed still shows the floor was evaluated. */
-  readonly summary: string;
-  readonly problems: Problem[];
-}
-
-/**
  * A floor, in the sense the coverage threshold is one: it catches a route that
  * no load has ever touched, and claims nothing about whether the load that did
  * touch it resembles production. Shipping an endpoint the ramp does not reach
@@ -131,13 +124,17 @@ export interface Coverage {
  * The allowlist arrives whole rather than as its entries, so that enforcing the
  * reason on each of them is not something a caller can typecheck without.
  */
-export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allowlist): Coverage {
+export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allowlist): Verdict {
   // Keyed, so that the table's own duplicates collapse the way the floor reads
   // them: one route, covered or not.
   const table = new Map(after.routeTable.map((route) => [key(route), route]));
   if (table.size === 0) {
     return {
-      summary: "route coverage: no route table",
+      // Present on a failing run, unlike the claim a proof carries: this one is
+      // a measurement of the floor, and it earns its line of log either way.
+      note: "route coverage: no route table",
+      table: undefined,
+      log: undefined,
       problems: [
         ...allowlist.problems,
         {
@@ -201,7 +198,9 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
   const uncovered = [...table.keys()].filter((name) => !covered.has(name) && !waived.has(name));
 
   return {
-    summary: `route coverage: ${covered.size} of ${table.size} routes exercised by the ramp, ${waived.size} allowlisted`,
+    note: `route coverage: ${covered.size} of ${table.size} routes exercised by the ramp, ${waived.size} allowlisted`,
+    table: undefined,
+    log: undefined,
     problems: [
       ...allowlist.problems,
       ...uncovered.map((name) => ({

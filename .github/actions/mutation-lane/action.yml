@@ -1,12 +1,10 @@
 name: Mutation lane
 description: >-
   Mutates the domain files this branch changed and fails on a mutant its own
-  lines left undetected. Coverage says a line ran; this says the suite would
-  have noticed had the line been wrong. Selective by construction — a full
-  campaign over a domain layer costs minutes to hours, and a gate that costs
-  that runs nightly or not at all, so what a pull request is held to is the
-  code in it. The score over those files is published to the run summary, and
-  a repo that wants a number it cannot fall below declares mutation-floor.
+  lines left undetected, publishing the score over those files to the run
+  summary. Why it is selective, where the domain is read from, which mutants
+  count and what the floor means: docs/gates/mutation-lane.md, which is the one
+  place any of that is argued.
 
 inputs:
   working-directory:
@@ -17,7 +15,7 @@ inputs:
       The mutation score the changed domain files must hold, as a fraction
       between 0 and 1 — the way bunfig.toml writes coverageThreshold. Empty
       publishes the score and fails on nothing but a mutant this branch's own
-      lines left undetected.
+      lines left undetected. A floor, not a target: docs/gates/mutation-lane.md.
     default: ""
 
 runs:

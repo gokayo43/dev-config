@@ -1,7 +1,16 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { allowlistFrom, inputs, notice, report, required } from "../.github/actions/_lib/gate.ts";
+import {
+  allowlistFrom,
+  inputs,
+  notice,
+  publish,
+  report,
+  required,
+} from "../.github/actions/_lib/gate.ts";
 import { git, history, type Tree } from "./tree.ts";
 
 function captureLog(): { lines: string[]; restore: () => void } {
@@ -14,7 +23,15 @@ function captureLog(): { lines: string[]; restore: () => void } {
 
 const environment = { ...process.env };
 
-afterEach(() => {
+/**
+ * The run summaries the publishing cases wrote, deleted after each of them. The
+ * name is derived rather than random for the reason `tests/tree.ts` gives about
+ * fixture roots: a run killed outright leaves a name the next run reclaims.
+ */
+const summaries: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(summaries.splice(0).map((file) => rm(file, { force: true })));
   process.exitCode = 0;
   // Restored rather than reset: these cases set and delete variables the whole
   // suite runs inside, and a case that changed one for every case after it
@@ -62,6 +79,95 @@ describe("annotations", () => {
     restore();
     expect(lines).toEqual(["::notice::exempt from 'ci-call'"]);
     expect(process.exitCode).toBe(0);
+  });
+});
+
+/**
+ * Every entry point that publishes hands its whole verdict to `publish` and does
+ * nothing else, so what those runs put on the log and in the run summary is
+ * decided entirely here. Captured off `console.log` because that is the
+ * protocol: GitHub reads `::error` and `::notice` off stdout, and the order they
+ * arrive in is what a reader scrolls through.
+ */
+describe("what publishing a verdict writes", () => {
+  /** A run summary of this case's own, since that is where the table goes. */
+  async function summaryFile(): Promise<string> {
+    const file = join(tmpdir(), `gate-summary-${process.pid}-${summaries.length}.md`);
+    summaries.push(file);
+    await rm(file, { force: true });
+    return file;
+  }
+
+  const nothing = { note: undefined, table: undefined, log: undefined, problems: [] };
+
+  // The order is the claim `publish` makes: the evidence is above the
+  // annotation that summarises it, which is above the errors — so a reader who
+  // scrolls to the error finds what it was about without scrolling further.
+  test("the log comes before the note, and the note before the errors", async () => {
+    const { lines, restore } = captureLog();
+    await publish(
+      {
+        ...nothing,
+        note: "2 changed domain files held no mutants",
+        log: "stryker said this\nand then this",
+        problems: [{ message: "kill the mutants listed in the run summary" }],
+      },
+      await summaryFile(),
+    );
+    restore();
+
+    expect(lines).toEqual([
+      "stryker said this",
+      "and then this",
+      "::notice::2 changed domain files held no mutants",
+      "::error::kill the mutants listed in the run summary",
+    ]);
+  });
+
+  test("a verdict with nothing to say writes nothing and fails nothing", async () => {
+    const { lines, restore } = captureLog();
+    await publish(nothing, await summaryFile());
+    restore();
+
+    expect(lines).toEqual([]);
+    expect(process.exitCode).toBe(0);
+  });
+
+  test("the table goes to the run summary rather than to the log", async () => {
+    const file = await summaryFile();
+    const { lines, restore } = captureLog();
+    await publish({ ...nothing, table: "### Capacity\n" }, file);
+    restore();
+
+    expect(lines).toEqual([]);
+    expect(await Bun.file(file).text()).toBe("### Capacity\n");
+  });
+
+  // Two gates of one job publish into the same file, and a run summary that
+  // held only the last of them would be the first one's measurement lost.
+  test("a second table joins the first rather than replacing it", async () => {
+    const file = await summaryFile();
+    const { restore } = captureLog();
+    await publish({ ...nothing, table: "### Capacity\n" }, file);
+    await publish({ ...nothing, table: "### Mutation lane\n" }, file);
+    restore();
+
+    expect(await Bun.file(file).text()).toBe("### Capacity\n### Mutation lane\n");
+  });
+
+  // The run this step is about to fail is exactly the run whose measurement is
+  // worth reading: it is what says which way the ramp or the campaign went wrong.
+  test("the table is published for a run the step fails", async () => {
+    const file = await summaryFile();
+    const { restore } = captureLog();
+    await publish(
+      { ...nothing, table: "### Capacity\n", problems: [{ message: "half the ramp failed" }] },
+      file,
+    );
+    restore();
+
+    expect(await Bun.file(file).text()).toBe("### Capacity\n");
+    expect(process.exitCode).toBe(1);
   });
 });
 

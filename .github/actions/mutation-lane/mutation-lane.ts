@@ -13,6 +13,7 @@ import {
   oneOf,
   type Problem,
   readConfig,
+  type Verdict,
 } from "../_lib/gate.ts";
 
 /**
@@ -100,17 +101,12 @@ function isMutable(path: string): boolean {
   return !name.endsWith(".d.ts") && !/\.(?:test|spec)\./.test(name);
 }
 
-export interface Lane {
-  /** One line for the log saying what the lane did, whichever way it went. */
-  readonly note: string;
-  /** The measurement, for the step summary. Absent when nothing was mutated. */
-  readonly table: string | undefined;
-  /** What the run wrote, for a failure whose reason is longer than an annotation. */
-  readonly log: string | undefined;
-  readonly problems: Problem[];
-}
-
-function nothing(note: string, problems: Problem[] = []): Lane {
+/**
+ * A lane always has a note — it says what it did whichever way it went, and a
+ * run that mutated nothing is an answer rather than a silence — so every return
+ * below fills the field `Verdict` leaves optional.
+ */
+function nothing(note: string, problems: Problem[] = []): Verdict {
   return { note, table: undefined, log: undefined, problems };
 }
 
@@ -578,7 +574,7 @@ export interface Input {
  * could not read out of the diff, and every `mutate` entry Stryker could not
  * resolve is refused by name below.
  */
-export async function mutationLane({ root, event, floor }: Input): Promise<Lane> {
+export async function mutationLane({ root, event, floor }: Input): Promise<Verdict> {
   const bound = floorFrom(floor);
 
   const domain = await domainGlobs(root);
@@ -702,7 +698,7 @@ function verdict(
   text: string,
   changed: ReadonlyMap<string, ReadonlySet<number>>,
   bound: number | undefined,
-): Lane {
+): Verdict {
   const graded = parseReport(text).map((mutant): Graded => {
     const own = inTheChange(mutant, linesOf(changed, mutant.file));
     return { mutant, own, worth: worthOf(mutant.status, own) };

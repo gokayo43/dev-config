@@ -12,6 +12,7 @@ import {
   isObject,
   type Problem,
   repoFiles,
+  type Verdict,
 } from "../_lib/gate.ts";
 import {
   beside,
@@ -25,7 +26,7 @@ import {
   scratchDatabase,
   textColumn,
 } from "./database.ts";
-import { passed, refused, type Verdict } from "./verdict.ts";
+import { passed, refused } from "./verdict.ts";
 
 /**
  * What a repo's migration history is asked to prove, and the two questions are

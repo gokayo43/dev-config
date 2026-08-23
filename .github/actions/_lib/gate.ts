@@ -4,6 +4,8 @@
 // repository out to run an action, so a script may import across action
 // directories; only the directory named in `uses:` is the action itself.
 
+import { appendFile } from "node:fs/promises";
+
 /** One violation, addressed to the file that has to change. */
 export interface Problem {
   readonly file?: string;
@@ -52,11 +54,70 @@ export function notice(message: string): void {
  * Evidence that belongs on the log rather than in an annotation: an annotation
  * is one line rendered on the step, and what a gate has to show sometimes runs
  * to hundreds — every line two dumps disagree about, everything a tool wrote
- * before it died. Here rather than at each caller because this module is the
- * one licensed to write to stdout, for the reason at the top of the file.
+ * before it died. Not exported: a gate says it by putting it on the verdict
+ * `publish` takes, which is where the order it lands in is decided.
  */
-export function log(text: string): void {
+function log(text: string): void {
   for (const line of text.split("\n")) console.log(line);
+}
+
+/**
+ * What a gate that publishes something answers with, where a bare `Problem[]`
+ * cannot carry it: the claim it established or the measurement it took, the
+ * table behind that measurement, and evidence too long to be an annotation.
+ *
+ * One shape rather than one per action, because three of them arrived at these
+ * same fields under three names — a replay's verdict, a ramp's table, a
+ * mutation lane's score and the output of the run behind it — and their entry
+ * points at the same writes in the same order, which is the order `publish`
+ * fixes below. A gate that only refuses answers with `Problem[]` and builds
+ * none of these.
+ */
+export interface Verdict {
+  /**
+   * One line of log, whichever way the gate went. Absent where the problems are
+   * the whole report: a step that failed has already said so in its
+   * annotations, and a note beside them is the step paraphrasing its own error
+   * back at the reader. Present on a failing run wherever the line is a
+   * measurement rather than a paraphrase — "5 of 10 routes exercised" is what a
+   * reader wants most on the run that failed.
+   */
+  readonly note: string | undefined;
+  /** Markdown for the run summary, absent where the gate measured nothing. */
+  readonly table: string | undefined;
+  /** Whatever belongs on the log rather than in an annotation, for the reason `log` above gives. */
+  readonly log: string | undefined;
+  readonly problems: Problem[];
+}
+
+/**
+ * The whole of what a `*.main.ts` does with one. Here rather than copied into
+ * each entry point because it is the same writes every time and their order is
+ * load-bearing: what the run wrote goes out first, then the annotation
+ * summarising it, so a reader who scrolls to the error finds what it was about
+ * above rather than somewhere below.
+ *
+ * The table is published even for a run the step is about to fail. The
+ * measurement is what says which way the ramp or the campaign went wrong, and a
+ * summary that appears only on green runs is missing from every run that needed
+ * one.
+ *
+ * `into` is where the run summary is, passed rather than read from
+ * `GITHUB_STEP_SUMMARY` here: the ramp has a caller outside a workflow —
+ * `project-template`'s `scripts/preview-capacity.sh`, which measures against the
+ * deployed shape — and it renders the same table into a file beside the repo.
+ * Every gate that publishes is handed one, including those that only ever prove
+ * a property and have no table today: the alternative is an optional argument,
+ * and a gate that grows a table under one writes it nowhere.
+ */
+export async function publish(
+  { note, table, log: written, problems }: Verdict,
+  into: string,
+): Promise<void> {
+  if (written !== undefined) log(written);
+  if (note !== undefined) notice(note);
+  if (table !== undefined) await appendFile(into, table);
+  report(problems);
 }
 
 /**

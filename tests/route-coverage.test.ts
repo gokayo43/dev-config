@@ -1,12 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { allowlistFrom } from "../.github/actions/_lib/gate.ts";
+import { allowlistFrom, type Verdict } from "../.github/actions/_lib/gate.ts";
 import type { RouteLog } from "../route-log.ts";
-import {
-  type Coverage,
-  parseRouteLog,
-  routeCoverage,
-} from "../.github/actions/db-gate/route-coverage.ts";
+import { parseRouteLog, routeCoverage } from "../.github/actions/db-gate/route-coverage.ts";
 
 import { containing } from "./matchers.ts";
 
@@ -38,7 +34,7 @@ async function fixture(when: string): Promise<RouteLog> {
 const BEFORE = await fixture("before");
 const AFTER = await fixture("after");
 
-function coverage(allowlist = "", before = BEFORE, after = AFTER): Coverage {
+function coverage(allowlist = "", before = BEFORE, after = AFTER): Verdict {
   return routeCoverage(before, after, allowlistFrom(allowlist, "route-allowlist"));
 }
 
@@ -73,7 +69,7 @@ describe("the route-coverage floor", () => {
   // the ramp, or the ramp's to neither.
   test("a route the poll reached and the ramp reached again is covered", () => {
     expect(problems()).not.toContainEqual(containing("GET /health"));
-    expect(coverage().summary).toContain("5 of 10 routes exercised");
+    expect(coverage().note).toContain("5 of 10 routes exercised");
   });
 
   // ROUTE_LOG is on from boot, so the poll that waits for the app to answer
@@ -146,7 +142,7 @@ describe("the route-coverage floor", () => {
       POST /presets -- a write path the read-only ramp has no body for
       ALL /events -- the ramp sends no method the GET route beside it does not answer`;
     expect(problems(clean)).toEqual([]);
-    expect(coverage(clean).summary).toBe(
+    expect(coverage(clean).note).toBe(
       "route coverage: 5 of 10 routes exercised by the ramp, 5 allowlisted",
     );
   });
@@ -155,7 +151,7 @@ describe("the route-coverage floor", () => {
   // app is exactly the "never load-tested" case this exists to catch.
   test("an app that reported no route table fails rather than passing vacuously", () => {
     expect(problems("", log([]), log([]))).toEqual([containing("reported an empty routeTable")]);
-    expect(coverage("", log([]), log([])).summary).toBe("route coverage: no route table");
+    expect(coverage("", log([]), log([])).note).toBe("route coverage: no route table");
   });
 });
 

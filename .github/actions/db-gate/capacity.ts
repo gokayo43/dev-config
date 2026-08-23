@@ -1,4 +1,4 @@
-import { isObject, kindOf, oneOf, type Problem, record } from "../_lib/gate.ts";
+import { isObject, kindOf, oneOf, record, type Verdict } from "../_lib/gate.ts";
 
 export interface Summary {
   readonly metrics: Record<string, Record<string, number>>;
@@ -118,12 +118,6 @@ function capacityTable(summary: Summary, ranOn: RanOn): string | undefined {
  */
 const FAILURE_BOUND = 0.1;
 
-export interface Capacity {
-  /** The table the caller publishes, absent when the ramp measured nothing. */
-  readonly table: string | undefined;
-  readonly problems: Problem[];
-}
-
 /**
  * What the step publishes and what it fails on, from the one file k6 leaves
  * behind. The bound lives here rather than in the shipped script's thresholds
@@ -131,12 +125,17 @@ export interface Capacity {
  * script of its own would otherwise publish the throughput of its own error
  * page, and the rule that decides what counts as a measurement would have two
  * homes that could disagree.
+ *
+ * The table is the whole of what this one has to say: the number is in it, and
+ * a note repeating a row of it would be a second reading of the same run.
  */
-export function capacity(summary: Summary, ranOn: RanOn): Capacity {
+export function capacity(summary: Summary, ranOn: RanOn): Verdict {
   const table = capacityTable(summary, ranOn);
   if (table === undefined) {
     return {
+      note: undefined,
       table,
+      log: undefined,
       problems: [
         {
           message:
@@ -148,7 +147,9 @@ export function capacity(summary: Summary, ranOn: RanOn): Capacity {
 
   const failed = stat(summary, "http_req_failed", "value");
   return {
+    note: undefined,
     table,
+    log: undefined,
     problems:
       failed > FAILURE_BOUND
         ? [
