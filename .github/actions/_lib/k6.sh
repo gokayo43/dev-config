@@ -9,8 +9,8 @@
 # another ramp of the same k6, which is the whole reason those numbers are kept.
 #
 # renovate: datasource=github-release-attachments depName=grafana/k6
-K6_VERSION=v2.1.0
-K6_SHA256=295d961ebfca306f295f1133068dcd403a8171c87f387928f5f30b0fbcff858a
+K6_VERSION=v2.2.0
+K6_SHA256=b5a8003c86f35f5cd5ceef1490312c48e587696c94d998cefc6d7b3b4cb1597d
 
 # shellcheck source=.github/actions/_lib/pinned-tool.sh
 . "$(dirname "${BASH_SOURCE[0]}")/pinned-tool.sh"

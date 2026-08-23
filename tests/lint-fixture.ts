@@ -125,10 +125,10 @@ export async function lintAt(
   const held = record(report)["diagnostics"];
   const diagnostics = (isList(held) ? held : []).map((each) => decoded(record(each)));
 
-  // A rule that throws is reported as a diagnostic belonging to no file, so
-  // grouping by file drops it and every case reads clean — which is exactly
-  // what a case expecting no diagnostics asserts. One crashing plugin would
-  // otherwise certify every rule in this suite.
+  // A diagnostic belonging to no file is dropped by the grouping every caller
+  // does, and the cases it should have failed then read clean — which is
+  // exactly what a case expecting no diagnostics asserts. Refused here instead,
+  // so that one of them cannot certify a whole block.
   const loose = diagnostics.filter(({ filename }) => filename === "");
   if (loose.length > 0) throw new Error(loose.map(({ message }) => message).join("\n"));
 

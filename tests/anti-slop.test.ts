@@ -10,8 +10,9 @@ const REPO = dirname(import.meta.dir);
 
 /**
  * What every case here is read through, so it is worth one case of its own: a
- * rule that throws and a config oxlint refuses both produce a run with no
- * diagnostics, which is what most of the cases below assert.
+ * rule that throws and a config oxlint refuses are both ways a run can end
+ * having graded nothing, and a case expecting no diagnostics is what a run that
+ * graded nothing looks like.
  */
 describe("the harness", () => {
   const THROWING = `const rule = { create() { return { Program() { throw new Error("thrown"); } }; } };
@@ -34,13 +35,20 @@ export default { meta: { name: "anti-slop" }, rules: { "no-runtime-typeof": rule
       rules: { "anti-slop/no-runtime-typeof": "error" },
     });
 
-    expect(
-      await refusal({
-        ".oxlintrc.json": wired,
-        "throws.js": THROWING,
-        "case.ts": "export const one = 1;\n",
-      }),
-    ).toContain("Error running JS plugin");
+    // oxlint reports the throw against the file it was linting, so the harness
+    // hands it back rather than refusing the run. Either shape is the invariant
+    // this case exists for; the empty list a clean tree produces is not.
+    const reported = await oxlint({
+      ".oxlintrc.json": wired,
+      "throws.js": THROWING,
+      "case.ts": "export const one = 1;\n",
+    }).then(
+      (diagnostics) => diagnostics.map(({ message }) => message),
+      (thrown: unknown) => [thrown instanceof Error ? thrown.message : String(thrown)],
+    );
+
+    expect(reported).not.toEqual([]);
+    expect(reported.join("\n")).toContain("Error running JS plugin");
   });
 
   test("a config oxlint will not read is a failure, not a clean tree", async () => {

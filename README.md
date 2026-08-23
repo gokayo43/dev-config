@@ -661,6 +661,11 @@ in lockstep, and a plugin ahead of its core fails at import.
 The file is named `default.json` because that is the name Renovate resolves for a
 bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.
 
+This repo consumes its own preset: the `renovate.json` beside `default.json` is
+the one line above, so the policy the fleet inherits is the policy this repo is
+held to. The two files are not the same subject — `default.json` is what other
+repos extend, `renovate.json` is this repo extending it.
+
 ### The pinned-binary custom manager
 
 Every other pin in these repos sits somewhere a manager already looks. A released

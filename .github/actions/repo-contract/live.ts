@@ -556,12 +556,10 @@ async function checkUnits(
   const script = `scripts/${name}.sh`;
   const services = new Map<string, Service>(
     await Promise.all(
-      stemsOf(entries, SERVICE).map(
-        async (stem): Promise<[string, Service]> => [
-          stem,
-          { stem, commands: commandsOf(await unitAt(`${root}/scripts/${stem}${SERVICE}`)) },
-        ],
-      ),
+      stemsOf(entries, SERVICE).map(async (stem): Promise<[string, Service]> => [
+        stem,
+        { stem, commands: commandsOf(await unitAt(`${root}/scripts/${stem}${SERVICE}`)) },
+      ]),
     ),
   );
   const timers = await Promise.all(
