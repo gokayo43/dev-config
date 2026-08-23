@@ -322,33 +322,33 @@ jobs:
           fi
           exit "$wrong"
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
         with:
           stack-allowlist: ${{ inputs.stack-allowlist }}
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.
-      - uses: gokayo43/dev-config/.github/actions/lint-workflows@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
 
       # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
-      - uses: gokayo43/dev-config/.github/actions/shell-scripts@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+      - uses: gokayo43/dev-config/.github/actions/shell-scripts@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
 
       - run: bun install --frozen-lockfile
 
@@ -377,7 +377,7 @@ jobs:
           bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
         with:
           test-network: ${{ inputs['test-network'] }}
           test-suite-evidence: ${{ inputs['test-suite-evidence'] }}
@@ -396,7 +396,7 @@ jobs:
       # every step before it down with it.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
-        uses: gokayo43/dev-config/.github/actions/mutation-lane@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+        uses: gokayo43/dev-config/.github/actions/mutation-lane@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
 
@@ -458,7 +458,7 @@ jobs:
       - if: inputs.build
         run: bun run build
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@413df85216d9b6e353027d898e4a1662c5370187 # v0.48.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@134c7370e1de8b90ec7f55b00e3c110c142ab048 # v0.49.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}
