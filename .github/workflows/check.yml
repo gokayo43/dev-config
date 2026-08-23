@@ -15,6 +15,14 @@ on:
         description: Build before the static gate — for repos whose types come from generated code that is not committed.
         type: boolean
         default: false
+      affected:
+        description: >-
+          Run the build and typecheck lanes over the packages a pull request changed rather
+          than the whole graph — turbo's `--affected`. For monorepos: needs turbo.json at
+          the repository root, and is refused without one. Ignored on a push, where
+          --affected selects nothing and main is the full run.
+        type: boolean
+        default: false
       database:
         description: >-
           Replay the migrations onto an empty Postgres, boot the app against the result,
@@ -132,6 +140,15 @@ on:
 permissions:
   contents: read
 
+# Turborepo reports anonymous usage counts unless this is set, and a repo whose
+# CI is a call to this workflow has nowhere else to say so: `env:` is not a
+# permitted key on a job that uses a reusable workflow, and a caller's own
+# workflow-level env does not reach the workflow it calls. Set here, so the
+# scaffolded monorepo's .env — which covers a checkout and nothing else — has a
+# counterpart for every CI run. Harmless where nothing reads it.
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+
 jobs:
   static:
     runs-on: ubuntu-latest
@@ -217,6 +234,28 @@ jobs:
           fi
           exit 1
 
+      # `--affected` is turbo's, and it is a CLI flag with no environment form —
+      # so a workflow that runs a repo's root scripts by name has nowhere to say
+      # it unless the seam is here. One step decides whether the flag applies to
+      # this run, and the two lanes below take whatever it decided.
+      - if: inputs.affected
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ ! -f turbo.json ]; then
+            echo "::error::affected: true needs a turbo.json at the repository root — --affected is turbo's flag, and without turbo it is an argument this repo's build and typecheck scripts would be handed and refuse"
+            exit 1
+          fi
+          # Only ever correct on a pull request. On a push to main --affected
+          # diffs main against itself and selects zero packages, so every lane
+          # would go green over nothing — and a change to a root file no
+          # package's inputs name selects nothing either. The full run on main
+          # is what makes the flag safe to hand a pull request at all.
+          if [ "$EVENT" = pull_request ]; then
+            echo "TURBO_AFFECTED=--affected" >> "$GITHUB_ENV"
+          fi
+
       - uses: gokayo43/dev-config/.github/actions/secret-scan@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -244,12 +283,20 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # The two lanes turbo owns in a monorepo, and the only two --affected is
+      # correct for: unquoted so that unset expands to no argument at all.
       - if: inputs.build
-        run: bun run build
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          bun run build ${TURBO_AFFECTED:-}
 
       - run: bun run format:check
       - run: bun run lint
-      - run: bun run typecheck
+      - run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
       - uses: gokayo43/dev-config/.github/actions/test-suite@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0

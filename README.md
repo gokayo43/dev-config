@@ -861,6 +861,7 @@ jobs:
 | Input                 | Default                            | Effect                                                                                                                                                                                                                                                                          |
 | --------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `build`               | `false`                            | Runs `bun run build` before the static gate and before the boot gate.                                                                                                                                                                                                           |
+| `affected`            | `false`                            | Appends turbo's `--affected` to the build and typecheck lanes on pull requests, so they run over the packages the branch changed. Needs `turbo.json` at the root and is refused without one; ignored on a push, where `main` stays the full run.                                |
 | `database`            | `false`                            | Adds the database job: an empty Postgres, the migrations replayed onto it twice, the app booted against the result, and a k6 ramp over every route it serves. Also makes `db:migrate` part of the repo contract.                                                                |
 | `compose`             | `false`                            | Holds `docker-compose.yml` to the deployment shape.                                                                                                                                                                                                                             |
 | `mutation-lane`       | `false`                            | Mutates the domain files this branch changed and fails on a mutant its own lines left undetected. Reads the pure domain from the `boundaries/elements` entry typed `domain`; needs `@stryker-mutator/core` and `@hughescr/stryker-bun-runner` among the repo's devDependencies. |
@@ -893,6 +894,23 @@ the matrix index, which GitHub does not
 document as reachable from inside a composite action, and a context that is not
 reachable evaluates to an empty string rather than to an error — so the derived
 name would collide exactly as quietly as the constant, with a trailing dash.
+
+`affected` is the seam turbo needs from a workflow that runs a repo's root
+scripts by name. `--affected` is a CLI flag with no environment form, so a
+monorepo whose `typecheck` is `turbo run typecheck` has nowhere else to say it.
+The flag goes on **pull requests only**: on a push to `main` it diffs `main`
+against itself and selects zero packages, and a change to a root file no
+package's `inputs` name selects zero as well — so every lane would go green over
+nothing. The full run on `main` is what makes handing it to a pull request safe
+at all. A repo with no `turbo.json` is refused rather than handed the flag,
+since without turbo it arrives at `tsc`.
+
+`TURBO_TELEMETRY_DISABLED` needs no input. It is set in this workflow's own
+`env:`, which is the only place a called workflow can be given one: `env:` is
+not a permitted key on a job that `uses:` a reusable workflow, and a caller's
+workflow-level `env` does not reach the workflow it calls. A scaffolded
+monorepo's `.env` covers a checkout and nothing else, so without this every CI
+run of every one of them was reporting usage counts.
 
 Eight inputs are aimed at steps of the database job — `upgrade-gate`,
 `capacity-path`, `capacity-script`, `db-gate-evidence`, `route-allowlist`,
