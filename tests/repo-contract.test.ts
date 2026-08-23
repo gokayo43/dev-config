@@ -346,6 +346,16 @@ describe("contract exemptions", () => {
 const BACKUP = "scripts/backup.sh";
 const RESTORE_DRILL = "scripts/restore-drill.sh";
 
+/** A timer that repeats and can be enabled, which is the pair of facts one is graded on. */
+function timerUnit(name: string): string {
+  return `[Unit]\nDescription=${name}\n\n[Timer]\nOnCalendar=*-*-* 04:10:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n`;
+}
+
+/** The service a timer of the same name activates, running the script it is the unit for. */
+function serviceUnit(name: string): string {
+  return `[Unit]\nDescription=${name}\n\n[Service]\nType=oneshot\nExecStart=/opt/clean/scripts/${name}.sh\n`;
+}
+
 /** Everything `lifecycle: "live"` derives, all of it satisfied. */
 const LIVE: Tree = {
   ...manifestWith((contents) => {
@@ -354,6 +364,10 @@ const LIVE: Tree = {
   }),
   [BACKUP]: "#!/usr/bin/env bash\n",
   [RESTORE_DRILL]: "#!/usr/bin/env bash\n",
+  "scripts/backup.timer": timerUnit("backup"),
+  "scripts/backup.service": serviceUnit("backup"),
+  "scripts/restore-drill.timer": timerUnit("restore-drill"),
+  "scripts/restore-drill.service": serviceUnit("restore-drill"),
   ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: true\n      upgrade-gate: true\n`,
 };
 
@@ -481,6 +495,87 @@ describe("what going live requires", () => {
     expect(await live(LIVE, { executable })).toEqual([containing(`${path} is not executable`)]);
   });
 
+  // A script is the program; the two units beside it are what "periodically"
+  // means, and canon says a backup nobody has restored is a backup nobody has.
+  // The gate reads all three for both jobs, because "the drill has a timer and
+  // the backup does not" is the same hole from the other side.
+  describe("a live repo's data scripts each carry the units that run them", () => {
+    const JOBS = ["backup", "restore-drill"];
+
+    test.each(JOBS)("scripts/%s.timer has to exist", async (name) => {
+      expect(await live(without(LIVE, `scripts/${name}.timer`))).toEqual([
+        containing(`a live repo owns scripts/${name}.timer`),
+      ]);
+    });
+
+    test.each(JOBS)("scripts/%s.service has to exist", async (name) => {
+      expect(await live(without(LIVE, `scripts/${name}.service`))).toEqual([
+        containing(`a live repo owns scripts/${name}.service`),
+      ]);
+    });
+
+    // The file existing is not the fact. A timer with no recurring schedule is
+    // the run somebody did by hand, committed.
+    test("a timer with no recurring schedule is refused", async () => {
+      const once =
+        "[Unit]\nDescription=x\n\n[Timer]\nOnBootSec=5min\n\n[Install]\nWantedBy=timers.target\n";
+      expect(await live({ ...LIVE, "scripts/backup.timer": once })).toEqual([
+        containing("sets no OnCalendar= or OnUnitActiveSec= under [Timer]"),
+      ]);
+    });
+
+    // systemd reads a directive only under the section it belongs to, so a gate
+    // that greps the whole file passes a unit that does nothing.
+    test("a schedule written outside [Timer] is not a schedule", async () => {
+      const misfiled =
+        "[Unit]\nDescription=x\nOnCalendar=*-*-* 04:10:00\n\n[Timer]\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n";
+      expect(await live({ ...LIVE, "scripts/backup.timer": misfiled })).toEqual([
+        containing("sets no OnCalendar= or OnUnitActiveSec= under [Timer]"),
+      ]);
+    });
+
+    test("a commented-out schedule is not a schedule", async () => {
+      const off =
+        "[Unit]\nDescription=x\n\n[Timer]\n# OnCalendar=*-*-* 04:10:00\n\n[Install]\nWantedBy=timers.target\n";
+      expect(await live({ ...LIVE, "scripts/backup.timer": off })).toEqual([
+        containing("sets no OnCalendar= or OnUnitActiveSec= under [Timer]"),
+      ]);
+    });
+
+    // `systemctl enable` refuses a unit with no [Install], so a timer without one
+    // is a schedule nobody can turn on.
+    test("a timer that cannot be enabled is refused", async () => {
+      const stuck = "[Unit]\nDescription=x\n\n[Timer]\nOnCalendar=*-*-* 04:10:00\n";
+      expect(await live({ ...LIVE, "scripts/backup.timer": stuck })).toEqual([
+        containing("has no WantedBy= under [Install]"),
+      ]);
+    });
+
+    test("a WantedBy written outside [Install] does not enable anything", async () => {
+      const misfiled =
+        "[Unit]\nDescription=x\n\n[Timer]\nOnCalendar=*-*-* 04:10:00\nWantedBy=timers.target\n";
+      expect(await live({ ...LIVE, "scripts/backup.timer": misfiled })).toEqual([
+        containing("has no WantedBy= under [Install]"),
+      ]);
+    });
+
+    // The pair is only a job if the service runs the script it is named for.
+    test("a service that runs something else is decoration", async () => {
+      const elsewhere =
+        "[Unit]\nDescription=x\n\n[Service]\nType=oneshot\nExecStart=/opt/clean/scripts/backup.sh\n";
+      expect(await live({ ...LIVE, "scripts/restore-drill.service": elsewhere })).toEqual([
+        containing("has no ExecStart= running restore-drill.sh"),
+      ]);
+    });
+
+    test("a service with no ExecStart at all is refused", async () => {
+      const empty = "[Unit]\nDescription=x\n\n[Service]\nType=oneshot\n";
+      expect(await live({ ...LIVE, "scripts/backup.service": empty })).toEqual([
+        containing("has no ExecStart= running backup.sh"),
+      ]);
+    });
+  });
+
   test("something in the repo has to report its crashes", async () => {
     const blind = manifestWith((contents) => {
       contents.lifecycle = "live";
@@ -588,7 +683,11 @@ describe("a live monorepo owns its database wherever the migrations live", () =>
       containing("must pass `database: true`"),
       containing("must pass `upgrade-gate: true`"),
       containing("a live repo owns scripts/backup.sh"),
+      containing("a live repo owns scripts/backup.timer"),
+      containing("a live repo owns scripts/backup.service"),
       containing("a live repo owns scripts/restore-drill.sh"),
+      containing("a live repo owns scripts/restore-drill.timer"),
+      containing("a live repo owns scripts/restore-drill.service"),
     ]);
   });
 });

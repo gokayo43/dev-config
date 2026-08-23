@@ -11,7 +11,7 @@
  * as a rule rather than as a change to the contract.
  */
 import type { Stats } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 
 import {
   baseRevision,
@@ -246,15 +246,127 @@ async function statOf(path: string): Promise<Stats | undefined> {
 }
 
 /**
- * The two scripts a live repo's *data* rests on, and what is on the other end
- * of each. Owed by a live repo that owns a database — a live marketing site
- * owes crash reporting and nothing here, and asking it for a backup script is
- * asking it to perform a ritual over a database it does not have.
+ * The two scheduled jobs a live repo's *data* rests on, and what is on the
+ * other end of each. Owed by a live repo that owns a database — a live
+ * marketing site owes crash reporting and nothing here, and asking it for a
+ * backup script is asking it to perform a ritual over a database it does not
+ * have.
+ *
+ * A job is three files, not one. The script is what runs; the `.timer` and the
+ * `.service` beside it are what "periodically" means on the box these repos are
+ * deployed to, and they are tracked so that the schedule is something a diff can
+ * be reviewed against rather than a fact only `systemctl` holds. What the repo
+ * cannot say is whether the timer is enabled on the box — that is a `systemctl
+ * enable --now` nobody can read out of a checkout, and docs/gates/repo-contract.md
+ * names it as the owner's step.
  */
-const LIVE_DATA_SCRIPTS = [
-  ["scripts/backup.sh", "a systemd timer runs it, and an undumped database is one nobody has"],
-  ["scripts/restore-drill.sh", "a backup nobody has restored is a backup nobody has"],
+const LIVE_DATA_JOBS = [
+  ["backup", "an undumped database is one nobody has"],
+  ["restore-drill", "a backup nobody has restored is a backup nobody has"],
 ] as const;
+
+/**
+ * The directives that make a timer fire more than once. `OnBootSec` is not
+ * among them on purpose: a unit that runs once per boot is a startup task, and
+ * a box that stays up for a month runs it once — which is the state a backup
+ * and a rehearsed restore both exist to rule out.
+ */
+const RECURRING = ["OnCalendar", "OnUnitActiveSec"] as const;
+
+/** One `Key=value` line of a unit file, from the section it was written under. */
+interface Directive {
+  readonly key: string;
+  readonly value: string;
+}
+
+/**
+ * The directives a unit file sets under one section. The section matters rather
+ * than decorates: systemd reads `WantedBy` only under `[Install]`, and the same
+ * line under `[Timer]` is silently nothing — which is exactly the unit that
+ * looks enabled in a diff and refuses `systemctl enable` on the box.
+ */
+function directivesIn(text: string, section: string): Directive[] {
+  const wanted = `[${section}]`;
+  let inside = false;
+  const found: Directive[] = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      inside = line === wanted;
+      continue;
+    }
+    if (!inside || line.startsWith("#") || line.startsWith(";")) continue;
+    const at = line.indexOf("=");
+    if (at === -1) continue;
+    found.push({ key: line.slice(0, at).trim(), value: line.slice(at + 1).trim() });
+  }
+  return found;
+}
+
+/** What the file holds, or nothing when there is no file — absent is an answer here too. */
+async function textOf(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The two units that turn a script into a scheduled job, graded on the three
+ * facts that decide whether it ever runs: the timer repeats, the timer can be
+ * enabled, and the service it activates is the one that execs this script. A
+ * pair that fails any of them is committed decoration, which is worse than an
+ * absent one — it reads, in every later diff, as a job somebody set up.
+ */
+async function checkUnits(root: string, name: string): Promise<Problem[]> {
+  const timerPath = `scripts/${name}.timer`;
+  const servicePath = `scripts/${name}.service`;
+  const [timer, service] = await Promise.all([
+    textOf(`${root}/${timerPath}`),
+    textOf(`${root}/${servicePath}`),
+  ]);
+  const problems: Problem[] = [];
+
+  if (timer === undefined) {
+    problems.push({
+      file: timerPath,
+      message: `a live repo owns ${timerPath} — a script nothing runs on a schedule is one that ran the day it was written, and the unit is committed so that the schedule is reviewable rather than a fact only the box holds`,
+    });
+  } else {
+    const timing = directivesIn(timer, "Timer");
+    if (!timing.some(({ key }) => oneOf(RECURRING, key) !== undefined)) {
+      problems.push({
+        file: timerPath,
+        message: `${timerPath} sets no ${RECURRING.join("= or ")}= under [Timer] — give it a recurring schedule, since a timer that fires once is the run somebody did by hand`,
+      });
+    }
+    if (!directivesIn(timer, "Install").some(({ key }) => key === "WantedBy")) {
+      problems.push({
+        file: timerPath,
+        message: `${timerPath} has no WantedBy= under [Install] — add \`WantedBy=timers.target\`, since systemctl enable refuses a unit with no install section and this timer cannot be turned on until it has one`,
+      });
+    }
+  }
+
+  if (service === undefined) {
+    problems.push({
+      file: servicePath,
+      message: `a live repo owns ${servicePath} — a .timer activates the service of its own name, and without it the schedule points at nothing`,
+    });
+  } else if (
+    !directivesIn(service, "Service").some(
+      ({ key, value }) => key === "ExecStart" && value.includes(`${name}.sh`),
+    )
+  ) {
+    problems.push({
+      file: servicePath,
+      message: `${servicePath} has no ExecStart= running ${name}.sh — point it at the script it is the unit for, since a pair naming something else is a schedule for a job this repo does not have`,
+    });
+  }
+
+  return problems;
+}
 
 /**
  * Sentry's SDKs are one per runtime — `@sentry/bun`, `@sentry/astro`,
@@ -355,13 +467,14 @@ export async function checkLive(
     }
 
     const found = await Promise.all(
-      LIVE_DATA_SCRIPTS.map(async ([path, why]) => ({
-        path,
+      LIVE_DATA_JOBS.map(async ([name, why]) => ({
+        path: `scripts/${name}.sh`,
         why,
-        mode: (await statOf(`${root}/${path}`))?.mode,
+        mode: (await statOf(`${root}/scripts/${name}.sh`))?.mode,
+        units: await checkUnits(root, name),
       })),
     );
-    for (const { path, why, mode } of found) {
+    for (const { path, why, mode, units } of found) {
       if (mode === undefined) {
         problems.push({ file: path, message: `a live repo owns ${path} — ${why}` });
       } else if ((mode & EXECUTABLE) === 0) {
@@ -370,6 +483,7 @@ export async function checkLive(
           message: `${path} is not executable — chmod +x it, since it is run as a program rather than handed to an interpreter`,
         });
       }
+      problems.push(...units);
     }
   }
 

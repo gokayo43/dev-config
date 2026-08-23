@@ -112,8 +112,9 @@ of.
 | a Sentry SDK among what the workspace ships         | always                   | a failure only the user sees is one nobody fixes                                                                                                                |
 | the `check.yml` call passes `database: true`        | the repo owns migrations | nothing replays the schema otherwise, and the gate below has no job to run in                                                                                   |
 | the `check.yml` call passes `upgrade-gate: true`    | the repo owns migrations | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
-| `scripts/backup.sh` exists and is executable        | the repo owns migrations | a systemd timer runs it directly, and an undumped database is one nobody has                                                                                    |
+| `scripts/backup.sh` exists and is executable        | the repo owns migrations | an undumped database is one nobody has                                                                                                                          |
 | `scripts/restore-drill.sh` exists and is executable | the repo owns migrations | a backup nobody has restored is a backup nobody has                                                                                                             |
+| a `.timer` and a `.service` beside each of them     | the repo owns migrations | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
 
 Only crash reporting is owed by every live repo. The rest is about a database,
 and half this fleet is a static site with a hostname and no schema — demanding a
@@ -141,6 +142,43 @@ would fail the first repo on a runtime nobody had thought of. A devDependency
 builds and tests the repo and reaches no deployment, and a peer range states
 what a consumer may bring, so an SDK in either is a repo whose crashes nobody
 hears.
+
+### A scheduled job is three files
+
+Canon says a backup is taken and a restore is rehearsed _periodically_. A script
+is only the program; what makes either of them periodic is a systemd timer on
+the box, and a timer that exists only on the box is a schedule no diff has ever
+been reviewed against and no rebuild reproduces. So a live repo tracks the two
+units beside each script — `scripts/backup.timer` and `scripts/backup.service`,
+`scripts/restore-drill.timer` and `scripts/restore-drill.service` — and the gate
+reads three facts out of them, which are exactly the three that decide whether
+the job ever runs:
+
+- the `.timer` sets `OnCalendar=` or `OnUnitActiveSec=` under `[Timer]`. Not
+  `OnBootSec`: a unit that runs once per boot is a startup task, and a box that
+  stays up for a month runs it once — which is the state a backup and a
+  rehearsed restore both exist to rule out.
+- the `.timer` sets `WantedBy=` under `[Install]`. `systemctl enable` refuses a
+  unit with no install section, so a timer without one is a schedule nobody can
+  turn on. The section is read rather than the file: the same line under
+  `[Timer]` is silently nothing, which is the unit that looks enabled in a diff
+  and fails on the box.
+- the `.service` has an `ExecStart=` naming the script it is the unit for. A
+  pair that runs something else is a schedule for a job this repo does not have.
+
+Both jobs, not just the drill. "The drill has a timer and the backup does not"
+is the same hole from the other side.
+
+**What the repo cannot say is whether the timer is enabled.** `systemctl enable
+--now scripts/restore-drill.timer` happens on the box, and no checkout can read
+it — so that is the owner's step, and `project-template` ships the units a repo
+starts from. What the gate closes is the state where nobody ever wrote the
+schedule down.
+
+The drill those units run restores each repo's real backup files into a
+throwaway database and drops it afterwards. Never a live one:
+`scripts/restore-drill.sh` refuses to restore over the deployed stack's own
+database without `CONFIRM=yes`, and defaults to a throwaway beside it.
 
 A field that is absent, or reads anything but those two words, is its own
 problem and the only one reported — a repo that has not said which it is gets
