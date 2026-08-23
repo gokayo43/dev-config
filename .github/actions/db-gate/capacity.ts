@@ -133,9 +133,6 @@ export function capacity(summary: Summary, ranOn: RanOn): Verdict {
   const table = capacityTable(summary, ranOn);
   if (table === undefined) {
     return {
-      note: undefined,
-      table,
-      log: undefined,
       problems: [
         {
           message:
@@ -147,9 +144,7 @@ export function capacity(summary: Summary, ranOn: RanOn): Verdict {
 
   const failed = stat(summary, "http_req_failed", "value");
   return {
-    note: undefined,
     table,
-    log: undefined,
     problems:
       failed > FAILURE_BOUND
         ? [

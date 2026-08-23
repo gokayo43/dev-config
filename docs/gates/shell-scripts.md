@@ -1,14 +1,14 @@
 # A repo's own shell scripts
 
-Every `*.sh` the repository tracks goes through shellcheck, on every run, with no
-input to set and nothing to turn on.
+Every `*.sh` the repository tracks goes through shellcheck, on every run, with
+no input to set and nothing to turn on.
 
 Nothing else in the pipeline reads one. `lint-workflows` runs actionlint, which
-shellchecks the `run:` blocks _inside_ a workflow and stops at the file boundary;
-`bun run lint` is oxlint over TypeScript. What is left over is the set that
-actually touches the box: the script that pipes a `pg_dump` into age and up to
-R2, the one that runs `DROP DATABASE` and carries the guard keeping the drill off
-production, the ones that `docker compose down -v`, the one that parses the
+shellchecks the `run:` blocks _inside_ a workflow and stops at the file
+boundary; `bun run lint` is oxlint over TypeScript. What is left over is the set
+that actually touches the box: the script that pipes a `pg_dump` into age and up
+to R2, the one that runs `DROP DATABASE` and carries the guard keeping the drill
+off production, the ones that `docker compose down -v`, the one that parses the
 compose project name every one of those refusals compares against. An unquoted
 expansion or a misspelt name in that set is not a lint nit.
 

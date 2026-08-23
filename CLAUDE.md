@@ -39,9 +39,7 @@ a change to a rule usually lands here too.
   denylist asks which package a spec installs. What two gates of one action
   share stays in that action's directory instead — `db-gate/database.ts`, the
   database those gates build for themselves and the one derivation of "these
-  two dumps came out the same", `db-gate/verdict.ts`, the claim and the refusal
-  those two build and the invariant that only one of them carries a note, and
-  `repo-contract/ci-workflow.ts`, the one
+  two dumps came out the same", and `repo-contract/ci-workflow.ts`, the one
   path both halves of that contract have an opinion about and neither owns. Any
   of them moves to `_lib/` when a second action reads it, and not on the
   argument that one might.
@@ -155,12 +153,12 @@ a gate that only refuses; one that also publishes answers with `_lib`'s
 `Verdict` — the note for the log, the table for the run summary, whatever the
 run wrote, and the problems — and its entry point hands that whole to
 `publish()`, which is the one place the order of those writes is decided. The
-entry point is a separate `<name>.main.ts` that
-`action.yml` runs: it hands its whole body to `entry()`, so that a throw reaches
-the log as an annotation rather than a stack trace, reads the inputs through
-`inputs()`, which throws on a missing one, and calls `report()` or `publish()`. Splitting them
-is what lets the coverage floor mean something, since nothing can drive an entry
-point from a test.
+entry point is a separate `<name>.main.ts` that `action.yml` runs: it hands its
+whole body to `entry()`, so that a throw reaches the log as an annotation rather
+than a stack trace, reads the inputs through `inputs()`, which throws on a
+missing one, and calls `report()` or `publish()`. Splitting them is what lets the
+coverage floor mean something, since nothing can drive an entry point from a
+test.
 
 Add the fixture suite and the `docs/gates/` page in the same change, then wire
 it into `check.yml`. A diagnostic names what to do, not what went wrong.

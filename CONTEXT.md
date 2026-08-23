@@ -50,11 +50,20 @@ the pick it lost to. A repo that keeps one anyway names it in the gate's
 allowlist, with the reason, at the call site the rest of its exemptions live in.
 
 **Escape hatch** — a way to proceed past a gate that costs the same work as
-making the claim checkable: a lint directive or an allowlist entry carrying its
-reason after `--`, and the healthcheck opt-out naming the test that asserts the
-service can never answer one. A hatch that costs nothing is a hole — and prose
-is close to nothing where the claim is about behaviour, since the gate can only
-take it on trust. Then the hatch names the run that grades it instead.
+making the claim checkable. A hatch that costs nothing is a hole, and prose is
+close to nothing where the claim is about _behaviour_: the gate can only take it
+on trust, so there the hatch names the run that grades it instead. The three in
+use, and which kind each is:
+
+- a lint directive or an allowlist entry carrying its reason after `--` — prose,
+  because what it waives is a judgement about this line and the reason is
+  addressed to the next reader;
+- `x-no-healthcheck`, which names the test asserting the service can never
+  answer one — a behavioural claim, so it names a test file git lists rather
+  than a sentence;
+- `x-host-network`, which stays prose. What it waives is a deployment
+  requirement — this listener needs the host's stack — rather than a claim about
+  what the service does at runtime, so there is no run for it to point at.
 
 **Boundary alias** — the one place a type nobody modelled may be named: an alias
 at the module that owns a trust or wire boundary, carrying a single disable with

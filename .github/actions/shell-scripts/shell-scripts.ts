@@ -1,4 +1,4 @@
-import { isList, isObject, type Problem, record, repoFiles } from "../_lib/gate.ts";
+import { isList, type Problem, record, repoFiles } from "../_lib/gate.ts";
 
 /**
  * Every shell script the repository has, at any depth. A git pathspec matches a
@@ -34,11 +34,11 @@ function findingsIn(text: string, wrote: string): Finding[] {
   } catch {
     throw new Error(`shellcheck wrote no report: ${wrote.trim() || "nothing at all"}`);
   }
-  const comments = record(isObject(parsed) ? parsed : {})["comments"];
+  const comments = record(parsed)["comments"];
   if (!isList(comments)) throw new Error(`shellcheck's report has no comments list: ${text}`);
 
   return comments.map((comment) => {
-    const { file, line, code, message } = record(isObject(comment) ? comment : {});
+    const { file, line, code, message } = record(comment);
     if (
       typeof file !== "string" ||
       typeof line !== "number" ||

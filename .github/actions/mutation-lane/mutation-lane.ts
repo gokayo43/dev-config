@@ -102,15 +102,6 @@ function isMutable(path: string): boolean {
 }
 
 /**
- * A lane always has a note — it says what it did whichever way it went, and a
- * run that mutated nothing is an answer rather than a silence — so every return
- * below fills the field `Verdict` leaves optional.
- */
-function nothing(note: string, problems: Problem[] = []): Verdict {
-  return { note, table: undefined, log: undefined, problems };
-}
-
-/**
  * The domain folders, or what to tell the repo instead — the two kept apart the
  * way `Base` in `_lib/gate.ts` keeps them, because "here are the folders" and
  * "there are none to give you" are not one value with a hole in it.
@@ -578,31 +569,42 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
   const bound = floorFrom(floor);
 
   const domain = await domainGlobs(root);
-  if (!("globs" in domain)) return nothing("the pure domain is not declared", [...domain.problems]);
+  if (!("globs" in domain)) {
+    return { note: "the pure domain is not declared", problems: [...domain.problems] };
+  }
 
   const base = await baseRevision(root, event, READS_THE_BASE_REF);
   if ("refused" in base) {
-    return nothing("the base ref could not be read", [{ message: base.refused }]);
+    return { note: "the base ref could not be read", problems: [{ message: base.refused }] };
   }
   if (base.rev === undefined) {
-    return nothing("there is no earlier commit to compare against — nothing to mutate");
+    return {
+      note: "there is no earlier commit to compare against — nothing to mutate",
+      problems: [],
+    };
   }
   const rev = base.rev;
 
   const { changed, problems } = await changeSet(root, rev, domain.globs);
-  if (problems.length > 0) return nothing("a changed file could not be named", problems);
+  if (problems.length > 0) return { note: "a changed file could not be named", problems };
   if (changed.size === 0) {
-    return nothing(`no domain file changed against ${rev.slice(0, 12)} — nothing to mutate`);
+    return {
+      note: `no domain file changed against ${rev.slice(0, 12)} — nothing to mutate`,
+      problems: [],
+    };
   }
 
   const stryker = join(root, "node_modules", ".bin", "stryker");
   if (!(await Bun.file(stryker).exists())) {
-    return nothing("the mutation runner is not installed", [
-      {
-        file: "package.json",
-        message: `add ${CORE} and ${RUNNER} to devDependencies — the lane runs the repo's own install, so the versions are the ones its lockfile pins`,
-      },
-    ]);
+    return {
+      note: "the mutation runner is not installed",
+      problems: [
+        {
+          file: "package.json",
+          message: `add ${CORE} and ${RUNNER} to devDependencies — the lane runs the repo's own install, so the versions are the ones its lockfile pins`,
+        },
+      ],
+    };
   }
 
   const scratch = await mkdtemp(join(tmpdir(), "mutation-lane-"));
@@ -633,7 +635,6 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
     if (missing.length > 0)
       return {
         note: "a changed file never reached the run",
-        table: undefined,
         log: wrote,
         problems: missing,
       };
@@ -641,7 +642,6 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
     if (status !== 0) {
       return {
         note: "the mutation run did not finish",
-        table: undefined,
         log: wrote,
         problems: [
           {
@@ -705,7 +705,7 @@ function verdict(
   });
   const counted = tally(graded);
   const files = `${changed.size} changed domain file${changed.size === 1 ? "" : "s"}`;
-  if (counted === undefined) return nothing(`${files} held no mutants`);
+  if (counted === undefined) return { note: `${files} held no mutants`, problems: [] };
 
   const surviving = graded
     .filter((each) => each.own && each.worth === "undetected")
@@ -721,7 +721,6 @@ function verdict(
   return {
     note: `mutation score ${percent(counted.score)} over ${files}`,
     table: table(counted, surviving, bound),
-    log: undefined,
     problems,
   };
 }

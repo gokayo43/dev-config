@@ -201,7 +201,7 @@ describe("replay gate", () => {
       containing("replaying the migrations a second time changed the schema"),
     ]);
     expect(verdict.note).toBeUndefined();
-    expect(verdict.log ?? "").toContain("thing_id_check1");
+    expect(verdict.log).toContain("thing_id_check1");
   });
 
   // Green on a tree whose rewritten migration the upgrade path would refuse, so
@@ -251,7 +251,7 @@ describe("replay gate", () => {
     ]);
     expect(messages(verdict)[0]).toContain("put the change in a new migration");
     expect(verdict.note).toBeUndefined();
-    expect(verdict.log ?? "").toContain("slug");
+    expect(verdict.log).toContain("slug");
   });
 
   // A migration whose journal clock sits behind one the base ref had already
@@ -274,7 +274,7 @@ describe("replay gate", () => {
     expect(messages(verdict)).toEqual([
       containing("does not reach the schema this branch builds from empty"),
     ]);
-    expect(verdict.log ?? "").toContain("slug");
+    expect(verdict.log).toContain("slug");
   });
 
   // The lineage the base ref names is the one that has to be replayed. Reading

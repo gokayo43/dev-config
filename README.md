@@ -937,9 +937,10 @@ like any other dependency.
 
 In order, the pinned workflow runs the gitleaks scan, the declarative gates
 (repo contract, stack denylist, suppression hygiene, shellcheck over the repo's
-own scripts, and the compose lint when asked), `bun install`, the optional build, `format:check`, `lint`, `typecheck`,
-`knip`, the test suite, the assertion that the suite ran, and — where the repo
-asks for it — the mutation lane over the domain files this branch changed.
+own scripts, and the compose lint when asked), `bun install`, the optional build,
+`format:check`, `lint`, `typecheck`, `knip`, the test suite, the assertion that
+the suite ran, and — where the repo asks for it — the mutation lane over the
+domain files this branch changed.
 Everything from
 `format:check` to the test suite is the local `bun run check`, so a green
 pre-push is a green CI run; the rest is what only CI has.
@@ -1054,8 +1055,8 @@ nobody reads.
 ### Where each gate is written down
 
 `repo-contract`, `stack-gate`, `suppression-hygiene`, `shell-scripts`,
-`lint-workflows` and `compose-lint` run in the static job; `db-gate` is the database job, and the
-capacity ramp is a step of it. Each has its page under
+`lint-workflows` and `compose-lint` run in the static job; `db-gate` is the
+database job, and the capacity ramp is a step of it. Each has its page under
 [`docs/gates/`](docs/gates/), listed in the table at the top of this file.
 
 ### Static sites

@@ -153,6 +153,21 @@ jobs:
   static:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    # `--affected` is turbo's, and it is a CLI flag with no environment form — so
+    # a workflow that runs a repo's root scripts by name has nowhere to say it
+    # unless the seam is here. Decided once, as an expression, because the two
+    # facts it needs are the caller's input and the event: nothing on disk, so
+    # nothing to run a step for.
+    #
+    # The event half is the whole of why it is not just the input. On a push to
+    # main --affected diffs main against itself and selects zero packages, and a
+    # change to a root file no package's inputs name selects zero as well — so
+    # every lane would go green over nothing. The full run on main is what makes
+    # handing the flag to a pull request safe at all.
+    env:
+      TURBO_AFFECTED: ${{ inputs.affected && github.event_name == 'pull_request' && '--affected' || '' }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -176,15 +191,18 @@ jobs:
       # belong to the database job: a repo that has written out the routes it
       # wants ramped, or the reasons a route cannot be, has said plainly that it
       # expects a ramp. The ninth is the mutation lane's floor, which bounds a
-      # score only that step measures. One step for both, so a caller that got
-      # two of them wrong reads two annotations rather than one and then the
-      # next run's.
+      # score only that step measures. The tenth is `affected`, which needs a
+      # turbo to hand the flag to — the one condition here that is a fact about
+      # the tree rather than about the inputs, which is why the step runs after
+      # the checkout. One step for all of them, so a caller that got two wrong
+      # reads two annotations rather than one and then the next run's.
       - if: >-
           ${{ (!inputs.database && (inputs.upgrade-gate || inputs.capacity-path != ''
           || inputs.capacity-script != '' || inputs['db-gate-evidence'] != ''
           || inputs.route-allowlist != '' || inputs.timestamp-allowlist != ''
           || inputs.backfill-command != '' || inputs.backfill-seed != ''))
-          || (!inputs['mutation-lane'] && inputs['mutation-floor'] != '') }}
+          || (!inputs['mutation-lane'] && inputs['mutation-floor'] != '')
+          || inputs.affected }}
         env:
           DATABASE: ${{ inputs.database }}
           UPGRADE_GATE: ${{ inputs.upgrade-gate }}
@@ -197,64 +215,51 @@ jobs:
           BACKFILL_SEED: ${{ inputs.backfill-seed }}
           MUTATION_LANE: ${{ inputs['mutation-lane'] }}
           MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
+          AFFECTED: ${{ inputs.affected }}
         run: |
           set -euo pipefail
-          # Re-asked here, because either half of the condition above can be
-          # what selected this step: without it a repo running the database job
-          # and no mutation lane would be told its ramp inputs need a job it
-          # already asked for.
+          wrong=0
+          refuse() {
+            echo "::error::$1"
+            wrong=1
+          }
+          # Re-asked here, because any one of the conditions above can be what
+          # selected this step: without it a repo running the database job and no
+          # mutation lane would be told its ramp inputs need a job it already
+          # asked for.
           if [ "$DATABASE" != true ]; then
             if [ "$UPGRADE_GATE" = true ]; then
-              echo "::error::upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
+              refuse "upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
             fi
             if [ -n "$CAPACITY_PATH" ]; then
-              echo "::error::capacity-path needs database: true — the ramp runs against the app the database job boots"
+              refuse "capacity-path needs database: true — the ramp runs against the app the database job boots"
             fi
             if [ -n "$CAPACITY_SCRIPT" ]; then
-              echo "::error::capacity-script needs database: true — the ramp runs against the app the database job boots"
+              refuse "capacity-script needs database: true — the ramp runs against the app the database job boots"
             fi
             if [ -n "$DB_GATE_EVIDENCE" ]; then
-              echo "::error::db-gate-evidence needs database: true — it names the artifact the database job uploads"
+              refuse "db-gate-evidence needs database: true — it names the artifact the database job uploads"
             fi
             if [ -n "$ROUTE_ALLOWLIST" ]; then
-              echo "::error::route-allowlist needs database: true — the route floor is measured across the database job's ramp"
+              refuse "route-allowlist needs database: true — the route floor is measured across the database job's ramp"
             fi
             if [ -n "$TIMESTAMP_ALLOWLIST" ]; then
-              echo "::error::timestamp-allowlist needs database: true — the column types are read from the database that job migrates"
+              refuse "timestamp-allowlist needs database: true — the column types are read from the database that job migrates"
             fi
             if [ -n "$BACKFILL_COMMAND" ]; then
-              echo "::error::backfill-command needs database: true — the backfill runs against a database the database job builds"
+              refuse "backfill-command needs database: true — the backfill runs against a database the database job builds"
             fi
             if [ -n "$BACKFILL_SEED" ]; then
-              echo "::error::backfill-seed needs database: true — it writes into a database the database job builds"
+              refuse "backfill-seed needs database: true — it writes into a database the database job builds"
             fi
           fi
           if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_FLOOR" ]; then
-            echo "::error::mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
+            refuse "mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
           fi
-          exit 1
-
-      # `--affected` is turbo's, and it is a CLI flag with no environment form —
-      # so a workflow that runs a repo's root scripts by name has nowhere to say
-      # it unless the seam is here. One step decides whether the flag applies to
-      # this run, and the two lanes below take whatever it decided.
-      - if: inputs.affected
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          if [ ! -f turbo.json ]; then
-            echo "::error::affected: true needs a turbo.json at the repository root — --affected is turbo's flag, and without turbo it is an argument this repo's build and typecheck scripts would be handed and refuse"
-            exit 1
+          if [ "$AFFECTED" = true ] && [ ! -f turbo.json ]; then
+            refuse "affected: true needs a turbo.json at the repository root — --affected is turbo's flag, and without turbo it is an argument this repo's build and typecheck scripts would be handed and refuse"
           fi
-          # Only ever correct on a pull request. On a push to main --affected
-          # diffs main against itself and selects zero packages, so every lane
-          # would go green over nothing — and a change to a root file no
-          # package's inputs name selects nothing either. The full run on main
-          # is what makes the flag safe to hand a pull request at all.
-          if [ "$EVENT" = pull_request ]; then
-            echo "TURBO_AFFECTED=--affected" >> "$GITHUB_ENV"
-          fi
+          exit "$wrong"
 
       - uses: gokayo43/dev-config/.github/actions/secret-scan@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
 
@@ -289,19 +294,16 @@ jobs:
       - run: bun install --frozen-lockfile
 
       # The two lanes turbo owns in a monorepo, and the only two --affected is
-      # correct for: unquoted so that unset expands to no argument at all.
+      # correct for. Quoted, and an empty value still reaches the script as no
+      # argument at all: `bun run <script> ""` drops the empty argument rather
+      # than forwarding it (measured against bun 1.3.11 — a script echoing `$#`
+      # sees 0), so nothing here needs an unquoted expansion and its suppression.
       - if: inputs.build
-        run: |
-          set -euo pipefail
-          # shellcheck disable=SC2086
-          bun run build ${TURBO_AFFECTED:-}
+        run: bun run build "${TURBO_AFFECTED:-}"
 
       - run: bun run format:check
       - run: bun run lint
-      - run: |
-          set -euo pipefail
-          # shellcheck disable=SC2086
-          bun run typecheck ${TURBO_AFFECTED:-}
+      - run: bun run typecheck "${TURBO_AFFECTED:-}"
       - run: bun run knip
 
       - uses: gokayo43/dev-config/.github/actions/test-suite@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0

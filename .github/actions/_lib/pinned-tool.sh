@@ -1,9 +1,9 @@
 # shellcheck shell=bash
 # A released binary, verified against the checksum the caller pinned.
 #
-# The three tools this repo reaches for — gitleaks, actionlint, k6 — are Go
-# binaries rather than npm packages, so none of them are in a lockfile and none
-# are covered by the install policy. The pin is the whole of their supply-chain
+# The four tools this repo reaches for — gitleaks, actionlint, k6, shellcheck —
+# are Go and Haskell binaries rather than npm packages, so none of them are in a
+# lockfile and none are covered by the install policy. The pin is the whole of their supply-chain
 # story: the version string is a label, the SHA-256 is the contract, and
 # Renovate's pinned-binary manager moves the two together.
 #

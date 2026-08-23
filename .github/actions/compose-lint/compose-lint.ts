@@ -1,8 +1,37 @@
-import { type ConfigObject, isList, type Problem, REASON, record } from "../_lib/gate.ts";
+import {
+  type ConfigObject,
+  isList,
+  type Problem,
+  REASON,
+  record,
+  repoFiles,
+} from "../_lib/gate.ts";
 
 const MIGRATE = "migrate";
 const OPT_OUT = "x-no-healthcheck";
 const HOST_NETWORK_OPT_OUT = "x-host-network";
+
+/**
+ * What counts as a test file, which is `oxlint.base.json`'s own test override —
+ * the one definition the fleet already lints by. `tests/compose-lint.test.ts`
+ * holds the two lists equal, so this is a copy that cannot drift rather than a
+ * second opinion.
+ */
+export const TEST_FILES = ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"];
+
+/**
+ * The same set with the leading globstar dropped, which is how both readers here
+ * want it. A git pathspec's `*` already crosses "/", so these reach any depth,
+ * while the globstar prefix would demand a directory and miss a test at the
+ * root. `Bun.Glob`'s `*` does not cross "/", which is why the match below is
+ * against a basename.
+ */
+const TEST_NAMES = TEST_FILES.map((glob) => glob.replace("**/", ""));
+
+function looksLikeATest(path: string): boolean {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  return TEST_NAMES.some((glob) => new Bun.Glob(glob).match(name));
+}
 
 /**
  * The healthcheck waiver, which is a path to the test that asserts the service
@@ -25,12 +54,12 @@ function waivedBy(service: ConfigObject): string | undefined {
   return named === "" ? undefined : named;
 }
 
-async function checkHealthcheck(
+function checkHealthcheck(
   name: string,
   service: ConfigObject,
   file: string,
-  root: string,
-): Promise<Problem[]> {
+  tests: ReadonlySet<string>,
+): Problem[] {
   if (service["healthcheck"] !== undefined) return [];
   const named = waivedBy(service);
   if (named === undefined) {
@@ -41,11 +70,19 @@ async function checkHealthcheck(
       },
     ];
   }
-  if (await Bun.file(`${root}/${named}`).exists()) return [];
+  if (!looksLikeATest(named)) {
+    return [
+      {
+        file,
+        message: `${name}'s ${OPT_OUT} names ${named}, which is not a test — the waiver points at the test that asserts this service can never answer a healthcheck, as a ${TEST_NAMES.join(" / ")} path from the repository root`,
+      },
+    ];
+  }
+  if (tests.has(named)) return [];
   return [
     {
       file,
-      message: `${name}'s ${OPT_OUT} names ${named}, which is not a file in this repo — write the test that asserts this service can never answer a healthcheck, and point the waiver at it`,
+      message: `${name}'s ${OPT_OUT} names ${named}, which git does not list in this repo — write that test and commit it, then point the waiver at it; a path outside the repo or one .gitignore covers is not a claim anybody can check`,
     },
   ];
 }
@@ -124,9 +161,17 @@ function checkMigrateService(services: ConfigObject, file: string): Problem[] {
 }
 
 /**
- * `root` is the repository the compose file sits in, which the healthcheck
- * waiver reads: the test it names is the whole of what makes that waiver a
- * claim rather than a sentence.
+ * `root` is the repository the compose file sits in, and the one thing read out
+ * of it is the set of test files: a healthcheck waiver names one, and that name
+ * is the whole of what makes the waiver a claim rather than a sentence.
+ *
+ * Listed once, up front, through git rather than by asking the filesystem
+ * whether each named path exists. `Bun.file(...).exists()` answered yes to
+ * README.md, to .gitignore, to a file .gitignore covers, to something under
+ * node_modules and to `../../../etc/hostname` — none of which is a test in this
+ * repo, which is what the key claims to name. git's listing is the claim
+ * itself: tracked or newly written, never ignored, never outside the tree, and
+ * a name never reaches git as a pathspec where it could escape.
  */
 export async function composeLint(root: string, file: string, text: string): Promise<Problem[]> {
   const services = record(record(Bun.YAML.parse(text))["services"]);
@@ -134,18 +179,19 @@ export async function composeLint(root: string, file: string, text: string): Pro
     return [{ file, message: "the compose file declares no services" }];
   }
 
-  const perService = await Promise.all(
-    Object.entries(services).map(async ([name, value]) => {
+  const tests = new Set(await repoFiles(root, TEST_NAMES));
+
+  return [
+    ...checkMigrateService(services, file),
+    ...Object.entries(services).flatMap(([name, value]) => {
       const service = record(value);
       return [
-        ...(await checkHealthcheck(name, service, file, root)),
+        ...checkHealthcheck(name, service, file, tests),
         ...checkMemoryCap(name, service, file),
         ...checkPorts(name, service, file),
         ...checkNetworkMode(name, service, file),
         ...checkMigrationOrder(name, service, file),
       ];
     }),
-  );
-
-  return [...checkMigrateService(services, file), ...perService.flat()];
+  ];
 }

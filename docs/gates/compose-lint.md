@@ -13,19 +13,38 @@ every stack on this box shares:
   without caps the kernel OOM killer picks its victim by score rather than by who
   caused the spike.
 - a healthcheck on every service, or `x-no-healthcheck` naming the **test** that
-  asserts it can never answer one — a path relative to the repository root,
-  optionally with ` -- why` after it, and the gate refuses a value that is not a
-  file in the repo. A one-shot job that exits is the honest case; "we did not get
-  round to it" is the case the key is there to make visible.
+  asserts it can never answer one. A one-shot job that exits is the honest case;
+  "we did not get round to it" is the case the key is there to make visible.
 
-  A reason string used to be the whole of it, and a lint cannot check a runtime
-  — so any non-empty prose passed. One waiver in the fleet read "the runtime
-  exits the process on a failure the loop cannot recover from", which was false,
-  and the gate took it. It still cannot check the runtime; what it can do is
-  insist the claim belongs to something that does. `x-no-healthcheck:
-"apps/worker/tests/exit.test.ts -- no socket; the loop exits the process"` is
-  a waiver a reviewer can follow, and a suite that stops asserting it is a red
-  build rather than a sentence nobody re-read.
+  A reason string used to be the whole of it, and a lint cannot check a runtime,
+  so any non-empty prose passed. One waiver in the fleet read "the runtime exits
+  the process on a failure the loop cannot recover from", which was false, and
+  the gate took it. It still cannot check the runtime; what it can do is insist
+  the claim belongs to something that does:
+
+  ```yaml
+  x-no-healthcheck: "apps/worker/tests/exit.test.ts -- no socket; the loop exits the process"
+  ```
+
+  **Exactly what is checked.** The value is a path, optionally followed by
+  ` -- why`; the path is graded and the reason is prose beside it. The path is
+  refused unless it is both
+
+  - **test-shaped** — one of `*.test.ts`, `*.test.tsx`, `*.spec.ts`,
+    `*.spec.tsx`, which is `oxlint.base.json`'s own test override and so the
+    same definition of "a test" every other tool in the fleet uses; and
+  - **listed by git for this repository** — tracked, or written and not yet
+    committed. Never a path `.gitignore` covers, never one under
+    `node_modules`, and never one that walks out of the tree.
+
+  It is git's listing rather than "does this file exist" deliberately. Asking
+  the filesystem accepted `README.md`, `.gitignore`, a gitignored file,
+  something under `node_modules` and `../../../etc/hostname` — every one of them
+  a file the machine has, and none of them the test the key claims to name.
+
+  What the gate still cannot check is whether that test asserts the thing. It
+  moves the claim from a sentence nobody re-reads to a run that either agrees or
+  goes red, and review does the rest.
 
 - a `migrate` service with `restart: "no"`, and every service that builds from
   this repo waiting on it with `condition: service_completed_successfully`. A

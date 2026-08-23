@@ -157,6 +157,13 @@ dropdb "$drill_databse"
     ],
   ])("%s fails loudly rather than passing", async (_, wrote, said) => {
     const root = await materialise(CLEAN);
-    expect(shellScripts(root, await shellcheckWriting(wrote))).rejects.toThrow(said);
+    // Awaited rather than left as a floating `.rejects` chain: a case that
+    // finishes before the assertion resolves reports an unhandled rejection
+    // instead of the run that was asked.
+    const failure = await shellScripts(root, await shellcheckWriting(wrote)).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain(said);
   });
 });

@@ -8,7 +8,6 @@ await entry(async () => {
     "seeded-data",
     "first-data",
     "second-data",
-    "step-summary",
   );
 
   // The service the calling job declared, from the environment it owns. This
@@ -35,6 +34,5 @@ await entry(async () => {
         second: read["second-data"],
       },
     }),
-    read["step-summary"],
   );
 });

@@ -7,7 +7,7 @@ async function routeLog(file: string, source: string): Promise<RouteLog> {
 }
 
 await entry(async () => {
-  const read = inputs("route-log-before", "route-log-after", "route-allowlist", "step-summary");
+  const read = inputs("route-log-before", "route-log-after", "route-allowlist");
 
   // The two fetches of the app's counter endpoint the ramp step made, either
   // side of the k6 run. Whatever the boot step's health poll reached is already
@@ -20,6 +20,5 @@ await entry(async () => {
 
   await publish(
     routeCoverage(before, after, allowlistFrom(read["route-allowlist"], "route-allowlist")),
-    read["step-summary"],
   );
 });

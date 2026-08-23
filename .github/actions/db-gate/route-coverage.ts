@@ -133,8 +133,6 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
       // Present on a failing run, unlike the claim a proof carries: this one is
       // a measurement of the floor, and it earns its line of log either way.
       note: "route coverage: no route table",
-      table: undefined,
-      log: undefined,
       problems: [
         ...allowlist.problems,
         {
@@ -199,8 +197,6 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
 
   return {
     note: `route coverage: ${covered.size} of ${table.size} routes exercised by the ramp, ${waived.size} allowlisted`,
-    table: undefined,
-    log: undefined,
     problems: [
       ...allowlist.problems,
       ...uncovered.map((name) => ({

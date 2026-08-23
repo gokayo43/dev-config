@@ -214,8 +214,8 @@ describe("the backfill check", () => {
     ]);
     expect(messages(verdict)[0]).toContain("guard each statement on the state it produces");
     expect(verdict.note).toBeUndefined();
-    expect(verdict.log ?? "").toContain("backfilled 1");
-    expect(verdict.log ?? "").toContain("the data after a second backfill");
+    expect(verdict.log).toContain("backfilled 1");
+    expect(verdict.log).toContain("the data after a second backfill");
   });
 
   // The most likely false positive: an unguarded UPDATE. It rewrites every row
@@ -246,7 +246,7 @@ describe("the backfill check", () => {
     expect(messages(verdict)).toEqual([
       containing("running the backfill a second time changed the data"),
     ]);
-    expect(verdict.log ?? "").toContain("A\nD");
+    expect(verdict.log).toContain("A\nD");
   });
 
   // The same class from the other side: the second run drops a blank line from

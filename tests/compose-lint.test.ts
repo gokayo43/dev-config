@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { composeLint } from "../.github/actions/compose-lint/compose-lint.ts";
+import { isList, readConfig, record } from "../.github/actions/_lib/gate.ts";
+import { composeLint, TEST_FILES } from "../.github/actions/compose-lint/compose-lint.ts";
 
 import { containing } from "./matchers.ts";
 import { materialise, type Tree } from "./tree.ts";
@@ -105,17 +106,55 @@ describe("compose lint", () => {
       await lint(
         waiving("the runtime exits the process on a failure the loop cannot recover from"),
       ),
-    ).toEqual([containing("which is not a file in this repo")]);
+    ).toEqual([containing("which is not a test")]);
   });
 
   test("a waiver naming a test that is not there is refused, naming what to write", async () => {
     const [message] = await lint(CLEAN, {});
     expect(message).toContain(
-      `migrate's x-no-healthcheck names ${WAIVER_TEST}, which is not a file in this repo`,
+      `migrate's x-no-healthcheck names ${WAIVER_TEST}, which git does not list in this repo`,
     );
-    expect(message).toContain(
-      "write the test that asserts this service can never answer a healthcheck",
-    );
+    expect(message).toContain("write that test and commit it");
+  });
+
+  // Every one of these was accepted while the check was `Bun.file(...).exists()`.
+  // A file that is not a test, a file git is told to ignore, one under
+  // node_modules and a path that walks out of the repository are all things the
+  // filesystem has, and none of them is the test that asserts this.
+  test.each([
+    ["a file that is not a test", "README.md", { "README.md": "# hi\n" }, "which is not a test"],
+    [
+      "a test .gitignore covers",
+      "scratch/local.test.ts",
+      { ".gitignore": "scratch/\n", "scratch/local.test.ts": "" },
+      "which git does not list",
+    ],
+    [
+      "a test under node_modules",
+      "node_modules/dep/dep.test.ts",
+      { "node_modules/dep/dep.test.ts": "" },
+      "which git does not list",
+    ],
+    ["a path out of the repository", "../../../etc/hostname", {}, "which is not a test"],
+  ])("%s is refused", async (_, named, beside, said) => {
+    expect(await lint(waiving(named), beside)).toEqual([containing(said)]);
+  });
+
+  // The definition of "a test" is oxlint.base.json's own test override rather
+  // than a second opinion in the gate: the fleet lints by that list, and a
+  // waiver graded against a different one would refuse a file every other tool
+  // here calls a test.
+  test("what counts as a test is the base's own list", async () => {
+    // Through the gates' own reader, since the base is JSON with comments —
+    // README asks for the reason for an override beside it.
+    const base = record((await readConfig(".", "oxlint.base.json")).contents);
+    const overrides = isList(base["overrides"]) ? base["overrides"] : [];
+    const testOverride = overrides
+      .map((entry) => record(entry)["files"])
+      .filter(isList)
+      .find((files) => files.includes("**/*.test.ts"));
+
+    expect(testOverride).toEqual(TEST_FILES);
   });
 
   // The reason is prose beside the path, and the path is the whole of what is

@@ -51,17 +51,6 @@ export function notice(message: string): void {
 }
 
 /**
- * Evidence that belongs on the log rather than in an annotation: an annotation
- * is one line rendered on the step, and what a gate has to show sometimes runs
- * to hundreds — every line two dumps disagree about, everything a tool wrote
- * before it died. Not exported: a gate says it by putting it on the verdict
- * `publish` takes, which is where the order it lands in is decided.
- */
-function log(text: string): void {
-  for (const line of text.split("\n")) console.log(line);
-}
-
-/**
  * What a gate that publishes something answers with, where a bare `Problem[]`
  * cannot carry it: the claim it established or the measurement it took, the
  * table behind that measurement, and evidence too long to be an annotation.
@@ -72,21 +61,30 @@ function log(text: string): void {
  * points at the same writes in the same order, which is the order `publish`
  * fixes below. A gate that only refuses answers with `Problem[]` and builds
  * none of these.
+ *
+ * The three are optional rather than nullable, which under
+ * `exactOptionalPropertyTypes` is the difference between a field a gate left
+ * out and one it filled with nothing: a verdict says what it has.
  */
 export interface Verdict {
   /**
-   * One line of log, whichever way the gate went. Absent where the problems are
-   * the whole report: a step that failed has already said so in its
+   * One line of log, whichever way the gate went. Left out where the problems
+   * are the whole report: a step that failed has already said so in its
    * annotations, and a note beside them is the step paraphrasing its own error
    * back at the reader. Present on a failing run wherever the line is a
    * measurement rather than a paraphrase — "5 of 10 routes exercised" is what a
    * reader wants most on the run that failed.
    */
-  readonly note: string | undefined;
-  /** Markdown for the run summary, absent where the gate measured nothing. */
-  readonly table: string | undefined;
-  /** Whatever belongs on the log rather than in an annotation, for the reason `log` above gives. */
-  readonly log: string | undefined;
+  readonly note?: string;
+  /** Markdown for the run summary, left out where the gate measured nothing. */
+  readonly table?: string;
+  /**
+   * Evidence that belongs on the log rather than in an annotation: an
+   * annotation is one line rendered on the step, and what a gate has to show
+   * sometimes runs to hundreds — every line two dumps disagree about,
+   * everything a tool wrote before it died.
+   */
+  readonly log?: string;
   readonly problems: Problem[];
 }
 
@@ -106,17 +104,25 @@ export interface Verdict {
  * `GITHUB_STEP_SUMMARY` here: the ramp has a caller outside a workflow —
  * `project-template`'s `scripts/preview-capacity.sh`, which measures against the
  * deployed shape — and it renders the same table into a file beside the repo.
- * Every gate that publishes is handed one, including those that only ever prove
- * a property and have no table today: the alternative is an optional argument,
- * and a gate that grows a table under one writes it nowhere.
+ * A gate with no table needs none, and a gate that grows one under an action
+ * that does not pass it is the wiring bug this refuses rather than writes
+ * nowhere.
  */
 export async function publish(
   { note, table, log: written, problems }: Verdict,
-  into: string,
+  into?: string,
 ): Promise<void> {
-  if (written !== undefined) log(written);
+  // One call rather than a line at a time: the text is already newline-joined,
+  // and console.log ends it with the newline the last line would otherwise get
+  // from the loop.
+  if (written !== undefined) console.log(written);
   if (note !== undefined) notice(note);
-  if (table !== undefined) await appendFile(into, table);
+  if (table !== undefined) {
+    if (into === undefined) {
+      throw new Error("this gate published a table and its action passed no step-summary path");
+    }
+    await appendFile(into, table);
+  }
   report(problems);
 }
 

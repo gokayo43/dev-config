@@ -11,7 +11,6 @@ import {
   scratchDatabase,
   shell,
 } from "./database.ts";
-import { passed, refused } from "./verdict.ts";
 
 /**
  * What a backfill is asked to prove: **running it a second time leaves what the
@@ -200,20 +199,24 @@ export async function backfillGate({
   // loud: an input silently ignored is how a gate somebody asked for turns out
   // never to have run.
   if (command === "") {
-    return refused([
-      {
-        message:
-          "backfill-seed is set and backfill-command is empty — the seed writes the state a backfill is graded against, and there is no backfill here to grade",
-      },
-    ]);
+    return {
+      problems: [
+        {
+          message:
+            "backfill-seed is set and backfill-command is empty — the seed writes the state a backfill is graded against, and there is no backfill here to grade",
+        },
+      ],
+    };
   }
   if (seed === "") {
-    return refused([
-      {
-        message:
-          "backfill-command is set and backfill-seed is empty — this runs against a database the migrations have just built, where a backfill has nothing to backfill and running it twice proves nothing; name the command that writes the state the backfill was written for",
-      },
-    ]);
+    return {
+      problems: [
+        {
+          message:
+            "backfill-command is set and backfill-seed is empty — this runs against a database the migrations have just built, where a backfill has nothing to backfill and running it twice proves nothing; name the command that writes the state the backfill was written for",
+        },
+      ],
+    };
   }
 
   const database = backfillDatabase(root);
@@ -242,11 +245,13 @@ export async function backfillGate({
     const seeded = await dataOf(own, "the state the seed wrote", evidence.seeded);
     const wrote = seeded.units.some((row) => !JOURNAL_ROW.test(row));
     if (!wrote) {
-      return refused([
-        {
-          message: `backfill-seed (\`${seed}\`) left no rows behind, so running the backfill twice would compare two empty databases and pass whatever the backfill does — write the state the backfill was written for, the rows it is meant to find`,
-        },
-      ]);
+      return {
+        problems: [
+          {
+            message: `backfill-seed (\`${seed}\`) left no rows behind, so running the backfill twice would compare two empty databases and pass whatever the backfill does — write the state the backfill was written for, the rows it is meant to find`,
+          },
+        ],
+      };
     }
 
     await shell(
@@ -267,19 +272,20 @@ export async function backfillGate({
 
     const changed = compare(first, second);
     if (changed !== undefined) {
-      return refused(
-        [
+      return {
+        log: changed.lines.join("\n"),
+        problems: [
           {
             message: `running the backfill a second time changed the data — ${changed.headline} — a backfill is re-run whenever a deploy is retried or resumed, or when a range it already covered is covered again, so a second run has to leave what the first one left; guard each statement on the state it produces, rather than on nothing`,
           },
         ],
-        changed.lines,
-      );
+      };
     }
 
-    return passed(
-      `backfill: \`${command}\` leaves the same data when it runs a second time over the state \`${seed}\` writes`,
-    );
+    return {
+      note: `backfill: \`${command}\` leaves the same data when it runs a second time over the state \`${seed}\` writes`,
+      problems: [],
+    };
   } finally {
     await discard(server, database);
   }

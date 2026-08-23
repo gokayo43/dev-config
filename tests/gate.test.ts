@@ -10,6 +10,7 @@ import {
   publish,
   report,
   required,
+  type Verdict,
 } from "../.github/actions/_lib/gate.ts";
 import { git, history, type Tree } from "./tree.ts";
 
@@ -98,7 +99,8 @@ describe("what publishing a verdict writes", () => {
     return file;
   }
 
-  const nothing = { note: undefined, table: undefined, log: undefined, problems: [] };
+  /** A verdict with every optional field left out, which each case adds one to. */
+  const nothing: Verdict = { problems: [] };
 
   // The order is the claim `publish` makes: the evidence is above the
   // annotation that summarises it, which is above the errors — so a reader who
@@ -116,12 +118,17 @@ describe("what publishing a verdict writes", () => {
     );
     restore();
 
-    expect(lines).toEqual([
-      "stryker said this",
-      "and then this",
-      "::notice::2 changed domain files held no mutants",
-      "::error::kill the mutants listed in the run summary",
-    ]);
+    // Joined, because what GitHub reads is the bytes on stdout rather than how
+    // many calls wrote them: a blob printed whole and the same blob printed a
+    // line at a time are the same log, and the order is what this is about.
+    expect(lines.join("\n")).toBe(
+      [
+        "stryker said this",
+        "and then this",
+        "::notice::2 changed domain files held no mutants",
+        "::error::kill the mutants listed in the run summary",
+      ].join("\n"),
+    );
   });
 
   test("a verdict with nothing to say writes nothing and fails nothing", async () => {
@@ -153,6 +160,22 @@ describe("what publishing a verdict writes", () => {
     restore();
 
     expect(await Bun.file(file).text()).toBe("### Capacity\n### Mutation lane\n");
+  });
+
+  // The wiring bug the optional argument makes possible: a gate that grows a
+  // table under an action whose YAML never passed a path. Refused at the one
+  // place that could write it, rather than published nowhere.
+  test("a table with nowhere to go is refused rather than dropped", async () => {
+    const { restore } = captureLog();
+    // Awaited rather than left as a floating `.rejects` chain: a run that
+    // finishes before the assertion resolves reports an unhandled rejection
+    // instead of the case that was asked.
+    const failure = await publish({ ...nothing, table: "### Capacity\n" }).catch(
+      (error: unknown) => error,
+    );
+    restore();
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain("its action passed no step-summary path");
   });
 
   // The run this step is about to fail is exactly the run whose measurement is

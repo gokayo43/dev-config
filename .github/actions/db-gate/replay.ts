@@ -26,7 +26,6 @@ import {
   scratchDatabase,
   textColumn,
 } from "./database.ts";
-import { passed, refused } from "./verdict.ts";
 
 /**
  * What a repo's migration history is asked to prove, and the two questions are
@@ -516,17 +515,17 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
 
   const repeated = compare(fresh, again);
   if (repeated !== undefined) {
-    return refused(
-      [
+    return {
+      log: repeated.lines.join("\n"),
+      problems: [
         {
           message: `replaying the migrations a second time changed the schema — ${repeated.headline} — a schema must not depend on how many times it was migrated; make the statements that ran again re-runnable, or have the runner skip what it has already applied`,
         },
       ],
-      repeated.lines,
-    );
+    };
   }
 
-  if (upgrade === undefined) return passed(REPLAYED);
+  if (upgrade === undefined) return { note: REPLAYED, problems: [] };
 
   // A checkout that cannot say where it came from is refused rather than
   // reported as having nothing to upgrade from: the whole check would pass by
@@ -536,42 +535,45 @@ export async function replayGate({ root, url, upgrade }: Replay): Promise<Verdic
 
   const rev = base.rev;
   if (rev === undefined) {
-    return passed(
-      `${REPLAYED}; there is no earlier commit to upgrade from, so the upgrade path is not proved for this run`,
-    );
+    return {
+      note: `${REPLAYED}; there is no earlier commit to upgrade from, so the upgrade path is not proved for this run`,
+      problems: [],
+    };
   }
   const from = rev.slice(0, 7);
 
   const { lineages, problems } = await baseLineages(root, rev);
-  if (problems.length > 0) return refused(problems);
+  if (problems.length > 0) return { problems };
   if (lineages.length === 0) {
-    return passed(
-      `${REPLAYED}; ${from} carries no migration lineage, so the upgrade path is not proved for this run`,
-    );
+    return {
+      note: `${REPLAYED}; ${from} carries no migration lineage, so the upgrade path is not proved for this run`,
+      problems: [],
+    };
   }
 
   const built = await upgradedSchema(root, url, rev, lineages);
   if ("unapplied" in built) {
-    return refused(
-      built.unapplied.map((dir) => ({
+    return {
+      problems: built.unapplied.map((dir) => ({
         message: `${dir} is in ${from}'s lineage set and this branch's db:migrate never applied it — a database deployed from ${from} keeps everything that lineage built, and a rebuild never makes it; point db:migrate at ${dir} again`,
       })),
-    );
+    };
   }
 
   const diverged = compare(fresh, built.dump);
   if (diverged === undefined) {
-    return passed(
-      `${REPLAYED}; upgrading a database built from ${from} (${built.replayed.join(", ")}) reaches the same schema`,
-    );
+    return {
+      note: `${REPLAYED}; upgrading a database built from ${from} (${built.replayed.join(", ")}) reaches the same schema`,
+      problems: [],
+    };
   }
 
-  return refused(
-    [
+  return {
+    log: diverged.lines.join("\n"),
+    problems: [
       {
         message: `upgrading a database built from ${from} does not reach the schema this branch builds from empty — ${diverged.headline} — the lineage ${from} had already applied has changed under it: a migration was rewritten, or a new one was ordered behind one already applied. An applied migration is never re-read, so no deployed database will ever reach this schema; put the change in a new migration, ordered after every one that has shipped.`,
       },
     ],
-    diverged.lines,
-  );
+  };
 }
