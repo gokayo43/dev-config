@@ -2,6 +2,8 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdir, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
+import manifest from "../package.json";
+
 import type { Verdict } from "../.github/actions/_lib/gate.ts";
 import { mutationLane } from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { containing } from "./matchers.ts";
@@ -28,12 +30,29 @@ const OXLINTRC = JSON.stringify({
   settings: { "boundaries/elements": [{ type: "domain", pattern: "src/domain" }] },
 });
 
+/**
+ * The tsconfig every repo in this fleet has: a root file extending a base
+ * beside it. In every fixture because it is in every repo the lane grades, and
+ * because Stryker's sandbox preprocessor only wakes for a project that has
+ * one — a fixture without it exercises a shape no repo the lane grades has.
+ */
+const TSCONFIG_BASE = JSON.stringify({
+  compilerOptions: { target: "ES2023", module: "preserve", moduleResolution: "bundler" },
+});
+const TSCONFIG = JSON.stringify({
+  extends: "./tsconfig.base.json",
+  compilerOptions: { types: ["bun"] },
+  include: ["src/**/*.ts", "tests/**/*.ts"],
+});
+
 /** A repository the lane can be run against: a manifest, the layer declaration, and a suite. */
 function repo(tree: Tree): Tree {
   return {
     ".gitignore": "node_modules\n",
     "package.json": JSON.stringify({ name: "fixture", type: "module", private: true }),
     ".oxlintrc.json": OXLINTRC,
+    "tsconfig.base.json": TSCONFIG_BASE,
+    "tsconfig.json": TSCONFIG,
     ...tree,
   };
 }
@@ -101,6 +120,10 @@ test("adds the fee", () => {
   expect(typeof withFee(100)).toBe("number");
 });
 `;
+
+/** The same two suites with only the import specifier changed, so the alias is the one variable. */
+const ALIASED_TOTAL_TEST = TOTAL_TEST.replace("../src/domain/pricing.ts", "~/domain/pricing.ts");
+const ALIASED_FEE_TEST = FEE_TEST.replace("../src/domain/pricing.ts", "~/domain/pricing.ts");
 
 /** A domain file that is all types, so Stryker finds nothing in it to mutate. */
 const KIND = `export interface Kind {
@@ -599,12 +622,46 @@ describe("the mutation lane", () => {
     ]);
   });
 
+  // Read back out of this repo's manifest rather than written out here, because
+  // the versions the diagnostic names are a claim about an install: the one the
+  // suite symlinks in, and so the only pair the lane is ever run against. A bump
+  // that leaves the diagnostic behind sends every consuming repo to a version
+  // this lane never ran, and it fails here instead.
   test("a repo without the runner installed is told which packages to declare", async () => {
+    const pins = manifest.devDependencies;
     const verdict = await lane([BEFORE, CHANGED], { installed: false });
 
     expect(messages(verdict)).toEqual([
-      containing("package.json: add @stryker-mutator/core and @hughescr/stryker-bun-runner"),
+      `package.json: add @stryker-mutator/core@${pins["@stryker-mutator/core"]} and @hughescr/stryker-bun-runner@${pins["@hughescr/stryker-bun-runner"]} to devDependencies — the lane runs the repo's own install, so those are the versions it runs`,
     ]);
+  });
+
+  // The lane names no tsconfig, so Stryker's sandbox keeps the repo's own
+  // unrewritten — the rewrite goes through `ts.parseConfigFileTextToJson`,
+  // which the native TypeScript 7 port does not export. This fixture's suite
+  // reaches its domain file ONLY through a `paths` alias, so a sandbox copy
+  // `bun test` could not resolve against grades nothing: the score below is
+  // what proves the copy is enough.
+  test("a repo whose suite reaches its domain through tsconfig paths is graded", async () => {
+    const aliased = (tree: Tree): Tree => ({
+      ...repo(tree),
+      "tsconfig.json": JSON.stringify({
+        extends: "./tsconfig.base.json",
+        compilerOptions: { types: ["bun"], paths: { "~/*": ["./src/*"] } },
+        include: ["src/**/*.ts", "tests/**/*.ts"],
+      }),
+    });
+
+    const verdict = await lane([
+      aliased({ "src/domain/pricing.ts": PRICING, "tests/pricing.test.ts": ALIASED_TOTAL_TEST }),
+      aliased({
+        "src/domain/pricing.ts": PRICING + WITH_FEE,
+        "tests/pricing.test.ts": ALIASED_FEE_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe("mutation score 100.0% over 1 changed domain file");
   });
 
   // Stryker copies the project into a sandbox to mutate it, and its default

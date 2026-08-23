@@ -28,6 +28,18 @@ import {
 const CORE = "@stryker-mutator/core";
 const RUNNER = "@hughescr/stryker-bun-runner";
 
+/**
+ * The pair as the diagnostic asks for it, versions included: a bare `bun add`
+ * resolves `@stryker-mutator/core@10`, which is outside the `^9.0.0` peer range
+ * the runner declares — an unsupported pair to send a repo to, whatever it
+ * happens to do on the day. These are the versions this repo's own
+ * devDependencies pin, which is the install every case in
+ * `tests/mutation-lane.test.ts` runs the lane against — the test reads them
+ * back out of that manifest, so a bump that leaves this line behind fails there
+ * rather than in a consuming repo.
+ */
+const DECLARE = `${CORE}@9.6.1 and ${RUNNER}@1.3.8`;
+
 const READS_THE_BASE_REF =
   "the lane mutates what this branch changed, and the base ref is what changed is measured against";
 
@@ -517,6 +529,17 @@ function strykerConfig(mutate: readonly string[], report: string, sandbox: strin
     // checkout and always cleaned, the lane leaves nothing whatever happens.
     tempDirName: sandbox,
     cleanTempDir: "always",
+    // Names no tsconfig, so Stryker's sandbox copy of the project keeps the
+    // repo's own. The rewrite it would otherwise do — repointing `extends` and
+    // `references` that fall outside the copy — is both unavailable and
+    // unwanted: it goes through `ts.parseConfigFileTextToJson`, which the
+    // native TypeScript 7 port does not export, so it throws before a mutant is
+    // tested; and the runner here is `bun test`, which resolves the copied
+    // tsconfig itself against a sandbox that mirrors the project. `""`
+    // resolves to the working directory, which is a directory and so never a
+    // file in the project — the only value the option's schema accepts that
+    // reaches nothing.
+    tsconfigFile: "",
   });
 }
 
@@ -579,7 +602,7 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
       problems: [
         {
           file: "package.json",
-          message: `add ${CORE} and ${RUNNER} to devDependencies — the lane runs the repo's own install, so the versions are the ones its lockfile pins`,
+          message: `add ${DECLARE} to devDependencies — the lane runs the repo's own install, so those are the versions it runs`,
         },
       ],
     };

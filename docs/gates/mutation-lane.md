@@ -151,9 +151,13 @@ a bound nobody has.
 
 The repo declares `@stryker-mutator/core` and `@hughescr/stryker-bun-runner`
 among its devDependencies — the lane runs the repo's own install, so the
-versions are the ones its lockfile pins. Nothing imports either of them, so knip
-reports both as unused and `bun run knip` fails a step before the lane ever
-runs. `knip.base.ts` exports the pair for the repo's own config to spread:
+versions are the ones its lockfile pins. Pin the core to a **9.x**: a bare
+`bun add` resolves 10, which is outside the `^9.0.0` peer range
+`@hughescr/stryker-bun-runner` declares. The lane's own diagnostic, when it
+finds neither installed, names the exact pair it is verified against. Nothing imports
+either of them, so knip reports both as unused and `bun run knip` fails a step
+before the lane ever runs. `knip.base.ts` exports the pair for the repo's own
+config to spread:
 
 ```ts
 import { base, mutationLaneDependencies } from "@gokayo43/dev-config/knip.base.ts";
@@ -175,7 +179,11 @@ would fail knip the day its pin moved.
 and cleans it whatever happens, so a CI run leaves nothing behind. Stryker's own
 defaults do not: `bunx stryker run` writes `.stryker-tmp/` beside the project
 and an HTML report under `reports/mutation/`. Add both to the repo's
-`.gitignore` before running it locally.
+`.gitignore` before running it locally. A hand run also needs the
+`"tsconfigFile": ""` the lane writes, for the reason `strykerConfig` gives:
+Stryker's tsconfig rewrite calls a TypeScript API the fleet's TypeScript does
+not export, so without that line the run dies on any repo that has a
+`tsconfig.json`.
 
 ## What it cannot see
 
