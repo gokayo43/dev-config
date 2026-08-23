@@ -34,9 +34,9 @@ function looksLikeATest(path: string): boolean {
 }
 
 /**
- * The healthcheck waiver, which is a path to the test that asserts the service
- * can never answer one — optionally with the house ` -- reason` after it, the
- * way every allowlist entry here carries prose beside its subject.
+ * The healthcheck waiver: a path to the test that asserts the service can never
+ * answer one, and the house ` -- reason` after it, the way every allowlist entry
+ * here carries prose beside its subject.
  *
  * A path rather than the prose it used to be. What the key waives is a claim
  * about a service's runtime, and a lint cannot check a runtime — but it can
@@ -45,13 +45,23 @@ function looksLikeATest(path: string): boolean {
  * a failure the loop cannot recover from", which was false, and the gate took
  * it. Naming the test moves the claim somewhere a run either agrees with or
  * does not.
+ *
+ * `./x.test.ts` and `x.test.ts` are one path. git lists the second spelling and
+ * only the second, so a waiver written the first way was being told the file it
+ * is looking at is not in the repository.
  */
-function waivedBy(service: ConfigObject): string | undefined {
+interface Waiver {
+  readonly path: string;
+  /** Whether it also says why, which is the price every other hatch here pays. */
+  readonly reasoned: boolean;
+}
+
+function waivedBy(service: ConfigObject): Waiver | undefined {
   const value = service[OPT_OUT];
   if (typeof value !== "string") return undefined;
-  const [path = ""] = value.split(REASON);
-  const named = path.trim();
-  return named === "" ? undefined : named;
+  const [named = "", ...reason] = value.split(REASON);
+  const path = named.trim().replace(/^\.\//, "");
+  return path === "" ? undefined : { path, reasoned: reason.join(REASON).trim() !== "" };
 }
 
 function checkHealthcheck(
@@ -61,8 +71,8 @@ function checkHealthcheck(
   tests: ReadonlySet<string>,
 ): Problem[] {
   if (service["healthcheck"] !== undefined) return [];
-  const named = waivedBy(service);
-  if (named === undefined) {
+  const waiver = waivedBy(service);
+  if (waiver === undefined) {
     return [
       {
         file,
@@ -70,19 +80,29 @@ function checkHealthcheck(
       },
     ];
   }
-  if (!looksLikeATest(named)) {
+  // Shape before reason before listing, so one mistake earns one diagnostic:
+  // prose in this key is not a reasonless path, it is the wrong kind of value.
+  if (!looksLikeATest(waiver.path)) {
     return [
       {
         file,
-        message: `${name}'s ${OPT_OUT} names ${named}, which is not a test — the waiver points at the test that asserts this service can never answer a healthcheck, as a ${TEST_NAMES.join(" / ")} path from the repository root`,
+        message: `${name}'s ${OPT_OUT} names ${waiver.path}, which is not a test — the waiver points at the test that asserts this service can never answer a healthcheck, as a ${TEST_NAMES.join(" / ")} path from the repository root`,
       },
     ];
   }
-  if (tests.has(named)) return [];
+  if (!waiver.reasoned) {
+    return [
+      {
+        file,
+        message: `${name}'s ${OPT_OUT} names ${waiver.path} without saying why — write '${waiver.path}${REASON}<reason>', the same price a lint directive pays: the test says the service cannot answer a probe, and the reason says why that is the design`,
+      },
+    ];
+  }
+  if (tests.has(waiver.path)) return [];
   return [
     {
       file,
-      message: `${name}'s ${OPT_OUT} names ${named}, which git does not list in this repo — write that test and commit it, then point the waiver at it; a path outside the repo or one .gitignore covers is not a claim anybody can check`,
+      message: `${name}'s ${OPT_OUT} names ${waiver.path}, which git does not list in this repo — write that test and commit it, then point the waiver at it; a path outside the repo or one .gitignore covers is not a claim anybody can check`,
     },
   ];
 }

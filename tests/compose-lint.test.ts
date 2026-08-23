@@ -137,7 +137,11 @@ describe("compose lint", () => {
     ],
     ["a path out of the repository", "../../../etc/hostname", {}, "which is not a test"],
   ])("%s is refused", async (_, named, beside, said) => {
-    expect(await lint(waiving(named), beside)).toEqual([containing(said)]);
+    // Reasoned, so that the rows about the path reach the checks about the path:
+    // a waiver with no reason is refused before its path is ever looked up.
+    expect(await lint(waiving(`${named} -- the loop exits the process`), beside)).toEqual([
+      containing(said),
+    ]);
   });
 
   // The definition of "a test" is oxlint.base.json's own test override rather
@@ -157,10 +161,21 @@ describe("compose lint", () => {
     expect(testOverride).toEqual(TEST_FILES);
   });
 
-  // The reason is prose beside the path, and the path is the whole of what is
-  // graded — so a waiver carries one or does not.
-  test("the path alone is a waiver", async () => {
-    expect(await lint(waiving(WAIVER_TEST))).toEqual([]);
+  // The reason is not optional, for the reason it is not optional on any hatch
+  // here: the test says the service cannot answer a probe, and the reason says
+  // why that is the design rather than an omission. The diagnostic used to ask
+  // for one and the gate used to take a bare path anyway.
+  test("a path with no reason is refused", async () => {
+    expect(await lint(waiving(WAIVER_TEST))).toEqual([
+      containing(`names ${WAIVER_TEST} without saying why`),
+    ]);
+  });
+
+  // `./x` and `x` are one path to everyone except git, which lists the second
+  // spelling and only the second — so the first was being told the file it is
+  // looking at is not in the repository.
+  test("a path written from here is the same path", async () => {
+    expect(await lint(waiving(`./${WAIVER_TEST} -- a one-shot job that exits`))).toEqual([]);
   });
 
   // The separator is the one every allowlist input here uses, so a reason

@@ -165,17 +165,43 @@ describe("what publishing a verdict writes", () => {
   // The wiring bug the optional argument makes possible: a gate that grows a
   // table under an action whose YAML never passed a path. Refused at the one
   // place that could write it, rather than published nowhere.
-  test("a table with nowhere to go is refused rather than dropped", async () => {
-    const { restore } = captureLog();
+  //
+  // `""` counts as nowhere, and is the case that actually happens:
+  // `INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY"` is the empty string for every
+  // caller outside a workflow, which is what project-template's
+  // preview-capacity.sh is.
+  test.each([
+    ["no path at all", undefined],
+    ["an empty path", ""],
+  ])("a table with nowhere to go (%s) is refused rather than dropped", async (_, into) => {
+    const { lines, restore } = captureLog();
     // Awaited rather than left as a floating `.rejects` chain: a run that
     // finishes before the assertion resolves reports an unhandled rejection
     // instead of the case that was asked.
-    const failure = await publish({ ...nothing, table: "### Capacity\n" }).catch(
-      (error: unknown) => error,
-    );
+    const failure = await publish(
+      { ...nothing, table: "### Capacity\n", problems: [{ message: "the ramp failed" }] },
+      into,
+    ).catch((error: unknown) => error);
     restore();
+
     expect(failure).toBeInstanceOf(Error);
-    expect(String(failure)).toContain("its action passed no step-summary path");
+    expect(String(failure)).toContain("named no step summary to put it in");
+    // The half that matters more than the throw: the gate's own findings still
+    // reached the log and still failed the step. Thrown first, they were the
+    // annotations a run lost to a stack trace about a file path.
+    expect(lines).toEqual(["::error::the ramp failed"]);
+    expect(process.exitCode).toBe(1);
+  });
+
+  // An empty field is one the gate did not fill, not one it filled with nothing:
+  // a bare `::notice::` stands for no measurement, and a blank line of log for no
+  // evidence.
+  test("an empty note or log is written as the absence it is", async () => {
+    const { lines, restore } = captureLog();
+    await publish({ ...nothing, note: "", log: "" }, await summaryFile());
+    restore();
+
+    expect(lines).toEqual([]);
   });
 
   // The run this step is about to fail is exactly the run whose measurement is
@@ -378,6 +404,31 @@ describe("a message that is not the gate author's to trust", () => {
     restore();
 
     expect(lines).toEqual(["::error::row differs: 'para one%0A::add-mask::secret%0Apara two'"]);
+  });
+
+  // The path is read off the repository being graded, so it is no more the gate
+  // author's to trust than the message is — and a property list is parsed by
+  // different rules: comma-separated `key=value`, so a colon or a comma ends the
+  // property and a newline ends the annotation. A tracked file whose name holds
+  // one turns `file=` into a command the runner obeys.
+  test("a newline in a path does not start a second command", () => {
+    const { lines, restore } = captureLog();
+
+    report([{ file: "a\n::add-mask::secret\nb.ts", message: "safe" }]);
+    restore();
+
+    expect(lines).toEqual(["::error file=a%0A%3A%3Aadd-mask%3A%3Asecret%0Ab.ts::safe"]);
+  });
+
+  test("a comma in a path does not start a second property", () => {
+    const { lines, restore } = captureLog();
+
+    report([{ file: "a,line=9,col=1.ts", message: "safe" }]);
+    restore();
+
+    // The `=` is left alone deliberately: a property is split on its FIRST `=`,
+    // so a later one is part of the value. The comma is what ends the property.
+    expect(lines).toEqual(["::error file=a%2Cline=9%2Ccol=1.ts::safe"]);
   });
 
   test("a percent is escaped before what the escaping introduces", () => {

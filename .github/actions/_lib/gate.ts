@@ -30,6 +30,21 @@ function commanded(message: string): string {
 }
 
 /**
+ * The same for a property's value, which needs two escapes the message does not:
+ * a property list is comma-separated and each entry is `key=value`, so a comma
+ * or a colon inside one ends it and the rest is read as further properties.
+ *
+ * `file=` is the only property written here, and its value is a path a gate read
+ * off the repository being graded — so it is no more the gate author's to trust
+ * than a message is. A tracked path holding a newline otherwise ends the
+ * annotation and offers what follows to the parser: `::add-mask::` in a filename
+ * is a command the runner obeys.
+ */
+function property(value: string): string {
+  return commanded(value).replaceAll(":", "%3A").replaceAll(",", "%2C");
+}
+
+/**
  * Annotates every problem and fails the step once. A gate that exits at the
  * first violation costs a full CI round-trip per fix, and a bare non-zero exit
  * points at the workflow rather than at the line that has to change.
@@ -39,7 +54,7 @@ export function report(problems: readonly Problem[]): void {
     console.log(
       problem.file === undefined
         ? `::error::${commanded(problem.message)}`
-        : `::error file=${problem.file}::${commanded(problem.message)}`,
+        : `::error file=${property(problem.file)}::${commanded(problem.message)}`,
     );
   }
   if (problems.length > 0) process.exitCode = 1;
@@ -68,12 +83,12 @@ export function notice(message: string): void {
  */
 export interface Verdict {
   /**
-   * One line of log, whichever way the gate went. Left out where the problems
-   * are the whole report: a step that failed has already said so in its
-   * annotations, and a note beside them is the step paraphrasing its own error
-   * back at the reader. Present on a failing run wherever the line is a
-   * measurement rather than a paraphrase — "5 of 10 routes exercised" is what a
-   * reader wants most on the run that failed.
+   * One line of log saying what the gate did, whichever way it went. Present
+   * beside problems wherever it says something they do not: "5 of 10 routes
+   * exercised by the ramp" and "mutation score 60% over 2 changed domain files"
+   * are what a reader wants most on the run that failed. Left out where it would
+   * only paraphrase them — the two gates that prove a property drop it on a
+   * refusal, because a step that failed has already said so in its annotations.
    */
   readonly note?: string;
   /** Markdown for the run summary, left out where the gate measured nothing. */
@@ -108,22 +123,41 @@ export interface Verdict {
  * that does not pass it is the wiring bug this refuses rather than writes
  * nowhere.
  */
-export async function publish(
-  { note, table, log: written, problems }: Verdict,
-  into?: string,
-): Promise<void> {
+export async function publish(verdict: Verdict, into?: string): Promise<void> {
+  const written = given(verdict.log);
   // One call rather than a line at a time: the text is already newline-joined,
   // and console.log ends it with the newline the last line would otherwise get
-  // from the loop.
+  // from a loop over it.
   if (written !== undefined) console.log(written);
+  const note = given(verdict.note);
   if (note !== undefined) notice(note);
-  if (table !== undefined) {
-    if (into === undefined) {
-      throw new Error("this gate published a table and its action passed no step-summary path");
-    }
-    await appendFile(into, table);
+
+  const summary = given(into);
+  if (verdict.table !== undefined && summary !== undefined) {
+    await appendFile(summary, verdict.table);
   }
-  report(problems);
+  // Before the throw below, not after it. A gate that cannot publish its table
+  // has still found what it found, and a step that died on the way to writing
+  // one would otherwise lose every annotation it was about to make — the failure
+  // reaching the log as a stack trace about a file path instead.
+  report(verdict.problems);
+  if (verdict.table !== undefined && summary === undefined) {
+    throw new Error(
+      "this gate published a table and its caller named no step summary to put it in",
+    );
+  }
+}
+
+/**
+ * A field a gate filled in, where an empty string is one it did not — the same
+ * reading `required` below gives an environment variable, and for the same
+ * reason: `INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY"` is the empty string
+ * wherever that variable is unset, which is every caller outside a workflow. A
+ * note that is empty is not a note either; it reaches the log as a bare
+ * `::notice::` standing for nothing.
+ */
+function given(value: string | undefined): string | undefined {
+  return value === undefined || value === "" ? undefined : value;
 }
 
 /**

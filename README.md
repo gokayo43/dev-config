@@ -684,8 +684,8 @@ of the shipped script, and `project-template`'s ramp against a preview stack are
 three callers of one pin, and a ramp is only comparable with another ramp of the
 same k6. `_lib/shellcheck.sh`: the `shell-scripts` gate over a repo's tracked
 scripts, and this repo's own pass over the scripts inlined in its composite
-actions — and a script is only graded the same way twice when the same binary
-read it, since the tool adds checks between releases.
+actions — and what the pin buys is
+[docs/gates/shell-scripts.md](docs/gates/shell-scripts.md)'s "Which shellcheck".
 
 The shape above is illustrative on purpose: this file is not in the manager's
 patterns, so a real version and checksum written here would be the one pin
@@ -868,7 +868,7 @@ jobs:
 | Input                 | Default                            | Effect                                                                                                                                                                                                                                                                          |
 | --------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `build`               | `false`                            | Runs `bun run build` before the static gate and before the boot gate.                                                                                                                                                                                                           |
-| `affected`            | `false`                            | Appends turbo's `--affected` to the build and typecheck lanes on pull requests, so they run over the packages the branch changed. Needs `turbo.json` at the root and is refused without one; ignored on a push, where `main` stays the full run.                                |
+| `affected`            | `false`                            | Runs the `typecheck` lane over the packages a pull request changed, via turbo's `--affected` with `TURBO_SCM_BASE` set to the pull request's base commit. Needs `turbo.json` at the root and is refused without one; ignored on a push, where `main` stays the full run.        |
 | `database`            | `false`                            | Adds the database job: an empty Postgres, the migrations replayed onto it twice, the app booted against the result, and a k6 ramp over every route it serves. Also makes `db:migrate` part of the repo contract.                                                                |
 | `compose`             | `false`                            | Holds `docker-compose.yml` to the deployment shape.                                                                                                                                                                                                                             |
 | `mutation-lane`       | `false`                            | Mutates the domain files this branch changed and fails on a mutant its own lines left undetected. Reads the pure domain from the `boundaries/elements` entry typed `domain`; needs `@stryker-mutator/core` and `@hughescr/stryker-bun-runner` among the repo's devDependencies. |
@@ -909,8 +909,26 @@ The flag goes on **pull requests only**: on a push to `main` it diffs `main`
 against itself and selects zero packages, and a change to a root file no
 package's `inputs` name selects zero as well — so every lane would go green over
 nothing. The full run on `main` is what makes handing it to a pull request safe
-at all. A repo with no `turbo.json` is refused rather than handed the flag,
-since without turbo it arrives at `tsc`.
+at all.
+
+Two variables carry it, and the second is not optional. `TURBO_AFFECTED` is the
+flag; `TURBO_SCM_BASE` is the commit it narrows against, set to
+`github.event.pull_request.base.sha`. Without it the flag narrows nothing:
+`actions/checkout` leaves a detached HEAD carrying `refs/remotes/origin/*` and
+no local branch, so turbo resolving its base by ref name finds none, prints
+"unable to detect git range, assuming all files have changed", and runs the
+whole graph — green, and silent about having ignored the flag.
+
+Only `typecheck` narrows. `build` does not, even with `affected: true`: a build
+is what writes the generated sources the whole-repo lanes then read — a route
+tree, a codegen client — and a build over the changed packages alone leaves
+`lint`, `knip` and the root typecheck reading files nothing wrote this run.
+
+A repo with no `turbo.json` is refused rather than handed the flag, since
+without turbo it arrives at `tsc`. That check is the file, not the script: a
+repo that has a `turbo.json` and a `typecheck` that is still `tsc --noEmit` gets
+`--affected` passed to `tsc`, which fails with TS5023 — loudly, which is the
+better half of a wrong answer, but a wrong answer.
 
 `TURBO_TELEMETRY_DISABLED` needs no input. It is set in this workflow's own
 `env:`, which is the only place a called workflow can be given one: `env:` is

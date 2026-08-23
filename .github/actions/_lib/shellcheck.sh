@@ -9,10 +9,8 @@
 # The pin lives beside the fetch rather than at each call site, for the reason
 # k6.sh gives: two callers — the shell-scripts gate over a repo's tracked
 # scripts, and this repo's own pass over the scripts inlined in its composite
-# actions — and a version written out twice is a version that drifts. Two runs
-# only agree about a script when the same binary read it: the tool adds checks
-# between releases, so an unpinned one is a gate whose answer is whichever
-# version the runner image shipped that week.
+# actions — and a version written out twice is a version that drifts. Why it is
+# pinned at all is docs/gates/shell-scripts.md, under "Which shellcheck".
 #
 # renovate: datasource=github-release-attachments depName=koalaman/shellcheck
 SHELLCHECK_VERSION=v0.11.0

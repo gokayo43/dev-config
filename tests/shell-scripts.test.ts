@@ -121,7 +121,7 @@ dropdb "$drill_databse"
   // The escape hatch stays what it is everywhere else here: beside the line, in
   // the diff, where a reviewer sees it — rather than a .shellcheckrc the gate
   // would have obeyed without anybody reading it.
-  test("a directive beside the line waives it, and a config file beside the script does not", async () => {
+  test("a directive beside the line waives it, and a .shellcheckrc at the root does not", async () => {
     const waived = CLEAN["scripts/backup.sh"]?.replace(
       'pg_dump "$target"',
       "# shellcheck disable=SC2086\npg_dump $target",
@@ -134,6 +134,22 @@ dropdb "$drill_databse"
         "scripts/backup.sh": CLEAN["scripts/backup.sh"]?.replace('"$out"', "$out") ?? "",
       }),
     ).toHaveLength(1);
+  });
+
+  // shellcheck answers 2 for a file it could not open — and writes a valid,
+  // empty report on stdout while doing it, which is byte for byte a clean tree.
+  // The status is the only thing that tells them apart.
+  test("a script shellcheck could not read is not a clean tree", async () => {
+    const root = await materialise({ "scripts/locked.sh": "#!/usr/bin/env bash\necho ok\n" });
+    await chmod(join(root, "scripts/locked.sh"), 0o000);
+    const failure = await shellScripts(root, SHELLCHECK).catch((error: unknown) => error);
+    // Restored before the assertion, so a failing case still leaves a tree the
+    // suite's own cleanup can remove.
+    await chmod(join(root, "scripts/locked.sh"), 0o644);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain("shellcheck exited 2 without reading the scripts");
+    expect(String(failure)).toContain("permission denied");
   });
 
   /** A stand-in for the pinned binary, for the runs where what it wrote is the subject. */

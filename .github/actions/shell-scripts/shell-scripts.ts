@@ -1,14 +1,10 @@
 import { isList, type Problem, record, repoFiles } from "../_lib/gate.ts";
 
 /**
- * Every shell script the repository has, at any depth. A git pathspec matches a
+ * Every shell script the repository has, at any depth: a git pathspec matches a
  * wildcard across "/", so this one reaches `scripts/backup.sh` and a `deploy.sh`
- * at the root alike.
- *
- * Named by extension rather than by a directory, and taking no input for it:
- * what makes a script worth reading is what is in it, not where somebody put
- * it, and an input naming paths is a gate that stops covering a file the day it
- * moves — silently, which is the failure this gate exists to end.
+ * at the root alike. Why by extension rather than by directory, and why there is
+ * no input for it: docs/gates/shell-scripts.md.
  */
 const SCRIPTS = "*.sh";
 
@@ -53,15 +49,9 @@ function findingsIn(text: string, wrote: string): Finding[] {
 
 /**
  * Every shell script in the repository, through the shellcheck the caller
- * pinned. Nothing else in the pipeline reads one: actionlint shellchecks the
- * `run:` blocks inside a workflow and stops there, so a repo's own scripts —
- * the one that pipes a dump into a bucket, the one that drops a database and
- * carries the guard keeping it off production — were covered by no gate at all.
- *
- * The binary is an argument rather than a name looked up on PATH, so that what
- * graded a run is the pin the action fetched and not whichever version the
- * machine happened to have: shellcheck adds checks between releases, and two
- * runs only agree when they were the same one.
+ * pinned — docs/gates/shell-scripts.md is what this gate is for and what it
+ * cannot see. The binary is an argument rather than a name looked up on PATH so
+ * that a caller cannot be handed a different gate by the machine it runs on.
  */
 export async function shellScripts(root: string, shellcheck: string): Promise<Problem[]> {
   const files = await repoFiles(root, [SCRIPTS]);
@@ -85,10 +75,16 @@ export async function shellScripts(root: string, shellcheck: string): Promise<Pr
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
-  // The exit status says nothing this does not already know: shellcheck answers
-  // 1 for a finding and 1 for a file it could not open, and the report is what
-  // tells the two apart.
-  await proc.exited;
+  // 0 is a clean run, 1 is a run with findings, and anything above that is
+  // shellcheck refusing to do the job — a file it could not open, an option it
+  // does not have. It answers 2 with a VALID and EMPTY report on stdout, which
+  // is byte for byte what a clean tree looks like, so the status is the only
+  // thing that tells them apart and a gate that ignored it would pass a run that
+  // read nothing.
+  const status = await proc.exited;
+  if (status >= 2) {
+    throw new Error(`shellcheck exited ${status} without reading the scripts: ${err.trim()}`);
+  }
 
   return findingsIn(out, err).map(({ file, line, code, message }) => ({
     file,

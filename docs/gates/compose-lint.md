@@ -26,9 +26,11 @@ every stack on this box shares:
   x-no-healthcheck: "apps/worker/tests/exit.test.ts -- no socket; the loop exits the process"
   ```
 
-  **Exactly what is checked.** The value is a path, optionally followed by
-  ` -- why`; the path is graded and the reason is prose beside it. The path is
-  refused unless it is both
+  **Exactly what is checked.** The value is a path followed by ` -- why`. Both
+  halves are required, the way every other hatch here requires both: the test
+  says the service cannot answer a probe, and the reason says why that is the
+  design rather than something nobody got to. `./x.test.ts` and `x.test.ts` are
+  read as one path. The path is refused unless it is both
 
   - **test-shaped** — one of `*.test.ts`, `*.test.tsx`, `*.spec.ts`,
     `*.spec.tsx`, which is `oxlint.base.json`'s own test override and so the
@@ -41,6 +43,10 @@ every stack on this box shares:
   the filesystem accepted `README.md`, `.gitignore`, a gitignored file,
   something under `node_modules` and `../../../etc/hostname` — every one of them
   a file the machine has, and none of them the test the key claims to name.
+
+  A waiver is graded in that order — shape, then reason, then listing — so one
+  mistake earns one diagnostic: prose in this key is told it is not a test
+  rather than that it has no reason.
 
   What the gate still cannot check is whether that test asserts the thing. It
   moves the claim from a sentence nobody re-reads to a run that either agrees or

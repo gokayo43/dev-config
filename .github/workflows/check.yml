@@ -165,8 +165,17 @@ jobs:
     # change to a root file no package's inputs name selects zero as well — so
     # every lane would go green over nothing. The full run on main is what makes
     # handing the flag to a pull request safe at all.
+    #
+    # TURBO_SCM_BASE beside it because the flag alone does not narrow anything
+    # here: actions/checkout leaves a detached HEAD carrying refs/remotes/origin/*
+    # and no local branch, so turbo resolving its base by the ref NAME finds
+    # none, reports "unable to detect git range, assuming all files have
+    # changed", and runs the full graph — green, and silent about having ignored
+    # the flag. The commit is the one thing that always resolves. Empty off a
+    # pull request, where turbo's own default is what should decide.
     env:
       TURBO_AFFECTED: ${{ inputs.affected && github.event_name == 'pull_request' && '--affected' || '' }}
+      TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -283,9 +292,7 @@ jobs:
 
       - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
 
-      # Nothing else here reads a repo's own shell. actionlint above covers the
-      # run: blocks inside workflows and stops there, and what is left over is
-      # the set that pipes a dump into a bucket and drops databases.
+      # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
       - uses: gokayo43/dev-config/.github/actions/shell-scripts@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0
 
       - if: inputs.compose
@@ -293,17 +300,29 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # The two lanes turbo owns in a monorepo, and the only two --affected is
-      # correct for. Quoted, and an empty value still reaches the script as no
-      # argument at all: `bun run <script> ""` drops the empty argument rather
-      # than forwarding it (measured against bun 1.3.11 — a script echoing `$#`
-      # sees 0), so nothing here needs an unquoted expansion and its suppression.
+      # Not narrowed, deliberately, even when the caller asked for it: a build
+      # is what produces the generated sources the whole-repo lanes below then
+      # read — a route tree, a codegen client — and a build over the changed
+      # packages alone leaves lint, knip and the root typecheck reading files
+      # nothing wrote this run.
       - if: inputs.build
-        run: bun run build "${TURBO_AFFECTED:-}"
+        run: bun run build
 
       - run: bun run format:check
       - run: bun run lint
-      - run: bun run typecheck "${TURBO_AFFECTED:-}"
+      # The one lane --affected narrows. Unquoted on purpose, and the
+      # suppression is the price: empty, the expansion has to vanish rather than
+      # arrive as an empty argument, which `turbo run typecheck ""` reads as a
+      # task with no name and every other repo's script reads as a stray
+      # argument. Quoting it and relying on `bun run` to drop the empty word is
+      # what this used to do, and bun stopped doing it between 1.3.11 and 1.4.0
+      # — on the `affected: false` path every repo takes. The value is this
+      # workflow's own expression, a fixed literal or nothing, never anything a
+      # caller writes, so there is no word here to split wrongly.
+      - run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
       - uses: gokayo43/dev-config/.github/actions/test-suite@14f70d468d350212b0b0d788485253b9d184f89e # v0.45.0

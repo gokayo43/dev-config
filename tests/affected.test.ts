@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { chmod } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import { type ConfigObject, isList, record } from "../.github/actions/_lib/gate.ts";
 import { materialise, type Tree } from "./tree.ts";
@@ -32,6 +34,31 @@ function scriptOf(step: unknown): string {
  */
 const LANES = STEPS.map(scriptOf).filter((script) => script.includes("${TURBO_AFFECTED"));
 
+async function versionOf(bun: string): Promise<string> {
+  const proc = Bun.spawn([bun, "--version"], { stdout: "pipe", stderr: "ignore" });
+  const version = (await new Response(proc.stdout).text()).trim();
+  await proc.exited;
+  return version;
+}
+
+/**
+ * Every bun on this machine, so the cases below run the lane under each. What
+ * `bun run <script> ""` does with an empty argument changed between 1.3.11 and
+ * 1.4.0 — dropped, then forwarded — and a lane graded under one of them only is
+ * how that shipped. A runner has one bun and this is then one run, which is why
+ * the case above it grades the shell rather than bun.
+ */
+const BUNS = await (async (): Promise<string[]> => {
+  const onPath = (process.env["PATH"] ?? "").split(":").map((entry) => join(entry, "bun"));
+  const candidates = [process.execPath, ...onPath];
+  const there = await Promise.all(candidates.map((path) => Bun.file(path).exists()));
+  const found = candidates.filter((_, at) => there[at] === true);
+  const versions = await Promise.all(found.map(versionOf));
+  // By version rather than by path: /usr/local/bin/bun and a symlink to it are
+  // one bun, and running the cases twice under it proves nothing.
+  return [...new Map(versions.map((version, at) => [version, found[at] ?? ""])).values()];
+})();
+
 /** The one step that refuses the inputs a caller cannot have meant, found by what it reads. */
 const VALIDATION = await (async (): Promise<string> => {
   const found = STEPS.map(scriptOf).filter((script) => script.includes("turbo.json"));
@@ -53,7 +80,7 @@ const MONOREPO: Tree = {
   "scripts/argv.ts": "console.log(JSON.stringify(Bun.argv.slice(2)));\n",
   "package.json": JSON.stringify({
     name: "fixture",
-    scripts: { build: "bun scripts/argv.ts", typecheck: "bun scripts/argv.ts" },
+    scripts: { typecheck: "bun scripts/argv.ts" },
   }),
 };
 
@@ -109,6 +136,16 @@ describe("which packages a run is held to", () => {
     );
   });
 
+  // Without a base turbo can resolve, the flag narrows nothing: the checkout is
+  // a detached HEAD with no local branch, turbo says so once and runs the whole
+  // graph green. The flag without this is a seam that reports success for work
+  // it never skipped.
+  test("the base the flag narrows against is the commit, not a branch name", () => {
+    expect(record(STATIC["env"])["TURBO_SCM_BASE"]).toBe(
+      "${{ github.event.pull_request.base.sha }}",
+    );
+  });
+
   // Refused rather than passed through: `tsc --noEmit --affected` is an error
   // from a tool that has never heard of the flag, and the run would blame the
   // repo's own script for an argument the workflow added.
@@ -144,22 +181,78 @@ describe("which packages a run is held to", () => {
 });
 
 describe("the lanes that take the flag", () => {
-  test("the suite found both of them", () => {
-    expect(LANES).toHaveLength(2);
+  // One: the build lane is deliberately not narrowed, because it writes the
+  // generated sources the whole-repo lanes then read.
+  test("the suite found the lane", () => {
+    expect(LANES).toHaveLength(1);
   });
 
-  // A seam whose value no lane reads is the failure this pair exists for: it
-  // passes every check above and changes nothing about the run.
-  test.each(LANES)("lane %# hands the flag to the repo's script", async (script) => {
-    const { stdout } = await ran(script, MONOREPO, { TURBO_AFFECTED: "--affected" });
+  /**
+   * The words the lane's shell produces, read off a `bun` that records its argv
+   * instead of running. This is the version-independent half: what the lane
+   * controls is the argument vector it builds, and grading that catches a
+   * re-quoted expansion on any machine — where grading what bun then does with
+   * it catches nothing on a bun that drops the empty word.
+   */
+  async function words(script: string, affected: string): Promise<string[]> {
+    const root = await materialise(MONOREPO);
+    const bin = join(root, "bin");
+    const recorded = join(root, "argv.json");
+    // NUL-delimited, because the word this has to see is the empty one: a
+    // newline-delimited record cannot tell "no arguments" from "one empty
+    // argument", which is exactly the pair being graded.
+    await Bun.write(
+      join(bin, "bun"),
+      `#!/usr/bin/env bash\nprintf '%s\\0' "$@" > ${JSON.stringify(recorded)}\n`,
+    );
+    await chmod(join(bin, "bun"), 0o755);
+    const proc = Bun.spawn(["bash", "-c", script], {
+      cwd: root,
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+        TURBO_AFFECTED: affected,
+      },
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    await proc.exited;
+    const written = await Bun.file(recorded).text();
+    return written === "" ? [] : written.split("\0").slice(0, -1);
+  }
+
+  test.each(LANES)("lane %# builds the argument vector with the flag", async (script) => {
+    expect(await words(script, "--affected")).toEqual(["run", "typecheck", "--affected"]);
+  });
+
+  // The bug this pair exists for. Empty, the lane has to invoke the script
+  // exactly as it would without this seam at all: `run typecheck`, three words
+  // becoming two — never a fourth empty one, which `turbo run typecheck ""`
+  // refuses as a task with no name and every non-turbo script takes as a stray
+  // argument. It fires on `affected: false`, which is every repo's default.
+  test.each(LANES)("lane %# builds it with nothing at all when empty", async (script) => {
+    expect(await words(script, "")).toEqual(["run", "typecheck"]);
+  });
+
+  test("the suite found a bun to run the lane with", () => {
+    expect(BUNS.length).toBeGreaterThan(0);
+  });
+
+  // And end to end, under every bun this machine has: what the script finally
+  // receives is the same argv under each.
+  test.each(BUNS)("under %s the script is handed the flag", async (bun) => {
+    const { stdout } = await ran(LANES[0] ?? "", MONOREPO, {
+      TURBO_AFFECTED: "--affected",
+      PATH: `${dirname(bun)}:${process.env["PATH"] ?? ""}`,
+    });
     expect(JSON.parse(stdout)).toEqual(["--affected"]);
   });
 
-  // The other half, and what a lane hardcoding the flag would fail: with nothing
-  // decided the script is run exactly as it would be without this seam at all —
-  // no argument, not an empty one, which turbo would read as a nameless task.
-  test.each(LANES)("lane %# hands it nothing at all when it is empty", async (script) => {
-    const { stdout } = await ran(script, MONOREPO, { TURBO_AFFECTED: "" });
+  test.each(BUNS)("under %s an empty flag reaches the script as no argument", async (bun) => {
+    const { stdout } = await ran(LANES[0] ?? "", MONOREPO, {
+      TURBO_AFFECTED: "",
+      PATH: `${dirname(bun)}:${process.env["PATH"] ?? ""}`,
+    });
     expect(JSON.parse(stdout)).toEqual([]);
   });
 });

@@ -59,8 +59,8 @@ use, and which kind each is:
   because what it waives is a judgement about this line and the reason is
   addressed to the next reader;
 - `x-no-healthcheck`, which names the test asserting the service can never
-  answer one — a behavioural claim, so it names a test file git lists rather
-  than a sentence;
+  answer one **and** says why — a behavioural claim, so it costs a test file git
+  lists as well as the sentence;
 - `x-host-network`, which stays prose. What it waives is a deployment
   requirement — this listener needs the host's stack — rather than a claim about
   what the service does at runtime, so there is no run for it to point at.
