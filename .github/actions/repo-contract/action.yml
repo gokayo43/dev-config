@@ -21,13 +21,26 @@ inputs:
     description: Where the repository root is.
     default: .
   database:
-    description: The repo owns migrations, so it has to expose a db:migrate script.
-    default: "false"
+    description: >-
+      Which database gates the caller runs — postgres, external or none. Anything
+      but none replays this repo's schema, so the repo has to expose a db:migrate
+      script; external is a wrapper workflow running the gates in check.yml's
+      Postgres job's place, and is what an extension of that workflow passes.
+    default: none
   exemptions:
     description: >-
       Facts this repo is structurally unable to satisfy, space-separated:
       config-lineage, ci-call, docs-spine, lifecycle-retire, secrets. Anything
       else fails, so a typo cannot quietly waive a check.
+    default: ""
+  data-jobs-external:
+    description: >-
+      Where the deployment already runs this repo's backup and restore drill,
+      when they are not this repo's own scripts — the job, its schedule and the
+      runbook. Empty, which is every repo that owns them, asks for
+      scripts/backup.sh and scripts/restore-drill.sh with the units that run
+      them. The reason IS the waiver: there is no way to claim it without naming
+      the jobs, and it is read in review like the reason on a lint directive.
     default: ""
 
 runs:
@@ -43,6 +56,7 @@ runs:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_DATABASE: ${{ inputs.database }}
         INPUT_EXEMPTIONS: ${{ inputs.exemptions }}
+        INPUT_DATA_JOBS_EXTERNAL: ${{ inputs['data-jobs-external'] }}
         INPUT_BASE_REF: ${{ github.base_ref }}
         INPUT_BEFORE: ${{ github.event.before }}
       run: |

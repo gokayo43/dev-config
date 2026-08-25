@@ -1,6 +1,6 @@
 # Repos with a database
 
-`database: true` adds a second job: an empty Postgres — plus a Redis, for the
+`database: postgres` adds a second job: an empty Postgres — plus a Redis, for the
 shapes whose health route pings one — the migrations replayed onto it, and the
 app booted against the result. `start-command` and
 `health-url` are how a repo names its own app; everything else is the same for

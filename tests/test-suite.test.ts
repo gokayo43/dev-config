@@ -296,6 +296,72 @@ describe("the coverage floor the repo declares", () => {
   });
 });
 
+/**
+ * A suite that only runs through its own bootstrap. The sentinel is an
+ * environment variable the `test` script sets, which is the smallest honest
+ * stand-in for what the real ones do — start containers, refuse a stray env
+ * file, build fixtures — and it makes the two runs tell each other apart: bare
+ * `bun test` over this tree fails at the assertion, and the declared script
+ * passes.
+ */
+const BOOTSTRAPPED: Tree = {
+  "package.json": JSON.stringify({ name: "wrapped", scripts: { test: "BOOTSTRAP=1 bun test" } }),
+  "bootstrap.test.ts": `import { expect, test } from "bun:test";
+
+test("ran through the repo's own bootstrap", () => {
+  expect(process.env.BOOTSTRAP).toBe("1");
+});
+`,
+};
+
+// The lane is what the repo runs, not a command this gate picked for it. A repo
+// whose suite needs a bootstrap declares it in `test` — nfp-elysia's starts
+// testcontainers, and bare `bun test` there is designed to die on a dead-port
+// sentinel — so the gate that ran `bun test` regardless was grading a command
+// the repo had never asked anyone to run.
+describe("the suite the repo declares", () => {
+  test("a scripted suite is run through its script", async () => {
+    expect(await ran(BOOTSTRAPPED)).toMatchObject({ status: 0 });
+  });
+
+  // The wrong implementation is the one that reads the script and replaces the
+  // flags with it: the suite then runs, passes, and writes no report — so the
+  // coverage floor is applied to nothing and both checks below it have nothing
+  // to read. Graded on the report rather than the exit status, because a run
+  // that lost the flags is honestly green.
+  test("and the coverage and reporter flags reach it", async () => {
+    const { report } = await ran(BOOTSTRAPPED);
+    expect(report).toMatch(/<testsuites [^>]* skipped="0"/);
+  });
+
+  // The repo's own script is what runs, so a script that keeps the trailing
+  // arguments to itself is a wrapper this gate cannot grade — and it says so by
+  // name rather than letting the greps report a missing file as the fault they
+  // were looking for.
+  test("a script that swallows the flags is named, not read as a skipped test", async () => {
+    const { status, output } = await ran({
+      ...BOOTSTRAPPED,
+      "package.json": JSON.stringify({
+        name: "swallows",
+        scripts: { test: "bash -c 'BOOTSTRAP=1 bun test'" },
+      }),
+    });
+    expect(output).toContain("::error::the suite passed and wrote no junit report");
+    expect(output).not.toContain("::error::skipped tests");
+    expect(status).not.toBe(0);
+  });
+
+  // The fallback, and the reason it cannot be `bun run test` unconditionally:
+  // with no script of that name bun runs the `test` on PATH — /usr/bin/test —
+  // which fails on the first flag with a message about a binary operator.
+  test.each([
+    ["a manifest that declares no test script", { "package.json": '{ "name": "bare" }' }],
+    ["no manifest at all", {}],
+  ])("%s runs bun test itself", async (_what, manifest) => {
+    expect(await ran({ ...CLEAN, ...manifest })).toMatchObject({ status: 0 });
+  });
+});
+
 describe("the run the report proves happened", () => {
   test("a skipped test is a suite that ran over nothing", async () => {
     const { status, output } = await ran({

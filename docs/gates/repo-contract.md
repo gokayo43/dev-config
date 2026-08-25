@@ -14,13 +14,13 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `typescript` major ≥ 7                                                                                          | the shared tsconfig is written against TypeScript 7                                               |
 | `oxlint-tsgolint` present, when `.oxlintrc.json` extends the base                                               | without it oxlint runs the base's type-aware rules over nothing and reports clean                 |
 | `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`   | a repo that stopped inheriting stops inheriting silently                                          |
-| `bunfig.toml` declares `minimumReleaseAge`, `saveExact`, and a coverage floor a run can fail                    | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
-| every rule, category and option `.oxlintrc.json` switches off carries a reason on the line above it             | a switch-off nobody wrote a reason for reads the same as one added to get a run green             |
+| `bunfig.toml` declares `minimumReleaseAge`, `exact`, and a coverage floor a run can fail                        | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
+| every rule, category and option `.oxlintrc.json` switches off carries a reason above it                         | a switch-off nobody wrote a reason for reads the same as one added to get a run green             |
 | `.oxlintrc.json` `extends` the shared base and nothing else, and no oxlint config sits below the root           | a second config is read after the root's and wins over it, in a file this gate never opens        |
 | `lefthook.yml` runs a staged gitleaks scan pre-commit and typecheck + tests pre-push                            | the hooks are the half of the gate that runs before a push                                        |
 | `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern | a blanket `.env.*` rule silently deletes the two files that have to ship                          |
 | `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                 | the docs spine                                                                                    |
-| `db:migrate` exists, when `database: true`                                                                      | the database gate replays migrations through it                                                   |
+| `db:migrate` exists, when `database` is anything but `none`                                                     | whichever gate replays this repo's migrations replays them through it                             |
 | a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                           | a tag is a name someone else can repoint                                                          |
 | `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                | it is what every rule under "Going live" below reconfigures off                                   |
 
@@ -48,6 +48,16 @@ threshold applied to nothing at all. The second is the one worth refusing
 loudly: that repo passes this gate, reports a floor, and is graded by nothing.
 [test-suite](test-suite.md) has the argument and the flag that applies the floor
 instead.
+
+**The pin is `exact`, and `saveExact` is not a spelling of it.** Bun reads the
+first and ignores the second — probed as a matched pair on both ends of the
+range this fleet runs, with `HOME` neutralised so no user bunfig decides it:
+`bun add lodash` writes `4.18.1` under `exact = true` on 1.3.11 and 1.4.0, and
+`^4.18.1` under `saveExact = true` on both, which is exactly what declaring
+neither does. A gate asking for the second was asking for a line that pins
+nothing, and that is worse than asking for nothing — the repo carries the field,
+passes this contract, and its next `bun add` writes a range straight past the
+release-age window beside it.
 
 `coveragePathIgnorePatterns` is deliberately not graded, though it can excuse a
 file from the floor as surely as a low threshold can. Each entry is a line in
@@ -78,6 +88,25 @@ is counted is a second thing a reason could be for, not a second token. And the
 reason has to say something: `//` and `/**/` are comments that argue exactly
 what no comment would, and are refused at the same bar `allowlistFrom` holds a
 waiver to.
+
+**The reason covers the run of switch-offs under it, not just the first.** One
+argument routinely retires several rules at once — the paragraph explaining why
+`pedantic`, `style`, `restriction` and `nursery` are not adopted is one reason
+about four of them — and demanding a comment per line would be demanding the
+same paragraph four times, which is how a rule teaches people to write a token
+instead of an argument. So the group is the contiguous run of **switch-offs**
+under the comment, written one per line.
+
+What continues that run is a switch-off and never merely an entry, which is the
+whole tightness of it: a rule left ON is a different subject, so the comment
+above _that_ is about the rule staying on and cannot be spent further down.
+`oxlint.base.json` is the case the looser reading was caught on —
+`"react/exhaustive-deps": "warn"` sits between the JSX runtime's reason and
+`oxc/no-map-spread`, and a walk counting entries handed the first's argument to
+the second in silence. A blank line closes the run as well, and so does any line
+carrying nothing at all: the `"rules": {` a block opens with, or a multi-line
+entry's continuation. A comment above the block's own opening line is therefore
+about the block, and cannot be spent on a switch-off inside it.
 
 **Off is three spellings, not one.** A rule's setting is oxlint's
 `AllowWarnDeny`, whose schema documents `"allow"` as the synonym of `"off"` and
@@ -200,22 +229,64 @@ has to be remembered: everything below is derived from that word rather than
 turned on one gate at a time, because a checklist is something you can do half
 of.
 
-| What `"live"` requires                              | When                     | Why it cannot wait                                                                                                                                              |
-| --------------------------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| a Sentry SDK among what the workspace ships         | always                   | a failure only the user sees is one nobody fixes                                                                                                                |
-| the `check.yml` call passes `database: true`        | the repo owns a database | nothing replays the schema otherwise, and the gate below has no job to run in                                                                                   |
-| the `check.yml` call passes `upgrade-gate: true`    | the repo owns a database | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
-| `scripts/backup.sh` exists and is executable        | the repo owns a database | an undumped database is one nobody has                                                                                                                          |
-| `scripts/restore-drill.sh` exists and is executable | the repo owns a database | a backup nobody has restored is a backup nobody has                                                                                                             |
-| a timer/service pair that runs each of them         | the repo owns a database | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
+| What `"live"` requires                                                   | When                                                        | Why it cannot wait                                                                                                                                              |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a Sentry SDK among what the workspace ships                              | always                                                      | a failure only the user sees is one nobody fixes                                                                                                                |
+| the `check.yml` call passes `database: postgres` or `database: external` | the repo owns a database                                    | nothing replays the schema otherwise, and the gate below has no job to run in                                                                                   |
+| the `check.yml` call passes `upgrade-gate: true`                         | the repo owns a database, and the call is not `external`    | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
+| `scripts/backup.sh` exists and is executable                             | the repo owns a database, and `data-jobs-external` is empty | an undumped database is one nobody has                                                                                                                          |
+| `scripts/restore-drill.sh` exists and is executable                      | the repo owns a database, and `data-jobs-external` is empty | a backup nobody has restored is a backup nobody has                                                                                                             |
+| a timer/service pair that runs each of them                              | the repo owns a database, and `data-jobs-external` is empty | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
 
 Only crash reporting is owed by every live repo. The rest is about a database,
 and half this fleet is a static site with a hostname and no schema — demanding a
 backup script of one would teach people to write a script that does nothing in
 order to get past a gate. The upgrade gate is scoped the same way for a harder
 reason than symmetry: `check.yml` **refuses** `upgrade-gate: true` without
-`database: true`, so asking for it there would be this contract demanding the
-one configuration the shared workflow rejects.
+`database: postgres`, so asking for it there would be this contract demanding
+the one configuration the shared workflow rejects. `external` is that same state
+and the only other one — the gate that input names belongs to the Postgres job,
+and a call that has replaced that job has no such gate to ask for. The wrapper
+that took the job over is what owes its consumers an upgrade gate of its own.
+
+**When the data jobs are somebody else's, `data-jobs-external` says whose.** The
+rule above can be satisfied dishonestly, and that is what this waives. A repo
+whose deployment already dumps its database on a schedule — a whole-box borg job
+under root's crontab, with binlog shipping beside it, which is what the API on
+this fleet's own box has — can only pass the rule as written by committing a
+**second** backup of the same data on a **second** schedule, reviewed and enabled
+separately. Two answers to "when is this dumped" is the failure this rule exists
+to prevent, arrived at from the other side.
+
+The reason **is** the waiver rather than a switch with a reason beside it: the
+input's value is where the jobs run — the job, its schedule and the runbook — so
+there is no spelling that claims the exemption without naming them, and an empty
+or whitespace value is simply a repo that owns its own. That is why it is not a
+`contract-exemptions` word: those are single words by design (`_lib/gate.ts`
+says so where it splits them), and a waiver whose whole worth is the sentence
+attached cannot be one. `test-network` is the same shape for the same reason.
+The refusal for a missing script names the input, because a repo whose backups
+genuinely run elsewhere would otherwise read the rule as one it must satisfy by
+writing a script.
+
+It has to still be waiving something, the way `lifecycle-retire` does: a repo
+that names external jobs and commits one of the scripts anyway has exactly the
+duplicate the waiver was granted to avoid, and is refused. It waives the two
+data jobs and nothing else — the crash reporting a live repo owes is a product
+decision per repo, not an infrastructure duplicate.
+
+**`database` is three values, and only one of them means "no database gate
+anywhere".** `postgres` is `check.yml`'s own job. `external` says a workflow
+wrapping it runs the database gates in that job's place, which is what
+`gokayo43/dev-config-db` — the MariaDB/MySQL extension — passes down when it
+replaces the Postgres job with its own dialect's. `none` is a repo with no
+schema. Under the boolean this replaces, a wrapper's live consumer was refused
+for a job somebody had deliberately taken over: its schema _is_ replayed, by a
+gate this workflow cannot see, and `contract-exemptions: ci-call` waives the
+call-by-path fact and never this one. A value outside the three is refused
+rather than read as `none`, in `check.yml` and in this action both: `none` is
+what switches every database rule off, so a typo falling through to it would
+shed them in silence.
 
 **"Owns a database" is a fact of the tree, never a script name and never the
 `database` input.** Four witnesses, any one of them enough: a script called
@@ -228,11 +299,11 @@ A script name alone was the hole, and it was a wide one: `db:migrate` is what
 this house asks for, `migrate` is what drizzle-kit's own template writes — and
 what the live repo on this box with the most data actually runs. Under the old
 rule that spelling answered "no" and the repo owed **nothing**: no backups, no
-rehearsed restore, no upgrade gate, silently, because of a colon. The `database` input says which CI job runs, and it lives in
+rehearsed restore, no upgrade gate, silently, because of a colon. The `database` input says which CI gates run, and it lives in
 the very file these rules are about — so keying off it would let a live repo
 shed its backup script, its rehearsed restore and its upgrade gate by deleting
 one line of its own workflow. A repo that owns a database and passes
-`database: false` is told so by name rather than quietly excused.
+`database: none` is told so by name rather than quietly excused.
 
 Any `@sentry/*` package satisfies the first, in any manifest in the workspace,
 and only among what that manifest ships — `dependencies` and

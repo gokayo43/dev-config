@@ -26,7 +26,7 @@ import {
   record,
   repoFiles,
 } from "../_lib/gate.ts";
-import { CI_WORKFLOW } from "./ci-workflow.ts";
+import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
 
 /**
  * Whether the repo is deployed and carrying people, said by the repo about
@@ -252,7 +252,7 @@ const SCHEMA_IN_THE_TREE = [
  * has no database can argue with something concrete.
  *
  * It matters that none of this is the `database` input. That input says which CI
- * job runs, and it lives in the very file the live rules are about — so keying
+ * gates run, and it lives in the very file the live rules are about — so keying
  * off it would let a live repo shed its backup script, its rehearsed restore and
  * its upgrade gate by deleting one line from its own workflow.
  */
@@ -299,6 +299,14 @@ const LIVE_DATA_JOBS = [
   ["backup", "an undumped database is one nobody has"],
   ["restore-drill", "a backup nobody has restored is a backup nobody has"],
 ] as const;
+
+/**
+ * The input that says these jobs are somebody else's, and where. Named in the
+ * diagnostic rather than left to be discovered, because a repo whose backups
+ * genuinely run outside it has no way to guess that the way out is an input at
+ * the call site.
+ */
+const DATA_JOBS_EXTERNAL = "data-jobs-external";
 
 /**
  * The directives that make a timer fire more than once. `OnBootSec` is not
@@ -634,7 +642,12 @@ async function checkJob(
   const mode = (await statOf(`${root}/${script}`))?.mode;
   if (mode === undefined) {
     return {
-      problems: [{ file: script, message: `a live repo owns ${script} — ${why}` }],
+      problems: [
+        {
+          file: script,
+          message: `a live repo owns ${script} — ${why}. Where the deployment already runs this job outside the repo, name it in \`${DATA_JOBS_EXTERNAL}\` at the call site instead: a second copy on a second schedule is two answers to when this data is dumped.`,
+        },
+      ],
       root: undefined,
     };
   }
@@ -684,10 +697,67 @@ function hasSentry(contents: ConfigObject): boolean {
  * is not read off the repo, and the only half that may be.
  */
 interface Asked {
-  /** The caller runs the database job, so something replays the schema. */
-  readonly database: boolean;
+  /** Which database gates the call runs — `none` is the one value under which nothing replays the schema. */
+  readonly database: DatabaseGates;
   /** The `with:` block of the job that calls check.yml, or nothing when the call is itself a problem. */
   readonly call: ConfigObject | undefined;
+  /**
+   * Where the deployment runs this repo's backup and restore drill, when they
+   * are not this repo's own scripts. The reason **is** the waiver: there is no
+   * spelling of it that claims the exemption without naming the jobs, which is
+   * the difference between an exception a reviewer can check and a switch.
+   */
+  readonly dataJobsExternal: string;
+}
+
+/**
+ * The two scheduled jobs, or the statement that they are somebody else's.
+ *
+ * The waiver exists because the rule can be satisfied dishonestly. A repo whose
+ * deployment already dumps its database on a schedule — a whole-box borg job
+ * under root's crontab, with binlog shipping beside it — can only pass the rule
+ * as written by committing a *second* backup of the same data on a *second*
+ * schedule, reviewed and enabled separately. That is two answers to "when is
+ * this dumped", which is the failure this rule exists to prevent, reached from
+ * the other side. So the way out is to say where the real ones run.
+ *
+ * The reason IS the waiver rather than a switch beside one: an empty value is
+ * not an exemption at all, so there is no spelling that claims it without naming
+ * the jobs, and a reviewer always has the thing to check. `test-network` is the
+ * same shape for the same reason.
+ *
+ * And it has to still be waiving something. A repo that names external jobs and
+ * commits one of these scripts anyway has exactly the duplicate the waiver was
+ * granted to avoid — so that is refused rather than quietly preferred one way
+ * or the other, the way `lifecycle-retire` is refused once it waives nothing.
+ */
+async function checkDataJobs(root: string, external: string): Promise<Problem[]> {
+  const entries = await scriptsIn(root);
+  if (external !== "") {
+    return LIVE_DATA_JOBS.filter(([name]) => entries.includes(`${name}.sh`)).map(([name]) => ({
+      file: `scripts/${name}.sh`,
+      message: `${DATA_JOBS_EXTERNAL} says this repo's data jobs run outside it — "${external}" — and scripts/${name}.sh is one of them committed here anyway. One of the two is the schedule nobody reads: keep the external jobs and delete this, or drop the input and own them here.`,
+    }));
+  }
+
+  const problems: Problem[] = [...dropIns(entries)];
+  const jobs = await Promise.all(
+    LIVE_DATA_JOBS.map(async ([name, why]) => await checkJob(root, entries, name, why)),
+  );
+  problems.push(...jobs.flatMap(({ problems: each }) => each));
+
+  // The one wrong location a checkout can catch. A unit copied from the stack
+  // next door keeps its neighbour's path, and the two jobs then disagree about
+  // where this repo lives — which nothing else here can see, since a checkout
+  // has no idea what directory it will be deployed into.
+  const roots = [...new Set(jobs.map(({ root: at }) => at).filter((at) => at !== undefined))];
+  if (roots.length > 1) {
+    problems.push({
+      file: "scripts",
+      message: `the data jobs' units disagree about where this repo is deployed — ${roots.join(" and ")} — so at least one of them is scheduling another stack's copy of the script`,
+    });
+  }
+  return problems;
 }
 
 /**
@@ -716,21 +786,31 @@ export async function checkLive(
   // would let a live repo shed all three of these by deleting one line of the
   // file they are about.
   //
-  // A repo that owns a schema and runs no job over it is that same hole from
+  // A repo that owns a schema and runs no gate over it is that same hole from
   // the other side: the rules would apply and every one of them would be
   // unenforceable, since the gate proving an upgrade never runs.
-  if (owned !== undefined && !asked.database) {
+  //
+  // `external` satisfies this and `none` does not, which is the whole of the
+  // difference between them: a wrapper workflow that replaced check.yml's
+  // Postgres job with its own dialect's does replay the schema, and refusing
+  // its consumers was refusing them for a job somebody had deliberately taken
+  // over.
+  if (owned !== undefined && asked.database === "none") {
     problems.push({
       file: CI_WORKFLOW,
-      message: `a live repo that owns migrations must pass \`database: true\` to check.yml — ${owned}, nothing replays it otherwise, and the upgrade gate below has no job to run in`,
+      message: `a live repo that owns migrations must pass \`database: postgres\` — or \`database: external\`, where a wrapper workflow runs the database gates — to check.yml: ${owned}, nothing replays it otherwise, and the upgrade gate below has no job to run in`,
     });
   }
 
   // The upgrade gate is here rather than beside the other workflow rules for a
   // harder reason than symmetry: check.yml *refuses* `upgrade-gate: true`
-  // without `database: true`, so asking a live site with no database for it
+  // without `database: postgres`, so asking a live site with no database for it
   // would be this contract demanding the one config the shared workflow
-  // rejects.
+  // rejects. `external` is that same state and the only other one — the upgrade
+  // gate this input names belongs to the Postgres job, and a call that has
+  // replaced that job has no such gate to ask for; the wrapper that did is what
+  // owes its consumers one. `none` still answers for it, since the finding
+  // beside it is what puts that call back on a job.
   if (owned !== undefined) {
     // Read off the call rather than out of the file's text, for the reason the
     // pin is: the fact is "this job asks check.yml for the upgrade gate", and a
@@ -740,7 +820,12 @@ export async function checkLive(
     // repo that wrote it that way is asking for the gate and getting it.
     // The `with:` block is undefined only when the call itself is already a problem.
     const gate = asked.call?.["upgrade-gate"];
-    if (asked.call !== undefined && gate !== true && gate !== "true") {
+    if (
+      asked.database !== "external" &&
+      asked.call !== undefined &&
+      gate !== true &&
+      gate !== "true"
+    ) {
       problems.push({
         file: CI_WORKFLOW,
         message:
@@ -748,24 +833,7 @@ export async function checkLive(
       });
     }
 
-    const entries = await scriptsIn(root);
-    problems.push(...dropIns(entries));
-    const jobs = await Promise.all(
-      LIVE_DATA_JOBS.map(async ([name, why]) => await checkJob(root, entries, name, why)),
-    );
-    problems.push(...jobs.flatMap(({ problems: each }) => each));
-
-    // The one wrong location a checkout can catch. A unit copied from the stack
-    // next door keeps its neighbour's path, and the two jobs then disagree about
-    // where this repo lives — which nothing else here can see, since a checkout
-    // has no idea what directory it will be deployed into.
-    const roots = [...new Set(jobs.map(({ root: at }) => at).filter((at) => at !== undefined))];
-    if (roots.length > 1) {
-      problems.push({
-        file: "scripts",
-        message: `the data jobs' units disagree about where this repo is deployed — ${roots.join(" and ")} — so at least one of them is scheduling another stack's copy of the script`,
-      });
-    }
+    problems.push(...(await checkDataJobs(root, asked.dataJobsExternal.trim())));
   }
 
   if (!all.some(({ value }) => hasSentry(value))) {

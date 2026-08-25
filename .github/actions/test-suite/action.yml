@@ -1,9 +1,14 @@
 name: Test suite
 description: >-
-  Runs bun test with no route off the host and proves the run happened. A suite
-  that skips when its database is missing leaves CI green over nothing at all,
-  and bun records both shapes that takes: a skipped test as <skipped/>, one that
-  returned early instead as assertions="0".
+  Runs the repo's suite with no route off the host and proves the run happened.
+  A suite that skips when its database is missing leaves CI green over nothing at
+  all, and bun records both shapes that takes: a skipped test as <skipped/>, one
+  that returned early instead as assertions="0".
+
+  The suite is the `test` script the repo's package.json declares, run through
+  `bun run` with the coverage and reporter flags appended, and bare `bun test`
+  where no script is declared. A repo whose tests need a bootstrap puts it in
+  that script, and the gate has to run what the repo runs.
 
   The lane this runs is the one the shared check.yml gives it: a job with no
   service containers, which is what makes it a unit lane rather than a naming
@@ -43,10 +48,30 @@ runs:
         TEST_NETWORK: ${{ inputs['test-network'] }}
       run: |
         set -euo pipefail
+        report=$RUNNER_TEMP/junit.xml
+
+        # The repo's own suite command, when it declares one. A suite that needs
+        # a bootstrap around it — containers to start, an env file to refuse,
+        # fixtures to build — puts that in the `test` script, and a gate running
+        # bare `bun test` there runs the command that repo designed to fail.
+        # Absent (no manifest, or no script in it), bare `bun test` is the suite,
+        # which is every repo whose script is `bun test` anyway.
+        #
+        # The flags below are appended rather than substituted: `bun run` passes
+        # trailing arguments to the script, so they reach the `bun test` the
+        # script ends in. A script that swallows them writes no report, and the
+        # check further down is what says so — which is why that check is by
+        # name rather than left to the greps after it.
+        declared=$(bun --print 'require("./package.json").scripts?.test ?? ""' 2>/dev/null || true)
         # --coverage here rather than `[test] coverage` in the graded repo's
         # bunfig, which is what makes the floor a CI gate instead of a tax on
         # every run its author makes: docs/gates/test-suite.md.
-        suite=(bun test --coverage --reporter=junit --reporter-outfile="$RUNNER_TEMP/junit.xml")
+        flags=(--coverage --reporter=junit --reporter-outfile="$report")
+        if [ -n "$declared" ]; then
+          suite=(bun run test "${flags[@]}")
+        else
+          suite=(bun test "${flags[@]}")
+        fi
         seal=()
 
         # Trimmed, the way every allowlist entry in this repo is trimmed before
@@ -100,12 +125,19 @@ runs:
         trap 'kill -TERM "$running" 2>/dev/null || true' INT TERM
         wait "$running"
 
+        # The report is what the two checks below are, so its absence is its own
+        # diagnostic: a green run that wrote none is a `test` script that kept
+        # the reporter flags to itself, and every grep after this would report
+        # the missing file as the fault it was looking for.
+        [ -f "$report" ] \
+          || { echo "::error::the suite passed and wrote no junit report — this step appends --coverage and the two --reporter flags to the package.json test script, so that script has to end in a bun test its trailing arguments reach; a wrapper building an argv of its own has to pass them through (docs/gates/test-suite.md)"; exit 1; }
+
         # Anchored on the root element: a per-file <testsuite name="…"> line
         # carries its own skipped count, and a file whose name contains
         # "testsuites" would otherwise answer for the whole run.
-        grep -q '<testsuites [^>]* skipped="0"' "$RUNNER_TEMP/junit.xml" \
+        grep -q '<testsuites [^>]* skipped="0"' "$report" \
           || { echo "::error::skipped tests: a suite whose infrastructure is absent must fail, never skip"; exit 1; }
-        ! grep -o '<testcase name="[^"]*"[^>]*assertions="0"' "$RUNNER_TEMP/junit.xml" \
+        ! grep -o '<testcase name="[^"]*"[^>]*assertions="0"' "$report" \
           || { echo "::error::the tests listed above asserted nothing — assert with expect, properties included; an assertion-free pass is indistinguishable from a test that never ran"; exit 1; }
 
     # The report the two checks above read, which is written into the runner and

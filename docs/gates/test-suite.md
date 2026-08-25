@@ -1,8 +1,35 @@
 # The test suite
 
-`bun test`, run so that a green suite means something: the run happened, no test
-skipped, no test asserted nothing, nothing in it reached a live host, and the
-coverage floor the repo declares was actually applied to it.
+The repo's suite, run so that a green suite means something: the run happened,
+no test skipped, no test asserted nothing, nothing in it reached a live host,
+and the coverage floor the repo declares was actually applied to it.
+
+## Which command is the suite
+
+The `test` script the repo's `package.json` declares, run through `bun run`;
+bare `bun test` where no script is declared. A repo whose tests need a bootstrap
+around them puts it there — containers to start, a stray env file to refuse,
+fixtures to build — and `nfp-elysia`'s bare `bun test` is _designed_ to die,
+on dead-port sentinels its wrapper replaces. A gate running `bun test` regardless
+was grading a command that repo has never asked anyone to run, and there is
+nothing a repo could have written to say so.
+
+The flags this step adds — `--coverage` and the two `--reporter` flags — are
+**appended** to the script rather than substituted for it: `bun run` passes its
+trailing arguments to the script, so they reach the `bun test` the script ends
+in. That is what a wrapper owes in exchange for being the suite: it has to end
+in a `bun test` its own trailing arguments reach, forwarding `"$@"` where it
+builds an argv of its own. A script that keeps them to itself writes no report,
+and the step says exactly that rather than letting the two checks below report
+a missing file as the fault they were looking for.
+
+There is no input for this, deliberately. The command is a fact the repo already
+declares in the one place every other tool reads it, and an input would be a
+second place for it to be written — drifting from the script the moment somebody
+changes one of them. The fallback cannot be `bun run test` unconditionally
+either: with no script of that name bun runs the `test` on `PATH`, which is
+`/usr/bin/test`, and the run dies on the first flag with a message about a
+binary operator.
 
 ## The unit lane
 
@@ -20,7 +47,7 @@ so it fails on the day the gate is loudest and passes on re-run; and it makes
 the suite untrue about what it covers, since the assertion that survived was
 about a response nobody in this repo wrote.
 
-So the run is **sealed**: `bun test` is executed inside a network namespace with
+So the run is **sealed**: the suite is executed inside a network namespace with
 no route out of it, and the connection fails at the line that made it. Not a
 proxy variable a test can unset, not a firewall rule that outlives the step that
 set it — a namespace, which goes away with the process that had it.
@@ -97,7 +124,7 @@ having.
 
 ## The coverage floor
 
-The step runs `bun test --coverage`, and that flag is what makes a repo's
+The step passes `--coverage`, and that flag is what makes a repo's
 `coverageThreshold` a gate: bun reads the threshold only while it is collecting,
 and a repo that declares one and never collects has the field without the floor
 — a file at 25% passes a floor of 0.99 (probed, bun 1.4.0 and 1.3.11).
@@ -125,8 +152,13 @@ take that decision back, in either direction.
 
 ## The run the report proves happened
 
-`bun test` writes a junit report, and two of its fields are read back:
+`bun test` writes a junit report, and three facts are read back off it:
 
+- that it is **there at all**. A green run that wrote none is a suite the
+  reporter flags never reached, so the floor above was applied to nothing and
+  the two checks below have nothing to read. It is named as its own failure
+  because it is the one a wrapper script produces, and every grep after it would
+  otherwise report the missing file as the fault it was looking for.
 - `skipped="0"` on the root element. A suite that skips when its infrastructure
   is absent leaves CI green over nothing at all, which is the failure mode this
   whole page is about, arriving through a different door.

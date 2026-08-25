@@ -71,7 +71,7 @@ const LIVE: Tree = {
   [RESTORE_DRILL]: "#!/usr/bin/env bash\n",
   ...unitsFor("backup"),
   ...unitsFor("restore-drill"),
-  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: true\n      upgrade-gate: true\n`,
+  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: postgres\n      upgrade-gate: true\n`,
 };
 
 /**
@@ -176,8 +176,8 @@ describe("what going live requires", () => {
   test("an upgrade-gate on a job that calls something else is not the call's", async () => {
     const elsewhere = `${LIVE[".github/workflows/ci.yml"] ?? ""}  other:\n    uses: someone/else/.github/workflows/check.yml@${PIN}\n    with:\n      upgrade-gate: true\n`;
     const off = elsewhere.replace(
-      "      database: true\n      upgrade-gate: true\n",
-      "      database: true\n",
+      "      database: postgres\n      upgrade-gate: true\n",
+      "      database: postgres\n",
     );
     expect(await live({ ...LIVE, ".github/workflows/ci.yml": off })).toEqual([
       containing("must pass `upgrade-gate: true`"),
@@ -427,8 +427,8 @@ describe("what going live requires", () => {
       "package.json": renamed["package.json"] ?? "",
       ...(file === undefined ? {} : { [file]: "-- schema\n" }),
     };
-    expect(await live(tree, { database: false })).toEqual([
-      containing("must pass `database: true`"),
+    expect(await live(tree, { database: "none" })).toEqual([
+      containing("must pass `database: postgres`"),
       containing("a live repo owns scripts/backup.sh"),
       containing("a live repo owns scripts/restore-drill.sh"),
     ]);
@@ -446,7 +446,7 @@ describe("what going live requires", () => {
       "package.json": none["package.json"] ?? "",
       ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
     };
-    expect(await live(tree, { database: false })).toEqual([]);
+    expect(await live(tree, { database: "none" })).toEqual([]);
   });
 
   test("something in the repo has to report its crashes", async () => {
@@ -501,7 +501,7 @@ describe("what going live requires", () => {
 // one would be teaching people to write a script that does nothing.
 describe("a live repo with no database of its own", () => {
   test("owes crash reporting, and no database rituals", async () => {
-    expect(await live(LIVE_STATIC, { database: false })).toEqual([]);
+    expect(await live(LIVE_STATIC, { database: "none" })).toEqual([]);
   });
 
   test("still owes the crash reporting", async () => {
@@ -512,7 +512,7 @@ describe("a live repo with no database of its own", () => {
     expect(
       await live(
         { ...LIVE_STATIC, "package.json": blind["package.json"] ?? "" },
-        { database: false },
+        { database: "none" },
       ),
     ).toEqual([containing("a live repo reports its crashes")]);
   });
@@ -522,7 +522,7 @@ describe("a live repo with no database of its own", () => {
   // behind it, and the database rules stay off because there is still no
   // database.
   test("running the database job over a repo with no migrations is the caller's problem", async () => {
-    expect(await live(LIVE_STATIC, { database: true })).toEqual([containing("db:migrate")]);
+    expect(await live(LIVE_STATIC, { database: "postgres" })).toEqual([containing("db:migrate")]);
   });
 });
 
@@ -552,8 +552,8 @@ describe("a live monorepo owns its database wherever the migrations live", () =>
   };
 
   test("so every rule holds, with the root carrying no script at all", async () => {
-    expect(await live(inTheWorkspace, { database: false })).toEqual([
-      containing("must pass `database: true`"),
+    expect(await live(inTheWorkspace, { database: "none" })).toEqual([
+      containing("must pass `database: postgres`"),
       containing("must pass `upgrade-gate: true`"),
       // One finding per job, not three: a script that is not there is not a
       // script whose schedule anyone can say anything about.
@@ -563,21 +563,148 @@ describe("a live monorepo owns its database wherever the migrations live", () =>
   });
 });
 
-// The `database` input says which CI job runs, and it lives in the very file
+// The `database` input says which CI gates run, and it lives in the very file
 // these rules are about. Keying off it would let a live repo drop its backup
 // script, its rehearsed restore and its upgrade gate by deleting one line of
 // its own workflow — so the contract asks the repo instead.
 describe("a live repo cannot shed the database rules by editing its workflow", () => {
-  test("owning migrations and running no database job is its own problem", async () => {
-    expect(await live(LIVE, { database: false })).toEqual([
-      containing("must pass `database: true`"),
+  test("owning migrations and running no database gate is its own problem", async () => {
+    expect(await live(LIVE, { database: "none" })).toEqual([
+      containing("must pass `database: postgres`"),
     ]);
   });
 
   test("and every rule it would have shed still holds", async () => {
-    expect(await live(without(LIVE, BACKUP), { database: false })).toEqual([
-      containing("must pass `database: true`"),
+    expect(await live(without(LIVE, BACKUP), { database: "none" })).toEqual([
+      containing("must pass `database: postgres`"),
       containing("a live repo owns scripts/backup.sh"),
+    ]);
+  });
+});
+
+// The rule can be satisfied dishonestly, and that is what this waives. A repo
+// whose box already dumps its database on a schedule — nfp-elysia's is a
+// whole-server borg job under root's crontab with binlog shipping beside it —
+// can only pass the rule as written by committing a SECOND backup of the same
+// data on a SECOND schedule, reviewed and enabled separately. Two answers to
+// "when is this dumped" is the failure the rule exists to prevent, reached from
+// the other side (dev-config#65's sibling, nfp-elysia#160).
+describe("a live repo whose data jobs run outside it", () => {
+  /** LIVE with neither script and neither unit pair: the repo that owns nothing here. */
+  const NO_SCRIPTS: Tree = without(
+    without(without(without(LIVE, BACKUP), RESTORE_DRILL), `scripts/${UNITS}backup.timer`),
+    `scripts/${UNITS}backup.service`,
+  );
+  const NOTHING_COMMITTED: Tree = without(
+    without(NO_SCRIPTS, `scripts/${UNITS}restore-drill.timer`),
+    `scripts/${UNITS}restore-drill.service`,
+  );
+
+  const RUNBOOK =
+    "the box's borg job at 02:05 from root's crontab, restore drill in /var/backups/db_dumps/PITR-RUNBOOK.md";
+
+  test("passes once it says where they run", async () => {
+    expect(await live(NOTHING_COMMITTED, { dataJobsExternal: RUNBOOK })).toEqual([]);
+  });
+
+  // The reason IS the waiver, so there is no spelling that claims it without
+  // naming the jobs: an empty value, and a value made of whitespace, are both
+  // "this repo owns them" and get the whole rule back. The wrong implementation
+  // is the switch-plus-optional-reason, which passes the second of these.
+  test.each([
+    ["empty", ""],
+    ["whitespace", "   \n  "],
+  ])("and a %s reason waives nothing", async (_what, reason) => {
+    expect(await live(NOTHING_COMMITTED, { dataJobsExternal: reason })).toEqual([
+      containing("a live repo owns scripts/backup.sh"),
+      containing("a live repo owns scripts/restore-drill.sh"),
+    ]);
+  });
+
+  // The diagnostic has to name the way out, because a repo whose backups
+  // genuinely run elsewhere cannot guess that the answer is an input at the
+  // call site — it reads the rule as one it must satisfy by writing a script.
+  test("and the refusal names the input that is the way out", async () => {
+    expect(await live(NOTHING_COMMITTED)).toEqual([
+      containing("name it in `data-jobs-external` at the call site"),
+      containing("name it in `data-jobs-external` at the call site"),
+    ]);
+  });
+
+  // Still waiving something, the way `lifecycle-retire` has to be. A repo that
+  // claims external jobs and commits one anyway has exactly the duplicate the
+  // waiver was granted to avoid, and neither copy is the one somebody reads.
+  test.each([BACKUP, RESTORE_DRILL])(
+    "but %s committed beside it is the duplicate",
+    async (path) => {
+      const both: Tree = { ...NOTHING_COMMITTED, [path]: "#!/usr/bin/env bash\n" };
+      expect(await live(both, { dataJobsExternal: RUNBOOK })).toEqual([
+        containing(`${path} is one of them committed here anyway`),
+      ]);
+    },
+  );
+
+  // It waives the data jobs and nothing else: the crash reporting a live repo
+  // owes is a product decision per repo, not an infrastructure duplicate.
+  test("and it does not waive the crash reporting", async () => {
+    const blind = manifestWith((contents) => {
+      contents.lifecycle = "live";
+    });
+    expect(
+      await live(
+        { ...NOTHING_COMMITTED, "package.json": blind["package.json"] ?? "" },
+        { dataJobsExternal: RUNBOOK },
+      ),
+    ).toEqual([containing("a live repo reports its crashes")]);
+  });
+});
+
+// The other half of the same rule. `database` says which gates run, not whether
+// this workflow's Postgres job is one of them: a workflow wrapping check.yml
+// replaces that job with its own dialect's and calls this one with `external`,
+// and a live consumer of it was refused for a job somebody had deliberately
+// taken over — the schema it owns is replayed, by a gate this one cannot see.
+describe("a wrapper workflow's database gates satisfy the rule this job's would", () => {
+  /** LIVE's call with the upgrade gate taken off, which is what `external` may not ask for. */
+  const CALLS_EXTERNAL: Tree = {
+    ...LIVE,
+    ".github/workflows/ci.yml": (LIVE[".github/workflows/ci.yml"] ?? "").replace(
+      "      database: postgres\n      upgrade-gate: true\n",
+      "      database: external\n",
+    ),
+  };
+
+  test("a live repo that owns migrations passes on external", async () => {
+    expect(await live(CALLS_EXTERNAL, { database: "external" })).toEqual([]);
+  });
+
+  // The upgrade gate goes with the job. check.yml REFUSES `upgrade-gate: true`
+  // without `database: postgres`, so a contract demanding it here would be
+  // demanding the one configuration the shared workflow rejects — the argument
+  // that already scopes this rule to a repo with a database, one case wider.
+  // The wrapper that took the job over is what owes its consumers the gate.
+  test("and is not asked for an upgrade gate this call cannot carry", async () => {
+    expect(
+      await live(CALLS_EXTERNAL, { database: "external" }).then((problems) =>
+        problems.filter((message) => message.includes("upgrade-gate")),
+      ),
+    ).toEqual([]);
+  });
+
+  // The shape the wrapper's own consumers are in: CI is a call into the
+  // wrapper, so `ci-call` waives the call-by-path fact, and `external` is what
+  // that wrapper passes down. This is the tree gokayo43/dev-config#65 was filed
+  // about, and the rule it was refused on.
+  test("a consumer whose CI calls the wrapper is not refused for the job it replaced", async () => {
+    const throughTheWrapper: Tree = {
+      ...LIVE,
+      ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config-db/.github/workflows/check.yml@${PIN}\n    with:\n      database: true\n`,
+    };
+    expect(
+      await live(throughTheWrapper, { database: "external", exemptions: ["ci-call"] }),
+    ).toEqual([]);
+    expect(await live(throughTheWrapper, { database: "none", exemptions: ["ci-call"] })).toEqual([
+      containing("must pass `database: postgres`"),
     ]);
   });
 });
@@ -617,7 +744,7 @@ function pushedOver(rev: string | undefined): Event {
 
 /** The gate against a repository with history, and against the project rather than the checkout. */
 async function graded(root: string, overrides: Partial<Contract> = {}): Promise<string[]> {
-  const asked: Contract = { ...DEFAULTS, database: false, ...overrides };
+  const asked: Contract = { ...DEFAULTS, database: "none", ...overrides };
   return (await repoContract(root, asked)).map(({ message }) => message);
 }
 

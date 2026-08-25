@@ -45,7 +45,7 @@ const MANIFEST: PackageJson = {
 
 const THRESHOLD = "{ lines = 0.75, functions = 0.75 }";
 
-const BUNFIG = `[install]\nminimumReleaseAge = 604800\nsaveExact = true\n\n[test]\ncoverageThreshold = ${THRESHOLD}\n`;
+const BUNFIG = `[install]\nminimumReleaseAge = 604800\nexact = true\n\n[test]\ncoverageThreshold = ${THRESHOLD}\n`;
 
 export const CLEAN: Tree = {
   "package.json": JSON.stringify(MANIFEST),
@@ -63,13 +63,18 @@ export const CLEAN: Tree = {
   ".env.example": "BETTER_AUTH_SECRET=\n",
   "CONTEXT.md": "# Domain\n",
   "CLAUDE.md": "# Repo\n",
-  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: true\n`,
+  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: postgres\n`,
 };
 
 /** No pull request and no previous tip: what a workflow_dispatch or a first push tells the gate. */
 const NO_EVENT: Event = { baseRef: "", before: "" };
 
-export const DEFAULTS: Contract = { database: true, exemptions: [], event: NO_EVENT };
+export const DEFAULTS: Contract = {
+  database: "postgres",
+  exemptions: [],
+  dataJobsExternal: "",
+  event: NO_EVENT,
+};
 
 export async function contract(tree: Tree, overrides: Partial<Contract> = {}): Promise<string[]> {
   const root = await materialise(tree, [".env.example"]);

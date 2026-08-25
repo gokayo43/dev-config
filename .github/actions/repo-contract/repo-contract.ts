@@ -15,7 +15,7 @@ import {
   withoutComments,
 } from "../_lib/gate.ts";
 import { checkPins, isExactVersion } from "../_lib/dependency-specs.ts";
-import { CI_WORKFLOW } from "./ci-workflow.ts";
+import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
 import { checkLifecycle, checkLive, declaredIn, lifecycleAtBase } from "./live.ts";
 
 const DEV_CONFIG = "@gokayo43/dev-config";
@@ -215,18 +215,37 @@ function walkConfig(blanked: string): Walk {
 }
 
 /**
- * The comment lines directly above `line`, as the prose in them. Comment syntax
- * is stripped rather than trusted, because `//` and `/**\/` are a comment that
- * says nothing — the same empty waiver `allowlistFrom` already refuses, in the
- * other dialect a repo writes reasons in.
+ * The comment lines above `line`, as the prose in them. Comment syntax is
+ * stripped rather than trusted, because `//` and `/**\/` are a comment that says
+ * nothing — the same empty waiver `allowlistFrom` already refuses, in the other
+ * dialect a repo writes reasons in.
+ *
+ * A reason covers the contiguous **group of switch-offs** under it, not only the
+ * first of them. One argument routinely retires several rules at once — the
+ * paragraph explaining why `pedantic`, `style`, `restriction` and `nursery` are
+ * not adopted is one reason about four of them, and writing it out four times
+ * is what a rule demanding a comment per line actually asks for. So the walk
+ * steps over the switch-offs above on its way up, and stops at everything else.
+ *
+ * A switch-off, rather than an entry, is what continues the group, and that is
+ * the whole tightness of it: a rule left ON is a different subject, so the
+ * comment above THAT is about the rule staying on and cannot be spent down here.
+ * `oxlint.base.json` is the case — `"react/exhaustive-deps": "warn"` sits
+ * between the JSX runtime's reason and `oxc/no-map-spread`, and a walk that
+ * counted entries would hand the first's argument to the second. A blank line
+ * closes the group as well, and so does any line carrying nothing at all: the
+ * `"rules": {` a block opens with, or a multi-line entry's continuation.
  */
 function reasonAbove(
   written: readonly string[],
   stripped: readonly string[],
+  switchedOff: ReadonlySet<number>,
   line: number,
 ): string {
+  let above = line - 1;
+  while (above >= 0 && switchedOff.has(above)) above -= 1;
   const prose: string[] = [];
-  for (let above = line - 1; above >= 0; above -= 1) {
+  for (; above >= 0; above -= 1) {
     const text = written[above] ?? "";
     if (text.trim() === "" || (stripped[above] ?? "").trim() !== "") break;
     prose.push(
@@ -250,9 +269,11 @@ function reasonAbove(
  * green.
  *
  * The reason is owed per switch-off, not per line, so a switch-off sharing its
- * line with any other entry is refused outright: a comment above two entries
- * says nothing about which of them it excuses, and a reader cannot recover the
- * difference. Read out of the text rather than the parse, because the parse is
+ * line with any other entry is refused outright: a comment above two entries on
+ * one line says nothing about which of them it excuses, and a reader cannot
+ * recover the difference. A comment above a run of switch-offs written one per
+ * line is the opposite case and is read as covering that run — `reasonAbove`
+ * has the argument. Read out of the text rather than the parse, because the parse is
  * precisely what drops the comment.
  */
 function checkOffReasons(oxlintrc: ConfigFile): Problem[] {
@@ -261,9 +282,10 @@ function checkOffReasons(oxlintrc: ConfigFile): Problem[] {
   const written = oxlintrc.text.split("\n");
   const stripped = blanked.split("\n");
   const { sites, entries } = walkConfig(blanked);
+  const switchedOff = new Set(sites.map(({ line }) => line));
   return sites.flatMap(({ name, line }) => {
     const crowded = (entries.get(line) ?? 0) > 1;
-    if (!crowded && reasonAbove(written, stripped, line) !== "") return [];
+    if (!crowded && reasonAbove(written, stripped, switchedOff, line) !== "") return [];
     const why = crowded
       ? "shares its line with another entry — one switch-off per line, its reason above"
       : "is turned off with no reason — add the reason above the entry";
@@ -416,8 +438,20 @@ async function checkBunfig(root: string): Promise<Problem[]> {
         "[install] minimumReleaseAge must hold new releases — a package published minutes ago must not be installable",
     });
   }
-  if (install["saveExact"] !== true) {
-    problems.push({ file: "bunfig.toml", message: "[install] saveExact must be true" });
+  // `exact`, and not `saveExact`, because `saveExact` is a key bun does not
+  // read. Probed as a matched pair on both ends of the range this fleet runs —
+  // `bun add lodash` under each key alone, HOME neutralised so no user bunfig
+  // decides it: `exact = true` writes `4.18.1` on bun 1.3.11 and 1.4.0, and
+  // `saveExact = true` writes `^4.18.1` on both, exactly as declaring neither
+  // does. A gate asking for the second was asking for a line that pins nothing,
+  // which is worse than asking for nothing: the repo carries the field, passes
+  // the contract, and its next `bun add` writes a range anyway.
+  if (install["exact"] !== true) {
+    problems.push({
+      file: "bunfig.toml",
+      message:
+        "[install] exact must be true — `saveExact` is not the key bun reads (probed, bun 1.3.11 and 1.4.0: under it `bun add` writes a caret range), and a floating spec is what the release-age window above exists to keep out of the lockfile",
+    });
   }
   if (test["coverage"] !== undefined) {
     problems.push({
@@ -594,10 +628,20 @@ async function checkCall(root: string): Promise<Call> {
 }
 
 export interface Contract {
-  /** The caller runs the database job, so the repo has to own a migration entry point. */
-  readonly database: boolean;
+  /**
+   * Which database gates the caller runs. Anything but `none` replays this
+   * repo's schema — check.yml's own Postgres job, or a wrapper workflow's —
+   * so the repo has to own a migration entry point.
+   */
+  readonly database: DatabaseGates;
   /** Facts this repo is structurally unable to satisfy, each named at the call site. */
   readonly exemptions: readonly string[];
+  /**
+   * Where a live repo's backup and restore drill actually run, when they are not
+   * this repo's own scripts. Empty is every repo that owns them; `live.ts` has
+   * the argument for why the reason is the waiver rather than a word beside one.
+   */
+  readonly dataJobsExternal: string;
   /** Where the run came from, so the lifecycle can be read at the base ref as well as here. */
   readonly event: Event;
 }
@@ -627,7 +671,7 @@ function checkRoot(contents: ConfigObject, contract: Contract): Problem[] {
     });
   }
 
-  if (contract.database && record(contents["scripts"])["db:migrate"] === undefined) {
+  if (contract.database !== "none" && record(contents["scripts"])["db:migrate"] === undefined) {
     problems.push({
       file: "package.json",
       message:
@@ -692,7 +736,11 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
       exempt("secrets") ? none : checkSecrets(root),
       exempt("docs-spine") ? none : checkDocs(root),
       declared.is === "live"
-        ? checkLive(root, all.read, { database: contract.database, call: call.asked })
+        ? checkLive(root, all.read, {
+            database: contract.database,
+            call: call.asked,
+            dataJobsExternal: contract.dataJobsExternal,
+          })
         : none,
     ]);
 

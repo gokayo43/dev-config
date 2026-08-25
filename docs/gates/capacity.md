@@ -1,6 +1,6 @@
 # The capacity ramp
 
-`database: true` ends in a k6 ramp, after the app has booted and answered its
+`database: postgres` ends in a k6 ramp, after the app has booted and answered its
 health route. It publishes what it measured, and asserts three things about it:
 that a measurement happened, that the app answered the requests it was measured
 on, and that no route the app serves sat the ramp out.
@@ -170,7 +170,7 @@ jobs:
   check:
     uses: gokayo43/dev-config/.github/workflows/check.yml@<commit sha> # <release tag>
     with:
-      database: true
+      database: postgres
       capacity-path: |
         /api/things
         /api/things/:id
@@ -187,7 +187,7 @@ jobs:
 
 Every one of these, and `upgrade-gate` and `timestamp-allowlist` with them, is
 aimed at a step of the database job — so passing any of them with
-`database: false` fails the run and says which, rather than being ignored. A repo that has written out the
+anything but `database: postgres` fails the run and says which, rather than being ignored. A repo that has written out the
 routes it wants ramped, or the reasons a route cannot be, has said plainly that
 it expects a ramp.
 

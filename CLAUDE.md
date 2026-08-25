@@ -48,8 +48,9 @@ a change to a rule usually lands here too.
   share stays in that action's directory instead — `db-gate/database.ts`, the
   scratch database its three data gates each build for themselves and the one
   derivation of "these two dumps came out the same", and
-  `repo-contract/ci-workflow.ts`, the one
-  path both halves of that contract have an opinion about and neither owns. Any
+  `repo-contract/ci-workflow.ts`, the repo's CI call — the path it lives at and
+  the three values its `database` input takes — which both halves of that
+  contract have an opinion about and neither owns. Any
   of them moves to `_lib/` when a second action reads it, and not on the
   argument that one might.
   The shell helpers beside them are `pinned-tool.sh` — the verified fetch

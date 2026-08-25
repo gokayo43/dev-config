@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { databaseGatesOf, notDatabaseGates } from "../.github/actions/repo-contract/ci-workflow.ts";
 import { repoContract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { containing } from "./matchers.ts";
 import {
@@ -12,6 +13,29 @@ import {
   withThreshold,
 } from "./repo-contract-fixture.ts";
 import { materialise, type Tree, without } from "./tree.ts";
+
+// The word the caller's workflow writes, before any rule reads it. The action
+// is called directly as well as through check.yml — this repo's own ci.yml does
+// — so the vocabulary is graded here rather than only at the workflow's guard.
+describe("the database gates a call asks for", () => {
+  test.each(["postgres", "external", "none"])("%s is one of them", (value) => {
+    expect(databaseGatesOf(value)).toBe(value);
+  });
+
+  // `none` is what switches every database rule off, so a value nobody defined
+  // must not fall through to it: the wrong implementation is any "is it
+  // postgres?" test, which reads every typo as "this repo has no database" and
+  // sheds the backup script, the rehearsed restore and the upgrade gate in
+  // silence. The refusal names the value back, because a typo is only findable
+  // if the diagnostic quotes it.
+  test.each(["true", "false", "Postgres", "mariadb", "", " none"])(
+    "a value nobody defined (%j) is refused rather than read as none",
+    (value) => {
+      expect(databaseGatesOf(value)).toBeUndefined();
+      expect(notDatabaseGates(value)).toContain(JSON.stringify(value));
+    },
+  );
+});
 
 describe("repo contract", () => {
   test("a repo that declares everything passes", async () => {
@@ -80,13 +104,38 @@ describe("repo contract", () => {
     expect(
       await contract({
         ...CLEAN,
-        "bunfig.toml": "[install]\nminimumReleaseAge = 0\nsaveExact = false\n",
+        "bunfig.toml": "[install]\nminimumReleaseAge = 0\nexact = false\n",
       }),
     ).toEqual([
       containing("minimumReleaseAge"),
-      containing("saveExact"),
+      containing("[install] exact must be true"),
       containing("coverageThreshold"),
     ]);
+  });
+
+  // The key bun reads is `exact`; `saveExact` is a name it ignores. Probed as a
+  // matched pair on both ends of the range this fleet runs, HOME neutralised so
+  // no user bunfig decides it: `bun add lodash` writes `4.18.1` under
+  // `exact = true` on 1.3.11 and 1.4.0, and `^4.18.1` under `saveExact = true`
+  // on both — which is what declaring neither does. So the wrong implementation
+  // is the one this replaces: it passed the second tree, whose next `bun add`
+  // writes a range straight past the release-age window above it.
+  test.each([
+    ["exact = true", "exact = true\n", []],
+    ["saveExact = true", "saveExact = true\n", [containing("[install] exact must be true")]],
+    [
+      "both, with exact false",
+      "saveExact = true\nexact = false\n",
+      [containing("[install] exact must be true")],
+    ],
+    ["neither", "", [containing("[install] exact must be true")]],
+  ])("a bunfig that pins with %s", async (_what, pinning, expected) => {
+    expect(
+      await contract({
+        ...CLEAN,
+        "bunfig.toml": `[install]\nminimumReleaseAge = 604800\n${pinning}\n[test]\ncoverageThreshold = { lines = 0.75, functions = 0.75 }\n`,
+      }),
+    ).toEqual([...expected]);
   });
 
   // A floor was checked for being declared, and `0` is declared. Bun enforces
@@ -132,7 +181,7 @@ describe("repo contract", () => {
       [containing("[test] coverage decides where the floor is applied")],
     ],
   ])("a floored bunfig that %s", async (_what, line, expected) => {
-    const bunfig = `[install]\nminimumReleaseAge = 604800\nsaveExact = true\n\n[test]\n${line}coverageThreshold = { lines = 0.75, functions = 0.75 }\n`;
+    const bunfig = `[install]\nminimumReleaseAge = 604800\nexact = true\n\n[test]\n${line}coverageThreshold = { lines = 0.75, functions = 0.75 }\n`;
     expect(await contract({ ...CLEAN, "bunfig.toml": bunfig })).toEqual(expected);
   });
 
@@ -222,13 +271,24 @@ describe("repo contract", () => {
     ]);
   });
 
-  test("db:migrate is only required of a repo that runs the database gate", async () => {
-    const tree = manifestWith((contents) => {
-      delete contents.scripts?.["db:migrate"];
-    });
-    expect(await contract(tree, { database: true })).toEqual([containing("db:migrate")]);
-    expect(await contract(tree, { database: false })).toEqual([]);
-  });
+  // Every value but `none` replays this repo's schema through that script —
+  // check.yml's own job, or the wrapper workflow that took it over — so the
+  // wrong implementation is the one that asks for the script only where the
+  // Postgres job runs, and lets a wrapper's consumer drop the entry point the
+  // wrapper replays through.
+  test.each([
+    ["postgres", [containing("db:migrate")]],
+    ["external", [containing("db:migrate")]],
+    ["none", []],
+  ] as const)(
+    "db:migrate is required of a repo whose caller runs database gates (%s)",
+    async (database, expected) => {
+      const tree = manifestWith((contents) => {
+        delete contents.scripts?.["db:migrate"];
+      });
+      expect(await contract(tree, { database })).toEqual([...expected]);
+    },
+  );
 
   test("a CI call pinned to a tag is refused", async () => {
     const floating = (CLEAN[".github/workflows/ci.yml"] ?? "").replace(`@${PIN}`, "@v0.6.0");
@@ -597,6 +657,53 @@ ${body}
     expect(
       await contract(withConfig(`  "rules": {\n    ${REASON}\n    ${entries}\n  }`)),
     ).toHaveLength(10);
+  });
+
+  // One argument routinely retires several rules at once, and the fleet's own
+  // configs are written that way: this block is `nfp-elysia`'s, four categories
+  // under one paragraph. The implementation this replaces credited the first
+  // entry of the group and refused the other three — eight findings across that
+  // one file — which asks for the same paragraph copied under each key.
+  test("a reason above a group of entries covers the group", async () => {
+    const group = `  "categories": {
+    // The pedantic & style opinion sets are deliberately NOT adopted: run at
+    // "warn" they emit ~31k diagnostics from rules that contradict established
+    // house conventions. That is noise, not signal.
+    "pedantic": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  }`;
+    expect(await contract(withConfig(group))).toEqual([]);
+  });
+
+  // The group's other end. A blank line is what closes it — a reason on the far
+  // side of one is a reason for whatever used to be between them, which is the
+  // rule the single-entry case already states, and a walk that stepped over
+  // entries without stopping at blank lines would spend one comment on a whole
+  // block.
+  test("a blank line closes the group the reason covers", async () => {
+    const split = `  "rules": {\n    ${REASON}\n    "no-debugger": "off",\n\n    "no-console": "off"\n  }`;
+    expect(await contract(withConfig(split))).toEqual([NO_REASON]);
+  });
+
+  // And what continues the group is a switch-off, never an entry: a rule left
+  // ON is a different subject, so the comment above THAT is about it staying
+  // on. `oxlint.base.json` is the tree this was found on — a `"warn"` sits
+  // between the JSX runtime's reason and `oxc/no-map-spread` — and a walk that
+  // stepped over entries handed the first argument to the second, silently.
+  test("a rule left on closes the group the reason covers", async () => {
+    const between = `  "rules": {\n    ${REASON}\n    "no-debugger": "off",\n    "no-empty": "warn",\n    "no-console": "off"\n  }`;
+    expect(await contract(withConfig(between))).toEqual([NO_REASON]);
+  });
+
+  // And the block's own opening line is not an entry, so a comment above it is
+  // about the block: spending it on the switch-offs inside would be this gate
+  // accepting "here are the rules" as an argument for turning one off.
+  test("a reason above the block itself covers nothing inside it", async () => {
+    expect(
+      await contract(withConfig(`  ${REASON}\n  "rules": {\n    "no-console": "off"\n  }`)),
+    ).toEqual([NO_REASON]);
   });
 
   // A comment that says nothing is the empty waiver `allowlistFrom` already

@@ -100,7 +100,7 @@ inputs:
 # backfill that can be run twice" are, while "Boot against that database",
 # "Capacity ramp" and "Every route the ramp reaches" are about the app the
 # schema has to be able to run. The directory is named for what
-# `database: true` buys.
+# `database: postgres` buys.
 #
 # What holds them together is the migrated database itself: every step below is
 # rooted in the replay, and the app steps are ordered among themselves — nothing
