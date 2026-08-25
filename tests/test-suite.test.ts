@@ -376,14 +376,12 @@ describe("the suite the repo declares", () => {
     expect(BUNS.length).toBeGreaterThan(0);
   });
 
-  describe.each(BUNS)("under %s", (bun) => {
-    test("a tree with no manifest still runs bun test itself", async () => {
-      expect(await ran(CLEAN, "", bun)).toMatchObject({ status: 0 });
-    });
-
-    test("and a tree that declares one is still run through its script", async () => {
-      expect(await ran(BOOTSTRAPPED, "", bun)).toMatchObject({ status: 0 });
-    });
+  // One shape per bun rather than both: what differs across versions is how the
+  // ABSENT manifest is read, and a sealed run costs a process tree and a
+  // namespace apiece. The declared-script path is graded above under this
+  // process's own bun, and nothing about it was ever version-dependent.
+  test.each(BUNS)("under %s a tree with no manifest still runs bun test itself", async (bun) => {
+    expect(await ran(CLEAN, "", bun)).toMatchObject({ status: 0 });
   });
 });
 
