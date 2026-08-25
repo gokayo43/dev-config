@@ -3,6 +3,7 @@ import { chmod } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { type ConfigObject, isList, record } from "../.github/actions/_lib/gate.ts";
+import { BUNS } from "./buns.ts";
 import { materialise, type Tree } from "./tree.ts";
 
 /**
@@ -38,31 +39,6 @@ function scriptOf(step: unknown): string {
  * count these cases run over.
  */
 const LANES = STEPS.map(scriptOf).filter((script) => script.includes("${TURBO_AFFECTED"));
-
-async function versionOf(bun: string): Promise<string> {
-  const proc = Bun.spawn([bun, "--version"], { stdout: "pipe", stderr: "ignore" });
-  const version = (await new Response(proc.stdout).text()).trim();
-  await proc.exited;
-  return version;
-}
-
-/**
- * Every bun on this machine, so the cases below run the lane under each. What
- * `bun run <script> ""` does with an empty argument changed between 1.3.11 and
- * 1.4.0 — dropped, then forwarded — and a lane graded under one of them only is
- * how that shipped. A runner has one bun and this is then one run, which is why
- * the case above it grades the shell rather than bun.
- */
-const BUNS = await (async (): Promise<string[]> => {
-  const onPath = (process.env["PATH"] ?? "").split(":").map((entry) => join(entry, "bun"));
-  const candidates = [process.execPath, ...onPath];
-  const there = await Promise.all(candidates.map((path) => Bun.file(path).exists()));
-  const found = candidates.filter((_, at) => there[at] === true);
-  const versions = await Promise.all(found.map(versionOf));
-  // By version rather than by path: /usr/local/bin/bun and a symlink to it are
-  // one bun, and running the cases twice under it proves nothing.
-  return [...new Map(versions.map((version, at) => [version, found[at] ?? ""])).values()];
-})();
 
 /** The one step that refuses the inputs a caller cannot have meant, found by what it reads. */
 const VALIDATION = await (async (): Promise<string> => {

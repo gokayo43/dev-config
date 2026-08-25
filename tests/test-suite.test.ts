@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { record } from "../.github/actions/_lib/gate.ts";
+import { BUNS } from "./buns.ts";
 import { materialise, type Tree } from "./tree.ts";
 
 /**
@@ -55,11 +56,14 @@ async function ownerOf(path: string): Promise<number | undefined> {
  * at the fixture — the junit report the step reads is per-run, and two cases
  * sharing one would grade each other's.
  */
-async function ran(tree: Tree, network = ""): Promise<Run> {
+async function ran(tree: Tree, network = "", bun = ""): Promise<Run> {
   const root = await materialise(tree);
+  // The step calls `bun` by name, so which one it gets is a fact about PATH —
+  // which is how a case runs the shipped shell under a bun other than this one.
+  const path = bun === "" ? process.env["PATH"] : `${dirname(bun)}:${process.env["PATH"] ?? ""}`;
   const proc = Bun.spawn(["bash", "-c", STEP], {
     cwd: root,
-    env: { ...process.env, RUNNER_TEMP: root, TEST_NETWORK: network },
+    env: { ...process.env, PATH: path, RUNNER_TEMP: root, TEST_NETWORK: network },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -359,6 +363,27 @@ describe("the suite the repo declares", () => {
     ["no manifest at all", {}],
   ])("%s runs bun test itself", async (_what, manifest) => {
     expect(await ran({ ...CLEAN, ...manifest })).toMatchObject({ status: 0 });
+  });
+
+  // Under EVERY bun on the machine, because which script the step finds is a
+  // question bun answers and the two versions in this fleet answered it
+  // differently. Asking `require("./package.json")` and letting the absent file
+  // throw worked on 1.4.0 and printed the word `undefined` on 1.3.11 — a
+  // non-empty answer, so every fixture with no manifest went to `bun run test`,
+  // which is `/usr/bin/test` and dies on the first flag. That shipped green
+  // here and red on the runner, whose bun is the one `packageManager` names.
+  test("the suite found more than one bun to run the step under", () => {
+    expect(BUNS.length).toBeGreaterThan(0);
+  });
+
+  describe.each(BUNS)("under %s", (bun) => {
+    test("a tree with no manifest still runs bun test itself", async () => {
+      expect(await ran(CLEAN, "", bun)).toMatchObject({ status: 0 });
+    });
+
+    test("and a tree that declares one is still run through its script", async () => {
+      expect(await ran(BOOTSTRAPPED, "", bun)).toMatchObject({ status: 0 });
+    });
   });
 });
 
