@@ -26,10 +26,15 @@ on:
         default: false
       database:
         description: >-
-          Replay the migrations onto an empty Postgres, boot the app against the result,
-          and ramp it — every route it serves, or an allowlisted reason why not.
-        type: boolean
-        default: false
+          Which database gates run. `postgres` replays the migrations onto an empty
+          Postgres, boots the app against the result, and ramps it — every route it
+          serves, or an allowlisted reason why not. `external` says a workflow wrapping
+          this one runs the database gates in that job's place, which is what an
+          extension of this workflow passes when it replaces them with its own dialect's
+          — the repo still owes a db:migrate, and the eleven inputs aimed at the job
+          here belong to the wrapper's own. `none` is a repo with no schema.
+        type: string
+        default: none
       upgrade-gate:
         description: >-
           Also prove that upgrading a database built from the base ref's migrations reaches
@@ -67,6 +72,17 @@ on:
           Repo-contract facts this repo is structurally unable to satisfy, space-separated
           (config-lineage, ci-call, docs-spine, lifecycle-retire, secrets). A marketing site
           names docs-spine; a repo being wound down names lifecycle-retire.
+        type: string
+        default: ""
+      data-jobs-external:
+        description: >-
+          Where the deployment already runs a live repo's backup and restore drill, when
+          they are not this repo's own scripts — the job, its schedule and the runbook.
+          Empty, which is every repo that owns them, asks for scripts/backup.sh and
+          scripts/restore-drill.sh with the units that run them. The reason is the waiver:
+          a repo whose box already dumps this database can only satisfy the rule as written
+          by committing a second dump on a second schedule, which is two answers to when
+          the data is safe.
         type: string
         default: ""
       stack-allowlist:
@@ -262,43 +278,59 @@ jobs:
             echo "::error::$1"
             wrong=1
           }
+          # A value nobody defined is refused rather than read as one of the
+          # three: `none` is the value that switches every database rule off,
+          # here and in the repo contract, so a typo falling through to it would
+          # shed them in silence — which is the failure mode this whole step
+          # exists to prevent.
+          case $DATABASE in
+            postgres | external | none) ;;
+            *)
+              refuse "database reads \"$DATABASE\" — it is postgres (this workflow's own database job), external (a workflow wrapping this one runs the database gates in that job's place) or none (the repo has no schema)"
+              ;;
+          esac
           # Re-asked here, because any one of the conditions above can be what
           # selected this step: without it a repo running the database job and no
           # mutation lane would be told its ramp inputs need a job it already
           # asked for.
-          if [ "$DATABASE" != true ]; then
+          #
+          # `external` refuses these exactly as `none` does, and for the reason
+          # the guards exist: the job they configure does not run here either
+          # way. The wrapper that took that job over declares its own, and an
+          # input passed to this workflow instead would be read by nothing.
+          if [ "$DATABASE" != postgres ]; then
             if [ "$UPGRADE_GATE" = true ]; then
-              refuse "upgrade-gate: true needs database: true — the upgrade path is replayed by the database job"
+              refuse "upgrade-gate: true needs database: postgres — the upgrade path is replayed by the database job"
             fi
             if [ -n "$CAPACITY_PATH" ]; then
-              refuse "capacity-path needs database: true — the ramp runs against the app the database job boots"
+              refuse "capacity-path needs database: postgres — the ramp runs against the app the database job boots"
             fi
             if [ -n "$CAPACITY_SCRIPT" ]; then
-              refuse "capacity-script needs database: true — the ramp runs against the app the database job boots"
+              refuse "capacity-script needs database: postgres — the ramp runs against the app the database job boots"
             fi
             if [ -n "$DB_GATE_EVIDENCE" ]; then
-              refuse "db-gate-evidence needs database: true — it names the artifact the database job uploads"
+              refuse "db-gate-evidence needs database: postgres — it names the artifact the database job uploads"
             fi
             if [ -n "$ROUTE_ALLOWLIST" ]; then
-              refuse "route-allowlist needs database: true — the route floor is measured across the database job's ramp"
+              refuse "route-allowlist needs database: postgres — the route floor is measured across the database job's ramp"
             fi
             if [ -n "$TIMESTAMP_ALLOWLIST" ]; then
-              refuse "timestamp-allowlist needs database: true — the column types are read from the database that job migrates"
+              refuse "timestamp-allowlist needs database: postgres — the column types are read from the database that job migrates"
             fi
             if [ -n "$BACKFILL_COMMAND" ]; then
-              refuse "backfill-command needs database: true — the backfill runs against a database the database job builds"
+              refuse "backfill-command needs database: postgres — the backfill runs against a database the database job builds"
             fi
             if [ -n "$BACKFILL_SEED" ]; then
-              refuse "backfill-seed needs database: true — it writes into a database the database job builds"
+              refuse "backfill-seed needs database: postgres — it writes into a database the database job builds"
             fi
             if [ -n "$SEMANTIC_FIXTURES" ]; then
-              refuse "semantic-fixtures needs database: true — the fixtures are written into a replay the database job runs"
+              refuse "semantic-fixtures needs database: postgres — the fixtures are written into a replay the database job runs"
             fi
             if [ -n "$PROBE_COMMAND" ]; then
-              refuse "probe-command needs database: true — the probe runs against the app the database job boots"
+              refuse "probe-command needs database: postgres — the probe runs against the app the database job boots"
             fi
             if [ -n "$PROBE_TIMEOUT" ]; then
-              refuse "probe-timeout needs database: true — it bounds a probe the database job runs"
+              refuse "probe-timeout needs database: postgres — it bounds a probe the database job runs"
             fi
           fi
           # The fixtures are written into a database built from the base ref's
@@ -319,33 +351,34 @@ jobs:
           fi
           exit "$wrong"
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
+          data-jobs-external: ${{ inputs['data-jobs-external'] }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
         with:
           stack-allowlist: ${{ inputs.stack-allowlist }}
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.
-      - uses: gokayo43/dev-config/.github/actions/lint-workflows@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
 
       # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
-      - uses: gokayo43/dev-config/.github/actions/shell-scripts@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+      - uses: gokayo43/dev-config/.github/actions/shell-scripts@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
 
       - run: bun install --frozen-lockfile
 
@@ -374,7 +407,7 @@ jobs:
           bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
         with:
           test-network: ${{ inputs['test-network'] }}
           test-suite-evidence: ${{ inputs['test-suite-evidence'] }}
@@ -393,12 +426,12 @@ jobs:
       # every step before it down with it.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
-        uses: gokayo43/dev-config/.github/actions/mutation-lane@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+        uses: gokayo43/dev-config/.github/actions/mutation-lane@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
 
   database:
-    if: inputs.database
+    if: inputs.database == 'postgres'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -455,7 +488,7 @@ jobs:
       - if: inputs.build
         run: bun run build
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@55e57c943d8de9e6120d3fd1a7daf7a70315c581 # v0.50.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@4c9f1d2f670cfb6eced97cdb39671aa715951f80 # v0.51.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}

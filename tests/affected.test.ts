@@ -22,6 +22,11 @@ const STATIC = await (async (): Promise<ConfigObject> => {
 
 const STEPS = isList(STATIC["steps"]) ? [...STATIC["steps"]] : [];
 
+const DATABASE_JOB = await (async (): Promise<ConfigObject> => {
+  const document = Bun.YAML.parse(await Bun.file(CHECK).text());
+  return record(record(record(document)["jobs"])["database"]);
+})();
+
 function scriptOf(step: unknown): string {
   const run = record(step)["run"];
   return typeof run === "string" ? run : "";
@@ -86,7 +91,7 @@ const MONOREPO: Tree = {
 
 /** Every variable the validation step reads, so `set -u` grades the case and not the harness. */
 const NOTHING_SET = {
-  DATABASE: "false",
+  DATABASE: "none",
   UPGRADE_GATE: "false",
   CAPACITY_PATH: "",
   CAPACITY_SCRIPT: "",
@@ -177,7 +182,7 @@ describe("which packages a run is held to", () => {
       CAPACITY_PATH: "/api/things",
       MUTATION_FLOOR: "0.7",
     });
-    expect(output).toContain("::error::capacity-path needs database: true");
+    expect(output).toContain("::error::capacity-path needs database: postgres");
     expect(output).toContain("::error::mutation-floor needs mutation-lane: true");
     expect(status).not.toBe(0);
   });
@@ -189,7 +194,7 @@ describe("which packages a run is held to", () => {
   test("fixtures without the replay they are written into are refused", async () => {
     const { status, output } = await ran(VALIDATION, MONOREPO, {
       ...NOTHING_SET,
-      DATABASE: "true",
+      DATABASE: "postgres",
       SEMANTIC_FIXTURES: "fixtures",
     });
     expect(output).toContain("::error::semantic-fixtures needs upgrade-gate: true");
@@ -199,12 +204,62 @@ describe("which packages a run is held to", () => {
   test("a bound with no command under it is refused", async () => {
     const { status, output } = await ran(VALIDATION, MONOREPO, {
       ...NOTHING_SET,
-      DATABASE: "true",
+      DATABASE: "postgres",
       PROBE_TIMEOUT: "300",
     });
     expect(output).toContain("::error::probe-timeout needs probe-command");
     expect(status).not.toBe(0);
   });
+
+  // A golden for the same reason the two above are: nothing here evaluates a
+  // GitHub expression, and what this pins is that the job asks for the one
+  // value that means it. `if: inputs.database` was the condition while the
+  // input was a boolean, and left as it stood it is truthy for every string —
+  // so `none` and `external` would both start a Postgres nobody asked for, and
+  // `external` would run the job the wrapper exists to replace.
+  test("the database job runs on the one value that names it", () => {
+    expect(DATABASE_JOB["if"]).toBe("inputs.database == 'postgres'");
+  });
+
+  // `external` says a wrapper workflow runs the database gates in this job's
+  // place, so every input aimed at the job here is aimed at nothing — the same
+  // state `none` is in, and the wrong implementation is the one that reads the
+  // input as a truthy string and lets the whole set through unread.
+  test("an input aimed at the job a wrapper took over is refused too", async () => {
+    const { status, output } = await ran(VALIDATION, MONOREPO, {
+      ...NOTHING_SET,
+      DATABASE: "external",
+      CAPACITY_PATH: "/api/things",
+      UPGRADE_GATE: "true",
+    });
+    expect(output).toContain("::error::capacity-path needs database: postgres");
+    expect(output).toContain("::error::upgrade-gate: true needs database: postgres");
+    expect(status).not.toBe(0);
+  });
+
+  // A wrapper's call with nothing else on it is the shape this input exists
+  // for, and it has to be as clean a run as `none` is.
+  test("and the wrapper's own call, with none of them, passes", async () => {
+    expect(await ran(VALIDATION, MONOREPO, { ...NOTHING_SET, DATABASE: "external" })).toMatchObject(
+      { status: 0 },
+    );
+  });
+
+  // `none` is the value that switches every database rule off, here and in the
+  // repo contract, so a value nobody defined must not fall through to it: an
+  // implementation testing only for `postgres` reads every typo as "no
+  // database" and sheds the rules in silence.
+  test.each(["true", "false", "Postgres", "mariadb", ""])(
+    "a database value nobody defined (%j) is refused rather than read as none",
+    async (value) => {
+      const { status, output } = await ran(VALIDATION, MONOREPO, {
+        ...NOTHING_SET,
+        DATABASE: value,
+      });
+      expect(output).toContain(`::error::database reads "${value}"`);
+      expect(status).not.toBe(0);
+    },
+  );
 
   // The clean tree for both: each input beside the one it rides on, with the
   // job that runs them asked for.
@@ -212,7 +267,7 @@ describe("which packages a run is held to", () => {
     expect(
       await ran(VALIDATION, MONOREPO, {
         ...NOTHING_SET,
-        DATABASE: "true",
+        DATABASE: "postgres",
         UPGRADE_GATE: "true",
         SEMANTIC_FIXTURES: "fixtures",
         PROBE_COMMAND: "bun run scripts/probe.ts",
