@@ -105,6 +105,36 @@ export function withSpec(name: string, spec: string): Tree {
   });
 }
 
+/**
+ * A config with the reason above one of its switch-offs taken out, which is the
+ * only way to ask the off-reason walker whether it would find one missing —
+ * asserting that a config draws no findings is a test a walker returning nothing
+ * at all passes.
+ *
+ * Shared because the suites that ask it grade different subjects — a rule the
+ * base switches off at the top level, and one it switches off inside an
+ * `overrides` block — over one definition of what the walker reads as the
+ * reason. Two splicers are two answers to that, drifting apart the first time
+ * the walker learns a new comment shape.
+ *
+ * `under` is the `files` glob of the block holding the switch-off, for a rule
+ * the base turns off more than once: picking one by its position in the file is
+ * a case that silently starts grading a different block the day one is added.
+ * @param text The config as shipped.
+ * @param rule The rule whose reason to remove.
+ * @param under The `files` glob of the block that owns it, when more than one does.
+ */
+export function withoutReasonFor(text: string, rule: string, under = ""): string {
+  const lines = text.split("\n");
+  const block = under === "" ? -1 : lines.findIndex((line) => line.includes(under));
+  const at = lines.findIndex((line, index) => index > block && line.trim().startsWith(`"${rule}"`));
+  if (at === -1) throw new Error(`${rule} is not switched off under ${under || "the top level"}`);
+  let first = at;
+  while (first > 0 && (lines[first - 1] ?? "").trim().startsWith("//")) first -= 1;
+  lines.splice(first, at - first);
+  return lines.join("\n");
+}
+
 /** The clean tree with a different coverage floor written into its bunfig. */
 export function withThreshold(threshold: string): Tree {
   return { ...CLEAN, "bunfig.toml": BUNFIG.replace(THRESHOLD, threshold) };

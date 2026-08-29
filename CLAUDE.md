@@ -16,7 +16,8 @@ a change to a rule usually lands here too.
 - `*.base.json` / `knip.base.ts` / `lighthouserc.json` — the bases repos inherit.
   Anything keyed to a repo's own paths does not belong in one.
 - `anti-slop/` — the oxlint JS plugin `oxlint.base.json` names in `jsPlugins`,
-  ported from dmmulroy/anti-slop (README has the rule table and the credit).
+  ported from dmmulroy/anti-slop, plus the house rules that carry a pick a file's
+  position decides (README has the rule tables and the credit).
   `shared/` holds the three questions more than one rule asks: `syntax.js` what
   was written, `bindings.js` what a name stands for and whether it can change,
   and `types.js` what a type finally means — `resolveType` is the one walk
@@ -89,23 +90,29 @@ a change to a rule usually lands here too.
   config cannot carry the reason, so it is here.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
   clean one. A gate without one is a claim; `anti-slop.test.ts`,
-  `anti-slop-test-smells.test.ts` and `anti-slop-env.test.ts` hold every lint
-  rule in `anti-slop/` to the same bar — a block of cases per rule, split where
-  the base splits, since the rules scoped to test files have a second question to
-  answer about every case, the one scoped away from `env.ts` and from a suite has
-  a third, and the ones that apply everywhere have none. None of them states how
-  many there are: `anti-slop.test.ts` asks the plugin and the base for their rule
-  names and requires the two sets to be equal, which is the check a count would
-  replace with a number to forget. All three run through `lint-fixture.ts`,
+  `anti-slop-test-smells.test.ts`, `anti-slop-env.test.ts` and
+  `lint-policy.test.ts` hold every lint rule in `anti-slop/` to the same bar — a
+  block of cases per rule, split where the base splits, since the rules scoped to
+  test files have a second question to answer about every case, the one scoped
+  away from `env.ts` and from a suite has a third, the two a directory grants or
+  scopes have a fourth, and the ones that apply everywhere have none. None of
+  them states how many there are: `anti-slop.test.ts` asks the plugin and the
+  base for their rule names and requires the two sets to be equal, which is the
+  check a count would replace with a number to forget. All of them run through
+  `lint-fixture.ts`,
   which owns the case shape and lints a whole block in one oxlint spawn, and
   refuses a run whose plugin threw or whose exit status and diagnostics
   disagree, both of which otherwise read as a clean tree.
   `anti-slop-upstream.test.ts` is
   upstream's own fixtures, as a differential oracle over every rule it ships
-  tests for. Two suites are not a gate's: `oxlint-base.test.ts` holds what
+  tests for. Three suites are not a gate's: `oxlint-base.test.ts` holds what
   the base config itself must — an override REPLACES a list-shaped rule rather
   than adding to it, which it proves against a config it builds itself and then
-  holds every override in the base to — and `action-evidence.test.ts` holds every action
+  holds every override in the base to, and that a consuming repo's own list
+  survives it — `lint-policy.test.ts` holds the picks a file's position decides,
+  on both sides of every glob that scopes one, on every spelling that reaches a
+  banned name without importing it, and on the message each names its pick in,
+  and `action-evidence.test.ts` holds every action
   publishing an artifact to keeping the runner-temp paths its own YAML names.
   `repo-contract-fixture.ts` is the clean tree the repo contract's three suites
   share — split the way the gate is: the facts every repo satisfies, the
@@ -150,9 +157,9 @@ Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
 `anti-slop/**` sits outside that floor, in `bunfig.toml`: its rules run inside a
 spawned oxlint and never execute in the test process, so the runner instruments
 them and then watches them run nowhere. What carries their duty instead is
-`tests/anti-slop*.test.ts`, which lints fixture trees with the shipped binary —
-a block of cases per rule, and a check that the base enables exactly the rules
-the plugin defines.
+`tests/anti-slop*.test.ts` and `tests/lint-policy.test.ts`, which lint fixture
+trees with the shipped binary — a block of cases per rule, and a check that the
+base enables exactly the rules the plugin defines.
 
 `bun test` needs a Postgres, a Redis, a chromium and passwordless sudo. The
 first because the replay gate's property is what two databases end up holding

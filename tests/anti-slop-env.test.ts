@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 
 import { baseConfig, type Case, cases, lines, underBase } from "./lint-fixture.ts";
-import { CLEAN, contract } from "./repo-contract-fixture.ts";
+import { CLEAN, contract, withoutReasonFor } from "./repo-contract-fixture.ts";
 
 const REPO = dirname(import.meta.dir);
 
@@ -273,24 +273,6 @@ const shipped = await Bun.file(join(REPO, "oxlint.base.json")).text();
  * that claim turned into a run.
  */
 describe("the switch-offs the base carries for it", () => {
-  /**
-   * The base with the reason above one named switch-off taken out. Found through
-   * the `files` glob of the block that owns it: two blocks switch this rule off,
-   * and picking one by its position in the file is a case that silently starts
-   * grading the other one the day a block is added.
-   */
-  function withoutTheReasonUnder(glob: string): string {
-    const written = shipped.split("\n");
-    const block = written.findIndex((line) => line.includes(glob));
-    const at = written.findIndex(
-      (line, index) => index > block && line.trim().startsWith(`"anti-slop/no-env-access"`),
-    );
-    let first = at;
-    while (first > 0 && (written[first - 1] ?? "").trim().startsWith("//")) first -= 1;
-    written.splice(first, at - first);
-    return written.join("\n");
-  }
-
   // That the base as shipped draws nothing is `oxlint-base.test.ts`'s "carries a
   // reason for every switch-off in it", which grades the whole file and so
   // grades both of these. What is only askable here is the other half over a
@@ -300,7 +282,7 @@ describe("the switch-offs the base carries for it", () => {
     async (glob) => {
       const problems = await contract({
         ...CLEAN,
-        ".oxlintrc.json": withoutTheReasonUnder(glob),
+        ".oxlintrc.json": withoutReasonFor(shipped, "anti-slop/no-env-access", glob),
       });
       expect(problems.filter((message) => message.includes("turned off"))).toEqual([
         "anti-slop/no-env-access is turned off with no reason — add the reason above the entry",

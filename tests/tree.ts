@@ -1,3 +1,4 @@
+// oxlint-disable-next-line eslint/no-restricted-imports -- the fixture-root registry every suite here shares, deleted after each case rather than set up before one — the disposable that replaces it changes 37 call sites in 17 suites, which is dev-config#85
 import { afterEach } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

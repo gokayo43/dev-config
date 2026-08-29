@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { type ConfigObject, configObjects, record } from "../.github/actions/_lib/gate.ts";
-import { BASE, lintAt, oxlint } from "./lint-fixture.ts";
-import { CLEAN, contract } from "./repo-contract-fixture.ts";
+import { type ConfigObject, configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
+import { BASE, baseConfig, lintAt, oxlint } from "./lint-fixture.ts";
+import { CLEAN, contract, withoutReasonFor } from "./repo-contract-fixture.ts";
 import { materialise } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -31,7 +31,7 @@ const ENTRY_LIST_RULES = [
 
 /** A rule's configured entries — everything after the severity, which is the list itself. */
 function entriesOf(configured: unknown): string[] {
-  return Array.isArray(configured) ? configured.slice(1).map((entry) => JSON.stringify(entry)) : [];
+  return isList(configured) ? configured.slice(1).map((entry) => JSON.stringify(entry)) : [];
 }
 
 /**
@@ -39,11 +39,12 @@ function entriesOf(configured: unknown): string[] {
  * rather than against the shipped base.
  *
  * It cannot be read off the base, because the base is entitled to have no
- * override redefining a list-shaped rule — which is exactly the state it is in.
- * A fact this whole file rests on must not be provable only while some other
- * file happens to be shaped a certain way: a canary asserting "the base still
- * has one for us to look at" turns the day someone deletes the last one into a
- * failing test about nothing, which is how a real guard gets deleted with it.
+ * override redefining a list-shaped rule — which is exactly the state it is in,
+ * and the state the block below keeps it in. A fact this whole file rests on
+ * must not be provable only while some other file happens to be shaped a certain
+ * way: a canary asserting "the base still has one for us to look at" turns the
+ * day someone deletes the last one into a failing test about nothing, which is
+ * how a real guard gets deleted with it.
  */
 describe("an override that names a list-shaped rule", () => {
   const USES_ALL = `export const a = __dirname;
@@ -117,9 +118,9 @@ describe("the base's list-shaped rules", () => {
   // day there is one.
   test("no override drops an entry the base states", () => {
     const dropped = redefinitions.flatMap(({ rule, files, configured }) => {
-      const carried = entriesOf(configured);
+      const carried = new Set(entriesOf(configured));
       return entriesOf(rules[rule])
-        .filter((entry) => !carried.includes(entry))
+        .filter((entry) => !carried.has(entry))
         .map((entry) => `${rule} in the override for ${files} drops ${entry}`);
     });
     expect(dropped).toEqual([]);
@@ -127,15 +128,63 @@ describe("the base's list-shaped rules", () => {
 });
 
 /**
+ * What the base's own overrides do to a decision a consuming repo made for
+ * itself. README tells every repo to lock one as a `no-restricted-*` entry in
+ * its own config, and an override REPLACES that list for every file it matches
+ * — so a block in the base redefining one would delete that lock wherever it
+ * reached, silently, from a file nobody in that repo is reading. Which is why a
+ * ban a file's position decides is a rule of its own, whose scalar setting in an
+ * override replaces only itself; the block above holds the base to stating no
+ * list-shaped rule in an override, and this one is what that buys.
+ */
+describe("a repo's own lock on an import", () => {
+  const LOCKED = `import { randomUUID } from "node:crypto";
+export const id = randomUUID;
+`;
+
+  /** What the base plus a repo's own entry refuse, in a file at that path. */
+  async function refusedAt(path: string): Promise<string[]> {
+    const reported = await oxlint({
+      ".oxlintrc.json": baseConfig({
+        rules: {
+          "no-restricted-imports": [
+            "error",
+            { name: "node:crypto", importNames: ["randomUUID"], message: "REPO LOCK" },
+          ],
+        },
+      }),
+      [path]: LOCKED,
+    });
+    return reported
+      .filter(({ code }) => code.includes("no-restricted-imports"))
+      .map(({ help }) => help);
+  }
+
+  // The two directories are the cases: they are where the base scopes a ban, and
+  // a scoped ban carried as an entry rather than as a rule of its own is exactly
+  // what would take this lock away here — silently, and in every repo at once.
+  test.each(["src/thing.ts", "src/routes/index.ts", "src/hooks/use-id.ts"])(
+    "holds in %s, because no block in the base redefines a list-shaped rule",
+    async (path) => {
+      expect(await refusedAt(path)).toEqual(["REPO LOCK"]);
+    },
+  );
+});
+
+/**
  * What the base says about a widened binding asserted back to what it was.
  *
  * This repo shipped a rule for exactly that and deleted it, because oxlint's
- * own `typescript/no-unsafe-type-assertion` — which the base denies through
- * `suspicious` — refuses every one of the shapes below at the same line and
- * column. That is the whole reason the rule is gone, so it is graded here
- * rather than asserted in a commit message: widening a value and asserting it
- * back is an assertion to a narrower type by construction, which is precisely
- * what the native rule reads.
+ * own `typescript/no-unsafe-type-assertion` refuses every one of the shapes
+ * below at the same line and column. That is the whole reason the rule is gone,
+ * so it is graded here rather than asserted in a commit message: widening a
+ * value and asserting it back is an assertion to a narrower type by
+ * construction, which is precisely what the native rule reads.
+ *
+ * Graded in a suite, which is where that rule now stands: in source it is off,
+ * under the stronger `consistent-type-assertions`, which refuses these shapes
+ * for being assertions at all rather than for what they assert — the case after
+ * the block is that half.
  *
  * Type-aware, because none of the base's own rules answer otherwise: the
  * analysis runs in `oxlint-tsgolint`, so the tree gets this repo's install to
@@ -171,7 +220,8 @@ export function round(value: User): User {
 }`,
   };
 
-  test.each(Object.entries(WIDENED))("%s", async (_name, source) => {
+  /** The codes the base draws over one shape, in a file at that path. */
+  async function drawnOver(source: string, path: string): Promise<string[]> {
     const root = await materialise({
       ".oxlintrc.json": JSON.stringify({
         extends: [BASE],
@@ -188,12 +238,25 @@ export function round(value: User): User {
         },
         include: ["*.ts"],
       }),
-      "case.ts": `${source}\n`,
+      [path]: `${source}\n`,
     });
     await symlink(join(REPO, "node_modules"), join(root, "node_modules"));
+    return (await lintAt(root)).map(({ code }) => code);
+  }
 
-    const reported = await lintAt(root);
-    expect(reported.map(({ code }) => code)).toContain("typescript(no-unsafe-type-assertion)");
+  test.each(Object.entries(WIDENED))("%s", async (_name, source) => {
+    expect(await drawnOver(source, "case.test.ts")).toContain(
+      "typescript(no-unsafe-type-assertion)",
+    );
+  });
+
+  // And in source, where the rule above is off and the stronger one has already
+  // refused the assertion — the half that makes turning it off there free.
+  test("and in source, where the stronger rule answers first", async () => {
+    const [first] = Object.values(WIDENED);
+    expect(await drawnOver(first ?? "", "case.ts")).toContain(
+      "typescript(consistent-type-assertions)",
+    );
   });
 });
 
@@ -207,16 +270,6 @@ export function round(value: User): User {
 const shipped = await Bun.file(join(REPO, "oxlint.base.json")).text();
 
 describe("the base against the rule it makes every repo keep", () => {
-  /** The base with the reason directly above one of its switch-offs taken out. */
-  function withoutReasonFor(rule: string): string {
-    const lines = shipped.split("\n");
-    const at = lines.findIndex((line) => line.trim().startsWith(`"${rule}"`));
-    let first = at;
-    while (first > 0 && (lines[first - 1] ?? "").trim().startsWith("//")) first -= 1;
-    lines.splice(first, at - first);
-    return lines.join("\n");
-  }
-
   test("carries a reason for every switch-off in it", async () => {
     const problems = await contract({ ...CLEAN, ".oxlintrc.json": shipped });
     expect(problems.filter((message) => message.includes("turned off"))).toEqual([]);
@@ -224,11 +277,13 @@ describe("the base against the rule it makes every repo keep", () => {
 
   // The half that makes the half above mean something. Asserting only that a
   // file draws no findings is a test a walker returning nothing at all passes,
-  // and this base holds four switch-offs for it to find.
+  // and the base holds switch-offs for it to find. How many is not written here:
+  // a count in a comment is a number to forget, and the case below names the one
+  // it is about instead.
   test("and is graded by the walker that would find one missing", async () => {
     const problems = await contract({
       ...CLEAN,
-      ".oxlintrc.json": withoutReasonFor("oxc/no-map-spread"),
+      ".oxlintrc.json": withoutReasonFor(shipped, "oxc/no-map-spread"),
     });
     expect(problems.filter((message) => message.includes("turned off"))).toEqual([
       "oxc/no-map-spread is turned off with no reason — add the reason above the entry",

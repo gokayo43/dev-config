@@ -1,3 +1,4 @@
+// oxlint-disable-next-line eslint/no-restricted-imports -- scratch databases and evidence directories dropped after each case, not setup it hides — the await using migration is dev-config#85
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

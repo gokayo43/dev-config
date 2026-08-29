@@ -1,3 +1,4 @@
+// oxlint-disable-next-line eslint/no-restricted-imports -- the environment and exit code these cases mutate, restored around each of them — the explicit using helper that replaces it is dev-config#85
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

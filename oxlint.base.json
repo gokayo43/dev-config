@@ -36,6 +36,22 @@
     ],
     "typescript/no-explicit-any": "error",
     "typescript/no-non-null-assertion": "error",
+    // `never` is the only setting that refuses assertions rather than choosing a
+    // syntax for them. An assertion tells the compiler to stop checking at the
+    // one place the answer was still available: an annotation makes the same
+    // claim and is checked, and `satisfies` makes it without widening. `as
+    // const` is not an assertion in this sense and stays legal — it narrows a
+    // literal rather than overriding an inference — which is why the option is
+    // `assertionStyle` alone and not the literal-shaped ones beside it.
+    "typescript/consistent-type-assertions": ["error", { "assertionStyle": "never" }],
+    // The rule above refuses every assertion; this one refuses the subset of
+    // them that widens or narrows unsafely, and arrives through `suspicious`.
+    // Two rules over one line means every escape hatch in a source file names
+    // both, and a reader of one disable cannot tell which fact it is about. So
+    // the weaker of the two is stated only where the stronger is off — the
+    // suite override below, where a case asserts about a value nothing typed
+    // and this rule is the whole of what still holds there.
+    "typescript/no-unsafe-type-assertion": "off",
     "typescript/no-restricted-types": [
       "error",
       {
@@ -55,6 +71,43 @@
       { "name": "__filename", "message": "Not defined in ESM — use import.meta.url/path." },
       { "name": "require", "message": "ESM project — use import (import() for dynamic)." }
     ],
+    // The imports a house pick has already answered, in the two cases that hold
+    // in every file. Each entry names what the import lost to, because the
+    // diagnostic is the only place the loser of that decision is standing.
+    //
+    // Only a ban with no exception can live here: an override
+    // REPLACES the whole list for the files it matches — a consuming repo's own
+    // entries included — so a ban a file's position decides is a plugin rule
+    // instead, whose scalar setting replaces only itself. `no-unnamed-effects`
+    // and `no-raw-query-hooks` below are the two that needed it.
+    //
+    // Memoisation is the React Compiler's, which every repo here builds with
+    // (STACK): it inserts the memo a hand-written one approximates, and reads
+    // the dependencies off the code rather than off a list that can disagree
+    // with it. Each name gets its own entry so each carries its own message.
+    //
+    // `bun:test`'s per-case hooks are the setup nothing in the case names (the
+    // testing rules' per-case-setup line): a reader has to hold a hook written
+    // elsewhere in the file to know what the case starts from, and the mutation
+    // lane cannot tell which case a shared fixture belongs to. `beforeAll` and
+    // `afterAll` stay: an expensive resource no case mutates is what they are
+    // for.
+    //
+    // Both entries refuse a type-only import of the name as well, which this
+    // rule gives no way to allow. Neither name has a use as a type.
+    "no-restricted-imports": [
+      "error",
+      {
+        "name": "react",
+        "importNames": ["useMemo", "useCallback"],
+        "message": "React Compiler owns memoisation — delete the wrapper and use the value directly."
+      },
+      {
+        "name": "bun:test",
+        "importNames": ["beforeEach", "afterEach"],
+        "message": "Set a case up with a call it makes itself, and tear it down with `await using` — beforeAll/afterAll stay for shared immutable resources."
+      }
+    ],
     "unicorn/prefer-node-protocol": "error",
     "typescript/ban-ts-comment": [
       "error",
@@ -62,8 +115,15 @@
     ],
     "unicorn/no-abusive-eslint-disable": "error",
     "max-lines": ["error", { "max": 1000 }],
-    "max-depth": ["warn", { "max": 4 }],
-    "complexity": ["warn", { "max": 20 }],
+    "max-depth": ["error", { "max": 4 }],
+    // `modified` counts a whole `switch` as one decision rather than one per
+    // `case`, which is the difference between measuring the branching a reader
+    // has to hold and measuring the size of a union. An exhaustive switch over a
+    // discriminated union is the house shape for a total mapping —
+    // `switch-exhaustiveness-check` below is what makes it total — and under the
+    // classic count a union of two dozen members is over this limit by being
+    // answered at all.
+    "complexity": ["error", { "max": 20, "variant": "modified" }],
     "import/no-cycle": "error",
     // The automatic JSX runtime compiles JSX with no React binding in scope, so
     // there is nothing here for the rule to ask to be imported. A repo on the
@@ -99,6 +159,11 @@
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
+    // Everywhere, and off in the one directory that answers the question it
+    // asks — see the `**/hooks/**` block below. `no-raw-query-hooks` is the
+    // same pick the other way round: it says nothing until a file is a route's,
+    // so it is stated in that block alone.
+    "anti-slop/no-unnamed-effects": "error",
     "anti-slop/no-unsafe-dictionary-type": "error"
   },
   "overrides": [
@@ -156,7 +221,48 @@
         // fixture that spawns, the migrator it runs, the harness that lints —
         // are that same code one file over, and are the half a suffix list
         // silently leaves failing.
-        "anti-slop/no-env-access": "off"
+        "anti-slop/no-env-access": "off",
+
+        // A case asserts about values the compiler has no way to know the shape
+        // of — a decoded report, a captured payload, a row read back out of a
+        // database — and the assertion is the claim the case is there to make.
+        // The same directories as above, for the same reason: the fixture that
+        // decodes is the suite's code one file over.
+        "typescript/consistent-type-assertions": "off",
+
+        // And the subset of it left standing where that is off: an assertion a
+        // case makes about a value it decoded is the claim, but one that widens
+        // or narrows unsafely is still a hole, and this is the only scope where
+        // saying so does not repeat the rule above.
+        "typescript/no-unsafe-type-assertion": "error"
+      }
+    },
+    // The two picks a file's position decides. Both are plugin rules rather
+    // than `no-restricted-imports` entries, because a scalar setting in an
+    // override replaces only itself: a list-shaped rule redefined here would
+    // take away every entry it did not restate, a consuming repo's own settled
+    // decisions included.
+    {
+      "files": ["**/routes/**"],
+      "rules": {
+        // A route's data is the loader's — `ensureQueryData` there,
+        // `useSuspenseQuery` in the component (STACK's Route data line) — so
+        // this rule says nothing at all until a file is a route's, and this
+        // block is where it starts.
+        "anti-slop/no-raw-query-hooks": "error"
+      }
+    },
+    {
+      "files": ["**/hooks/**"],
+      "rules": {
+        // The directory that answers the question the rule asks. A hook is the
+        // module an effect is allowed to live in, because the hook's name is
+        // what states the subscription — and this block is last so that a hook
+        // colocated under `routes/` is graded as a hook, which is also why the
+        // rule below is off again here: data fetched on interaction is what raw
+        // `useQuery` is for, and a hook is where that fetch belongs.
+        "anti-slop/no-unnamed-effects": "off",
+        "anti-slop/no-raw-query-hooks": "off"
       }
     }
   ]

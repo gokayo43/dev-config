@@ -152,15 +152,19 @@ adding to them, which is why the base names every plugin it wants including the
 defaults `oxc`, `unicorn` and `typescript`. Across `extends` the arrays are
 unioned, so a repo that adds `plugins` of its own keeps the base's.
 
-Four rules the base switches off: `no-await-in-loop` (a sequential loop is
+The rules the base switches off: `no-await-in-loop` (a sequential loop is
 usually the correct one here, and the fan-out it asks for is a design call about
 shared state the rule cannot see), `react/react-in-jsx-scope` (the automatic JSX
 runtime imports nothing), `oxc/no-map-spread` (its advice is to mutate in place,
 wrong for the copy-on-write style these codebases are written in), and
-`unicorn/consistent-function-scoping`, in the test-file override alone (a helper
-one describe uses belongs inside it). The reason in full sits beside each entry,
-which is where the repo contract requires it — see
-[the repo contract](docs/gates/repo-contract.md).
+`typescript/no-unsafe-type-assertion` (a subset of the rule below it, which is
+why it is stated only where that one is off). Then, in an override:
+`unicorn/consistent-function-scoping` and
+`typescript/consistent-type-assertions` in a suite, and
+`anti-slop/no-unnamed-effects` under `hooks/`. The reason in full sits beside
+each entry, which is where the repo contract requires it — see
+[the repo contract](docs/gates/repo-contract.md). No count is given here on
+purpose: a number in prose is one nobody updates, and the list is the answer.
 
 ### The escape hatches, and their price
 
@@ -199,13 +203,70 @@ unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
   does. Inline `{ [k: string]: unknown }` is not matched — the rule reads type
   references, not shapes — but `anti-slop/no-unsafe-dictionary-type` below is,
   and catches it along with aliases and mapped types.
+- `typescript/consistent-type-assertions`, at `assertionStyle: "never"` — an
+  assertion tells the compiler to stop checking at the one place the answer was
+  still available. An annotation makes the same claim and is checked, and
+  `satisfies` makes it without widening. `as const` is not an assertion in this
+  sense and stays legal, whatever the literal-shaped options beside it say: it
+  narrows a literal rather than overriding an inference. A suite is where the
+  rule is off — see the overrides below, and with it goes the only reason
+  `typescript/no-unsafe-type-assertion` is stated at all: that rule refuses the
+  subset of assertions that widen or narrow unsafely, so wherever the stronger
+  one is on it is a second name on every disable and a reader of one cannot tell
+  which fact it is about. It is therefore off at the top level and `error` in the
+  suite override, where it is the whole of what still holds.
 - `no-restricted-globals` — `__dirname`, `__filename` and `require`. Every repo
   here is ESM, where none of the three exists; the entries name the replacement
   (`import.meta.dir`, `import.meta.url`, `import`) so the diagnostic is the fix.
 
+### The imports a pick has already answered
+
+Four of the stack's picks are decisions about which import to reach for, and
+this is where they stop being a thing to remember. Each diagnostic names **what
+the import lost to**, because it is the only place the loser of that decision is
+standing:
+
+| Import                                                 | From                    | Where                 | Instead                                                 | Carrier                        |
+| ------------------------------------------------------ | ----------------------- | --------------------- | ------------------------------------------------------- | ------------------------------ |
+| `useMemo`, `useCallback`                               | `react`                 | everywhere            | the React Compiler inserts the memo; delete the wrapper | `no-restricted-imports`        |
+| `beforeEach`, `afterEach`                              | `bun:test`              | everywhere            | a call the case makes itself, and `await using`         | `no-restricted-imports`        |
+| `useEffect`, `useLayoutEffect`, `useSyncExternalStore` | `react`                 | outside `**/hooks/**` | a named hook whose name says what it subscribes to      | `anti-slop/no-unnamed-effects` |
+| `useQuery`, `useInfiniteQuery`                         | `@tanstack/react-query` | under `**/routes/**`  | the loader's `ensureQueryData` and `useSuspenseQuery`   | `anti-slop/no-raw-query-hooks` |
+
+The suspense pair, `beforeAll`/`afterAll`, and every other React hook are
+untouched: what is banned is the name, not the module.
+
+**Why two carriers.** A ban that holds in every file is an entry in
+`no-restricted-imports`, which is what that rule is for. A ban a file's position
+decides cannot be: an override REPLACES a list-shaped rule rather than adding to
+it, so scoping one that way would take away every entry it did not restate — a
+consuming repo's [own lock](#locking-a-settled-decision) among them, wherever the
+block reached. A plugin rule's scalar `"off"` replaces only itself, so the two
+positional bans are rules of the plugin and no block in the base redefines a
+list-shaped rule at all. `tests/oxlint-base.test.ts` holds it to both halves.
+
+The two carriers differ in what they can see, and both differences are graded in
+`tests/lint-policy.test.ts`:
+
+- The plugin rules follow the name past every spelling that reaches it without
+  importing it — renamed, off a namespace, destructured off one, through
+  `await import`, and re-exported from a barrel (`export { useEffect } from
+"react"` is refused at the barrel, which is the end that can still tell). They
+  also leave a **type-only** import alone: `import type { useEffect }` borrows
+  the signature without reaching the value.
+- `no-restricted-imports` refuses a namespace import and a renamed one, and
+  refuses a type-only import as well, which it gives no way to allow. Neither
+  `useMemo` nor `beforeEach` has a use as a type, so that costs nothing here —
+  and the day a name on that list does, it is the carrier that has to change.
+
+The grant is the directory, which is the limit both scoped rules carry: inside
+`hooks/` every spelling of the effect trio is allowed, a barrel re-exporting it
+included, exactly as `env.ts` may re-export what `no-env-access` refuses
+everywhere else.
+
 ### Overrides
 
-Four facts are true of a file because of where it sits, not what it contains:
+Some facts are true of a file because of where it sits, not what it contains:
 
 ```json
 {
@@ -224,7 +285,19 @@ Four facts are true of a file because of where it sits, not what it contains:
     { "files": ["**/env.ts"], "rules": { "anti-slop/no-env-access": "off" } },
     {
       "files": ["**/*.test.ts", "**/*.spec.ts", "**/tests/**", "**/e2e/**"],
-      "rules": { "anti-slop/no-env-access": "off" }
+      "rules": {
+        "anti-slop/no-env-access": "off",
+        "typescript/consistent-type-assertions": "off",
+        "typescript/no-unsafe-type-assertion": "error"
+      }
+    },
+    { "files": ["**/routes/**"], "rules": { "anti-slop/no-raw-query-hooks": "error" } },
+    {
+      "files": ["**/hooks/**"],
+      "rules": {
+        "anti-slop/no-unnamed-effects": "off",
+        "anti-slop/no-raw-query-hooks": "off"
+      }
     }
   ]
 }
@@ -237,18 +310,36 @@ hoisted to module scope. Server code writes through the structured logger, so
 under those paths carries a file-level disable with its reason, which is the shape
 the directive rule below already requires. And `env.ts` is [the one module that
 reads the environment](#the-environment-is-read-in-one-module), while a suite is
-where a variable is set for a spawned process rather than read for its value —
-which is why the last block names **directories** as well as suffixes: a suite's
-helpers are that same code one file over, under no suffix at all.
+where a variable is set for a spawned process rather than read for its value, and
+where a case asserts about a value nothing typed — which is why that block names
+**directories** as well as suffixes: a suite's helpers are that same code one
+file over, under no suffix at all.
+
+The last two blocks are the [import bans](#the-imports-a-pick-has-already-answered)
+that depend on where a file sits, each a scalar on a rule of its own. `hooks/`
+comes last of the two, so that a hook colocated under `routes/` is graded as a
+hook — an effect belongs there, and so does the fetch-on-interaction the raw
+query pair is for — and a `routes/` directory nested under `hooks/` reads the
+same way, for the same reason.
 
 **An override replaces a rule's whole configuration; it does not add to it**
 (oxc#12179). An override that says nothing about a rule inherits it whole, so the
 cost lands only where one is redefined: an override restating a list-shaped rule
 to change a single thing about it silently exempts every file it matches from
-every entry it did not restate, in every repo extending the base. Nothing here
-redefines one today, and `tests/oxlint-base.test.ts` is what keeps that honest —
-it proves the semantics against a config it builds itself, and holds any override
-that does redefine one to carrying every entry the top level states.
+every entry it did not restate, in every repo extending the base. That is why the
+two blocks above spell out every entry they owe their files rather than the one
+they were written for, and `tests/oxlint-base.test.ts` is what keeps them honest
+— it proves the semantics against a config it builds itself, then holds every
+override that redefines a list-shaped rule to carrying every entry the top level
+states.
+
+The list an override replaces includes **the consuming repo's own entries**,
+which is why no block in the base redefines one at all: any that did would take
+every repo's [settled-decision lock](#locking-a-settled-decision) away wherever
+it reached, from a file nobody in that repo is reading. A ban a file's position
+decides is carried as a rule of its own instead, and `oxlint-base.test.ts` grades
+both halves — that no override in the base states a list-shaped rule, and that a
+repo's own lock survives inside the directories the base scopes a ban to.
 
 `overrides` survive `extends`, so a consuming repo inherits both without naming
 them.
@@ -267,16 +358,34 @@ immediately while the old ones drain, and the whitelist going empty is what
 deletes the block — a ratchet, tracked by an issue, not a permanent carve-out.
 The reference example for the choke messages is nfp-elysia's `.oxlintrc.json`.
 
-These rules are **per-repo and never go in the base**: a decision that is settled
-for one repo's stack is not settled for another's, and a base that carried them
-would be answering a question nobody in the consuming repo asked.
+A lock like that is **per-repo**: a decision settled for one repo's stack is not
+settled for another's, and a base that carried it would be answering a question
+nobody in the consuming repo asked.
+
+One thing to know before writing one: a rule's configuration is **replaced across
+`extends`**, not merged, so a repo stating `no-restricted-imports` or
+`no-restricted-globals` of its own drops every entry the base states for it — the
+memoisation and `bun:test` bans, and the three ESM globals, become unenforced in
+that repo, silently. (The two positional bans are unaffected: they are rules of
+their own, and a repo redefining a list-shaped rule cannot reach them.) Restate
+the entries beside your own until
+[dev-config#86](https://github.com/gokayo43/dev-config/issues/86) makes that a
+gate rather than a thing to remember. What the base does carry is the other kind —
+[a pick STACK.md makes for the whole fleet](#the-imports-a-pick-has-already-answered),
+where the question is the same in every repo and the answer is the same too. The
+test is which document the message would cite, not which rule it is written as.
 
 ### Architecture rules
 
 `max-lines` denies at 1000: a file crossing 1000 lines is a presumptive blocker,
 and the linter is where that gets said out loud. `max-depth` (4) and `complexity`
-(20) warn at oxlint's own defaults, pinned so an upstream default change cannot
-move the gate. `import/no-cycle` denies.
+(20) deny at oxlint's own thresholds, pinned so an upstream default change cannot
+move the gate. Complexity is counted in the **`modified`** variant, which charges
+a whole `switch` one decision rather than one per `case`: an exhaustive switch
+over a discriminated union is the house shape for a total mapping — it is what
+`typescript/switch-exhaustiveness-check` asks for — and under the classic count a
+union of two dozen members is over the limit by being answered at all.
+`import/no-cycle` denies.
 
 ### Type-aware rules
 
@@ -340,8 +449,22 @@ base:
 | `no-reflect-get`             | `Reflect.get`, which answers `any` for a property read                 |
 
 Where a ported rule overlapped oxlint's own `typescript/no-unsafe-type-assertion`
-— which the base denies through `suspicious` — both were run over the same
-fixtures and only the stronger one kept.
+both were run over the same fixtures and only the stronger one kept.
+
+Two more rules are this repo's own, and answer a different question again — not
+what a type says, but which import a settled pick already answered:
+
+| Rule                 | What it rejects                                                            |
+| -------------------- | -------------------------------------------------------------------------- |
+| `no-unnamed-effects` | React's effect trio outside `hooks/`, where the hook's name states the job |
+| `no-raw-query-hooks` | `useQuery`/`useInfiniteQuery` in a route, whose data the loader owns       |
+
+They are rules rather than `no-restricted-imports` entries because their answer
+depends on where the file sits — see [the two
+carriers](#the-imports-a-pick-has-already-answered) for why that decides it — and
+each follows its names through every spelling that reaches the value without
+importing it, a re-exporting barrel included, while leaving a type-only import
+alone.
 
 `no-chained-type-assertions` is the one that overlaps and stays. The native
 rule covers every chain that fabricates a type, because such a chain has a
@@ -570,6 +693,15 @@ takes the reason out from above each of the base's two switch-offs for it — fo
 by the `files` glob of the block that owns it, not by position — and requires the
 contract's off-reason walker to find both: a plugin rule inside an `overrides`
 block, which is what the fleet's own escape from this rule will be.
+
+`tests/lint-policy.test.ts` is the same shape over the picks a file's position
+decides, whichever of the two carriers states one: one tree under the shipped
+base, a file per case, and an assertion about which of them drew what. It grades
+the scoped bans on both sides of every glob — a hook at any depth, a name that
+merely reads like one, a route under a hook and a hook under a route — every
+spelling that reaches a banned name without importing it, and the **message**,
+since a ban whose diagnostic does not name the pick the import lost to is a rule
+the next person argues with rather than follows.
 
 The harness in `tests/lint-fixture.ts` carries cases of its own, because a
 plugin that throws and a config oxlint refuses both produce a run with no

@@ -119,7 +119,7 @@ function stringAt(text: string, at: number): { readonly value: string; readonly 
       // Decoded rather than sliced, so the file has one spelling of each name
       // and each setting: `"off"` is a string oxlint reads as `off`,
       // and a gate comparing raw bytes reads it as something else entirely.
-      const decoded = JSON.parse(text.slice(at, end)) as unknown;
+      const decoded: unknown = JSON.parse(text.slice(at, end));
       return { value: typeof decoded === "string" ? decoded : "", end };
     }
     index += 1;

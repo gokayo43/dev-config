@@ -34,7 +34,7 @@ import { type ConfigObject, isList, isObject, kindOf, notice } from "../_lib/gat
  * typed at all, so they stay and say so rather than being asserted away.
  */
 export async function rows(db: SQL, query: string): Promise<readonly ConfigObject[]> {
-  const answered = (await db.unsafe(query)) as unknown;
+  const answered: unknown = await db.unsafe(query);
   if (!isList(answered)) {
     throw new Error(`the query answered ${kindOf(answered)} rather than rows — ${query}`);
   }

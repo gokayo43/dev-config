@@ -197,7 +197,7 @@ export function inputs<const Names extends readonly string[]>(
     if (value === undefined) throw new Error(`${variable} is not set — the action must pass it`);
     return [name, value];
   });
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- fromEntries answers a string-keyed record; that its keys are exactly `names` is what the signature promises and what no inference can express
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- fromEntries answers a string-keyed record; that its keys are exactly `names` is what the signature promises and what no inference can express
   return Object.fromEntries(read) as Record<Names[number], string>;
 }
 
@@ -232,7 +232,7 @@ export const DEPENDENCY_FIELDS = [
 export type ConfigObject = Record<string, unknown>;
 
 export function record(value: unknown): ConfigObject {
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the check on the left is the evidence: an object that is not null is exactly what the alias claims, and nothing narrower is claimed about its keys
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- the check on the left is the evidence: an object that is not null is exactly what the alias claims, and nothing narrower is claimed about its keys
   return typeof value === "object" && value !== null ? (value as ConfigObject) : {};
 }
 
@@ -592,6 +592,12 @@ export interface Batch<T> {
 type Decode = (text: string) => unknown;
 
 /**
+ * The one place `any` becomes `unknown`: `JSON.parse` is declared `any`, and the
+ * annotation on this binding is what takes that back for both JSON dialects.
+ */
+const json: Decode = (text) => JSON.parse(text);
+
+/**
  * The dialect a batch of files is written in, which is the whole of what varies
  * between the gates that read them. `package.json` is strict JSON — a comment
  * in one is a file npm and bun both refuse — while an oxlint or TypeScript
@@ -599,8 +605,8 @@ type Decode = (text: string) => unknown;
  * TOML, and a workflow is YAML. The name is also the word the diagnostic uses.
  */
 const DIALECTS = {
-  JSON: (text: string) => JSON.parse(text) as unknown,
-  "JSON with comments": (text: string) => JSON.parse(withoutComments(text)) as unknown,
+  JSON: json,
+  "JSON with comments": (text: string) => json(withoutComments(text)),
   TOML: (text: string) => Bun.TOML.parse(text),
   YAML: (text: string) => Bun.YAML.parse(text),
 } satisfies Record<string, Decode>;

@@ -156,7 +156,7 @@ function reNormalized<Body>(
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
   if (!("status" in parsed) || typeof parsed.status !== "number") return undefined;
   const status: number = parsed.status;
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- the one place a golden crosses back in. The file is what this module wrote out of a `Body`, and only the repo's own normaliser knows that shape, so nothing here could check it; the status beside it is checked, because a file whose status is not a number is not a capture at all. Keeping the assertion here is what keeps every consuming repo's normaliser free of one.
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- the one place a golden crosses back in. The file is what this module wrote out of a `Body`, and only the repo's own normaliser knows that shape, so nothing here could check it; the status beside it is checked, because a file whose status is not a number is not a capture at all. Keeping the assertion here is what keeps every consuming repo's normaliser free of one.
   const body = ("body" in parsed ? parsed.body : undefined) as Body;
   return serialize(normalize({ status, body }));
 }
