@@ -4,6 +4,12 @@
   "categories": {
     "correctness": "error",
     "suspicious": "error",
+    // The one tier that stays advisory, against the rule that a warn is a count
+    // nobody drives to zero. A perf hint is a claim about shared state and
+    // input size the rule cannot see — `no-await-in-loop` below is off outright
+    // for exactly that, and it is the tier's general case rather than its
+    // exception. At `error` the rest would be answered by disables carrying a
+    // measurement nobody took, which is worse than a hint nobody read.
     "perf": "warn"
   },
   "options": {
@@ -28,7 +34,7 @@
     // `perf` stays on: `unicorn/prefer-array-find` is about the code, not about
     // the concurrency model.
     "no-await-in-loop": "off",
-    "no-console": "warn",
+    "no-console": "error",
     "no-empty": "error",
     "eslint/no-warning-comments": [
       "error",
@@ -131,7 +137,21 @@
     // it back on for itself.
     "react/react-in-jsx-scope": "off",
     "react/rules-of-hooks": "error",
-    "react/exhaustive-deps": "warn",
+    "react/exhaustive-deps": "error",
+    // One rule carrying what `eslint-plugin-react-hooks` splits across a dozen
+    // names: oxlint ports the React Compiler itself, so `react/purity` and its
+    // siblings are not writable here and each judgement arrives as the prefix
+    // on this rule's message. `reportAllBailouts` adds the components the
+    // compiler declined to compile at all, which are silent without it.
+    // Which judgements, what each one means, and how to answer the two the
+    // fleet actually hits: README, "What the React Compiler declines to
+    // optimize".
+    "react/react-compiler": ["error", { "reportAllBailouts": true }],
+    // `pedantic`, which this base does not take. `null` is the exception the
+    // option carves out: `x == null` is the one loose comparison that states an
+    // intent the strict operator cannot — either of the two nullish values at
+    // once — and `x === null || x === undefined` is longer and says less.
+    "eqeqeq": ["error", "always", { "null": "ignore" }],
     // Its fix is to mutate the accumulator in place rather than spread into it.
     // That is right for a measured hot loop and wrong as a default for the
     // copy-on-write style these codebases are written in, where a fresh object
@@ -149,7 +169,7 @@
     "typescript/no-unsafe-enum-comparison": "error",
     "typescript/no-unsafe-member-access": "error",
     "typescript/no-unsafe-return": "error",
-    "typescript/prefer-nullish-coalescing": "warn",
+    "typescript/prefer-nullish-coalescing": "error",
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-env-access": "error",
     "anti-slop/no-known-value-widening": "error",

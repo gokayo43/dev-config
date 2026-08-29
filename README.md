@@ -128,10 +128,11 @@ Configs merge first-to-last, so anything the local file declares wins over the
 base.
 
 The base sets `correctness: error`, `suspicious: error`, `perf: warn`,
-`no-console: warn`, and the hooks rules — which oxlint configures under the
-`react` plugin as `react/rules-of-hooks` and `react/exhaustive-deps`. Their
-diagnostics are labelled `react-hooks`, but there is no `react-hooks` plugin to
-name in a config, and a config naming one silently lints nothing.
+`no-console: error`, and the hooks rules — which oxlint configures under the
+`react` plugin as `react/rules-of-hooks` and `react/exhaustive-deps`, both at
+`error`. Their diagnostics are labelled `react-hooks`, but there is no
+`react-hooks` plugin to name in a config, and a config naming one silently lints
+nothing.
 
 `suspicious` denies rather than warns because every repo here is template-born
 and greenfield: there is no inherited violation count for a warn tier to report
@@ -146,6 +147,17 @@ deny tier is the gate and the warn tier is a report: a rule that has to hold goe
 to `error`, and a rule at `warn` is a hint whose count nobody is required to
 drive to zero. Moving something from `warn` to `error` is the whole of the
 decision — there is no middle setting that stops a merge.
+
+Which is why almost nothing is left at `warn`. `no-console` and
+`typescript/prefer-nullish-coalescing` were both advisory and are now denied: a
+stray `console.log` and a `||` that should have been `??` are each a decision, not
+a taste. The `perf` **category** is the one deliberate exception, and it stays
+advisory for a reason that does not generalise — a perf rule's advice is a claim
+about shared state and input size the rule cannot see, so at `error` it would be
+answered by disables carrying a measurement nobody took. `no-await-in-loop` is
+that tier's general case, off outright a few lines below rather than warned. The
+exception is graded by severity in `tests/lint-policy.test.ts`, so promoting the
+tier is a decision someone has to take deliberately rather than tidily.
 
 A config's own `plugins` array replaces oxlint's built-in defaults rather than
 adding to them, which is why the base names every plugin it wants including the
@@ -218,6 +230,97 @@ unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
 - `no-restricted-globals` — `__dirname`, `__filename` and `require`. Every repo
   here is ESM, where none of the three exists; the entries name the replacement
   (`import.meta.dir`, `import.meta.url`, `import`) so the diagnostic is the fix.
+- `eqeqeq`, at `always` with `{ "null": "ignore" }` — `==` coerces instead of
+  deciding, and the coercion table is the thing nobody has in their head. It sits
+  in `pedantic`, which this base does not take, so it is stated. `null` is the
+  one exception, and it is not a softening: `x == null` asks about both nullish
+  values at once, which is a question `===` cannot put in one comparison and
+  `x === null || x === undefined` answers at twice the length.
+- `preserve-caught-error` — a `catch` that throws something new without passing
+  the original as `cause` deletes the only record of what actually failed. It
+  arrives through `suspicious`, and the base does not restate it: a rule the tier
+  already denies is one the base agrees with, and restating those is a list with
+  no end. `tests/lint-policy.test.ts` grades that the ban is live, through the
+  tier that carries it.
+
+### What the React Compiler declines to optimize
+
+Every repo here builds with the React Compiler, which is why the memo pair below
+is banned outright. The compiler earns that ban by optimizing what it can prove
+pure — and it skips what it cannot, silently, per component. So the mandate was
+the one stack pick nothing in the gate could see: a component that rolled a die
+during render passed clean.
+
+`react/react-compiler` is the rule that ends that, at `error`. It is one rule
+covering what `eslint-plugin-react-hooks` splits across a dozen names, because
+oxlint ports the **compiler** rather than the rules — there is no `react/purity`
+to write, and a config that writes one is refused at parse time rather than
+ignored. Which judgement was made is the prefix on the message:
+
+| Judgement            | Prefix                 | The code it refuses                                            |
+| -------------------- | ---------------------- | -------------------------------------------------------------- |
+| purity               | `Purity:`              | `Math.random()`, `Date.now()` and friends called during render |
+| immutability         | `Immutability:`        | writing through props, or through a value a hook returned      |
+| set-state-in-render  | `RenderSetState:`      | a setter called in the render body                             |
+| set-state-in-effect  | `EffectSetState:`      | a setter called synchronously in an effect body                |
+| refs                 | `Refs:`                | reading or writing `.current` during render                    |
+| globals              | `Globals:`             | reassigning a binding declared outside the component or hook   |
+| static-components    | `StaticComponents:`    | a component declared inside another one's render               |
+| error-boundaries     | `ErrorBoundaries:`     | JSX constructed inside a `try`, where its errors never land    |
+| use-memo             | `UseMemo:`             | a dependency list that is not an array of simple expressions   |
+| void-use-memo        | `VoidUseMemo:`         | a `useMemo` callback that returns nothing                      |
+| preserve-manual-memo | `PreserveManualMemo:`  | a hand-written memo whose deps the compiler infers differently |
+| hooks                | `Hooks:`               | a hook called conditionally, so the call order can change      |
+| capitalized-calls    | `CapitalizedCalls:`    | a capitalized function called directly instead of rendered     |
+| incompatible-library | `IncompatibleLibrary:` | an API returning functions that cannot be memoized safely      |
+| (no rule upstream)   | `Invariant:`           | an upstream assertion — see below; not a judgement about you   |
+| unsupported-syntax   | `Todo:`                | syntax the compiler stopped at — see the bail-outs below       |
+
+Two of those need a word beyond the row.
+
+`Hooks:` reports the same conditional call, at the same line and column, as
+`react/rules-of-hooks`. Both stay anyway, which is the one place this base
+accepts two rules over one line. The settling fact is that `rules-of-hooks`
+catches a hook called from a function that is neither a component nor a hook —
+and that function is not a component, so the compiler never analyses it and says
+nothing. Dropping the older rule would trade a duplicated diagnostic for a
+missing one. `react/exhaustive-deps` is beside them for the same reason: the
+compiler's own `Effect` judgements do not report a missing dependency, and that
+rule is the only thing that does.
+
+`Invariant:` is the sharp edge, and it is not a judgement about your code at all.
+A class declared inside a component draws `Invariant:
+[InferMutationAliasingEffects] Expected value kind to be initialized` — an
+upstream assertion firing, with no
+user-facing rule behind it and no advice in the message. The fix is to hoist the
+class to module scope, which is where a class wants to be regardless. It is in
+the table's suite as a fixture so that the day upstream turns it into a real
+diagnostic, the change is visible here rather than surprising in a consuming
+repo.
+
+#### The bail-outs
+
+The last row is the one the rule is **configured** for rather than merely
+switched on. A bail-out is not a violation: it is the compiler saying it declined
+to optimize the whole component, so every memo it would have inserted is simply
+absent. With `reportAllBailouts` off that is silent — exactly the components
+nothing optimized are the ones that draw nothing — and every other row above
+holds with the option missing, which is why the base configures the rule instead
+of setting a bare `"error"`.
+
+The construct the diagnostic names is usually a shape one of the house picks
+already owns, so the fix is to restore the house shape rather than to disable the
+rule; the diagnostic names the compiler's problem and never that shape, which is
+the one thing to know before reading one. Measured against the fleet's real
+React, all 22 bail-outs are two shapes: a `try`/`finally` in a component, and an
+`await import(...)` inside one. A generator body and a logical assignment bail
+out too and occur nowhere in the fleet.
+
+Every row above is driven against a fixture in `tests/lint-policy.test.ts`,
+`IncompatibleLibrary:` excepted — none of the shapes tried here provoked it, so
+it carries the row a reader who hits it needs and no case claiming a check
+nothing drives. A judgement oxlint's port stops carrying fails there rather than
+going quiet under a rule name still switched on.
 
 ### The imports a pick has already answered
 
@@ -399,8 +502,10 @@ Denied: `typescript/no-floating-promises`, `typescript/no-misused-promises`,
 `typescript/switch-exhaustiveness-check`,
 `typescript/no-unnecessary-type-assertion`, and the unsafe-`any` family —
 `no-unsafe-argument`, `no-unsafe-assignment`, `no-unsafe-call`,
-`no-unsafe-enum-comparison`, `no-unsafe-member-access`, `no-unsafe-return`.
-Warned: `typescript/prefer-nullish-coalescing`.
+`no-unsafe-enum-comparison`, `no-unsafe-member-access`, `no-unsafe-return`, and
+`typescript/prefer-nullish-coalescing` — `||` treats `0` and `""` as absent,
+which is a bug wherever either is a legal value, and `??` is what the code
+almost always meant. Nothing here is warned.
 
 `no-unnecessary-condition` fires on any check TypeScript already proved
 redundant, which includes real validation at a trust boundary — a parsed JSON

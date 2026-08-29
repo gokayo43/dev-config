@@ -220,7 +220,12 @@ export function round(value: User): User {
 }`,
   };
 
-  /** The codes the base draws over one shape, in a file at that path. */
+  /**
+   * What the base draws over one shape, as severity and code both. The severity
+   * is half the assertion: a rule downgraded to `warn` still reports, so a
+   * projection that dropped it would read a gate and a report as the same
+   * answer.
+   */
   async function drawnOver(source: string, path: string): Promise<string[]> {
     const root = await materialise({
       ".oxlintrc.json": JSON.stringify({
@@ -241,12 +246,12 @@ export function round(value: User): User {
       [path]: `${source}\n`,
     });
     await symlink(join(REPO, "node_modules"), join(root, "node_modules"));
-    return (await lintAt(root)).map(({ code }) => code);
+    return (await lintAt(root)).map(({ severity, code }) => `${severity} ${code}`);
   }
 
   test.each(Object.entries(WIDENED))("%s", async (_name, source) => {
     expect(await drawnOver(source, "case.test.ts")).toContain(
-      "typescript(no-unsafe-type-assertion)",
+      "error typescript(no-unsafe-type-assertion)",
     );
   });
 
@@ -255,7 +260,20 @@ export function round(value: User): User {
   test("and in source, where the stronger rule answers first", async () => {
     const [first] = Object.values(WIDENED);
     expect(await drawnOver(first ?? "", "case.ts")).toContain(
-      "typescript(consistent-type-assertions)",
+      "error typescript(consistent-type-assertions)",
+    );
+  });
+
+  // Promoted from `warn` with `no-console`, and graded in this block because it
+  // is type-aware: whether `||` should have been `??` is a question about what
+  // the left side can hold, which the fixture tree in `lint-policy.test.ts`
+  // cannot ask with the checker off. The severity is the whole of the change.
+  test("and a logical or over a nullable value denies rather than advises", async () => {
+    const NULLABLE = `export function pick(v: string | undefined): string {
+  return v || "fallback";
+}`;
+    expect(await drawnOver(NULLABLE, "case.ts")).toContain(
+      "error typescript(prefer-nullish-coalescing)",
     );
   });
 });
