@@ -15,8 +15,9 @@ import { SQL } from "bun";
 import { drizzle } from "drizzle-orm/bun-sql";
 import { migrate } from "drizzle-orm/bun-sql/migrator";
 
-const url = Bun.env["DATABASE_URL"];
-if (url === undefined || url === "") throw new Error("DATABASE_URL is not set");
+import { required } from "../.github/actions/_lib/gate.ts";
+
+const url = required("DATABASE_URL", "the migrator applies its lineage to the database it names");
 
 const folders = Bun.argv.slice(2);
 if (folders.length === 0) throw new Error("usage: journalled-migrator.ts <migrations folder>...");

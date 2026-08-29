@@ -9,19 +9,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { record } from "../.github/actions/_lib/gate.ts";
+import { record, required } from "../.github/actions/_lib/gate.ts";
 
-function requireEnv(name: string): string {
-  const value = Bun.env[name];
-  if (value === undefined || value === "") {
-    throw new Error(
-      `${name} is unset — point it at the pinned k6 binary (CI fetches one before this runs)`,
-    );
-  }
-  return value;
-}
-
-const k6 = requireEnv("K6");
+const k6 = required("K6", "point it at the pinned k6 binary (CI fetches one before this runs)");
 
 const RAMP = new URL("../.github/actions/db-gate/capacity.js", import.meta.url).pathname;
 const hits = new Map<string, number>();
@@ -83,7 +73,7 @@ async function ramp(capacityPath: string | undefined, name: string): Promise<Ram
   const out = join(summaries, `${name}.json`);
   const proc = Bun.spawn([k6, "run", "--quiet", STAGE, "--summary-export", out, RAMP], {
     env: {
-      PATH: requireEnv("PATH"),
+      PATH: required("PATH", "k6 is spawned as a child of this process and inherits nothing else"),
       HEALTH_URL: `http://localhost:${server.port}/api/health`,
       ...(capacityPath === undefined ? {} : { CAPACITY_PATH: capacityPath }),
     },

@@ -8,8 +8,12 @@ import { readdir } from "node:fs/promises";
 
 import { SQL } from "bun";
 
-const url = Bun.env["DATABASE_URL"];
-if (url === undefined || url === "") throw new Error("DATABASE_URL is not set");
+import { required } from "../.github/actions/_lib/gate.ts";
+
+const url = required(
+  "DATABASE_URL",
+  "the migrator replays its lineage against the database it names",
+);
 
 const folder = Bun.argv[2];
 if (folder === undefined) throw new Error("usage: replaying-migrator.ts <migrations folder>");

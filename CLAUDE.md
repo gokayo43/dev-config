@@ -92,8 +92,8 @@ a change to a rule usually lands here too.
   `anti-slop-test-smells.test.ts` and `anti-slop-env.test.ts` hold every lint
   rule in `anti-slop/` to the same bar — a block of cases per rule, split where
   the base splits, since the rules scoped to test files have a second question to
-  answer about every case, the one scoped away from `env.ts` and test files has a
-  third, and the ones that apply everywhere have none. None of them states how
+  answer about every case, the one scoped away from `env.ts` and from a suite has
+  a third, and the ones that apply everywhere have none. None of them states how
   many there are: `anti-slop.test.ts` asks the plugin and the base for their rule
   names and requires the two sets to be equal, which is the check a count would
   replace with a number to forget. All three run through `lint-fixture.ts`,

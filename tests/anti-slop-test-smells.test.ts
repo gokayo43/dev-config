@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { BASE, type Case, cases, lines, underBase } from "./lint-fixture.ts";
+import { baseConfig, type Case, cases, lines, underBase } from "./lint-fixture.ts";
 
 /**
  * The four rules the base enables only over test files, because every one of
@@ -513,11 +513,7 @@ describe("the test-smell rules", () => {
   // name resolved to a variable the environment declared, and a rule reading
   // "did this resolve" as "does the file own it" saw somebody else's `jest`.
   test("a runner's globals declared in the config are still the runner's", async () => {
-    const declared = JSON.stringify({
-      extends: [BASE],
-      options: { typeAware: false },
-      globals: { jest: "readonly", vi: "readonly" },
-    });
+    const declared = baseConfig({ globals: { jest: "readonly", vi: "readonly" } });
     const wired = (
       await lines({
         ".oxlintrc.json": declared,
@@ -537,7 +533,7 @@ vi.mock("./service.ts", () => ({ run: () => 1 }));
   // line still failing on the other, so the shape of the escape from both is
   // part of what this pack has to show rather than leave to be found.
   describe("the escape from a line that trips two of them", () => {
-    const config = JSON.stringify({ extends: [BASE], options: { typeAware: false } });
+    const config = baseConfig();
     const both = `import { expect, mock, test } from "bun:test";
 const send = mock(() => 1);
 test("sends", () => {

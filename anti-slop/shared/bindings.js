@@ -1,6 +1,12 @@
 /** @import { ESTree, Scope, SourceCode, Variable } from "@oxlint/plugins" */
 
-import { memberName, readOutOf, unwrapAssertions } from "./syntax.js";
+import {
+  isWriteTarget,
+  memberName,
+  moduleExportName,
+  readOutOf,
+  unwrapAssertions,
+} from "./syntax.js";
 
 /**
  * The variable an identifier refers to, found by walking out of the scope the
@@ -93,8 +99,13 @@ export function isSettledBinding(variable, declarator) {
  * written name would be disabled by an `as` — a one-token edit that reads as
  * style. A namespace comes back as `*` and a default as `default`, so a caller
  * can tell the three apart without repeating this walk.
+ *
+ * `at` is the local binding the import introduced, which is where a diagnostic
+ * about the import belongs. Handed back rather than re-derived, because the
+ * caller that went looking for it again had to guard a `defs[0]` this function
+ * has already proven is there.
  * @param {Variable | null} variable
- * @returns {{ source: string, name: string } | null}
+ * @returns {{ source: string, name: string, at: ESTree.Node } | null}
  */
 export function importedBinding(variable) {
   const [definition] = variable?.defs ?? [];
@@ -104,12 +115,11 @@ export function importedBinding(variable) {
 
   const specifier = definition.node;
   const source = declaration.source.value;
-  if (specifier.type === "ImportDefaultSpecifier") return { source, name: "default" };
-  if (specifier.type === "ImportNamespaceSpecifier") return { source, name: "*" };
+  const at = definition.name;
+  if (specifier.type === "ImportDefaultSpecifier") return { source, name: "default", at };
+  if (specifier.type === "ImportNamespaceSpecifier") return { source, name: "*", at };
   if (specifier.type !== "ImportSpecifier") return null;
-  const imported = specifier.imported;
-  const name = imported.type === "Identifier" ? imported.name : imported.value;
-  return typeof name === "string" ? { source, name } : null;
+  return { source, name: moduleExportName(specifier.imported), at };
 }
 
 /**
@@ -130,44 +140,57 @@ export function settledValue(sourceCode, identifier) {
 }
 
 /**
+ * Every name for the global object. They are one object under four spellings,
+ * and a rule that knew only `globalThis` is one word away from silent:
+ * `self.setTimeout` is the same function reached the same long way round,
+ * `window` is what a repo with a DOM lib writes without thinking about it, and
+ * `global.process.env` is what a Node repo does. One list, because two rules
+ * disagreeing about how many names the global object has is a hole in whichever
+ * of them knows fewer.
+ */
+export const GLOBAL_OBJECT_NAMES = new Set(["global", "globalThis", "self", "window"]);
+
+/**
  * Whether an expression is the global of that name, however it was reached: the
- * name itself, the name read off `globalThis`, or a `const` given one of those
- * once. Recognition goes through the binding rather than the spelling for the
- * reason every rule here does — `globalThis.Reflect` and `const R = Reflect`
- * are one object, and a rule keyed to the written form is one line away from
- * off.
+ * name itself, the name read off the global object under any of its spellings,
+ * or a `const` given one of those once. Recognition goes through the binding
+ * rather than the spelling for the reason every rule here does —
+ * `globalThis.Reflect` and `const R = Reflect` are one object, and a rule keyed
+ * to the written form is one line away from off.
  * @param {SourceCode} sourceCode
  * @param {ESTree.Expression} expression
  * @param {string} name
  * @returns {boolean}
  */
 export function isGlobalNamed(sourceCode, expression, name) {
-  return isGlobalNamedThrough(sourceCode, expression, name, new Set());
+  return denotesGlobal(sourceCode, expression, new Set([name]), new Set());
 }
 
 /**
  * @param {SourceCode} sourceCode
  * @param {ESTree.Expression} expression
- * @param {string} name
+ * @param {ReadonlySet<string>} names The names that would answer; several, for the global object itself.
  * @param {Set<ESTree.Node>} seen The aliases already followed, so a name given itself ends the walk.
  * @returns {boolean}
  */
-function isGlobalNamedThrough(sourceCode, expression, name, seen) {
+function denotesGlobal(sourceCode, expression, names, seen) {
   const value = unwrapAssertions(expression);
 
   if (value.type === "MemberExpression") {
     // The only object a global is a property of is the global object, which is
-    // itself reached by any of the three ways above.
+    // itself reached by any of the ways above.
+    const read = memberName(value);
     return (
-      memberName(value) === name &&
-      isGlobalNamedThrough(sourceCode, value.object, "globalThis", seen)
+      read !== null &&
+      names.has(read) &&
+      denotesGlobal(sourceCode, value.object, GLOBAL_OBJECT_NAMES, seen)
     );
   }
   if (value.type !== "Identifier" || seen.has(value)) return false;
   seen.add(value);
-  if (value.name === name && isGlobalBinding(sourceCode, value)) return true;
+  if (names.has(value.name) && isGlobalBinding(sourceCode, value)) return true;
   const held = settledValue(sourceCode, value);
-  return held !== null && isGlobalNamedThrough(sourceCode, held, name, seen);
+  return held !== null && denotesGlobal(sourceCode, held, names, seen);
 }
 
 /**
@@ -184,10 +207,6 @@ function isGlobalNamedThrough(sourceCode, expression, name, seen) {
 export function writesThroughMember(variable) {
   return variable.references.some(({ identifier }) => {
     const member = readOutOf(identifier);
-    if (member === null) return false;
-    const parent = member.parent;
-    if (parent.type === "AssignmentExpression") return parent.left === member;
-    if (parent.type === "UpdateExpression") return true;
-    return parent.type === "UnaryExpression" && parent.operator === "delete";
+    return member !== null && isWriteTarget(member);
   });
 }

@@ -424,6 +424,18 @@ export const value = apply();`,
       reports: ["Replace `Reflect.get`"],
     },
     {
+      name: "and through the global object's other three names, which are the same object",
+      source: `${REFLECT}export const a = global.Reflect.get(owner, key);
+export const b = window.Reflect.get(owner, key);
+export const c = self.Reflect.get(owner, key);`,
+      reports: ["Replace `Reflect.get`", "Replace `Reflect.get`", "Replace `Reflect.get`"],
+    },
+    {
+      name: "a template with nothing in it spells the method as surely as a string does",
+      source: `${REFLECT}export const value = Reflect[\`get\`](owner, key);`,
+      reports: ["Replace `Reflect.get`"],
+    },
+    {
       name: "and so is one a const was given once",
       source: `${REFLECT}const R = Reflect;
 export const value = R.get(owner, key);`,

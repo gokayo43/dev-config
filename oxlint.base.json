@@ -117,13 +117,7 @@
         "anti-slop/no-call-log-assertions": "error",
         "anti-slop/no-local-module-mocks": "error",
         "anti-slop/no-mock-assertions": "error",
-        "anti-slop/no-real-timers": "error",
-        // A suite is where a variable is SET, not where one is read for its
-        // value: a case spawns the thing under test with an environment it
-        // wrote, and reads the runner's own to find the binary, the temp
-        // directory or the database it was pointed at. None of that is a
-        // repo's configuration, and there is no `env.ts` for it to come from.
-        "anti-slop/no-env-access": "off"
+        "anti-slop/no-real-timers": "error"
       }
     },
     {
@@ -140,6 +134,28 @@
         // variant of it: a second env module is a second place the answer comes
         // from, so a repo that needs one writes the switch-off itself and the
         // reason for it, rather than inheriting a glob that already forgave it.
+        "anti-slop/no-env-access": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/tests/**",
+        "**/e2e/**"
+      ],
+      "rules": {
+        // A suite is where a variable is SET, not where one is read for its
+        // value: a case spawns the thing under test with an environment it
+        // wrote, and reads the runner's own to find a binary, a temp directory
+        // or the throwaway database it was pointed at. None of that is a repo's
+        // configuration and there is no `env.ts` for it to come from. The
+        // directories go with the suffixes because a suite's helpers — the
+        // fixture that spawns, the migrator it runs, the harness that lints —
+        // are that same code one file over, and are the half a suffix list
+        // silently leaves failing.
         "anti-slop/no-env-access": "off"
       }
     }
