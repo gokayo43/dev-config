@@ -11,6 +11,15 @@
     // that can fail before it runs. The `unknown` parameter is therefore this
     // repo's decoder: the rule exists to push parsing to the boundary, and in
     // this repo the boundary is the product.
-    "anti-slop/no-unknown-parameters": "off"
+    "anti-slop/no-unknown-parameters": "off",
+    // This repo ships no app, so it has no startup for a missing variable to
+    // stop and no `env.ts` for one to come from. What it has instead is
+    // `_lib/gate.ts`, whose `inputs()` and `required()` are the choke point the
+    // rule asks for under another name: every gate reads its `INPUT_*` through
+    // them and each throws rather than defaulting. The rest of the reads here
+    // are a spawn's environment being WRITTEN — a fixture handing a child the
+    // PATH, the temp directory or the database it was pointed at — which is not
+    // configuration being read at all.
+    "anti-slop/no-env-access": "off"
   }
 }

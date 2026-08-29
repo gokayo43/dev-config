@@ -88,14 +88,15 @@ a change to a rule usually lands here too.
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
-  clean one. A gate without one is a claim; `anti-slop.test.ts` and
-  `anti-slop-test-smells.test.ts` hold every lint rule in `anti-slop/` to the
-  same bar — a block of cases per rule, split where the base splits, since the
-  rules scoped to test files have a second question to answer about every case
-  and the ones that apply everywhere do not. Neither file states how many there
-  are: `anti-slop.test.ts` asks the plugin and the base for their rule names and
-  requires the two sets to be equal, which is the check a count would replace
-  with a number to forget. Both run through `lint-fixture.ts`,
+  clean one. A gate without one is a claim; `anti-slop.test.ts`,
+  `anti-slop-test-smells.test.ts` and `anti-slop-env.test.ts` hold every lint
+  rule in `anti-slop/` to the same bar — a block of cases per rule, split where
+  the base splits, since the rules scoped to test files have a second question to
+  answer about every case, the one scoped away from `env.ts` and test files has a
+  third, and the ones that apply everywhere have none. None of them states how
+  many there are: `anti-slop.test.ts` asks the plugin and the base for their rule
+  names and requires the two sets to be equal, which is the check a count would
+  replace with a number to forget. All three run through `lint-fixture.ts`,
   which owns the case shape and lints a whole block in one oxlint spawn, and
   refuses a run whose plugin threw or whose exit status and diagnostics
   disagree, both of which otherwise read as a clean tree.

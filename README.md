@@ -205,7 +205,7 @@ unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
 
 ### Overrides
 
-Two facts are true of a file because of where it sits, not what it contains:
+Three facts are true of a file because of where it sits, not what it contains:
 
 ```json
 {
@@ -217,20 +217,24 @@ Two facts are true of a file because of where it sits, not what it contains:
         "anti-slop/no-call-log-assertions": "error",
         "anti-slop/no-local-module-mocks": "error",
         "anti-slop/no-mock-assertions": "error",
-        "anti-slop/no-real-timers": "error"
+        "anti-slop/no-real-timers": "error",
+        "anti-slop/no-env-access": "off"
       }
     },
-    { "files": ["src/server/**", "server/**", "apps/api/**"], "rules": { "no-console": "error" } }
+    { "files": ["src/server/**", "server/**", "apps/api/**"], "rules": { "no-console": "error" } },
+    { "files": ["**/env.ts"], "rules": { "anti-slop/no-env-access": "off" } }
   ]
 }
 ```
 
 A test file is where the four scoped rules of [the plugin](#the-anti-slop-plugin)
-apply, and where a helper one `describe` uses belongs inside it rather than
-hoisted to module scope. And server code writes through the structured logger, so
-`no-console` rises from `warn` to `error` on the server globs — a one-shot CLI
+apply, where a helper one `describe` uses belongs inside it rather than hoisted
+to module scope, and where the environment is written for a spawned process
+rather than read for a value. Server code writes through the structured logger,
+so `no-console` rises from `warn` to `error` on the server globs — a one-shot CLI
 under those paths carries a file-level disable with its reason, which is the shape
-the directive rule below already requires.
+the directive rule below already requires. And `env.ts` is [the one module that
+reads the environment](#the-environment-is-read-in-one-module).
 
 **An override replaces a rule's whole configuration; it does not add to it**
 (oxc#12179). An override that says nothing about a rule inherits it whole, so the
@@ -314,7 +318,7 @@ Type-aware rules catch what `any` touches; they do not see a plain `as`. So
 `admin as User as object`, an `unknown` parameter that never gets parsed, a
 function that hands `unknown` back, and a `Record<string, unknown>` value
 contract all pass a fully type-aware run — and assertion laundering is precisely
-the move an agent makes to silence the rules above. Eleven rules close that,
+the move an agent makes to silence the rules above. Nine rules close that,
 shipped in this package as an oxlint JS plugin and enabled at `error` by the
 base:
 
@@ -386,6 +390,41 @@ thing about a stand-in worth asserting on, and an object of the test's own with
 a `mock` property on it is not a stand-in at all. For `no-local-module-mocks`
 the line is the specifier: a package is a true external boundary, so
 `mock.module("stripe", …)` is not what that rule is about.
+
+#### The environment is read in one module
+
+`no-env-access` is the tenth unscoped rule and answers a different question:
+where configuration comes from. It refuses `process.env`, `Bun.env` and
+`import.meta.env` — read as a member, in brackets, by destructuring, handed on
+whole, or written back into — everywhere except `**/env.ts` and a test file.
+
+| Where           | What it is                                                              |
+| --------------- | ----------------------------------------------------------------------- |
+| `env.ts`        | the one module that reads the environment, and validates it             |
+| a test file     | where a variable is _set_ for a spawned process, not read for its value |
+| everywhere else | import the parsed value from `env.ts`                                   |
+
+`env.ts` parses the whole environment through the repo's schema library — Effect
+Schema or zod, per STACK — and throws on anything missing or malformed, at import
+time. The two halves are one convention: the schema is what makes a missing
+variable stop the process at startup, and the lint rule is what stops a second
+place from reading around it. `process.env.PORT ?? "3000"` scattered through a
+codebase is a deploy pointed at nothing that comes up green, and every default is
+a fact about production written by whoever was editing that line.
+
+The glob is `env.ts` exactly, in any directory, and deliberately nothing wider:
+`env.client.ts` and `src/env/index.ts` are ordinary source files the rule still
+grades. A repo that genuinely needs a second env module writes the switch-off and
+its reason in its own `.oxlintrc.json`, which the repo contract's off-reason
+walker holds to the same bar as any other — a decision a reader can find, rather
+than a glob that forgave it silently.
+
+Recognition goes through the binding, as everywhere else here: `globalThis.process.env`,
+a `const` given `process` once, `import process from "node:process"` and
+`import { env } from "node:process"` are the same object reached four ways, and a
+rule keyed to the written spelling would be one line away from off. A property
+called `env` on an object of the file's own, and a parameter that shadows
+`process`, are not the environment and are left alone.
 
 #### What they do not see
 
@@ -496,6 +535,14 @@ same source in a `.ts` or a `.tsx`, since a rule that fired everywhere is one
 every repo would turn off. Most of its cases are the spellings that would
 otherwise turn a rule off: an `as` on an import, a namespace, an optional link,
 a global reached through `globalThis`, a matcher in brackets.
+
+`tests/anti-slop-env.test.ts` is `no-env-access`, which has a third question
+again: the base has to grade it in a source file, say nothing in an `env.ts` at
+any depth, still grade `env.client.ts` and `src/env/index.ts`, and say nothing in
+any of the four test suffixes. It also takes the reason out from above one of the
+base's two switch-offs for it and requires the contract's off-reason walker to
+find it — a plugin rule inside an `overrides` block, which is what the fleet's
+own escape from this rule will be.
 
 The harness in `tests/lint-fixture.ts` carries cases of its own, because a
 plugin that throws and a config oxlint refuses both produce a run with no

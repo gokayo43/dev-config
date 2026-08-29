@@ -1,43 +1,12 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
 
 import {
-  isGlobalBinding,
+  isGlobalNamed,
   isSettledBinding,
   resolveVariable,
-  settledValue,
   variableDeclarator,
 } from "../shared/bindings.js";
 import { memberName, propertyKeyName, unwrapAssertions } from "../shared/syntax.js";
-
-/**
- * Whether an expression is the global of that name, however it was reached: the
- * name itself, the name read off `globalThis`, or a `const` given one of those
- * once. Recognition goes through the binding rather than the spelling for the
- * reason every rule here does — `globalThis.Reflect` and `const R = Reflect`
- * are one object, and a rule keyed to the written form is one line away from
- * off.
- * @param {SourceCode} sourceCode
- * @param {ESTree.Expression} expression
- * @param {string} name
- * @param {Set<ESTree.Node>} seen
- * @returns {boolean}
- */
-function isGlobalNamed(sourceCode, expression, name, seen) {
-  const value = unwrapAssertions(expression);
-
-  if (value.type === "MemberExpression") {
-    // The only object a global is a property of is the global object, which is
-    // itself reached by any of the three ways above.
-    return (
-      memberName(value) === name && isGlobalNamed(sourceCode, value.object, "globalThis", seen)
-    );
-  }
-  if (value.type !== "Identifier" || seen.has(value)) return false;
-  seen.add(value);
-  if (value.name === name && isGlobalBinding(sourceCode, value)) return true;
-  const held = settledValue(sourceCode, value);
-  return held !== null && isGlobalNamed(sourceCode, held, name, seen);
-}
 
 /**
  * The `Reflect` method a bare name stands for, when a destructuring took it off
@@ -56,7 +25,7 @@ function destructuredMethod(sourceCode, identifier) {
     declarator.init === null ||
     declarator.id.type !== "ObjectPattern" ||
     !isSettledBinding(variable, declarator) ||
-    !isGlobalNamed(sourceCode, declarator.init, "Reflect", new Set())
+    !isGlobalNamed(sourceCode, declarator.init, "Reflect")
   ) {
     return null;
   }
@@ -107,7 +76,7 @@ function bannedReflectMethodRule(banned) {
         if (callee.type === "MemberExpression") {
           return (
             memberName(callee) === banned.method &&
-            isGlobalNamed(sourceCode, callee.object, "Reflect", new Set())
+            isGlobalNamed(sourceCode, callee.object, "Reflect")
           );
         }
         return (

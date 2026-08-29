@@ -1,6 +1,6 @@
 /** @import { ESTree, Scope, SourceCode, Variable } from "@oxlint/plugins" */
 
-import { readOutOf, unwrapAssertions } from "./syntax.js";
+import { memberName, readOutOf, unwrapAssertions } from "./syntax.js";
 
 /**
  * The variable an identifier refers to, found by walking out of the scope the
@@ -127,6 +127,47 @@ export function settledValue(sourceCode, identifier) {
   const declarator = variableDeclarator(variable);
   if (declarator === null || declarator.init === null) return null;
   return isSettledBinding(variable, declarator) ? unwrapAssertions(declarator.init) : null;
+}
+
+/**
+ * Whether an expression is the global of that name, however it was reached: the
+ * name itself, the name read off `globalThis`, or a `const` given one of those
+ * once. Recognition goes through the binding rather than the spelling for the
+ * reason every rule here does — `globalThis.Reflect` and `const R = Reflect`
+ * are one object, and a rule keyed to the written form is one line away from
+ * off.
+ * @param {SourceCode} sourceCode
+ * @param {ESTree.Expression} expression
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isGlobalNamed(sourceCode, expression, name) {
+  return isGlobalNamedThrough(sourceCode, expression, name, new Set());
+}
+
+/**
+ * @param {SourceCode} sourceCode
+ * @param {ESTree.Expression} expression
+ * @param {string} name
+ * @param {Set<ESTree.Node>} seen The aliases already followed, so a name given itself ends the walk.
+ * @returns {boolean}
+ */
+function isGlobalNamedThrough(sourceCode, expression, name, seen) {
+  const value = unwrapAssertions(expression);
+
+  if (value.type === "MemberExpression") {
+    // The only object a global is a property of is the global object, which is
+    // itself reached by any of the three ways above.
+    return (
+      memberName(value) === name &&
+      isGlobalNamedThrough(sourceCode, value.object, "globalThis", seen)
+    );
+  }
+  if (value.type !== "Identifier" || seen.has(value)) return false;
+  seen.add(value);
+  if (value.name === name && isGlobalBinding(sourceCode, value)) return true;
+  const held = settledValue(sourceCode, value);
+  return held !== null && isGlobalNamedThrough(sourceCode, held, name, seen);
 }
 
 /**

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 
-import { configObjects, record } from "../.github/actions/_lib/gate.ts";
+import { configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
 import antiSlop from "../anti-slop/index.js";
 import { type Case, cases, lines, oxlint, underBase } from "./lint-fixture.ts";
 import type { Tree } from "./tree.ts";
@@ -848,10 +848,19 @@ export type Mapped<Value> = { readonly [K in string]: Value };`,
   ],
 } satisfies Record<string, readonly Case[]>;
 
+/** Whether a rule is switched off: the setting, or the head of a list carrying its options. */
+function isOff(configured: unknown): boolean {
+  return (isList(configured) ? configured[0] : configured) === "off";
+}
+
 /**
  * Every rule the base turns on, wherever it turns it on. The scoped four are
  * enabled in an override rather than at the top level, and a check that read
  * only `rules` would call each of them a rule no repo runs.
+ *
+ * A name, not a mention: a rule turned on at the top level and off again over
+ * the files that own it is written twice and is one rule, and one turned off and
+ * nowhere on is a rule no repo runs however many blocks name it.
  */
 const enabled = await (async (): Promise<string[]> => {
   const base = record(
@@ -859,11 +868,12 @@ const enabled = await (async (): Promise<string[]> => {
   );
   const overrides = Array.isArray(base["overrides"]) ? base["overrides"] : [];
   const blocks = [record(base["rules"]), ...overrides.map((each) => record(record(each)["rules"]))];
-  return blocks
-    .flatMap((block) => Object.keys(block))
-    .filter((rule) => rule.startsWith("anti-slop/"))
-    .map((rule) => rule.slice("anti-slop/".length))
-    .toSorted((left, right) => left.localeCompare(right));
+  const names = blocks.flatMap((block) =>
+    Object.entries(block)
+      .filter(([rule, configured]) => rule.startsWith("anti-slop/") && !isOff(configured))
+      .map(([rule]) => rule.slice("anti-slop/".length)),
+  );
+  return [...new Set(names)].toSorted((left, right) => left.localeCompare(right));
 })();
 
 describe("anti-slop rules", () => {
