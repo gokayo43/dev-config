@@ -12,5 +12,25 @@
     // repo's decoder: the rule exists to push parsing to the boundary, and in
     // this repo the boundary is the product.
     "anti-slop/no-unknown-parameters": "off"
-  }
+  },
+  "overrides": [
+    {
+      "files": [
+        ".github/actions/_lib/gate.ts",
+        ".github/actions/db-gate/database.ts",
+        ".github/actions/db-gate/probe.ts",
+        ".github/actions/mutation-lane/mutation-lane.ts"
+      ],
+      "rules": {
+        // `gate.ts` is this repo's `env.ts` under another name, and the only
+        // file here that reads a variable for its value: `inputs()` and
+        // `required()` are the choke point the rule asks for, and both throw
+        // rather than default. The other three forward the environment they
+        // were started with to a child process — `{ ...process.env, DATABASE_URL }`
+        // — which reads no variable and has none to validate. Named one file at
+        // a time so a fifth reader fails rather than joining a glob.
+        "anti-slop/no-env-access": "off"
+      }
+    }
+  ]
 }

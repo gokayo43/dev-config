@@ -247,12 +247,25 @@ function violating(list: readonly Case[]): string {
 }
 
 /**
+ * The config a fixture inherits the shipped base through. Type-aware checking is
+ * off because a fixture tree has no tsconfig for the checker to read; a case
+ * needing more than that — the globals a repo declares, say — adds it.
+ *
+ * One definition, because every scoping case in this suite is graded against
+ * the base as shipped, and a second copy of this object is a second answer to
+ * "what does a repo inherit" that nothing would notice had drifted.
+ */
+export function baseConfig(extra: ConfigObject = {}): string {
+  return JSON.stringify({ extends: [BASE], options: { typeAware: false }, ...extra });
+}
+
+/**
  * Every rule's violating case, in a file named the way the base decides what it
  * grades — which is the whole of what a scoped rule's suite is asking about.
  */
 export function underBase(suffix: string, rules: Record<string, readonly Case[]>): Tree {
   return {
-    ".oxlintrc.json": JSON.stringify({ extends: [BASE], options: { typeAware: false } }),
+    ".oxlintrc.json": baseConfig(),
     ...Object.fromEntries(
       Object.entries(rules).map(([rule, list]) => [`${rule}${suffix}`, violating(list)]),
     ),

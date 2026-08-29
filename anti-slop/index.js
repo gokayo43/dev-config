@@ -18,6 +18,7 @@ import {
   noMockAssertionsRule,
 } from "./rules/mocks.js";
 import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.js";
+import { noEnvAccessRule } from "./rules/no-env-access.js";
 import { noKnownValueWideningRule } from "./rules/no-known-value-widening.js";
 import { noRealTimersRule } from "./rules/no-real-timers.js";
 import { noObjectParametersRule, noUnknownParametersRule } from "./rules/parameter-types.js";
@@ -32,6 +33,7 @@ const antiSlop = {
   rules: {
     "no-call-log-assertions": noCallLogAssertionsRule,
     "no-chained-type-assertions": noChainedTypeAssertionsRule,
+    "no-env-access": noEnvAccessRule,
     "no-known-value-widening": noKnownValueWideningRule,
     "no-local-module-mocks": noLocalModuleMocksRule,
     "no-mock-assertions": noMockAssertionsRule,

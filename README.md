@@ -205,7 +205,7 @@ unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
 
 ### Overrides
 
-Two facts are true of a file because of where it sits, not what it contains:
+Four facts are true of a file because of where it sits, not what it contains:
 
 ```json
 {
@@ -220,17 +220,26 @@ Two facts are true of a file because of where it sits, not what it contains:
         "anti-slop/no-real-timers": "error"
       }
     },
-    { "files": ["src/server/**", "server/**", "apps/api/**"], "rules": { "no-console": "error" } }
+    { "files": ["src/server/**", "server/**", "apps/api/**"], "rules": { "no-console": "error" } },
+    { "files": ["**/env.ts"], "rules": { "anti-slop/no-env-access": "off" } },
+    {
+      "files": ["**/*.test.ts", "**/*.spec.ts", "**/tests/**", "**/e2e/**"],
+      "rules": { "anti-slop/no-env-access": "off" }
+    }
   ]
 }
 ```
 
 A test file is where the four scoped rules of [the plugin](#the-anti-slop-plugin)
 apply, and where a helper one `describe` uses belongs inside it rather than
-hoisted to module scope. And server code writes through the structured logger, so
+hoisted to module scope. Server code writes through the structured logger, so
 `no-console` rises from `warn` to `error` on the server globs — a one-shot CLI
 under those paths carries a file-level disable with its reason, which is the shape
-the directive rule below already requires.
+the directive rule below already requires. And `env.ts` is [the one module that
+reads the environment](#the-environment-is-read-in-one-module), while a suite is
+where a variable is set for a spawned process rather than read for its value —
+which is why the last block names **directories** as well as suffixes: a suite's
+helpers are that same code one file over, under no suffix at all.
 
 **An override replaces a rule's whole configuration; it does not add to it**
 (oxc#12179). An override that says nothing about a rule inherits it whole, so the
@@ -314,7 +323,7 @@ Type-aware rules catch what `any` touches; they do not see a plain `as`. So
 `admin as User as object`, an `unknown` parameter that never gets parsed, a
 function that hands `unknown` back, and a `Record<string, unknown>` value
 contract all pass a fully type-aware run — and assertion laundering is precisely
-the move an agent makes to silence the rules above. Eleven rules close that,
+the move an agent makes to silence the rules above. These rules close that,
 shipped in this package as an oxlint JS plugin and enabled at `error` by the
 base:
 
@@ -387,6 +396,55 @@ a `mock` property on it is not a stand-in at all. For `no-local-module-mocks`
 the line is the specifier: a package is a true external boundary, so
 `mock.module("stripe", …)` is not what that rule is about.
 
+#### The environment is read in one module
+
+`no-env-access` answers a different question from the rules above: where
+configuration comes from. It refuses `process.env`, `Bun.env` and
+`import.meta.env` everywhere except `**/env.ts` and a suite.
+
+| Where           | What it is                                                              |
+| --------------- | ----------------------------------------------------------------------- |
+| `env.ts`        | the one module that reads the environment, and validates it             |
+| a suite         | where a variable is _set_ for a spawned process, not read for its value |
+| everywhere else | import the parsed value from `env.ts`                                   |
+
+`env.ts` parses the whole environment through the repo's schema library — Effect
+Schema or zod, per STACK — and throws on anything missing or malformed, at import
+time. The two halves are one convention: the schema is what makes a missing
+variable stop the process at startup, and the lint rule is what stops a second
+place from reading around it. `process.env.PORT ?? "3000"` scattered through a
+codebase is a deploy pointed at nothing that comes up green, and every default is
+a fact about production written by whoever was editing that line.
+
+The glob is `env.ts` exactly, in any directory, and deliberately nothing wider:
+`env.client.ts` and `src/env/index.ts` are ordinary source files the rule still
+grades. A repo that genuinely needs a second env module writes the switch-off and
+its reason in its own `.oxlintrc.json`, which the repo contract's off-reason
+walker holds to the same bar as any other — a decision a reader can find, rather
+than a glob that forgave it silently.
+
+The rule asks one question — **does this expression denote the environment
+holder?** — and hangs every answer site off that one derivation, because a rule
+deriving it twice catches a holder written one way and is silent on the next. The
+holder is `process`, `Bun` or `import.meta`: read off the global object under any
+of its four names, held by a `const` given one once, imported from `bun` or
+`node:process` statically or dynamically. Off that, `env` is read as a member
+(`process.env`), in brackets, in a substitution-free template, or by
+**destructuring the holder** — `const { env: settings } = Bun` reads the
+environment with no `.env` anywhere in the file — and is then handed on whole, or
+written back into, each with its own diagnostic.
+
+Two shapes are refused at the module edge rather than at a read, because by the
+read there is nothing left to see: a named import of `env` binds it under a name
+of the file's choosing, and `export { env } from "node:process"` — or `export *`
+— creates no local binding at all while the far side imports a relative specifier
+one file cannot read across. A re-export of anything else from the same module,
+`export { cwd }`, is not laundering and is left alone.
+
+So is a property called `env` on an object of the file's own, a parameter that
+shadows `process`, another property of the holder (`const { argv } = process`),
+and a key computed from a value, which has no name to read and is not guessed at.
+
 #### What they do not see
 
 A plugin reads one file at a time and has no type checker under it. Two
@@ -422,9 +480,16 @@ anything writing through the container (`spies.send = real`) all make the
 literal a poor witness, and a rule that read it anyway would report a stand-in
 that is not there by the time the assertion runs.
 
-**A matcher computed from a value** has no name to read: `expect(x)[matcher](1)`
-is left alone, while `expect(x)["toHaveBeenCalledTimes"](1)` has one and is
-refused.
+A **`let` given the holder** is the same limit and the same answer: `let p =
+process; p.env.PORT` is past `no-env-access`, exactly as `let R = Reflect` is
+past the reflect rules. The alternative is a rule that reports a name whose value
+something later reassigned, which is a diagnostic about code that is not there —
+and a repo can only be asked to keep a rule that is right about what it names.
+
+**A key computed from a value** has no name to read: `expect(x)[matcher](1)` is
+left alone, while `expect(x)["toHaveBeenCalledTimes"](1)` and
+``expect(x)[`toHaveBeenCalledTimes`](1)`` both have one and are refused — a
+template with no substitutions in it is a spelling, not a computation.
 
 The one place a rule refuses rather than shrugs is a module specifier it cannot
 read: `mock.module(import.meta.resolve("./x.ts"))` fails asking to be written as
@@ -479,7 +544,7 @@ Two facts about how it is wired, both load-bearing:
   and this directory is inside `node_modules` for every repo that consumes it.
   `tsc` still checks it in this repo, through `checkJs` and JSDoc types.
 
-`tests/anti-slop.test.ts` drives the nine with the real binary: a block of cases
+`tests/anti-slop.test.ts` drives the unscoped rules with the real binary: a block of cases
 per rule — alias chains, shadowed built-ins, type parameters bound by default,
 permuted between two aliases and named for the aliases they shadow, the scope a
 binding resolves in, and the clean tree each of those has to leave alone — plus
@@ -496,6 +561,15 @@ same source in a `.ts` or a `.tsx`, since a rule that fired everywhere is one
 every repo would turn off. Most of its cases are the spellings that would
 otherwise turn a rule off: an `as` on an import, a namespace, an optional link,
 a global reached through `globalThis`, a matcher in brackets.
+
+`tests/anti-slop-env.test.ts` is `no-env-access`, which has a third question
+again: the base has to grade it in a source file, say nothing in an `env.ts` at
+any depth or under a suite's suffixes and directories, and still grade
+`env.client.ts`, `src/env/index.ts`, `test-utils.ts` and `src/testing/`. It also
+takes the reason out from above each of the base's two switch-offs for it — found
+by the `files` glob of the block that owns it, not by position — and requires the
+contract's off-reason walker to find both: a plugin rule inside an `overrides`
+block, which is what the fleet's own escape from this rule will be.
 
 The harness in `tests/lint-fixture.ts` carries cases of its own, because a
 plugin that throws and a config oxlint refuses both produce a run with no

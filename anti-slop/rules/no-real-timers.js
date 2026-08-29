@@ -1,6 +1,6 @@
 /** @import { ESTree, Reference, Rule, SourceCode } from "@oxlint/plugins" */
 
-import { importedBinding, isEnvironmentDeclared } from "../shared/bindings.js";
+import { GLOBAL_OBJECT_NAMES, importedBinding, isEnvironmentDeclared } from "../shared/bindings.js";
 import { memberName, readOutOf } from "../shared/syntax.js";
 
 /**
@@ -13,14 +13,6 @@ const TIMERS = new Set(["setImmediate", "setInterval", "setTimeout"]);
 
 /** Bun's own two, which are members of a global rather than globals. */
 const SLEEPS = new Set(["sleep", "sleepSync"]);
-
-/**
- * Every name for the global object. They are one object under four spellings,
- * and a rule that knew only `globalThis` was one word away from silent:
- * `self.setTimeout` is the same function reached the same long way round, and
- * `window` is what a repo with a DOM lib writes without thinking about it.
- */
-const HOLDERS = new Set(["global", "globalThis", "self", "window"]);
 
 /**
  * The modules that export the same functions under a name a file can choose.
@@ -50,7 +42,7 @@ function sleepThrough(node) {
 function spentBy({ identifier }) {
   if (TIMERS.has(identifier.name)) return { at: identifier, name: identifier.name };
   if (identifier.name === "Bun") return sleepThrough(identifier);
-  if (!HOLDERS.has(identifier.name)) return null;
+  if (!GLOBAL_OBJECT_NAMES.has(identifier.name)) return null;
 
   // `globalThis.setTimeout` is the same function reached the long way round,
   // and `globalThis.Bun.sleep` is Bun's the long way round.
@@ -122,10 +114,8 @@ export const noRealTimersRule = {
             const imported = importedBinding(variable);
             if (imported === null || !TIMER_MODULES.has(imported.source)) continue;
             if (!TIMERS.has(imported.name)) continue;
-            const [definition] = variable.defs;
-            if (definition === undefined) continue;
             context.report({
-              node: definition.name,
+              node: imported.at,
               messageId: "realTimer",
               data: { name: `${imported.name} from ${imported.source}` },
             });
