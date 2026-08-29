@@ -44,6 +44,11 @@ since both name the one line someone was looking at. A waiver is repo-wide: it
 covers that package wherever any manifest in the tree declares it, not one
 workspace, because what was agreed is a fact about the repo.
 
+The why itself lives in the deviating repo's `CLAUDE.md`, which is where the
+canon records a deviation and the only place it is written out. What the entry
+carries is the line that stands for it here, not a second account of the
+decision.
+
 The reason is the whole price, the same one a lint directive pays — an exemption
 nobody had to justify is indistinguishable a year later from a bug someone
 silenced.

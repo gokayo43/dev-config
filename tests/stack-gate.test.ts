@@ -14,7 +14,11 @@ const DENYLIST_ENTRIES = denylistIn(await Bun.file(DENYLIST).json(), String(DENY
 /** A repo whose stack is clean, which is the only thing these cases vary. */
 const MANIFEST: PackageJson = {
   name: "clean",
-  dependencies: { "drizzle-orm": "0.44.7", sonner: "2.0.7", clsx: "2.1.1" },
+  dependencies: {
+    "drizzle-orm": "0.44.7",
+    "@base-ui-components/react": "1.0.0-rc.0",
+    clsx: "2.1.1",
+  },
   devDependencies: { "drizzle-kit": "0.31.6", "jest-expo": "54.0.0" },
 };
 
@@ -47,16 +51,25 @@ describe("stack gate", () => {
     ["prisma", "Drizzle"],
     ["ioredis", "Redis"],
     ["valibot", "zod"],
-    ["@radix-ui/react-dialog", "Base UI"],
-    ["react-hot-toast", "sonner"],
+    ["@radix-ui/react-dialog", "primitive source"],
+    ["sonner", "Base UI Toast"],
     ["classnames", "clsx"],
     ["@emotion/react", "Tailwind"],
     ["dayjs", "Temporal"],
     ["recharts", "dataviz"],
     ["next-auth", "Better Auth"],
     ["nodemailer", "Resend"],
+    ["@aws-sdk/client-s3", "Bun's native S3 client"],
+    ["aws-sdk", "Bun's native S3 client"],
+    ["@vercel/analytics", "Cloudflare's beacon"],
+    ["mixpanel-browser", "PostHog"],
+    ["@amplitude/analytics-browser", "PostHog"],
     ["node-cron", "Effect Schedule"],
     ["vitest", "bun test"],
+    ["chai", "bun test"],
+    ["sinon", "bun test"],
+    ["nock", "MSW"],
+    ["cypress", "Playwright"],
     ["nativewind", "StyleSheet"],
     ["@react-native-async-storage/async-storage", "expo-secure-store"],
   ])("%s is refused and the diagnostic names the pick", async (name, pick) => {

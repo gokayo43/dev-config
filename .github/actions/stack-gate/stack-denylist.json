@@ -14,15 +14,15 @@
     },
     {
       "names": ["yup", "joi", "superstruct", "valibot", "ajv"],
-      "reason": "Effect Schema on the server, zod at the edges"
+      "reason": "Effect Schema in Effect programs end to end, zod otherwise"
     },
     {
       "patterns": ["^@radix-ui/"],
-      "reason": "Base UI is the headless primitive set"
+      "reason": "Base UI is the primitive source"
     },
     {
-      "names": ["react-hot-toast", "react-toastify"],
-      "reason": "sonner is the toaster"
+      "names": ["sonner", "react-hot-toast", "react-toastify"],
+      "reason": "Base UI Toast is the toaster — a slot Base UI ships takes no second primitive library"
     },
     {
       "names": ["react-icons", "@heroicons/react"],
@@ -52,7 +52,7 @@
     {
       "names": ["recharts", "chart.js", "victory"],
       "patterns": ["^@nivo/", "^@visx/"],
-      "reason": "charts are hand-rolled per the dataviz skill until TanStack Charts ships"
+      "reason": "charts are hand-rolled per the dataviz skill until TanStack Charts leaves alpha"
     },
     {
       "names": ["next-auth", "lucia"],
@@ -60,24 +60,37 @@
       "reason": "Better Auth is the auth layer"
     },
     {
-      "names": [
-        "nodemailer",
-        "@sendgrid/mail",
-        "@aws-sdk/client-s3",
-        "aws-sdk",
-        "@vercel/analytics",
-        "mixpanel-browser"
-      ],
+      "names": ["nodemailer", "@sendgrid/mail"],
+      "reason": "Resend sends mail"
+    },
+    {
+      "names": ["@aws-sdk/client-s3", "aws-sdk"],
+      "reason": "Bun's native S3 client holds objects, presigning included"
+    },
+    {
+      "names": ["@vercel/analytics"],
+      "reason": "Cloudflare's beacon holds web analytics"
+    },
+    {
+      "names": ["mixpanel-browser"],
       "patterns": ["^@amplitude/"],
-      "reason": "Resend sends mail, Bun's S3 client holds objects, PostHog holds product analytics"
+      "reason": "PostHog holds product analytics"
     },
     {
       "names": ["node-cron", "agenda", "bree", "bull"],
       "reason": "Effect Schedule for in-process cadence, BullMQ for durable jobs"
     },
     {
-      "names": ["jest", "vitest", "mocha", "chai", "sinon", "nock", "cypress"],
-      "reason": "bun test is the runner, MSW fakes the network, Playwright drives the browser"
+      "names": ["jest", "vitest", "mocha", "chai", "sinon"],
+      "reason": "bun test is the runner, and it brings its own expect and mocks"
+    },
+    {
+      "names": ["nock"],
+      "reason": "MSW fakes the network"
+    },
+    {
+      "names": ["cypress"],
+      "reason": "Playwright drives the browser"
     },
     {
       "names": ["nativewind", "tamagui", "@shopify/restyle"],
