@@ -191,15 +191,23 @@ migrations existed — is a notice and a pass. There is no schema to upgrade fro
 
 ## The diagnostic
 
-The step prints every line the two dumps do not share, addressed to whichever
-schema has it, and fails with a one-line annotation naming the count and the
-first of them. The comparison is `pg_dump --schema-only` minus the `\restrict`
-tokens pg_dump randomises per invocation.
+The step opens with the position the two dumps parted at — the line number and
+what each holds there — then prints every line they do not share, addressed to
+whichever schema has it, and fails with a one-line annotation naming the count
+and the first of them. The comparison is `pg_dump --schema-only` minus the
+`\restrict` tokens pg_dump randomises per invocation, and nothing else is
+dropped: the unit is a **line**, and pg_dump writes a table `COMMENT` and a
+dollar-quoted routine body as source text, so a blank line inside one of those
+is the object's own. A filter for the blank lines between statements cannot tell
+the two apart, and would let two databases whose comment really differs compare
+equal. A blank line is named in words where it is reported, since one printed
+raw leaves a sentence with a hole in it.
 
 One function decides it, for both replays. It answers "identical" or a
 difference that always carries both a headline and a listing — including for two
 dumps holding the same statements in a different order, which is the one shape
-a line-by-line reading would call a difference and have nothing to say about. A
+a multiset has nothing to say about and where the parting position is the whole
+answer. A
 red step with an empty explanation is not something this gate can produce.
 
 There is no allowlist. Both paths run the same DDL in the same order, differing

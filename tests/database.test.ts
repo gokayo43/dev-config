@@ -140,39 +140,82 @@ describe("comparing two dumps", () => {
 
   const left = lines("the left schema", 'CREATE TABLE "a" ();\nCREATE TABLE "b" ();\n');
 
-  test("identical text is the only way two schemas are equal", () => {
+  test("the same statements in the same order are equal", () => {
     expect(
       compare(left, lines("the right schema", 'CREATE TABLE "a" ();\nCREATE TABLE "b" ();\n')),
     ).toBeUndefined();
   });
 
-  test("the same statements arranged differently are not equal, and say so", () => {
+  // The one shape a multiset has nothing to say about: every unit is on both
+  // sides, so the only-in listing is empty and the position they parted at is
+  // the whole answer. Reported as "the same lines are arranged differently" it
+  // named no line at all, which is a red run with no evidence on it.
+  test("the same statements arranged differently are not equal, and say where", () => {
     const difference = compare(
       left,
       lines("the right schema", 'CREATE TABLE "b" ();\nCREATE TABLE "a" ();\n'),
     );
 
-    expect(difference?.headline).toContain("not in which statements they hold");
-    expect(difference?.lines).not.toEqual([]);
+    const parting =
+      'they part at line 1: the left schema has `CREATE TABLE "a" ();`, the right schema has `CREATE TABLE "b" ();`';
+    expect(difference?.headline).toBe(parting);
+    expect(difference?.lines).toEqual([parting]);
   });
 
-  // The tally is of statements, so a blank line moves nothing in it. Reporting
-  // that as "a different order" was a claim about something never compared.
-  test("a blank-line difference is not reported as a different order", () => {
+  // pg_dump writes a table COMMENT and a dollar-quoted routine body as source
+  // text, and the schema half's unit is a LINE — so a blank line inside one of
+  // those is the object's own, and two databases whose comment really differs
+  // differ by exactly one blank line. A filter for "lines that carry no schema"
+  // takes this one out with the formatting and turns a true red green.
+  test("a blank line inside a quoted body is a difference", () => {
+    expect(
+      compare(
+        lines("the schema built from empty", "COMMENT ON TABLE public.t IS 'first\n\nsecond';\n"),
+        lines(
+          "the schema the upgrade path reached",
+          "COMMENT ON TABLE public.t IS 'first\nsecond';\n",
+        ),
+      ),
+    ).toBeDefined();
+  });
+
+  // And it is shown rather than printed, since a blank line put raw into a
+  // sentence leaves a hole where its subject should be.
+  test("the blank line one dump has is named in words", () => {
     const difference = compare(
-      left,
-      lines("the right schema", 'CREATE TABLE "a" ();\n\nCREATE TABLE "b" ();\n'),
+      lines("the left schema", 'CREATE TABLE "a" ();\n\nCREATE TABLE "b" ();\n'),
+      lines("the right schema", 'CREATE TABLE "a" ();\nCREATE TABLE "b" ();\n'),
     );
 
-    expect(difference?.headline).toContain("not in which statements they hold");
-    expect(difference?.headline).not.toContain("different order");
-    expect(difference?.lines).not.toEqual([]);
+    expect(difference?.headline).toContain("first (blank line)");
+    expect(difference?.lines[0]).toBe(
+      'they part at line 2: the left schema has (blank line), the right schema has `CREATE TABLE "b" ();`',
+    );
+  });
+
+  // A comparison reading each unit as its trimmed text would call these two
+  // equal, and the indentation pg_dump writes is where a column definition
+  // lives.
+  test("whitespace inside a statement is still part of it", () => {
+    const difference = compare(
+      lines("the left schema", 'CREATE TABLE "a" (\n  id int\n);\n'),
+      lines("the right schema", 'CREATE TABLE "a" (\nid int\n);\n'),
+    );
+
+    expect(difference?.lines).toEqual([
+      "they part at line 2: the left schema has `  id int`, the right schema has `id int`",
+      "only in the left schema:   id int",
+      "only in the right schema: id int",
+    ]);
   });
 
   test("a line one schema does not have is named, on the side that has it", () => {
     const difference = compare(left, lines("the right schema", 'CREATE TABLE "a" ();\n'));
 
-    expect(difference?.lines).toEqual(['only in the left schema: CREATE TABLE "b" ();']);
+    expect(difference?.lines).toEqual([
+      'they part at line 2: the left schema has `CREATE TABLE "b" ();`, the right schema has (blank line)',
+      'only in the left schema: CREATE TABLE "b" ();',
+    ]);
     expect(difference?.headline).toContain("the left schema alone has 1 line");
   });
 
@@ -190,6 +233,7 @@ describe("comparing two dumps", () => {
 
     expect(difference?.headline).toContain("the data before alone has 1 row");
     expect(difference?.lines).toEqual([
+      "they part at row 1: the data before has `INSERT INTO t VALUES (1, 'A\nB');`, the data after has nothing — the data after ends here",
       "only in the data before: INSERT INTO t VALUES (1, 'A\nB');",
     ]);
   });

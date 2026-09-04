@@ -298,13 +298,44 @@ function joined({ units }: Dump): string {
   return units.join("\n");
 }
 
-/** How many times each unit occurs, since a dump repeats `SET`s and blank lines. */
+/** How many times each unit occurs, since a dump repeats its `SET`s and its blank lines. */
 function tally(units: readonly string[]): Map<string, number> {
   const counts = new Map<string, number>();
-  for (const unit of units) {
-    if (unit.trim() !== "") counts.set(unit, (counts.get(unit) ?? 0) + 1);
-  }
+  for (const unit of units) counts.set(unit, (counts.get(unit) ?? 0) + 1);
   return counts;
+}
+
+/**
+ * A unit as a diagnostic shows it. A blank one printed raw is a sentence with a
+ * hole where its subject should be, and blank is a unit these dumps really
+ * carry: pg_dump writes a table `COMMENT` and a dollar-quoted routine body as
+ * source text, so an empty line inside one is the object's own, and the schema
+ * half's unit is a line.
+ *
+ * Quoted rather than named for whitespace that is not empty, so that a line of
+ * spaces and an empty line do not both read as the same word.
+ */
+function shown(unit: string | undefined, ended: string): string {
+  if (unit === undefined) return `nothing — ${ended} ends here`;
+  return unit === "" ? "(blank line)" : `\`${unit}\``;
+}
+
+/**
+ * Where the two parted: the first position they do not hold the same unit at,
+ * as the number a reader counts from 1 and both sides' text there.
+ *
+ * Only called once the joins have already differed, so such a position exists —
+ * either within both, or at the end of the shorter, which `shown` says was the
+ * end. It is what the answer for two dumps holding one multiset in two orders
+ * used to lack: that case reported "the same lines are arranged differently"
+ * and listed nothing, which named no line and left a red run with no evidence
+ * on it.
+ */
+function parted(left: Dump, right: Dump): string {
+  const shared = Math.min(left.units.length, right.units.length);
+  let at = 0;
+  while (at < shared && left.units[at] === right.units[at]) at += 1;
+  return `they part at ${left.each} ${at + 1}: ${left.of} has ${shown(left.units[at], left.of)}, ${right.of} has ${shown(right.units[at], right.of)}`;
 }
 
 /**
@@ -323,7 +354,7 @@ function only(dump: readonly string[], other: readonly string[]): string[] {
 
 /** How two dumps differ. There is no such thing as an empty one. */
 export interface Difference {
-  /** What the log gets: every line the two do not share, addressed to whichever has it. */
+  /** What the log gets: where the two parted, then every unit the other does not hold. */
   readonly lines: string[];
   /** What the annotation gets: the shortest true sentence about it. */
   readonly headline: string;
@@ -331,39 +362,44 @@ export interface Difference {
 
 /**
  * The single derivation of "these two came out the same". `undefined` is the
- * only way two dumps are equal, and every other answer carries both a headline
- * and something to print — so a refusal with nothing to say for itself cannot
- * be built. Two dumps holding the same statements in a different order are not
- * equal, and that difference names itself rather than coming out blank.
+ * only way two dumps are equal, and every other answer opens with the position
+ * they parted at — so a refusal that names no line cannot be built.
  *
  * Order matters here because a schema dump's does: pg_dump is deterministic, so
  * two schemas that differ only in arrangement differ. A caller for which order
  * is not a fact about the database — rows in a table have none — sorts its
- * units before handing them over, and then this branch cannot be reached from
- * it at all.
+ * units before handing them over.
+ *
+ * Nothing is dropped on the way in. Every unit counts, blank ones included: the
+ * schema half's unit is a line and pg_dump writes a `COMMENT` and a routine
+ * body verbatim, so a filter for "lines that carry no schema" cannot be written
+ * here — it would take the blank line out of a comment body with the ones
+ * between statements, and two databases whose comment really differs would
+ * compare equal.
  */
 export function compare(left: Dump, right: Dump): Difference | undefined {
   if (joined(left) === joined(right)) return undefined;
 
+  const where = parted(left, right);
   const sides = [
     { dump: left, lines: only(left.units, right.units) },
     { dump: right, lines: only(right.units, left.units) },
   ].filter(({ lines }) => lines.length > 0);
 
-  // Every line one holds, the other holds as often — so what differs is the
-  // arrangement: the order of the statements, or the blank lines between them.
-  // Which of the two it is, this does not know, and saying would be a guess.
-  if (sides.length === 0) {
-    const arranged = `${left.of} and ${right.of} differ, but not in which statements they hold — the same lines are arranged differently`;
-    return { lines: [arranged], headline: arranged };
-  }
+  // Every unit one holds, the other holds as often — so the whole of what is
+  // left to differ is the order they are in, and the position above is the
+  // entire answer rather than the opening of one.
+  if (sides.length === 0) return { lines: [where], headline: where };
 
   return {
-    lines: sides.flatMap(({ dump, lines }) => lines.map((line) => `only in ${dump.of}: ${line}`)),
+    lines: [
+      where,
+      ...sides.flatMap(({ dump, lines }) => lines.map((line) => `only in ${dump.of}: ${line}`)),
+    ],
     headline: sides
       .map(
         ({ dump, lines }) =>
-          `${dump.of} alone has ${lines.length} ${dump.each}${lines.length === 1 ? "" : "s"}, first \`${lines[0]}\``,
+          `${dump.of} alone has ${lines.length} ${dump.each}${lines.length === 1 ? "" : "s"}, first ${shown(lines[0], dump.of)}`,
       )
       .join(", "),
   };
