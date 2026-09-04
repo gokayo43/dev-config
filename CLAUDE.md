@@ -35,17 +35,29 @@ a change to a rule usually lands here too.
   `repo-contract/live.ts` is what the word "live" derives — everything a repo
   owes because it carries people — beside the contract every repo satisfies
   whether or not anyone is on the other end.
-  `db-gate` holds three beside its replay: `semantic-fixtures.ts`, since what
+  `db-gate` holds five beside its replay: `semantic-fixtures.ts`, since what
   the base ref's replay proves about a _schema_ and what it proves about the
   _rows_ are two subjects and the second is the only gate here that grades data;
   `base-lineage.ts`, the lineage as the base ref carried it and the rollback that
   puts a checkout back onto one, which both of those need and neither is about;
-  and `capacity.ts` for the ramp. What more than
+  `capacity.ts` for the ramp; `route-compat.ts`, the committed
+  `routes.snapshot.json` — which **every** repo running the database job owes,
+  since the file is what makes a route table readable at a ref nothing boots,
+  while the _holding_ of the base ref's routes is `live`-only — a second subject
+  over the route table `route-coverage.ts` grades, since "was this route ramped"
+  and "is this route still here" are different questions and only the second
+  reaches outside the run; and `route-table.ts`, which is what those two floors
+  share and neither is about: how a route is named, and the three questions a
+  reasoned hatch over a set of routes is asked. What more than
   one **action** reads lives in `_lib/`: `gate.ts` — which is where `plainly`
   sits, the environment a child whose output a gate reads is given, now that two
-  actions spawn one — and `dependency-specs.ts` —
+  actions spawn one — `dependency-specs.ts` —
   the version grammar the repo contract grades every spec by and the stack
-  denylist asks which package a spec installs. What two gates of one action
+  denylist asks which package a spec installs — and `lifecycle.ts`, the
+  `lifecycle` field itself: the repo contract derives what "live" costs a repo
+  and db-gate's compatibility floor asks the same word whether a route may be
+  dropped, and one field read twice is two answers to whether anyone is on the
+  other end. What two gates of one action
   share stays in that action's directory instead — `db-gate/database.ts`, the
   scratch database its three data gates each build for themselves and the one
   derivation of "these two dumps came out the same", and
@@ -76,7 +88,7 @@ a change to a rule usually lands here too.
   that bin imports. Each is in
   `files` and `exports`, and each is here rather than in an action for the same
   reason: what it grades is only visible from inside the repo. `route-log.ts` is
-  the protocol between an app and the route-coverage floor;
+  the protocol between an app and the two floors over its route table;
   `invariant-sweep.ts` replaces Playwright's browser context with one that
   watches every page it opens, popups included, and trusts a page for one
   sanitised sentence and nothing else; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`

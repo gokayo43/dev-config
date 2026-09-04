@@ -15,8 +15,9 @@ import {
   withoutComments,
 } from "../_lib/gate.ts";
 import { checkPins, isExactVersion } from "../_lib/dependency-specs.ts";
+import { declaredIn } from "../_lib/lifecycle.ts";
 import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
-import { checkLifecycle, checkLive, declaredIn, lifecycleAtBase } from "./live.ts";
+import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
 
 const DEV_CONFIG = "@gokayo43/dev-config";
 

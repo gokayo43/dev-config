@@ -1,8 +1,10 @@
 # The route log
 
-`@gokayo43/dev-config/route-log.ts` is the protocol between an app and the
-capacity ramp's route-coverage floor: two strings and three shapes, exported so
-that neither end of the contract reproduces them from memory.
+`@gokayo43/dev-config/route-log.ts` is the protocol between an app and the two
+floors the database job holds its route table to — the capacity ramp's route
+coverage, and [the compatibility floor](../gates/route-compat.md) that asks
+whether a route it used to serve is still there. Two strings and three shapes,
+exported so that neither end of the contract reproduces them from memory.
 
 An app that sets `ROUTE_LOG` serves `GET /__route-log`, answering both lists in
 one fetch:
@@ -25,7 +27,9 @@ Both lists name a route _as its router registered it_: `/presets/42` as
 guessed would credit coverage to a route that served nothing.
 
 Unlike the other exports here, this one is a data contract rather than a check:
-nothing in it fails a build. What reads it is the `db-gate` capacity step, and
-the argument for every choice above — why a count rather than announced events,
-what the floor does and does not claim — lives with that gate in
-[docs/gates/capacity.md](../gates/capacity.md).
+nothing in it fails a build. What reads it is `db-gate` — the capacity step
+writes both fetches, the coverage floor subtracts them, and the compatibility
+floor reads `routeTable` out of the first. The argument for every choice above —
+why a count rather than announced events, what the floor does and does not claim
+— lives with that gate in [docs/gates/capacity.md](../gates/capacity.md), beside
+[docs/gates/route-compat.md](../gates/route-compat.md) for the other floor.

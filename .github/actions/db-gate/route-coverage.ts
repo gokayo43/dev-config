@@ -1,12 +1,6 @@
 import { EVERY_METHOD, type Route, type RouteLog, type Served } from "../../../route-log.ts";
-import {
-  type Allowlist,
-  isList,
-  isObject,
-  kindOf,
-  type Problem,
-  type Verdict,
-} from "../_lib/gate.ts";
+import { type Allowlist, isList, isObject, kindOf, type Verdict } from "../_lib/gate.ts";
+import { key, routeIn, waivedBy } from "./route-table.ts";
 
 /**
  * The gate's half of the route-coverage floor. The protocol it reads — the
@@ -14,16 +8,11 @@ import {
  * fetches of them rather than a count of one — is declared once in
  * `route-log.ts` at the root of this package, which is what both ends import.
  *
- * What lives here is the reading of that payload and the grading of it.
+ * What lives here is the reading of that payload and the grading of it. How a
+ * route is named, and how the reasoned hatch over one is graded, is
+ * `route-table.ts` beside this: the compatibility floor asks a different
+ * question of the same table and gets its entries read the same way.
  */
-
-function routeIn(value: unknown, source: string): Route {
-  const { method, path } = isObject(value) ? value : {};
-  if (typeof method === "string" && typeof path === "string") return { method, path };
-  throw new Error(
-    `${source} names ${JSON.stringify(value)}, which is not a {"method","path"} pair`,
-  );
-}
 
 function servedIn(value: unknown, source: string): Served {
   const { method, path, count } = isObject(value) ? value : {};
@@ -39,10 +28,17 @@ function servedIn(value: unknown, source: string): Served {
  * Parsed at the boundary rather than asserted through. This is the app's own
  * output, not a file this action wrote, so a payload that is not the shape read
  * here says so loudly instead of surfacing as a floor that silently covers
- * less than it claims.
+ * less than it claims — and a body that is not JSON at all is framed with what
+ * it was, rather than reaching the log as a bare SyntaxError about a column
+ * number in a document nobody named.
  */
 export function parseRouteLog(text: string, source: string): RouteLog {
-  const parsed: unknown = JSON.parse(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${source} is not JSON: ${String(error)}`, { cause: error });
+  }
   if (!isObject(parsed)) {
     throw new Error(`${source} is not a route log: the top level is ${kindOf(parsed)}`);
   }
@@ -57,10 +53,6 @@ export function parseRouteLog(text: string, source: string): RouteLog {
     routeTable: routeTable.map((entry) => routeIn(entry, `${source}: routeTable`)),
     counts: counts.map((entry) => servedIn(entry, `${source}: counts`)),
   };
-}
-
-function key({ method, path }: Route): string {
-  return `${method.toUpperCase()} ${path}`;
 }
 
 function totalOf(counts: readonly Served[], matches: (served: Served) => boolean): number {
@@ -104,18 +96,6 @@ function hits(counts: readonly Served[], route: Route, table: readonly Route[]):
 }
 
 /**
- * An allowlist entry as the route it waives, or nothing when it is not one. A
- * method is a fixed vocabulary and reads as well in either case; a path is a
- * path, and `/Presets` is not `/presets` to any router.
- */
-function routeFrom(entry: string): Route | undefined {
-  const [method = "", path, ...rest] = entry.split(/\s+/);
-  const wellFormed =
-    method !== "" && path !== undefined && path.startsWith("/") && rest.length === 0;
-  return wellFormed ? { method, path } : undefined;
-}
-
-/**
  * A floor, in the sense the coverage threshold is one: it catches a route that
  * no load has ever touched, and claims nothing about whether the load that did
  * touch it resembles production. Shipping an endpoint the ramp does not reach
@@ -146,63 +126,30 @@ export function routeCoverage(before: RouteLog, after: RouteLog, allowlist: Allo
   // A difference, not a count: the boot step polled the health route to get the
   // app this far, and traffic this action made is not the scenario's.
   const routes = after.routeTable;
-  const covered = new Set(
-    [...table]
-      .filter(([, route]) => hits(after.counts, route, routes) > hits(before.counts, route, routes))
-      .map(([name]) => name),
-  );
+  const covered = (route: Route): boolean =>
+    hits(after.counts, route, routes) > hits(before.counts, route, routes);
 
-  // Every entry is one of these: the route it waives, or what is wrong with it.
-  // A classifier rather than three pushes inside the loop, so that the rule
-  // about which of them the reader is told stays in one place below.
-  const read = (entry: string): { readonly waives: string } | { readonly rotten: string } => {
-    const route = routeFrom(entry);
-    if (route === undefined) {
-      return {
-        rotten: `route-allowlist entry '${entry}' is not a route — write 'METHOD /path', matching a line of the app's own route table`,
-      };
-    }
-    const name = key(route);
-    if (!table.has(name)) {
-      return {
-        rotten: `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
-      };
-    }
-    if (covered.has(name)) {
-      // The reason written beside it says the ramp cannot reach the route. The
-      // ramp reached it, so the reason is no longer true, and an exemption
-      // nobody can see rotting is how a gate quietly stops covering what it
-      // names.
-      return {
-        rotten: `route-allowlist waives ${entry}, which the ramp did exercise — drop the entry and let the floor hold the route`,
-      };
-    }
-    return { waives: name };
-  };
+  const hatch = waivedBy(allowlist, table, covered, {
+    malformed: (entry) =>
+      `route-allowlist entry '${entry}' is not a route — write 'METHOD /path', matching a line of the app's own route table`,
+    unknown: (entry) =>
+      `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
+    // The reason written beside it says the ramp cannot reach the route. The
+    // ramp reached it, so the reason is no longer true.
+    satisfied: (entry) =>
+      `route-allowlist waives ${entry}, which the ramp did exercise — drop the entry and let the floor hold the route`,
+  });
 
-  const waived = new Set<string>();
-  const hatch: Problem[] = [];
-  for (const entry of allowlist.entries) {
-    const verdict = read(entry);
-    if ("waives" in verdict) waived.add(verdict.waives);
-    // An entry already refused for saying nothing about why is asked none of
-    // those questions: its author is going back to that line regardless, and
-    // one mistake earns one diagnostic. stack-gate and the timestamptz gate
-    // charge the hatch the same way. It still waives its route in the branch
-    // above, so the floor does not report the route on top of it either.
-    else if (!allowlist.unreasoned.has(entry)) hatch.push({ message: verdict.rotten });
-  }
-
-  const uncovered = [...table.keys()].filter((name) => !covered.has(name) && !waived.has(name));
+  const exercised = [...table.values()].filter((route) => covered(route)).length;
 
   return {
-    note: `route coverage: ${covered.size} of ${table.size} routes exercised by the ramp, ${waived.size} allowlisted`,
+    note: `route coverage: ${exercised} of ${table.size} routes exercised by the ramp, ${hatch.waived.size} allowlisted`,
     problems: [
       ...allowlist.problems,
-      ...uncovered.map((name) => ({
+      ...hatch.unmet.map((name) => ({
         message: `${name} is served but no ramp request exercises it — ramp it from capacity-path or the capacity script, or list it in route-allowlist with a reason`,
       })),
-      ...hatch,
+      ...hatch.problems,
     ],
   };
 }

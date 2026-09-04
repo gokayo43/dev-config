@@ -1,5 +1,6 @@
 /**
- * What a repo's `lifecycle` says, and everything the word "live" derives.
+ * Everything the word "live" derives. What the field itself says is
+ * `_lib/lifecycle.ts`, since a second action reads it.
  *
  * The rest of the contract grades a repo the same way whether or not anyone is
  * on the other end of it: a package manager is pinned or it is not. This half
@@ -21,49 +22,12 @@ import {
   isObject,
   type Manifest,
   type Missing,
-  oneOf,
   type Problem,
   record,
   repoFiles,
 } from "../_lib/gate.ts";
+import { type Declared, type Lifecycle, lifecycleOf } from "../_lib/lifecycle.ts";
 import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
-
-/**
- * Whether the repo is deployed and carrying people, said by the repo about
- * itself rather than inferred from anything. Nothing derives it — a repo with a
- * hostname, a compose file and a backup script is indistinguishable from one
- * three days away from its first deploy — so it is declared, and moving it to
- * `live` is the owner's own commit. Everything below it reconfigures off that
- * one word.
- */
-const LIFECYCLES = ["dev", "live"] as const;
-
-type Lifecycle = (typeof LIFECYCLES)[number];
-
-/**
- * The field as written and as read, derived once. Two readings of one manifest
- * key are two places for it to mean different things, and the diagnostics need
- * the raw value as much as the graded one.
- */
-interface Declared {
-  /** What the manifest holds, phrased the way a diagnostic has to say it. */
-  readonly found: string;
-  /** That value as one of the two words, or nothing — its own problem, never a default. */
-  readonly is: Lifecycle | undefined;
-}
-
-/** The field as one of those, or nothing — which is its own problem and never a default. */
-function lifecycleOf(value: unknown): Lifecycle | undefined {
-  return oneOf(LIFECYCLES, value);
-}
-
-export function declaredIn(contents: ConfigObject): Declared {
-  const value = contents["lifecycle"];
-  return {
-    found: value === undefined ? "is absent" : `reads ${JSON.stringify(value)}`,
-    is: lifecycleOf(value),
-  };
-}
 
 /**
  * The field only ever moves up. `dev` is where every repo starts and says

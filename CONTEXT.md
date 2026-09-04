@@ -91,9 +91,11 @@ from an exemption, which is about what a repo is, and from a downgrade to `warn`
 which stops the rule blocking anything at all.
 
 **Floor** — a bound set below what honest work already produces, there to catch
-the absence of the work rather than to be aimed at: the coverage threshold, and
-the capacity ramp's route coverage. A floor says a route has been under load
-once; it says nothing about whether that load resembled production.
+the absence of the work rather than to be aimed at: the coverage threshold, the
+capacity ramp's route coverage, and the route compatibility floor. A floor says
+a route has been under load once, or that it is still there at all; it says
+nothing about whether that load resembled production, or whether the route still
+answers what it used to.
 
 **Trend line and claim** — the two things a capacity ramp can produce, from one
 script and one reader. On a CI runner the app shares a machine with a Postgres,
@@ -103,8 +105,14 @@ asks for. `ran-on` names which happened, because nothing downstream can tell.
 
 **Route table** — the routes an app serves, named by the app itself as its
 router registered them (`/presets/:id`, not `/presets/42`). Only the router
-knows which route answered a URL, so it is the only honest source, and the
-capacity ramp's floor is measured against it.
+knows which route answered a URL, so it is the only honest source, and both
+floors over it are measured against it.
+
+**Route snapshot** — a repo's committed `routes.snapshot.json`: its route table
+as of a commit, which is what makes the table readable at a ref nothing boots.
+The gate that reads it also generates it and refuses any difference from the
+booted app, so it is a golden the app itself keeps honest rather than a file
+somebody maintains.
 
 **Pin** — a reference by content rather than by name: a commit SHA for an
 action or a workflow, a SHA-256 for a released binary, a digest for an image,

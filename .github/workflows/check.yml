@@ -177,6 +177,14 @@ on:
           is refused — the price a lint directive already pays.
         type: string
         default: ""
+      route-retire:
+        description: >-
+          Routes this repo has deliberately stopped serving, as `METHOD /path -- why`
+          entries matching the base ref's routes.snapshot.json, one per line. Read
+          only where the lifecycle field says live. The reason is part of the entry,
+          and an entry without one is refused — the price a lint directive already pays.
+        type: string
+        default: ""
       timestamp-allowlist:
         description: >-
           Columns whose value is a wall-clock reading rather than an instant, as
@@ -274,6 +282,7 @@ jobs:
           CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
           DB_GATE_EVIDENCE: ${{ inputs['db-gate-evidence'] }}
           ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
+          ROUTE_RETIRE: ${{ inputs.route-retire }}
           TIMESTAMP_ALLOWLIST: ${{ inputs.timestamp-allowlist }}
           BACKFILL_COMMAND: ${{ inputs.backfill-command }}
           BACKFILL_SEED: ${{ inputs.backfill-seed }}
@@ -340,6 +349,7 @@ jobs:
             needs_postgres capacity-script "$CAPACITY_SCRIPT" "the ramp runs against the app the database job boots"
             needs_postgres db-gate-evidence "$DB_GATE_EVIDENCE" "it names the artifact the database job uploads"
             needs_postgres route-allowlist "$ROUTE_ALLOWLIST" "the route floor is measured across the database job's ramp"
+            needs_postgres route-retire "$ROUTE_RETIRE" "the routes the base ref served are held against the app the database job boots"
             needs_postgres timestamp-allowlist "$TIMESTAMP_ALLOWLIST" "the column types are read from the database that job migrates"
             needs_postgres backfill-command "$BACKFILL_COMMAND" "the backfill runs against a database the database job builds"
             needs_postgres backfill-seed "$BACKFILL_SEED" "it writes into a database the database job builds"
@@ -558,3 +568,4 @@ jobs:
           capacity-path: ${{ inputs.capacity-path }}
           db-gate-evidence: ${{ inputs['db-gate-evidence'] }}
           route-allowlist: ${{ inputs.route-allowlist }}
+          route-retire: ${{ inputs.route-retire }}

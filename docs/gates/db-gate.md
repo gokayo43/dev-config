@@ -165,9 +165,10 @@ wrote that nothing would have read.
 - **Whether the probe is right.** A probe that exits 0 without asserting
   anything passes every build, exactly as a test that asserts nothing does.
 
-Once it has booted, the job ramps it and publishes what that measured.
-That is a step of this gate rather than a gate of its own, and it has a page:
-[capacity.md](capacity.md).
+Once it has booted, the job ramps it, publishes what that measured, and holds
+its route table to the routes the base ref served. Those are steps of this gate
+rather than gates of their own, and they have pages: [capacity.md](capacity.md)
+and [route-compat.md](route-compat.md).
 
 Booting is the half that migrations succeeding does not prove. Health answers
 200 only after the process has started against that schema and a query has

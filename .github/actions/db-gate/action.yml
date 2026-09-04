@@ -3,7 +3,8 @@ description: >-
   Replays the migrations onto the empty Postgres the caller declared, twice —
   and, where the caller asks for it, from the base ref's migrations as well,
   with the repo's own legacy rows written into that replay — boots the app
-  against the result, probes it where the repo has one, and ramps it. Every step reads
+  against the result, probes it where the repo has one, ramps it, and holds its
+  route table to the routes the base ref served. Every step reads
   DATABASE_URL from the environment — the caller declares the service, so it
   owns the URL, and one value means no two steps can disagree about which
   database was migrated — plus REDIS_URL when the app needs one.
@@ -72,10 +73,10 @@ inputs:
   db-gate-evidence:
     description: >-
       The artifact name for everything this gate leaves behind — the k6
-      summary, both route-log snapshots, the three data dumps the backfill
-      check compares and the app's own output, whichever of them the run got as
-      far as writing. A matrix that runs more than one leg
-      MUST give each its own: an artifact name may be claimed once per run, the
+      summary, both route-log snapshots, the route table the committed snapshot
+      must hold, the three data dumps the backfill check compares and the app's
+      own output, whichever of them the run got as far as writing. A matrix that
+      runs more than one leg MUST give each its own: an artifact name may be claimed once per run, the
       default below is a constant, and the second leg to upload fails on the
       duplicate. Empty takes that default, so a caller can pass this straight
       through without having to know how "unset" is spelled.
@@ -85,6 +86,14 @@ inputs:
       Routes the ramp is not expected to reach, as `METHOD /path -- why`
       entries matching the app's own route table, one per line. The reason is
       part of the entry, the price a lint directive pays.
+    default: ""
+  route-retire:
+    description: >-
+      Routes this repo has deliberately stopped serving, as `METHOD /path --
+      why` entries matching the base ref's routes.snapshot.json, one per line.
+      Read only where the lifecycle field says live, since that is where the
+      routes the base ref served are held at all. The reason is part of the
+      entry, the price a lint directive pays.
     default: ""
   timestamp-allowlist:
     description: >-
@@ -98,15 +107,16 @@ inputs:
 # One action rather than several, and not because everything here is about the
 # database — "Replay the migrations", "Every instant carries its zone" and "A
 # backfill that can be run twice" are, while "Boot against that database",
-# "Capacity ramp" and "Every route the ramp reaches" are about the app the
-# schema has to be able to run. The directory is named for what
-# `database: postgres` buys.
+# "Capacity ramp", "Every route the ramp reaches" and "Every route the base ref
+# served" are about the app the schema has to be able to run. The directory is
+# named for what `database: postgres` buys.
 #
 # What holds them together is the migrated database itself: every step below is
 # rooted in the replay, and the app steps are ordered among themselves — nothing
 # can read a column type before the migrations ran, boot before there is a
-# schema, probe or ramp before the app answers, or count routes before the ramp. The two
-# database steps beside the replay are free of each other and of the rest —
+# schema, probe or ramp before the app answers, or read a route table before the
+# app has declared one. The two database steps beside the replay are free of
+# each other and of the rest —
 # reading a column type says nothing about rows, and the backfill check works in
 # a database of its own — which makes this a partial order rather than a chain,
 # and one composite's step list is the strongest form that ordering takes: split
@@ -114,7 +124,8 @@ inputs:
 # get wrong.
 #
 # "Publish what the ramp measured and what it read" is what settles it. The k6
-# summary and both route-log snapshots come from "Capacity ramp", the three data
+# summary and both route-log snapshots come from "Capacity ramp", the route table
+# a repo has to commit from "Every route the base ref served", the three data
 # dumps from the backfill check, the app's own output from "Boot against that
 # database", and db-gate-evidence above says why they leave as one artifact — so
 # one job's evidence is one upload, and an upload belongs to whatever runs the
@@ -318,6 +329,33 @@ runs:
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/route-coverage.main.ts"
 
+    # The second floor over the same route table, and the only one here that
+    # outlives its run: coverage asks whether the ramp reached a route, this asks
+    # whether the repo has stopped serving one people already call. It reads the
+    # snapshot the ramp step fetched rather than the app, since that is the
+    # answer the floor above was graded on, and it writes the content the
+    # repo's own routes.snapshot.json must hold — which is why there is no
+    # regeneration script anywhere: the gate is the generator.
+    #
+    # Here rather than beside the replay because a route table is the app's to
+    # declare and only a booted app has declared one.
+    - name: Every route the base ref served
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_ROUTE_LOG_BEFORE: ${{ runner.temp }}/route-log-before.json
+        INPUT_ROUTE_RETIRE: ${{ inputs.route-retire }}
+        INPUT_SNAPSHOT_EVIDENCE: ${{ runner.temp }}/routes.snapshot.json
+        # The event's own two facts, read from the `github` context here rather
+        # than threaded through as inputs, exactly as the replay reads them: they
+        # are identical for every caller, and a caller that had to pass them
+        # could pass them wrong.
+        INPUT_BASE_REF: ${{ github.base_ref }}
+        INPUT_BEFORE: ${{ github.event.before }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/route-compat.main.ts"
+
     # Everything the steps above wrote into the runner's workspace, which the
     # next run's checkout cleans away. A step that failed on the way to a number is exactly when its
     # partial evidence is worth having — the summary of a ramp that died, the
@@ -349,6 +387,7 @@ runs:
           ${{ runner.temp }}/capacity.json
           ${{ runner.temp }}/route-log-before.json
           ${{ runner.temp }}/route-log-after.json
+          ${{ runner.temp }}/routes.snapshot.json
           ${{ runner.temp }}/server.log
         # Each of these is written by a step that may not have been reached.
         if-no-files-found: ignore

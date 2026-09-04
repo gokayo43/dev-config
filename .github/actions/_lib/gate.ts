@@ -314,14 +314,16 @@ function entriesIn(value: string): string[] {
  * list alone would let a caller typecheck while dropping that half.
  *
  * The rule that an entry standing for nothing is refused belongs to every
- * allowlist here, but only two of them can be handed the subjects whole:
- * `deadEntries` below is those two. route-coverage stays out because its
- * entries are not the thing it compares — they are parsed into a method and a
- * path first, with a diagnostic of its own for one that is not a route at all,
- * and the comparison is against a normalised key, so `options /*` and
- * `OPTIONS /*` are one route and neither is a member of any set of entry
- * spellings. Its classifier is in route-coverage.ts, which is where the parse
- * that makes it different lives.
+ * allowlist here, but only the ones whose entries *are* their subjects can be
+ * handed those subjects whole: `deadEntries` below serves those. The two
+ * aimed at a route table — route-coverage's and route-compat's — stay out
+ * because their entries are not the thing they compare: they are parsed into a
+ * method and a path first, with a diagnostic of their own for a line that is not
+ * a route at all, and the comparison is against a normalised key, so
+ * `options /*` and `OPTIONS /*` are one route and neither is a member of any set
+ * of entry spellings. `db-gate/route-table.ts` is their `deadEntries` — the same
+ * three questions asked of a keyed set of routes — and it lives there rather
+ * than here because one action holds both floors.
  */
 export interface Allowlist {
   /** Each entry with its reason stripped: the part a gate compares against. */

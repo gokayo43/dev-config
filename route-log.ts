@@ -1,7 +1,8 @@
 /**
- * The protocol between an app and the capacity ramp's route-coverage floor,
- * declared once and imported by both ends — the two strings as well as the
- * three shapes.
+ * The protocol between an app and the two floors the database job holds its
+ * route table to — the ramp's route coverage, and the compatibility floor that
+ * asks whether a route it used to serve is still there. Declared once and
+ * imported by both ends: the two strings as well as the three shapes.
  *
  * Exporting the strings costs an app one identifier from a devDependency in
  * whatever bundle its instrument lands in, and that cost is accepted: `"ALL"`

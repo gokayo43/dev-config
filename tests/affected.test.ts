@@ -99,6 +99,7 @@ const NOTHING_SET = {
   CAPACITY_SCRIPT: "",
   DB_GATE_EVIDENCE: "",
   ROUTE_ALLOWLIST: "",
+  ROUTE_RETIRE: "",
   TIMESTAMP_ALLOWLIST: "",
   BACKFILL_COMMAND: "",
   BACKFILL_SEED: "",
@@ -223,6 +224,20 @@ describe("which packages a run is held to", () => {
   test.each(REFUSED_WHEN_EMPTY)("%s is declared with an empty default", (name) => {
     expect(INPUTS[name]).toBeDefined();
     expect(record(INPUTS[name])["default"]).toBe("");
+  });
+
+  // ...and the refusal itself over that same set, rather than over the pair of
+  // goldens below. The helper takes the input's name and its value as separate
+  // arguments, so a call that transposes them, or names an input the step does
+  // not read, refuses nothing while reading as wired — and the input added last
+  // is the one nobody has a golden for.
+  test.each(REFUSED_WHEN_EMPTY)("%s is refused where that job is not running", async (name) => {
+    const { status, output } = await ran(VALIDATION, MONOREPO, {
+      ...NOTHING_SET,
+      [name.toUpperCase().replaceAll("-", "_")]: "what the caller meant by it",
+    });
+    expect(output).toContain(`::error::${name} needs database: postgres`);
+    expect(status).not.toBe(0);
   });
 
   // The one input in the set graded on its value rather than on its emptiness,

@@ -66,6 +66,10 @@ throughput and a failure rate under a tenth are published for a human to read.
 
 ## The route-coverage floor
 
+One of two floors over the same route table: this one asks whether the ramp
+reached every route the app serves, and [the route compatibility
+floor](route-compat.md) asks whether the app has stopped serving one it used to.
+
 **A floor, in the sense the coverage threshold is one.** It catches the route
 that no load has ever touched — an endpoint shipped without the ramp being
 extended to reach it — and claims nothing at all about whether the load that did
@@ -214,6 +218,7 @@ the runner that produced it:
 | `capacity.json`         | the raw k6 summary, which the table is read from and another run's can be diffed against                             |
 | `route-log-before.json` | what the app declared it serves, and what the boot poll had already reached                                          |
 | `route-log-after.json`  | the same, after the ramp — the floor's verdict is the difference between the two                                     |
+| `routes.snapshot.json`  | the route table the repo's own committed snapshot must hold, so adopting or regenerating it is a copy                |
 | `server.log`            | what the app said while all of that happened — copied while the process still holds it open, so the tail may be torn |
 
 The upload runs whatever the steps before it did, so a floor that failed, a ramp
