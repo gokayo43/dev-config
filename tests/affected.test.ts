@@ -16,17 +16,16 @@ import { materialise, type Tree } from "./tree.ts";
  */
 const CHECK = new URL("../.github/workflows/check.yml", import.meta.url).pathname;
 
-const STATIC = await (async (): Promise<ConfigObject> => {
-  const document = Bun.YAML.parse(await Bun.file(CHECK).text());
-  return record(record(record(document)["jobs"])["static"]);
-})();
+const DOCUMENT = record(Bun.YAML.parse(await Bun.file(CHECK).text()));
+
+const STATIC = record(record(DOCUMENT["jobs"])["static"]);
 
 const STEPS = isList(STATIC["steps"]) ? [...STATIC["steps"]] : [];
 
-const DATABASE_JOB = await (async (): Promise<ConfigObject> => {
-  const document = Bun.YAML.parse(await Bun.file(CHECK).text());
-  return record(record(record(document)["jobs"])["database"]);
-})();
+const DATABASE_JOB = record(record(DOCUMENT["jobs"])["database"]);
+
+/** What a caller may pass, as this workflow declares it. */
+const INPUTS = record(record(record(DOCUMENT["on"])["workflow_call"])["inputs"]);
 
 function scriptOf(step: unknown): string {
   const run = record(step)["run"];
@@ -38,6 +37,17 @@ function textAt(held: ConfigObject, key: string): string {
   const value = held[key];
   return typeof value === "string" ? value : "";
 }
+
+/** What the database job hands db-gate, found by the action it names rather than by position. */
+const DB_GATE = ((): ConfigObject => {
+  const steps = isList(DATABASE_JOB["steps"]) ? [...DATABASE_JOB["steps"]] : [];
+  const found = steps.filter((step) => textAt(record(step), "uses").includes("/db-gate@"));
+  const [step, ...rest] = found;
+  if (step === undefined || rest.length > 0) {
+    throw new Error(`check.yml's database job calls db-gate ${found.length} times, not once`);
+  }
+  return record(record(step)["with"]);
+})();
 
 /**
  * Every lane that takes the flag, found by the expansion rather than by a list
@@ -55,6 +65,16 @@ const VALIDATION = await (async (): Promise<string> => {
   }
   return script;
 })();
+
+/**
+ * The inputs that step refuses by emptiness, named by the calls themselves. The
+ * helper is what makes the set readable from here — a hand-written `if` block
+ * per input was a set only a person could enumerate, and enumerating it here is
+ * the second copy that goes stale.
+ */
+const REFUSED_WHEN_EMPTY = [...VALIDATION.matchAll(/^\s*needs_postgres (\S+) /gmu)].map(
+  ([, name]) => name ?? "",
+);
 
 /**
  * Both lanes pointed at a script that prints its argv back. The argv rather than
@@ -83,6 +103,8 @@ const NOTHING_SET = {
   BACKFILL_COMMAND: "",
   BACKFILL_SEED: "",
   SEMANTIC_FIXTURES: "",
+  START_COMMAND: "",
+  HEALTH_URL: "",
   PROBE_COMMAND: "",
   PROBE_TIMEOUT: "",
   MUTATION_LANE: "false",
@@ -183,6 +205,64 @@ describe("which packages a run is held to", () => {
     expect(status).not.toBe(0);
   });
 
+  // The rule the two goldens below are instances of, held over the whole set
+  // rather than over the pair that broke it. Read off the step instead of
+  // listed here: a list is a second statement of the set, and the copy that
+  // goes stale is the one nobody runs. Another input added to that guard is
+  // covered by this the moment it is written.
+  test("the suite found the inputs the guard refuses by emptiness", () => {
+    expect(REFUSED_WHEN_EMPTY.length).toBeGreaterThan(0);
+  });
+
+  // `needs_postgres` reads "the caller passed this" as "the value is non-empty",
+  // and a workflow cannot tell an unset input from one set to its default —
+  // `github.event.inputs` is not populated for `workflow_call`. So an input in
+  // that set carrying any other default is one the guard can never see: it
+  // would refuse every caller or none, and it refuses none. That is exactly
+  // what `start-command` and `health-url` did.
+  test.each(REFUSED_WHEN_EMPTY)("%s is declared with an empty default", (name) => {
+    expect(INPUTS[name]).toBeDefined();
+    expect(record(INPUTS[name])["default"]).toBe("");
+  });
+
+  // The one input in the set graded on its value rather than on its emptiness,
+  // because it is the one boolean: `-n` is true of `false`, so an emptiness
+  // reading would refuse every caller that names it at all.
+  test("the boolean of the set is graded on the word, not on emptiness", () => {
+    expect(record(INPUTS["upgrade-gate"])["type"]).toBe("boolean");
+    expect(VALIDATION).toContain('[ "$UPGRADE_GATE" = true ]');
+    expect(REFUSED_WHEN_EMPTY).not.toContain("upgrade-gate");
+  });
+
+  // These two carried YAML defaults, so "the caller passed this" — which every
+  // check in that step spells as "the value is non-empty" — was true of every
+  // caller and so of none: the step would have refused all of them or none, and
+  // it refused none. A repo passing them with `database: none` went green with
+  // both read by nothing, which is the class the rest of the step kills.
+  test("the two inputs that used to carry a default are refused too", async () => {
+    const { status, output } = await ran(VALIDATION, MONOREPO, {
+      ...NOTHING_SET,
+      START_COMMAND: "bun run serve",
+      HEALTH_URL: "http://localhost:8080/health",
+    });
+
+    expect(output).toContain("::error::start-command needs database: postgres");
+    expect(output).toContain("::error::health-url needs database: postgres");
+    expect(status).not.toBe(0);
+  });
+
+  // A golden for the reason the two at the top of this block are: nothing here
+  // evaluates a GitHub expression, and what an empty input has to keep meaning
+  // is the value it meant before. The wrong implementation is the one that took
+  // the defaults off the inputs to let the guard see them and stopped there,
+  // leaving every repo that never named a start command booting `""`.
+  test("the defaults the guard cannot see are applied by the job that reads them", () => {
+    expect(DB_GATE["start-command"]).toBe("${{ inputs.start-command || 'bun run start' }}");
+    expect(DB_GATE["health-url"]).toBe(
+      "${{ inputs.health-url || format('http://localhost:{0}/api/health', env.PORT) }}",
+    );
+  });
+
   test("a bound with no command under it is refused", async () => {
     const { status, output } = await ran(VALIDATION, MONOREPO, {
       ...NOTHING_SET,
@@ -252,8 +332,7 @@ describe("which packages a run is held to", () => {
     // is free and then binding it is a race the kernel already answers.
     expect(allocation[0] ?? "").toContain("port: 0");
 
-    const gate = steps.find((step) => textAt(record(step), "uses").includes("db-gate"));
-    const health = textAt(record(record(gate)["with"]), "health-url");
+    const health = textAt(DB_GATE, "health-url");
     expect(health).toContain("env.PORT");
     expect(health).not.toContain("3000");
   });
@@ -307,6 +386,8 @@ describe("which packages a run is held to", () => {
         DATABASE: "postgres",
         UPGRADE_GATE: "true",
         SEMANTIC_FIXTURES: "fixtures",
+        START_COMMAND: "bun run serve",
+        HEALTH_URL: "http://localhost:8080/health",
         PROBE_COMMAND: "bun run scripts/probe.ts",
         PROBE_TIMEOUT: "300",
       }),

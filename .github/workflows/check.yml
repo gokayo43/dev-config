@@ -31,7 +31,7 @@ on:
           serves, or an allowlisted reason why not. `external` says a workflow wrapping
           this one runs the database gates in that job's place, which is what an
           extension of this workflow passes when it replaces them with its own dialect's
-          — the repo still owes a db:migrate, and the eleven inputs aimed at the job
+          — the repo still owes a db:migrate, and the inputs aimed at the job
           here belong to the wrapper's own. `none` is a repo with no schema.
         type: string
         default: none
@@ -107,14 +107,20 @@ on:
         type: string
         default: ""
       start-command:
-        description: How the boot gate starts the app.
+        description: >-
+          How the boot gate starts the app. Empty takes the value the database job
+          hands db-gate, which is where that default lives — empty rather than
+          defaulted here because a workflow cannot tell an unset input from one set
+          to its default, and the guard below reads "the caller passed this" as
+          "the value is non-empty".
         type: string
         default: ""
       health-url:
         description: >-
-          What the boot gate polls until it answers 200. Defaults to the port the
-          job allocated, which is why the default is not stated here — see the
-          db-gate step.
+          What the boot gate polls until it answers 200. Empty takes the value the
+          database job hands db-gate — the port that job allocated, which is a
+          value no input default could state — and it is empty rather than
+          defaulted for the reason start-command above gives as well.
         type: string
         default: ""
       probe-command:
@@ -243,12 +249,12 @@ jobs:
       # Every input named below is aimed at a step of something the caller may
       # not have asked to run, so passing one is a request that would otherwise
       # be ignored in silence — and a gate nobody notices is off is the worst
-      # kind. Eleven belong to the database job: a repo that has written out the
+      # kind. Most belong to the database job: a repo that has written out the
       # routes it wants ramped, or the reasons a route cannot be, has said
-      # plainly that it expects a ramp. Two of the eleven are also aimed at each
+      # plainly that it expects a ramp. Two of those are also aimed at each
       # other — `semantic-fixtures` needs the replay `upgrade-gate` adds, and
-      # `probe-timeout` bounds a `probe-command` — so each is asked twice, once
-      # about the job and once about the input it rides on. Then the mutation
+      # `probe-timeout` bounds a `probe-command` — so each is asked twice,
+      # once about the job and once about the input it rides on. Then the mutation
       # lane's floor, which bounds a score only that step measures, and
       # `affected`, which needs a turbo to hand the flag to — the one condition
       # here that is a fact about the tree rather than about the inputs, which
@@ -272,6 +278,8 @@ jobs:
           BACKFILL_COMMAND: ${{ inputs.backfill-command }}
           BACKFILL_SEED: ${{ inputs.backfill-seed }}
           SEMANTIC_FIXTURES: ${{ inputs['semantic-fixtures'] }}
+          START_COMMAND: ${{ inputs['start-command'] }}
+          HEALTH_URL: ${{ inputs['health-url'] }}
           PROBE_COMMAND: ${{ inputs['probe-command'] }}
           PROBE_TIMEOUT: ${{ inputs['probe-timeout'] }}
           MUTATION_LANE: ${{ inputs['mutation-lane'] }}
@@ -283,6 +291,23 @@ jobs:
           refuse() {
             echo "::error::$1"
             wrong=1
+          }
+          # An input aimed at the database job, refused when that job is not the
+          # one running: its name, the value that says a caller set it, and the
+          # sentence naming what would have read it.
+          #
+          # One function rather than a copy of the same three lines per input,
+          # so that adding an input to this workflow is a line here — and so
+          # that the set is greppable, which is what lets the suite hold every
+          # member of it to the empty default this reading needs. "The caller
+          # passed this" is spelled "the value is non-empty", and an input
+          # carrying any other default is one this cannot see: the workflow
+          # cannot tell an unset input from one set to its default, since
+          # `github.event.inputs` is not populated for `workflow_call`.
+          needs_postgres() {
+            if [ -n "$2" ]; then
+              refuse "$1 needs database: postgres — $3"
+            fi
           }
           # A value nobody defined is refused rather than read as one of the
           # three: `none` is the value that switches every database rule off,
@@ -305,39 +330,24 @@ jobs:
           # way. The wrapper that took that job over declares its own, and an
           # input passed to this workflow instead would be read by nothing.
           if [ "$DATABASE" != postgres ]; then
+            # The one graded on its value rather than on emptiness, because it is
+            # the one boolean here: `false` is what a caller who asked for
+            # nothing sends, and `-n` is true of it.
             if [ "$UPGRADE_GATE" = true ]; then
               refuse "upgrade-gate: true needs database: postgres — the upgrade path is replayed by the database job"
             fi
-            if [ -n "$CAPACITY_PATH" ]; then
-              refuse "capacity-path needs database: postgres — the ramp runs against the app the database job boots"
-            fi
-            if [ -n "$CAPACITY_SCRIPT" ]; then
-              refuse "capacity-script needs database: postgres — the ramp runs against the app the database job boots"
-            fi
-            if [ -n "$DB_GATE_EVIDENCE" ]; then
-              refuse "db-gate-evidence needs database: postgres — it names the artifact the database job uploads"
-            fi
-            if [ -n "$ROUTE_ALLOWLIST" ]; then
-              refuse "route-allowlist needs database: postgres — the route floor is measured across the database job's ramp"
-            fi
-            if [ -n "$TIMESTAMP_ALLOWLIST" ]; then
-              refuse "timestamp-allowlist needs database: postgres — the column types are read from the database that job migrates"
-            fi
-            if [ -n "$BACKFILL_COMMAND" ]; then
-              refuse "backfill-command needs database: postgres — the backfill runs against a database the database job builds"
-            fi
-            if [ -n "$BACKFILL_SEED" ]; then
-              refuse "backfill-seed needs database: postgres — it writes into a database the database job builds"
-            fi
-            if [ -n "$SEMANTIC_FIXTURES" ]; then
-              refuse "semantic-fixtures needs database: postgres — the fixtures are written into a replay the database job runs"
-            fi
-            if [ -n "$PROBE_COMMAND" ]; then
-              refuse "probe-command needs database: postgres — the probe runs against the app the database job boots"
-            fi
-            if [ -n "$PROBE_TIMEOUT" ]; then
-              refuse "probe-timeout needs database: postgres — it bounds a probe the database job runs"
-            fi
+            needs_postgres capacity-path "$CAPACITY_PATH" "the ramp runs against the app the database job boots"
+            needs_postgres capacity-script "$CAPACITY_SCRIPT" "the ramp runs against the app the database job boots"
+            needs_postgres db-gate-evidence "$DB_GATE_EVIDENCE" "it names the artifact the database job uploads"
+            needs_postgres route-allowlist "$ROUTE_ALLOWLIST" "the route floor is measured across the database job's ramp"
+            needs_postgres timestamp-allowlist "$TIMESTAMP_ALLOWLIST" "the column types are read from the database that job migrates"
+            needs_postgres backfill-command "$BACKFILL_COMMAND" "the backfill runs against a database the database job builds"
+            needs_postgres backfill-seed "$BACKFILL_SEED" "it writes into a database the database job builds"
+            needs_postgres semantic-fixtures "$SEMANTIC_FIXTURES" "the fixtures are written into a replay the database job runs"
+            needs_postgres start-command "$START_COMMAND" "it starts the app the database job boots"
+            needs_postgres health-url "$HEALTH_URL" "it is polled against the app the database job boots"
+            needs_postgres probe-command "$PROBE_COMMAND" "the probe runs against the app the database job boots"
+            needs_postgres probe-timeout "$PROBE_TIMEOUT" "it bounds a probe the database job runs"
           fi
           # The fixtures are written into a database built from the base ref's
           # migrations, which is the replay upgrade-gate adds. Without it there
@@ -530,6 +540,15 @@ jobs:
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}
           backfill-seed: ${{ inputs.backfill-seed }}
           backfill-command: ${{ inputs.backfill-command }}
+          # Both defaults live here, in the job that reads them, and health-url's
+          # could live nowhere else: the port is not known until the step above
+          # has run, so that default is a value only this job can build.
+          # start-command's could have been an input default and must not be —
+          # an input carrying one is non-empty for every caller, and the guard
+          # step above reads "the caller passed this" as "the value is
+          # non-empty", so these two were the only inputs aimed at this job that
+          # it could not refuse when the job is not running. `||` is what an
+          # empty input means, which is what a caller who said nothing sends.
           start-command: ${{ inputs.start-command || 'bun run start' }}
           health-url: ${{ inputs.health-url || format('http://localhost:{0}/api/health', env.PORT) }}
           probe-command: ${{ inputs['probe-command'] }}
