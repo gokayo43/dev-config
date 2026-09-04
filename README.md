@@ -1155,7 +1155,9 @@ config migration exit non-zero rather than print.
 `dev-server.ts` is the one root module a repo **runs** rather than imports:
 installing this package puts a `dev-server` binary in `node_modules/.bin`, so
 every worktree of the repo has the same six commands without a script of its
-own.
+own. `dev-server-derive.ts` beside it is the half that can be answered without a
+machine — what a worktree's server is called, which port it gets, and what its
+record has to be — and is imported by the bin and by nothing else.
 
 | Command                     | What it does                                                                                              |
 | --------------------------- | --------------------------------------------------------------------------------------------------------- |
@@ -1164,55 +1166,106 @@ own.
 | `bun run dev-server status` | every server the repository has: branch, port, pid, whether the process is alive, and whether it answers  |
 | `bun run dev-server url`    | this worktree's URL, or exit 1 when no server is up                                                       |
 | `bun run dev-server logs`   | the tail of this worktree's log; `-f` follows it                                                          |
-| `bun run dev-server sweep`  | stops and forgets the servers of worktrees that are gone                                                  |
+| `bun run dev-server sweep`  | stops and forgets the servers of worktrees that are gone, and collects records that will not decode       |
 
 Stdout is the answer — a URL, the table, log lines — and everything a person
 reads rather than pipes goes to stderr. So `open "$(bun run dev-server url)"` is
 a thing that works, and `up` in a script hands back a URL rather than a
-paragraph.
+paragraph. A command refuses an argument it does not take rather than ignoring
+it, and it does so before it reads anything off the machine: a typo outside a
+repository prints the usage rather than git's complaint.
+
+**Linux only.** The child is put in a session of its own with util-linux
+`setsid`, and the proof that a recorded pid is still the process this tool
+started is read out of `/proc`. Neither exists on macOS. Nobody on this fleet
+runs one, so there is no second path here rather than an untested one.
 
 **The whole contract with the repo is its `dev` script: it must bind `$PORT` on
 `$HOST`.** Four names are handed to it and nothing is read back out —
 `PORT`, `DEV_PORT`, `HOST=127.0.0.1` and `SITE_URL`, which are
 `project-template`'s names, so a template repo needs no edit at all. Loading a
-`.env` stays the repo's own business; this adds four variables to the
-environment it already had.
+`.env` stays the repo's own business.
+
+`HOST` is a request rather than a guarantee, so `up` asks the machine once the
+server answers: if the port also answers on `127.0.0.2` or on any of this
+machine's real addresses, the dev script is binding every interface instead of
+`$HOST`, and the child is stopped. A dev server reachable from the LAN is
+somebody else's code running on this machine's ports.
+
+**Identity is the worktree, never a name derived from it.** The record and the
+log are `<branch-slug>-<tag>.json` and `.log`, where the slug is for a reader
+and the tag is a hash of the worktree's own path. Two branches that differ only
+in punctuation or case reduce to one slug, and two detached worktrees share one
+short commit — so anything keyed on a readable name is one record and one port
+for two servers, which is one worktree serving another's code under a URL it
+printed itself. Every command also checks the `worktree` field of what it reads
+and refuses a record naming a different checkout, because a 32-bit tag is short
+enough to owe that check.
 
 **The port is derived, never allocated.** A worktree's block is ten ports, hashed
 (FNV-1a) from `<package name>/<branch>` and landing between 20000 and 60000, and
-the first port in that block nothing is holding is the one claimed. The package
-name is in the hash and not merely beside it: every repo on a machine has a
-`main`, and hashing the branch alone puts two of them in one block, where the
-second `up` lands beside the first repo's server. The primary checkout derives
-exactly as a linked worktree does — its branch is whatever it is on — and a
-detached HEAD derives from its short commit, which `status` shows in the branch
-column. Nothing is special-cased and no port is written into a repo.
+the first port in that block nothing is holding is the one claimed. The branch is
+hashed **as git spells it** — `feat/x` and `feat-x` are two worktrees and must be
+two blocks — and a detached worktree hashes its path instead, since its name is
+not its own. The package name is in the hash and not merely beside it: every repo
+on a machine has a `main`. The range deliberately overlaps the ephemeral ports
+the kernel hands out, which no span of this size could avoid, so every port is
+probed before it is claimed rather than assumed free.
 
-**A claimed port is refused, never stepped over.** If something else is
-listening on the port a worktree already claimed, `up` says so, names the port
-and exits 1. Falling forward to the next free one would keep `up` working and
-quietly break the only property the derivation is for — that this worktree's URL
-is still this worktree's URL tomorrow. `dev-server down` gives the claim up, and
-the next `up` derives again.
+**A claimed port is refused, never stepped over.** If something else is listening
+on the port a worktree already claimed, `up` says so, names the port and exits 1.
+Falling forward to the next free one would keep `up` working and quietly break
+the only property the derivation is for — that this worktree's URL is still this
+worktree's URL tomorrow. `dev-server down` gives the claim up, and the next `up`
+derives again.
+
+**One `up` per worktree at a time**, held over the whole read-decide-spawn-write
+with a lock file beside the record. Two of them racing that sequence both bind:
+measured, five concurrent pairs left four servers running that no record named.
+A lock whose holder is gone is taken rather than waited on — the holder is named
+by pid, boot id and start tick, exactly as a server is — so a run killed
+mid-`up` costs the next one nothing.
+
+**A recorded pid is not trusted on its number.** A pid is reused, and a reboot
+recycles every one of them at once, so the record carries the boot id it was
+taken on and the tick the process started at (`/proc/<pid>/stat` field 22); all
+three are re-read before any signal, and a mismatch means the record names
+nobody. Since what gets signalled is a process _group_, the pid must also still
+lead its own — which `setsid` guarantees for anything this tool started, and
+nothing else. A record whose pid or port is a number no derivation here could
+have produced is not a record at all.
 
 **The records live in git's common directory** — `$(git rev-parse
---git-common-dir)/dev-server/<branch>.json`, with the log beside it. That is one
-directory per repository whatever `git worktree` does to it: never tracked, so
-no consumer is asked for a `.gitignore` line, and still there when a worktree's
-own directory is not — which is the state `sweep` exists for. A record holds the
-worktree path, the branch, the package name, the port, the pid, the log path and
-when it started; `up` writes it **before** it waits for the first response, so a
-run killed mid-wait leaves a child something can still find.
+--git-common-dir)/dev-server/`, mode 0700, with each record and log 0600 because
+the log holds whatever the dev script printed, environment included. That is one
+directory per repository whatever `git worktree` does to it: never tracked, so no
+consumer is asked for a `.gitignore` line, and still there when a worktree's own
+directory is not — which is the state `sweep` exists for. A record holds the
+worktree path, the branch, the package name, the port, the pid, the boot id, the
+start tick, the log path and when it started; it is written whole and moved into
+place, and `up` writes it the moment there is a pid to write. The window that
+remains is `up` itself dying between the spawn and that write: the child is then
+orphaned with no record, and what surfaces it is the next `up` refusing the port
+it is holding.
+
+One unreadable record no longer takes the repository's tool down with it.
+`status` lists it as junk with its path, `sweep` collects it, and the other
+commands say so on stderr and carry on as if it were absent.
 
 **`sweep` is the one command that reads `git worktree list`.** A record whose
 worktree is no longer there — removed with `git worktree remove`, or deleted
 outright, which git still lists as prunable — is a server nobody can stand in
-front of any more, so it is stopped and its record and log are dropped. Every
-other record is left alone.
+front of any more, so it is stopped and its record and log are dropped. The rule
+is "the path is not there", which a worktree on an unmounted volume also
+satisfies: `sweep` would stop its server too. Every other record is left alone.
 
-`up` waits two minutes for the first HTTP response before it gives up, prints the
-last 40 log lines and takes the child down with it. `DEV_SERVER_READY_TIMEOUT_MS`
-shortens that, which is what this repo's own suite sets.
+`up` waits two minutes for the first HTTP response before it gives up, stops the
+child and prints the last 40 log lines. It stops waiting the moment the child
+exits, rather than sitting out the clock for a process that is already gone.
+`DEV_SERVER_READY_TIMEOUT_MS` shortens that and is read before anything is
+started, which is what this repo's own suite sets. The log is appended to rather
+than truncated, with a dated header per run, so a spawn that fails on its first
+line does not destroy the log somebody came to read.
 
 ## Secret scanning
 

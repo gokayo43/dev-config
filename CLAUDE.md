@@ -72,7 +72,8 @@ a change to a rule usually lands here too.
   release-age window.
 - The `*.ts` at the root are what a consuming repo reaches directly, as against
   the gates, which run over it from CI. Five of them are **exports** it imports
-  and calls; `dev-server.ts` below is the one it runs instead. Each is in
+  and calls; the two `dev-server*` files below are a bin it runs and the module
+  that bin imports. Each is in
   `files` and `exports`, and each is here rather than in an action for the same
   reason: what it grades is only visible from inside the repo. `route-log.ts` is
   the protocol between an app and the route-coverage floor;
@@ -86,14 +87,20 @@ a change to a rule usually lands here too.
   is by subject rather than by taste: a route table is a value one call can
   grade, and a limiter is a sequence of attempts against a live Redis that only
   a test framework can sequence.
-- `dev-server.ts` — one supervised dev server per git worktree, on a port the
-  worktree derives, reached as `bun run dev-server <cmd>` through the `bin`
-  entry. It is a bin rather than an export because there is nothing in it for a
-  repo to call: what it grades is a machine's state, so its reference page is
-  README's "One dev server per worktree" rather than a `docs/exports/` one, and
-  `tests/dev-server.test.ts` drives it against real worktrees and real detached
-  processes — the one suite here that spends real time, because a signal
-  reaching a process group is not a thing any injected clock has a part in.
+- `dev-server.ts` and `dev-server-derive.ts` — one supervised dev server per git
+  worktree, on a port the worktree derives, reached as `bun run dev-server <cmd>`
+  through the `bin` entry. Neither is an export: there is nothing in either for a
+  repo to import, so `files` ships them, `bin` names the first, and `exports`
+  names neither. The split is by what needs a machine — the bin is the detached
+  child, the claimed port, the lock and the signals; the derivation is what a
+  worktree's server is called, which port it gets, and what its record has to be,
+  and is the half a test can drive with no repository at all. That is also why
+  only the bin is waived from the coverage floor in `bunfig.toml`.
+  Its reference page is README's "One dev server per worktree" rather than a
+  `docs/exports/` one, and `tests/dev-server.test.ts` drives it against real
+  worktrees and real detached processes — the one suite here that spends real
+  time, because a signal reaching a process group is not a thing any injected
+  clock has a part in.
 - `db-gate/capacity.js` is the exception: it runs inside k6, not under this
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
@@ -172,7 +179,8 @@ base enables exactly the rules the plugin defines.
 
 `tests/house-limiter.ts` and `dev-server.ts` are out for the same reason and
 carry their duty the same way — a suite that spawns the real thing. `bunfig.toml`
-names which suite, per file.
+names which suite, per file, and says why `dev-server-derive.ts` is not with
+them.
 
 `bun test` needs a Postgres, a Redis, a chromium and passwordless sudo. The
 first because the replay gate's property is what two databases end up holding
