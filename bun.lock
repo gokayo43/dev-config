@@ -26,7 +26,7 @@
         "eslint-plugin-boundaries": ">=7",
         "knip": ">=6",
         "oxfmt": ">=0.63",
-        "oxlint": ">=1.79",
+        "oxlint": "1.81.0",
         "oxlint-tsgolint": ">=7",
         "typescript": ">=7",
       },
