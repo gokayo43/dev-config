@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
   "extends": ["./oxlint.base.json"],
   "env": { "node": true, "es2024": true },
-  "ignorePatterns": ["node_modules/**", ".github/actions/db-gate/capacity.js"],
+  "ignorePatterns": ["node_modules/**", ".claude/**", ".github/actions/db-gate/capacity.js"],
   "rules": {
     // One of the base's own rules, off here and nowhere else. Every gate in
     // this repo reads a file it does not own — another repo's package.json,

@@ -138,15 +138,53 @@
     "react/react-in-jsx-scope": "off",
     "react/rules-of-hooks": "error",
     "react/exhaustive-deps": "error",
-    // One rule carrying what `eslint-plugin-react-hooks` splits across a dozen
-    // names: oxlint ports the React Compiler itself, so `react/purity` and its
-    // siblings are not writable here and each judgement arrives as the prefix
-    // on this rule's message. `reportAllBailouts` adds the components the
-    // compiler declined to compile at all, which are silent without it.
-    // Which judgements, what each one means, and how to answer the two the
-    // fleet actually hits: README, "What the React Compiler declines to
-    // optimize".
-    "react/react-compiler": ["error", { "reportAllBailouts": true }],
+    // The React Compiler's judgements, one rule per judgement. None of them
+    // takes options, so the severity is the whole of what there is to say here.
+    //
+    // Stated in full rather than left to the tiers, because they do not all
+    // arrive through one: twelve are `correctness` and four `suspicious`, which
+    // this base already denies, but five are `restriction`, which it does not
+    // take at all — and `no-deriving-state-in-effects` is `perf`, the one tier
+    // deliberately left advisory above. That last is the single exception to
+    // the argument written there, and it is an exception because the hint is
+    // not a guess about input size: deriving state in an effect costs a render
+    // every time, which is a fact about the code and not about the load.
+    // Naming all twenty-two also means a rule upstream recategorises stays at
+    // `error` here rather than quietly following its tier.
+    //
+    // `react/todo` is the misleading name and the load-bearing one: it is the
+    // bail-out report — the compiler saying it declined to compile a component
+    // at all, so every memo it would have inserted is simply absent. A bail-out
+    // is not a violation, so with this one off, exactly the components nothing
+    // optimized are the ones that draw nothing. It has no relation to
+    // `no-warning-comments` above, which is what reads the word `todo` in a
+    // comment.
+    //
+    // Which judgement means what, how to answer the two the fleet actually
+    // hits, and the one suppression nothing here catches: README, "What the
+    // React Compiler declines to optimize".
+    "react/capitalized-calls": "error",
+    "react/error-boundaries": "error",
+    "react/exhaustive-effect-dependencies": "error",
+    "react/globals": "error",
+    "react/hooks": "error",
+    "react/immutability": "error",
+    "react/incompatible-library": "error",
+    "react/invariant": "error",
+    "react/memo-dependencies": "error",
+    "react/no-deriving-state-in-effects": "error",
+    "react/preserve-manual-memoization": "error",
+    "react/purity": "error",
+    "react/refs": "error",
+    "react/rule-suppression": "error",
+    "react/set-state-in-effect": "error",
+    "react/set-state-in-render": "error",
+    "react/static-components": "error",
+    "react/syntax": "error",
+    "react/todo": "error",
+    "react/unsupported-syntax": "error",
+    "react/use-memo": "error",
+    "react/void-use-memo": "error",
     // `pedantic`, which this base does not take. `null` is the exception the
     // option carves out: `x == null` is the one loose comparison that states an
     // intent the strict operator cannot — either of the two nullish values at

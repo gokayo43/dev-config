@@ -120,201 +120,6 @@ export const modes = ["a", "b"] as const;
 export const shaped = { a: 1 } satisfies Shape;
 `;
 
-/**
- * One case per judgement the React Compiler makes, keyed by the rule
- * `eslint-plugin-react-hooks` splits that judgement out as. oxlint ports the
- * compiler rather than the rules, so every one of them arrives under
- * `react/react-compiler` and says which it was in the prefix on its message —
- * which is the fact this table exists to hold. A judgement the port stopped
- * carrying would otherwise leave the one rule name in the base switched on and
- * answering for nothing.
- *
- * Source and expectation sit in one entry so that a case cannot be half
- * written: a fixture with no prefix to match would be a file in the tree that
- * nothing reads, and a prefix with no fixture an assertion nothing runs.
- */
-const COMPILER = {
-  purity: {
-    prefix: "Purity:",
-    source: `export function Panel(props: { readonly n: number }) {
-  const roll = Math.random();
-  return <p data-n={props.n}>{roll}</p>;
-}
-`,
-  },
-  immutability: {
-    prefix: "Immutability:",
-    source: `export function Config(props: { readonly cfg: { a: number } }) {
-  props.cfg.a = 3;
-  return <p>{props.cfg.a}</p>;
-}
-`,
-  },
-  "set-state-in-render": {
-    prefix: "RenderSetState:",
-    source: `import { useState } from "react";
-export function Counter(props: { readonly n: number }) {
-  const [v, setV] = useState(0);
-  setV(props.n);
-  return <p>{v}</p>;
-}
-`,
-  },
-  "set-state-in-effect": {
-    prefix: "EffectSetState:",
-    source: `import { useEffect, useState } from "react";
-export function useMirror(n: number) {
-  const [v, setV] = useState(0);
-  useEffect(() => {
-    setV(n);
-  });
-  return v;
-}
-`,
-  },
-  refs: {
-    prefix: "Refs:",
-    source: `import { useRef } from "react";
-export function Focus() {
-  const box = useRef<HTMLInputElement>(null);
-  return <input ref={box} data-had={String(box.current)} />;
-}
-`,
-  },
-  globals: {
-    prefix: "Globals:",
-    source: `let seen = 0;
-export function Seen(props: { readonly n: number }) {
-  seen += props.n;
-  return <p>{seen}</p>;
-}
-`,
-  },
-  "static-components": {
-    prefix: "StaticComponents:",
-    source: `export function Outer(props: { readonly n: number }) {
-  function Inner() {
-    return <span>{props.n}</span>;
-  }
-  return (
-    <div>
-      <Inner />
-    </div>
-  );
-}
-`,
-  },
-  "error-boundaries": {
-    prefix: "ErrorBoundaries:",
-    source: `export function Guarded(props: { readonly n: number }) {
-  try {
-    return <p>{props.n}</p>;
-  } catch {
-    return <p>failed</p>;
-  }
-}
-`,
-  },
-  "use-memo": {
-    prefix: "UseMemo:",
-    source: `import { useMemo } from "react";
-export function useTotal(a: number) {
-  return useMemo(() => a + 1, [a + 1]);
-}
-`,
-  },
-  "void-use-memo": {
-    prefix: "VoidUseMemo:",
-    source: `import { useMemo } from "react";
-export function useNoted(n: number) {
-  useMemo(() => {
-    globalThis.reportError(new Error(String(n)));
-  }, [n]);
-  return n;
-}
-`,
-  },
-  "preserve-manual-memoization": {
-    prefix: "PreserveManualMemo:",
-    source: `import { useMemo } from "react";
-export function useMaybe(a: number, on: boolean) {
-  return on ? useMemo(() => a, [a]) : 0;
-}
-`,
-  },
-  hooks: {
-    prefix: "Hooks:",
-    source: `import { useState } from "react";
-export function Cond(props: { readonly on: boolean }) {
-  if (props.on) {
-    const [v] = useState(0);
-    return <p>{v}</p>;
-  }
-  return <p>off</p>;
-}
-`,
-  },
-  "capitalized-calls": {
-    prefix: "CapitalizedCalls:",
-    source: `function Helper(n: number) {
-  return n + 1;
-}
-export function Sum(props: { readonly n: number }) {
-  return <p>{Helper(props.n)}</p>;
-}
-`,
-  },
-  invariant: {
-    prefix: "Invariant:",
-    source: `export function Holder(props: { readonly n: number }) {
-  class Box {
-    readonly at = props.n;
-  }
-  return <p>{new Box().at}</p>;
-}
-`,
-  },
-  "unsupported-syntax": {
-    prefix: "Todo:",
-    source: `export function Saving(props: { readonly n: number }) {
-  let done = 0;
-  try {
-    done = props.n;
-  } finally {
-    done += 1;
-  }
-  return <p>{done}</p>;
-}
-`,
-  },
-};
-
-/**
- * The path each is graded at, derived from the key rather than stored beside
- * it: the tree is built by `Object.fromEntries`, where two entries naming one
- * file collapse to whichever was written last and the case for the other passes
- * on its neighbour's diagnostics. A key is unique because the object is.
- *
- * Under `hooks/`, which is where the effect and query bans say nothing — so
- * what a case draws is the compiler's judgement and not the base's opinion of
- * where an effect belongs.
- */
-function compilerPath(rule: string): string {
-  return `src/hooks/${rule}.tsx`;
-}
-
-/**
- * The orchestrator's probe, which is the shape that opened this: a component
- * that rolls a die during render, writes through its own props, and compares
- * loosely. Under the base as it shipped before this set it drew nothing at all.
- */
-const PROBE = `export function Panel(props: { readonly cfg: { a: number }; readonly n: number }) {
-  const roll = Math.random();
-  props.cfg.a = 3;
-  return <p data-n={props.n == 1 ? roll : 0} />;
-}
-`;
-
 /** The line of `NULLISH` holding the comparison `{ "null": "ignore" }` does not forgive. */
 const LOOSE_AT = 3;
 
@@ -322,18 +127,6 @@ const LOOSE_AT = 3;
 const NULLISH = `declare const value: string | undefined;
 export const missing = value == null;
 export const one = value == "1";
-`;
-
-/**
- * A hook called from a function that is neither a component nor a hook — the
- * half of the rules of hooks the compiler never reaches, because it is not a
- * component and so is not compiled.
- */
-const NON_COMPONENT = `import { useState } from "react";
-export function helper() {
-  const [v] = useState(0);
-  return v;
-}
 `;
 
 /**
@@ -375,13 +168,8 @@ export function useRows(n: number) {
 `;
 
 const TREE = {
-  ...Object.fromEntries(
-    Object.entries(COMPILER).map(([rule, { source }]) => [compilerPath(rule), source]),
-  ),
-  "src/probe.tsx": PROBE,
   "src/nullish.ts": NULLISH,
   "src/hooks/use-rows.tsx": MISSING_DEP,
-  "src/hooks/non-component.ts": NON_COMPONENT,
   "src/rethrow.ts": RETHROW,
   "src/logging.ts": CONSOLE,
   "src/first.ts": PERF,
@@ -487,17 +275,6 @@ function adviceIn(file: string): string[] {
 /** Whether anything a file drew says what it is about — the message, not the code. */
 function saidIn(file: string, fragment: string): boolean {
   return adviceIn(file).some((each) => each.includes(fragment));
-}
-
-/**
- * What the compiler said about a file, as the judgement each message opens
- * with. The prefix is how one rule name answers for a dozen, so it is what a
- * case reads rather than the code every one of them shares.
- */
-function judgedIn(file: string): string[] {
-  return reportedIn(file)
-    .filter(({ code }) => code.includes("react-compiler"))
-    .map(({ severity, message }) => `${severity} ${message.split(" ")[0] ?? ""}`);
 }
 
 describe("the shape of a decision", () => {
@@ -670,64 +447,6 @@ describe("a type assertion", () => {
   });
 });
 
-describe("what the React Compiler declines to optimize", () => {
-  // The shape that opened this: the base mandated the compiler in every repo
-  // and then graded none of its judgements, so a component that rolls a die
-  // during render and writes through its own props passed the gate clean.
-  test("the probe that passed: an impure render, a props write, and a loose compare", () => {
-    expect(judgedIn("src/probe.tsx")).toEqual(["error Purity:", "error Immutability:"]);
-    expect(drawnIn("src/probe.tsx")).toContain("error eslint(eqeqeq)");
-  });
-
-  // A dozen-odd rule names upstream, one rule name here. Enabling that one is
-  // the whole of the wiring, so what has to be graded is that it still answers
-  // for each of them — a judgement oxlint's port stopped carrying would leave
-  // the base switched on and silent, which is the state this set exists to end.
-  //
-  // Exactly one judgement per fixture, not merely the right one among several:
-  // a case that tolerated extra diagnostics would pass on a rule that had begun
-  // reporting the same code twice, which is the shape this base refuses
-  // everywhere else.
-  test.each(Object.entries(COMPILER))("%s", (rule, { prefix }) => {
-    expect(judgedIn(compilerPath(rule))).toEqual([`error ${prefix}`]);
-  });
-
-  // The one judgement that is off by default, and the reason the rule is
-  // configured rather than switched on: a component the compiler declined to
-  // compile at all is not a violation, so without `reportAllBailouts` it draws
-  // nothing and reads as optimized. Every other case in this block passes with
-  // the option missing, which is what makes this the case that carries it.
-  test("a component the compiler skipped is a diagnostic, not a silence", () => {
-    const path = compilerPath("unsupported-syntax");
-    expect(judgedIn(path)).toEqual(["error Todo:"]);
-    // And it names the construct rather than only the fact, which is what makes
-    // a bail-out answerable at all — the compiler's internal path to it is
-    // upstream's to reword, so the case reads the syntax and not the prefix.
-    expect(reportedIn(path)[0]?.message ?? "").toContain("TryStatement");
-  });
-
-  // The memo ban and the compiler's memo judgements are not the same rule
-  // saying one thing twice: the ban refuses the import, and these two grade the
-  // memo that survives a disable carrying its reason.
-  test("and a hand-written memo is graded, not only refused", () => {
-    const path = compilerPath("preserve-manual-memoization");
-    expect(refusedIn(path)).toEqual(["useMemo"]);
-    expect(judgedIn(path)).toEqual(["error PreserveManualMemo:"]);
-  });
-
-  // `Hooks:` and `react/rules-of-hooks` report the same conditional call at the
-  // same line and column, which is the two-rules-one-line shape this base
-  // argues against for the assertion rules. Both stay anyway, and this is the
-  // fact that settles it: a hook called from a plain function is not a
-  // component the compiler analyses at all, so the older rule reaches a caller
-  // its replacement never sees. Dropping it would trade a duplicated
-  // diagnostic for a missing one.
-  test("and the older hooks rule reaches a caller the compiler never analyses", () => {
-    expect(judgedIn("src/hooks/non-component.ts")).toEqual([]);
-    expect(drawnIn("src/hooks/non-component.ts")).toEqual(["error react-hooks(rules-of-hooks)"]);
-  });
-});
-
 describe("a re-throw that drops its cause", () => {
   // Not stated in the base's own rules: `suspicious` carries it, and the base
   // restating a tier rule it agrees with is a precedent with no stopping point.
@@ -765,8 +484,15 @@ describe("a dependency list", () => {
   // no `--max-warnings` is passed anywhere — so a dependency the compiler
   // infers differently from the one written was a line in a report nobody was
   // required to drive to zero. Graded by the severity, which is the whole diff.
+  //
+  // Both rules deny it, which is the one place the base carries two errors over
+  // one line deliberately: the case above pins what each of them reaches that
+  // the other does not.
   test("is a gate rather than a report, now that it denies", () => {
-    expect(drawnIn("src/hooks/use-rows.tsx")).toEqual(["error react-hooks(exhaustive-deps)"]);
+    expect(drawnIn("src/hooks/use-rows.tsx").toSorted()).toEqual([
+      "error react(exhaustive-effect-dependencies)",
+      "error react-hooks(exhaustive-deps)",
+    ]);
   });
 });
 

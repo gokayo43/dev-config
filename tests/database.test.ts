@@ -14,8 +14,7 @@ import {
   textColumn,
 } from "../.github/actions/db-gate/database.ts";
 
-const SERVER =
-  Bun.env["TEST_DATABASE_URL"] ?? "postgres://postgres:postgres@localhost:5432/postgres";
+import { SERVER } from "./postgres.ts";
 
 describe("a database beside the one the caller declared", () => {
   const declared = "postgres://postgres:hunter2@localhost:5432/app";

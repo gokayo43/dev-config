@@ -531,7 +531,7 @@ ${body}
 
   // `AllowWarnDeny` documents `"allow"` as the synonym of `"off"` and `0` as
   // the number that means it, and oxlint honours all three (probed against
-  // 1.78). A check that knew only the word `off` would pass a rule switched off
+  // 1.80). A check that knew only the word `off` would pass a rule switched off
   // in either of the other two spellings, in silence, which is the whole
   // failure this gate exists to stop.
   test.each([

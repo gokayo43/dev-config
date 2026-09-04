@@ -33,6 +33,12 @@ function scriptOf(step: unknown): string {
   return typeof run === "string" ? run : "";
 }
 
+/** One string field of a mapping, or the empty string — a key absent reads as unset. */
+function textAt(held: ConfigObject, key: string): string {
+  const value = held[key];
+  return typeof value === "string" ? value : "";
+}
+
 /**
  * Every lane that takes the flag, found by the expansion rather than by a list
  * here — so a lane added without one, or one that stops reading it, changes the
@@ -195,6 +201,51 @@ describe("which packages a run is held to", () => {
   // `external` would run the job the wrapper exists to replace.
   test("the database job runs on the one value that names it", () => {
     expect(DATABASE_JOB["if"]).toBe("inputs.database == 'postgres'");
+  });
+
+  // Every address this job hands out is a port the daemon assigned, never a
+  // number written here. A fixed one is two failures at once on a self-hosted
+  // runner: `5432:5432` binds 0.0.0.0, which Docker's DNAT then answers on the
+  // box's public address, and no two overlapping jobs can both hold it. The
+  // wrong implementation is the readable one — a service published on its own
+  // port and a URL naming it — so the case reads both halves rather than the
+  // service alone, which would pass on a job that published ephemerally and
+  // then built its URL from 5432 anyway.
+  test("the services publish on loopback, on ports nothing else can be holding", () => {
+    const services = record(DATABASE_JOB["services"]);
+    for (const [name, port] of [
+      ["postgres", "5432"],
+      ["redis", "6379"],
+    ]) {
+      const published = record(services[name ?? ""])["ports"];
+      expect(isList(published) ? published : []).toEqual([`127.0.0.1::${port}`]);
+    }
+    const environment = record(DATABASE_JOB["env"]);
+    expect(environment["DATABASE_URL"]).toContain("job.services.postgres.ports['5432']");
+    expect(environment["REDIS_URL"]).toContain("job.services.redis.ports['6379']");
+  });
+
+  // The boot gate's app gets a port picked by the kernel, for the second half
+  // of the same reason: 3000 is the framework default, so it is exactly the
+  // port a shared box has already given to something else — on this one, to a
+  // deployed API — and two of these jobs would collide on it as surely as on a
+  // fixed 5432. The wrong implementation is the one that shipped: a health-url
+  // default that still says 3000. Read through `format(...)` rather than by
+  // searching for the absence of "3000", since a case that only asserted the
+  // absence would pass on a default that had been deleted rather than moved.
+  test("the boot gate polls the port the job allocated, not a default 3000", () => {
+    const steps = isList(DATABASE_JOB["steps"]) ? [...DATABASE_JOB["steps"]] : [];
+    const allocation = steps.map(scriptOf).filter((script) => script.includes("PORT="));
+    expect(allocation).toHaveLength(1);
+    expect(allocation[0] ?? "").toContain("$GITHUB_ENV");
+    // Bound to port 0 rather than probed for a free one: asking whether a port
+    // is free and then binding it is a race the kernel already answers.
+    expect(allocation[0] ?? "").toContain("port: 0");
+
+    const gate = steps.find((step) => textAt(record(step), "uses").includes("db-gate"));
+    const health = textAt(record(record(gate)["with"]), "health-url");
+    expect(health).toContain("env.PORT");
+    expect(health).not.toContain("3000");
   });
 
   // `external` says a wrapper workflow runs the database gates in this job's

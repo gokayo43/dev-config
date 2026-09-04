@@ -109,11 +109,14 @@ on:
       start-command:
         description: How the boot gate starts the app.
         type: string
-        default: bun run start
+        default: ""
       health-url:
-        description: What the boot gate polls until it answers 200.
+        description: >-
+          What the boot gate polls until it answers 200. Defaults to the port the
+          job allocated, which is why the default is not stated here — see the
+          db-gate step.
         type: string
-        default: http://localhost:3000/api/health
+        default: ""
       probe-command:
         description: >-
           A command of the repo's own, run against the booted app after it answers its
@@ -191,7 +194,10 @@ env:
 
 jobs:
   static:
-    runs-on: ubuntu-latest
+    # A caller with no runner carrying both labels queues here forever rather
+    # than failing. That, and what a shared persistent machine changes about
+    # service ports and the workspace: README, "Where it runs".
+    runs-on: [self-hosted, linux]
     timeout-minutes: 15
 
     # `--affected` is turbo's, and it is a CLI flag with no environment form — so
@@ -432,7 +438,7 @@ jobs:
 
   database:
     if: inputs.database == 'postgres'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     timeout-minutes: 15
 
     # Empty on every run, which is the one state no developer database is ever
@@ -440,22 +446,31 @@ jobs:
     # tag kept inline: that is the form Renovate's docker datasource maintains.
     # Redis is started unconditionally — the API shape pings it from its health
     # route, and an idle container costs a couple of seconds.
+    #
+    # `127.0.0.1::` is the `ip::containerPort` form: loopback, and a host port
+    # the daemon picks. Both halves are load-bearing on a self-hosted runner.
+    # A bare `5432:5432` binds 0.0.0.0, and Docker's DNAT rule carries no
+    # destination match, so the container answers on the box's public address
+    # whatever the firewall says — ufw does not filter the FORWARD path Docker
+    # installs. A fixed host port is also single-occupancy: two runners' jobs
+    # overlapping is the ordinary case here, and the second to start dies with
+    # "port is already allocated". The assigned port is read back below.
     services:
       postgres:
         image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
         env:
           POSTGRES_PASSWORD: postgres
         ports:
-          - 5432:5432
+          - 127.0.0.1::5432
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
       redis:
-        image: redis:7-alpine@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
         ports:
-          - 6379:6379
+          - 127.0.0.1::6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -463,8 +478,8 @@ jobs:
           --health-retries 30
 
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-      REDIS_URL: redis://localhost:6379
+      DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres
+      REDIS_URL: redis://localhost:${{ job.services.redis.ports['6379'] }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -488,14 +503,28 @@ jobs:
       - if: inputs.build
         run: bun run build
 
+      # The port the boot gate's app listens on, picked by the kernel rather
+      # than stated. 3000 is the framework default and therefore the one port
+      # every other service on a shared box has already taken; it is also what
+      # two of these jobs would collide on. Binding port 0 and reading the
+      # assignment back is the only way to name a port nothing else holds —
+      # asking whether a fixed one is free and then using it is a race.
+      #
+      # PORT is the platform convention, so an app that honours it needs no
+      # further wiring; one that does not sets start-command and health-url.
+      - name: Allocate a port for the app
+        run: |
+          bun -e 'const s = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+                  console.log(`PORT=${s.port}`); s.stop(true);' >> "$GITHUB_ENV"
+
       - uses: gokayo43/dev-config/.github/actions/db-gate@1aeb645afbeb782dc0c43d37bbf4e5d3203dcf8c # v0.53.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}
           backfill-seed: ${{ inputs.backfill-seed }}
           backfill-command: ${{ inputs.backfill-command }}
-          start-command: ${{ inputs.start-command }}
-          health-url: ${{ inputs.health-url }}
+          start-command: ${{ inputs.start-command || 'bun run start' }}
+          health-url: ${{ inputs.health-url || format('http://localhost:{0}/api/health', env.PORT) }}
           probe-command: ${{ inputs['probe-command'] }}
           probe-timeout: ${{ inputs['probe-timeout'] }}
           timestamp-allowlist: ${{ inputs.timestamp-allowlist }}

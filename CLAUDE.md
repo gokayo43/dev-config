@@ -127,8 +127,13 @@ a change to a rule usually lands here too.
   holds every override in the base to, and that a consuming repo's own list
   survives it — `lint-policy.test.ts` holds the picks a file's position decides,
   on both sides of every glob that scopes one, on every spelling that reaches a
-  banned name without importing it, and on the message each names its pick in,
-  and `action-evidence.test.ts` holds every action
+  banned name without importing it, and on the message each names its pick in;
+  `lint-policy-react.test.ts` is the React Compiler's half of that policy, split
+  off because it is its own subject and the largest one — one table keyed by
+  every `react/*` rule the base states, each entry a fixture that must draw its
+  own key, a named reason nothing here provokes it, or a note that the rule is
+  not the compiler's, and three comparisons holding that table, the base and the
+  README's own table to one set. And `action-evidence.test.ts` holds every action
   publishing an artifact to keeping the runner-temp paths its own YAML names.
   `repo-contract-fixture.ts` is the clean tree the repo contract's three suites
   share — split the way the gate is: the facts every repo satisfies, the
@@ -188,12 +193,13 @@ and the semantic fixtures' is what a real migration does to a real row; the
 second because a limiter's bucket is shared by two processes and its Redis can
 be gone; the third because what the invariant sweep claims is what a browser
 reports; the fourth because the test-suite gate seals a run in a network
-namespace and nothing short of taking one says whether it holds. The suite looks
-at `TEST_DATABASE_URL` or localhost:5432 and creates and drops databases there.
-`TEST_REDIS_URL` has no default and is refused when unset: the conformance suite
-**flushes** what it is given, and a suite that guessed at localhost:6379 on this
-box would wipe whichever stack's Redis was on it. README's "Gating this repo"
-has the one-liners, including the browser install.
+namespace and nothing short of taking one says whether it holds. Neither
+`TEST_DATABASE_URL` nor `TEST_REDIS_URL` has a default, and each is refused when
+unset: the database suites create and **drop** databases on the server they are
+given and the conformance suite **flushes** its Redis, and `localhost` on this
+box is a host address one of the stacks or a runner's service container may be
+publishing. `tests/postgres.ts` is the one reader of the first.
+README's "Gating this repo" has the one-liners, including the browser install.
 
 Two runs may share one server, which is what two worktrees under review are.
 Every database either end makes is named for what tells the runs apart: the

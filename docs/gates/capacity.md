@@ -35,6 +35,12 @@ things depending on what was underneath it — and a table that claimed the wron
 one would be a capacity claim nobody made. A value outside those two is refused
 rather than defaulted.
 
+`ci-runner` is now a self-hosted runner sharing a box with the stacks it serves,
+under a CPU and memory cap shared with every other runner on it. That does not
+change what the number is for — a trend line against the last run — but it does
+mean runs either side of that move are not comparable with each other, and that
+a neighbour's deploy shifts the line as readily as a commit does.
+
 ## Why there is no latency threshold
 
 A latency bound on a shared runner fails on a bad neighbour rather than on a bad

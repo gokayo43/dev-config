@@ -14,21 +14,27 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux]
     timeout-minutes: 10
 
     # The replay gate's fixtures are two databases and what each ends up
     # holding, so the suite drives a real Postgres — see tests/replay.test.ts
-    # for why nothing in-process can stand in. Published on 5432, which is where
-    # the suite looks when TEST_DATABASE_URL says nothing else. Pinned by digest
-    # for the same reason the actions are.
+    # for why nothing in-process can stand in. Pinned by digest for the same
+    # reason the actions are.
+    #
+    # `127.0.0.1::` is the `ip::containerPort` form — loopback, and a host port
+    # the daemon picks. See check.yml's database job for why both halves matter
+    # on a self-hosted runner; the short of it is that a bare `5432:5432` is
+    # reachable from off the box, and that two of these jobs cannot both have
+    # it. Every URL below is built from the assignment rather than from a
+    # number, which is also what makes TEST_DATABASE_URL explicit here.
     services:
       postgres:
         image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
         env:
           POSTGRES_PASSWORD: postgres
         ports:
-          - 5432:5432
+          - 127.0.0.1::5432
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -43,7 +49,7 @@ jobs:
       redis:
         image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
         ports:
-          - 6379:6379
+          - 127.0.0.1::6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
@@ -106,7 +112,11 @@ jobs:
       # its suite grades is what a browser reports — so the suite drives one.
       # The headless shell rather than the full chromium: nothing here opens a
       # window, and it is the smaller download.
-      - run: bunx playwright install --with-deps chromium-headless-shell
+      #
+      # No `--with-deps`: it shells out to `sudo apt-get`, and the runner user
+      # here may not run apt. The shared libraries it would install are already
+      # on the box, which is what lets the browser suites pass without it.
+      - run: bunx playwright install chromium-headless-shell
 
       # The gates this repo ships are TypeScript, and their suite is what proves
       # each one refuses a violating tree and passes a clean one. Every other
@@ -117,8 +127,12 @@ jobs:
       # applied to nothing. docs/gates/test-suite.md.
       - run: bun test --coverage
         env:
-          # No default, deliberately: the conformance suite flushes this one.
-          TEST_REDIS_URL: redis://127.0.0.1:6379
+          # Neither has a default, deliberately: the conformance suite flushes
+          # its Redis and the database suites drop databases on their server,
+          # and `localhost` on a box that runs the fleet's stacks is not a safe
+          # thing for either to assume. Both are the port the daemon assigned.
+          TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+          TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}
 
       # The k6 ramp this repo ships is the one file its own linter cannot read,
       # so it gets executed instead: both branches, against a stub server.

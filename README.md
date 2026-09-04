@@ -251,47 +251,69 @@ pure — and it skips what it cannot, silently, per component. So the mandate wa
 the one stack pick nothing in the gate could see: a component that rolled a die
 during render passed clean.
 
-`react/react-compiler` is the rule that ends that, at `error`. It is one rule
-covering what `eslint-plugin-react-hooks` splits across a dozen names, because
-oxlint ports the **compiler** rather than the rules — there is no `react/purity`
-to write, and a config that writes one is refused at parse time rather than
-ignored. Which judgement was made is the prefix on the message:
+The compiler's judgements are what end that, and the base states every one of
+them at `error`. oxlint ports the **compiler** rather than
+`eslint-plugin-react-hooks`, so the port's rule set is its own: the names below
+are the whole of what it offers, and upstream's `component-hook-factories`,
+`config` and `gating` are not among them. A judgement is its own rule name, so a
+name the port drops is refused at config-parse time rather than ignored:
 
-| Judgement            | Prefix                 | The code it refuses                                            |
-| -------------------- | ---------------------- | -------------------------------------------------------------- |
-| purity               | `Purity:`              | `Math.random()`, `Date.now()` and friends called during render |
-| immutability         | `Immutability:`        | writing through props, or through a value a hook returned      |
-| set-state-in-render  | `RenderSetState:`      | a setter called in the render body                             |
-| set-state-in-effect  | `EffectSetState:`      | a setter called synchronously in an effect body                |
-| refs                 | `Refs:`                | reading or writing `.current` during render                    |
-| globals              | `Globals:`             | reassigning a binding declared outside the component or hook   |
-| static-components    | `StaticComponents:`    | a component declared inside another one's render               |
-| error-boundaries     | `ErrorBoundaries:`     | JSX constructed inside a `try`, where its errors never land    |
-| use-memo             | `UseMemo:`             | a dependency list that is not an array of simple expressions   |
-| void-use-memo        | `VoidUseMemo:`         | a `useMemo` callback that returns nothing                      |
-| preserve-manual-memo | `PreserveManualMemo:`  | a hand-written memo whose deps the compiler infers differently |
-| hooks                | `Hooks:`               | a hook called conditionally, so the call order can change      |
-| capitalized-calls    | `CapitalizedCalls:`    | a capitalized function called directly instead of rendered     |
-| incompatible-library | `IncompatibleLibrary:` | an API returning functions that cannot be memoized safely      |
-| (no rule upstream)   | `Invariant:`           | an upstream assertion — see below; not a judgement about you   |
-| unsupported-syntax   | `Todo:`                | syntax the compiler stopped at — see the bail-outs below       |
+| Rule                             | The code it refuses                                              |
+| -------------------------------- | ---------------------------------------------------------------- |
+| `purity`                         | `Math.random()`, `Date.now()` and friends called during render   |
+| `immutability`                   | writing through props, or through a value a hook returned        |
+| `set-state-in-render`            | a setter called in the render body                               |
+| `set-state-in-effect`            | a setter called synchronously in an effect body                  |
+| `no-deriving-state-in-effects`   | an effect whose whole job is to compute state from another value |
+| `exhaustive-effect-dependencies` | an effect dependency list that omits what the body reads         |
+| `refs`                           | reading or writing `.current` during render                      |
+| `globals`                        | reassigning a binding declared outside the component or hook     |
+| `static-components`              | a component declared inside another one's render                 |
+| `error-boundaries`               | JSX constructed inside a `try`, where its errors never land      |
+| `use-memo`                       | a dependency list that is not an array of simple expressions     |
+| `memo-dependencies`              | a memo dependency list that omits what the callback reads        |
+| `void-use-memo`                  | a `useMemo` callback that returns nothing                        |
+| `preserve-manual-memoization`    | a hand-written memo whose deps the compiler infers differently   |
+| `hooks`                          | a hook called conditionally, so the call order can change        |
+| `capitalized-calls`              | a capitalized function called directly instead of rendered       |
+| `incompatible-library`           | an API returning functions that cannot be memoized safely        |
+| `unsupported-syntax`             | `eval` and `with`, which nothing can analyse statically          |
+| `rule-suppression`               | a comment silencing a `react-hooks/*` rule — see below           |
+| `syntax`                         | code the compiler could not read at all                          |
+| `invariant`                      | an upstream assertion — see below; not a judgement about you     |
+| `todo`                           | a component the compiler skipped — see the bail-outs below       |
 
-Two of those need a word beyond the row.
+Four of those need a word beyond the row.
 
-`Hooks:` reports the same conditional call, at the same line and column, as
-`react/rules-of-hooks`. Both stay anyway, which is the one place this base
-accepts two rules over one line. The settling fact is that `rules-of-hooks`
-catches a hook called from a function that is neither a component nor a hook —
-and that function is not a component, so the compiler never analyses it and says
-nothing. Dropping the older rule would trade a duplicated diagnostic for a
-missing one. `react/exhaustive-deps` is beside them for the same reason: the
-compiler's own `Effect` judgements do not report a missing dependency, and that
-rule is the only thing that does.
+**`react/rule-suppression`, and the suppression nothing catches.** The compiler
+skips any function holding a suppression of one of its rules — the violation it
+was told to ignore might be the one that makes compiling unsafe — so a disable
+comment costs that component every memo, not just the diagnostic. This rule
+reports it. What it reads is the **rule name**, not the directive keyword:
+`eslint-disable` and `oxlint-disable` both draw it when they name a
+`react-hooks/*` rule, and **neither draws it for the `react/*` names this base
+actually states**.
 
-`Invariant:` is the sharp edge, and it is not a judgement about your code at all.
-A class declared inside a component draws `Invariant:
-[InferMutationAliasingEffects] Expected value kind to be initialized` — an
-upstream assertion firing, with no
+So the house form of an escape hatch — `oxlint-disable react/purity -- reason`,
+which is how every other rule here is answered — is the one spelling that
+silently un-optimizes a component. Nothing in the gate says so. If you must
+suppress a compiler judgement, know that the component stops being compiled, and
+prefer fixing the code; dev-config#91 tracks the rule ever catching the form this
+base makes natural. Both halves are driven in `tests/lint-policy-react.test.ts`,
+the silence included.
+
+`react/hooks` reports the same conditional call, at the same line and column, as
+`react/rules-of-hooks`, and `react/exhaustive-effect-dependencies` reports the
+same missing dependency as `react/exhaustive-deps`. Both older rules stay anyway,
+which is the one place this base accepts two rules over one line, and one fact
+settles both: they reach a hook called from a function that is neither a
+component nor a hook, and that function is not a component, so the compiler never
+analyses it and says nothing. Dropping either would trade a duplicated
+diagnostic for a missing one.
+
+`react/invariant` is the sharp edge, and it is not a judgement about your code at
+all. A class declared inside a component draws `[InferMutationAliasingEffects]
+Expected value kind to be initialized` — an upstream assertion firing, with no
 user-facing rule behind it and no advice in the message. The fix is to hoist the
 class to module scope, which is where a class wants to be regardless. It is in
 the table's suite as a fixture so that the day upstream turns it into a real
@@ -300,13 +322,13 @@ repo.
 
 #### The bail-outs
 
-The last row is the one the rule is **configured** for rather than merely
-switched on. A bail-out is not a violation: it is the compiler saying it declined
-to optimize the whole component, so every memo it would have inserted is simply
-absent. With `reportAllBailouts` off that is silent — exactly the components
-nothing optimized are the ones that draw nothing — and every other row above
-holds with the option missing, which is why the base configures the rule instead
-of setting a bare `"error"`.
+`react/todo` is the last row and the misleading name — it has nothing to do with
+the word `todo` in a comment, which is `no-warning-comments`. A bail-out is not a
+violation: it is the compiler saying it declined to optimize the whole component,
+so every memo it would have inserted is simply absent. Switched off, that is
+silent — exactly the components nothing optimized are the ones that draw nothing
+— and every other row above holds without it, which is why the base states this
+one rather than leaving it to a category.
 
 The construct the diagnostic names is usually a shape one of the house picks
 already owns, so the fix is to restore the house shape rather than to disable the
@@ -317,10 +339,13 @@ React, all 22 bail-outs are two shapes: a `try`/`finally` in a component, and an
 out too and occur nowhere in the fleet.
 
 Every row above is driven against a fixture in `tests/lint-policy.test.ts`,
-`IncompatibleLibrary:` excepted — none of the shapes tried here provoked it, so
-it carries the row a reader who hits it needs and no case claiming a check
-nothing drives. A judgement oxlint's port stops carrying fails there rather than
-going quiet under a rule name still switched on.
+`incompatible-library`, `rule-suppression` and `syntax` excepted — none of the
+shapes tried here provoked those three, so each carries the row a reader who hits
+it needs and no case claiming a check nothing drives. The suite holds the two
+halves the table cannot: that the set of rules it drives plus those three is
+exactly the set the base enables, and that each of them still reports — a rule
+that stays a name and goes quiet fails there rather than passing as a config
+switched on and answering for nothing.
 
 ### The imports a pick has already answered
 
@@ -1070,37 +1095,48 @@ and what is ignored. Every other repo's gate is only as honest as those two
 lanes, which is why they run first.
 
 The replay suite needs a real Postgres, since what it asserts is what two
-databases end up holding. CI publishes one as a service on 5432, which is where
-the suite looks unless `TEST_DATABASE_URL` says otherwise; locally that is
+databases end up holding. It creates and **drops** databases on whatever it is
+pointed at, so `TEST_DATABASE_URL` is required and the suite refuses to guess —
+`tests/postgres.ts` is its one reader. There used to be a `localhost:5432`
+default, on the argument that a suite naming its own databases costs a stranger
+nothing; that stopped being true when `localhost` became a box running the
+fleet's stacks and its CI runners. Locally:
 
 ```sh
-docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine
+docker run --rm -d -p 127.0.0.1:5497:5432 -e POSTGRES_PASSWORD=postgres postgres:16-alpine
+export TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5497/postgres
 ```
 
-It creates and drops databases on whatever it is pointed at, so point it at a
-throwaway. Two runs may share one: every name either the suite or a gate puts on
-that server carries what tells the runs apart — the process for the suite's own
-databases, and the checkout being worked on for the two a gate builds for itself
+Two runs may share one server: every name either the suite or a gate puts on it
+carries what tells the runs apart — the process for the suite's own databases,
+and the checkout being worked on for the two a gate builds for itself
 (`upgrade_path_<digest>` and `backfill_<digest>`).
 
 The limiter conformance suite needs a Redis, since what it grades is a bucket
 shared by two processes and a limiter whose Redis is gone. It **flushes** what it
-is given, so unlike the Postgres above it has no default at all: `TEST_REDIS_URL`
-is required and the suite refuses to guess. A default address is how a suite
-wipes the Redis four stacks on one box were sharing.
+is given, and is required for the same reason and refuses to guess for the same
+reason. A default address is how a suite wipes the Redis four stacks on one box
+were sharing.
 
 ```sh
-docker run --rm -d -p 6390:6379 redis:7-alpine
+docker run --rm -d -p 127.0.0.1:6390:6379 redis:7-alpine
 export TEST_REDIS_URL=redis://127.0.0.1:6390
 ```
+
+Both publish on `127.0.0.1` explicitly: a bare `-p 5432:5432` binds `0.0.0.0`,
+and Docker's forwarding rule answers it on the box's public address whatever
+`ufw` is set to.
 
 The invariant sweep's suite drives a real browser against a real server, because
 every part of what that fixture claims is a browser fact. It needs Playwright's
 chromium, which CI installs and a machine gets with:
 
 ```sh
-bunx playwright install --with-deps chromium-headless-shell
+bunx playwright install chromium-headless-shell
 ```
+
+No `--with-deps`: it shells out to `sudo apt-get`, which the CI runner's account
+may not run, and the shared libraries it installs are already on the box.
 
 The test-suite gate's own suite needs passwordless `sudo`, which is what taking a
 network namespace costs — a runner has it, and a machine that does not cannot run
@@ -1316,6 +1352,37 @@ The gate is a workflow in this repo — `.github/workflows/check.yml` — and re
 call it instead of retyping it. A consuming repo's `.github/workflows/ci.yml` is
 the whole of its CI:
 
+### Where it runs
+
+Every job in `check.yml` and in this repo's own `ci.yml` declares
+`runs-on: [self-hosted, linux]`. **A caller needs a runner carrying both labels,
+or its jobs queue until one appears** — there is no timeout on a queued job, so
+the symptom is a run that never starts rather than one that fails. dev-config#88
+is where the move is argued.
+
+Three things follow from the runner being a shared, persistent machine rather
+than a fresh cloud VM, and they are why the workflows look the way they do:
+
+- **Service containers publish on `127.0.0.1` and on a port the daemon picks**
+  (`ports: ["127.0.0.1::5432"]`), never on a fixed one. A bare `5432:5432` binds
+  `0.0.0.0`, and the DNAT rule Docker installs carries no destination match — so
+  the container answers on the box's public address whatever the host firewall
+  says, since `ufw` does not filter the FORWARD path. A fixed port is also
+  single-occupancy, and two runners' jobs overlapping is the ordinary case. Read
+  the assignment back with `${{ job.services.postgres.ports['5432'] }}`.
+- **The boot gate's app gets an allocated port too.** `health-url` defaults to
+  `http://localhost:${PORT}/api/health`, where `PORT` is a free port the job
+  bound and exported before the gate runs. 3000 is the framework default and
+  therefore the port something else on a shared box already holds. `PORT` is the
+  platform convention; an app that ignores it needs `start-command` and
+  `health-url` set explicitly.
+- **The workspace is not discarded when the run ends.** What cleans it is
+  `actions/checkout` at the start of the next run.
+
+The Lighthouse example under "Static sites" deliberately stays on
+`ubuntu-latest`: its numbers are the assertion, and a box that is also serving
+production moves them for reasons no commit caused.
+
 ```yaml
 name: CI
 
@@ -1339,32 +1406,32 @@ jobs:
       database: postgres
 ```
 
-| Input                 | Default                            | Effect                                                                                                                                                                                                                                                                                                                                                                                                       |
-| --------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `build`               | `false`                            | Runs `bun run build` before the static gate and before the boot gate.                                                                                                                                                                                                                                                                                                                                        |
-| `affected`            | `false`                            | Runs the `typecheck` lane over the packages a pull request changed, via turbo's `--affected` with `TURBO_SCM_BASE` set to the pull request's base commit. Needs `turbo.json` at the root and is refused without one; ignored on a push, where `main` stays the full run.                                                                                                                                     |
-| `database`            | `none`                             | `postgres` adds the database job: an empty Postgres, the migrations replayed onto it twice, the app booted against the result, and a k6 ramp over every route it serves. `external` says a workflow wrapping this one runs the database gates in that job's place. `none` is a repo with no schema. Anything but `none` makes `db:migrate` part of the repo contract; anything outside the three is refused. |
-| `compose`             | `false`                            | Holds `docker-compose.yml` to the deployment shape.                                                                                                                                                                                                                                                                                                                                                          |
-| `mutation-lane`       | `false`                            | Mutates the domain files this branch changed and fails on a mutant its own lines left undetected. Reads the pure domain from the `boundaries/elements` entry typed `domain`; needs `@stryker-mutator/core` and `@hughescr/stryker-bun-runner` among the repo's devDependencies.                                                                                                                              |
-| `mutation-floor`      | `""`                               | The mutation score the changed domain files must hold, as a fraction between 0 and 1. Empty publishes the score and enforces nothing. Needs `mutation-lane: true`.                                                                                                                                                                                                                                           |
-| `upgrade-gate`        | `false`                            | Also proves that a database upgraded from the base ref's migrations reaches the schema a fresh one gets. Needs `database: postgres`; for repos whose database is deployed.                                                                                                                                                                                                                                   |
-| `semantic-fixtures`   | `""`                               | A directory of the repo's own holding the rows a deployed database already has, as base-compatible SQL, each with the assertion the current contract makes about them: written into the base ref's replay and graded after this branch's migrations run over them. Needs `upgrade-gate: true`.                                                                                                               |
-| `contract-exemptions` | `""`                               | Repo-contract facts this repo is structurally unable to satisfy, space-separated. A marketing site names `docs-spine`; a repo being wound down names `lifecycle-retire`.                                                                                                                                                                                                                                     |
-| `data-jobs-external`  | `""`                               | Where the deployment already runs a live repo's backup and restore drill, when they are not this repo's own scripts — the job, its schedule and the runbook. Empty asks for `scripts/backup.sh` and `scripts/restore-drill.sh` with their units. The reason is the waiver, so there is no way to claim it without naming the jobs.                                                                           |
-| `stack-allowlist`     | `""`                               | Packages this repo keeps against the stack denylist, as `<package> -- why` entries, one per line; an entry is refused when it carries no reason, when nothing here declares the package any more, or when the denylist has stopped denying it.                                                                                                                                                               |
-| `backfill-seed`       | `""`                               | Shell code putting a database into the state this repo's backfill was written for. Set it with `backfill-command` or not at all.                                                                                                                                                                                                                                                                             |
-| `backfill-command`    | `""`                               | The backfill, as shell code: run twice against the state `backfill-seed` wrote, in a database of the check's own, with the data compared either side of the second run.                                                                                                                                                                                                                                      |
-| `start-command`       | `bun run start`                    | How the boot gate starts the app.                                                                                                                                                                                                                                                                                                                                                                            |
-| `health-url`          | `http://localhost:3000/api/health` | What the boot gate polls until it answers 200.                                                                                                                                                                                                                                                                                                                                                               |
-| `probe-command`       | `""`                               | A command of the repo's own, run as shell against the booted app after it answers its health route and before the ramp, with the app's URL in `HEALTH_URL`. Its stdout is the verdict: every line it writes there is one problem, whatever it exits with.                                                                                                                                                    |
-| `probe-timeout`       | `""`                               | How many seconds `probe-command` gets before it is killed. Empty takes the bound `db-gate/probe.ts` declares — 120 seconds today — which is where that number and the argument for it live. Needs `probe-command`.                                                                                                                                                                                           |
-| `timestamp-allowlist` | `""`                               | `schema.table.column -- why` entries whose value really is a wall-clock reading rather than an instant, one per line; an entry is refused when it carries no reason, when the schema has no column of that name, or when that column is no longer a wall-clock one.                                                                                                                                          |
-| `capacity-path`       | `""`                               | Paths to ramp alongside the health route, one per line.                                                                                                                                                                                                                                                                                                                                                      |
-| `capacity-script`     | `""`                               | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                                                                                                                                                                                                                                                   |
-| `db-gate-evidence`    | `db-gate-evidence`                 | The artifact name for the k6 summary, the two route-log snapshots, the backfill check's three data dumps and the app's output, for a matrix that runs more than one leg.                                                                                                                                                                                                                                     |
-| `route-allowlist`     | `""`                               | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                                                                                                                                                                                                            |
-| `test-network`        | `""`                               | Why this repo's suite has to reach a real network. Empty runs the suite sealed in a network namespace with nothing but loopback in it, so a live call fails where it is written. The reason is the input, and it is read in review like the reason on a lint directive.                                                                                                                                      |
-| `test-suite-evidence` | `test-suite-evidence`              | The artifact name for the junit report, for a matrix that runs more than one leg.                                                                                                                                                                                                                                                                                                                            |
+| Input                 | Default                             | Effect                                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `build`               | `false`                             | Runs `bun run build` before the static gate and before the boot gate.                                                                                                                                                                                                                                                                                                                                        |
+| `affected`            | `false`                             | Runs the `typecheck` lane over the packages a pull request changed, via turbo's `--affected` with `TURBO_SCM_BASE` set to the pull request's base commit. Needs `turbo.json` at the root and is refused without one; ignored on a push, where `main` stays the full run.                                                                                                                                     |
+| `database`            | `none`                              | `postgres` adds the database job: an empty Postgres, the migrations replayed onto it twice, the app booted against the result, and a k6 ramp over every route it serves. `external` says a workflow wrapping this one runs the database gates in that job's place. `none` is a repo with no schema. Anything but `none` makes `db:migrate` part of the repo contract; anything outside the three is refused. |
+| `compose`             | `false`                             | Holds `docker-compose.yml` to the deployment shape.                                                                                                                                                                                                                                                                                                                                                          |
+| `mutation-lane`       | `false`                             | Mutates the domain files this branch changed and fails on a mutant its own lines left undetected. Reads the pure domain from the `boundaries/elements` entry typed `domain`; needs `@stryker-mutator/core` and `@hughescr/stryker-bun-runner` among the repo's devDependencies.                                                                                                                              |
+| `mutation-floor`      | `""`                                | The mutation score the changed domain files must hold, as a fraction between 0 and 1. Empty publishes the score and enforces nothing. Needs `mutation-lane: true`.                                                                                                                                                                                                                                           |
+| `upgrade-gate`        | `false`                             | Also proves that a database upgraded from the base ref's migrations reaches the schema a fresh one gets. Needs `database: postgres`; for repos whose database is deployed.                                                                                                                                                                                                                                   |
+| `semantic-fixtures`   | `""`                                | A directory of the repo's own holding the rows a deployed database already has, as base-compatible SQL, each with the assertion the current contract makes about them: written into the base ref's replay and graded after this branch's migrations run over them. Needs `upgrade-gate: true`.                                                                                                               |
+| `contract-exemptions` | `""`                                | Repo-contract facts this repo is structurally unable to satisfy, space-separated. A marketing site names `docs-spine`; a repo being wound down names `lifecycle-retire`.                                                                                                                                                                                                                                     |
+| `data-jobs-external`  | `""`                                | Where the deployment already runs a live repo's backup and restore drill, when they are not this repo's own scripts — the job, its schedule and the runbook. Empty asks for `scripts/backup.sh` and `scripts/restore-drill.sh` with their units. The reason is the waiver, so there is no way to claim it without naming the jobs.                                                                           |
+| `stack-allowlist`     | `""`                                | Packages this repo keeps against the stack denylist, as `<package> -- why` entries, one per line; an entry is refused when it carries no reason, when nothing here declares the package any more, or when the denylist has stopped denying it.                                                                                                                                                               |
+| `backfill-seed`       | `""`                                | Shell code putting a database into the state this repo's backfill was written for. Set it with `backfill-command` or not at all.                                                                                                                                                                                                                                                                             |
+| `backfill-command`    | `""`                                | The backfill, as shell code: run twice against the state `backfill-seed` wrote, in a database of the check's own, with the data compared either side of the second run.                                                                                                                                                                                                                                      |
+| `start-command`       | `bun run start`                     | How the boot gate starts the app.                                                                                                                                                                                                                                                                                                                                                                            |
+| `health-url`          | `http://localhost:$PORT/api/health` | What the boot gate polls until it answers 200. `PORT` is a free port the job allocates and exports, because 3000 is the port a shared runner box has already given to something else. An app that does not honour `PORT` sets this and `start-command` explicitly.                                                                                                                                           |
+| `probe-command`       | `""`                                | A command of the repo's own, run as shell against the booted app after it answers its health route and before the ramp, with the app's URL in `HEALTH_URL`. Its stdout is the verdict: every line it writes there is one problem, whatever it exits with.                                                                                                                                                    |
+| `probe-timeout`       | `""`                                | How many seconds `probe-command` gets before it is killed. Empty takes the bound `db-gate/probe.ts` declares — 120 seconds today — which is where that number and the argument for it live. Needs `probe-command`.                                                                                                                                                                                           |
+| `timestamp-allowlist` | `""`                                | `schema.table.column -- why` entries whose value really is a wall-clock reading rather than an instant, one per line; an entry is refused when it carries no reason, when the schema has no column of that name, or when that column is no longer a wall-clock one.                                                                                                                                          |
+| `capacity-path`       | `""`                                | Paths to ramp alongside the health route, one per line.                                                                                                                                                                                                                                                                                                                                                      |
+| `capacity-script`     | `""`                                | A k6 script of the repo's own, replacing the shipped ramp.                                                                                                                                                                                                                                                                                                                                                   |
+| `db-gate-evidence`    | `db-gate-evidence`                  | The artifact name for the k6 summary, the two route-log snapshots, the backfill check's three data dumps and the app's output, for a matrix that runs more than one leg.                                                                                                                                                                                                                                     |
+| `route-allowlist`     | `""`                                | Routes the ramp cannot cover, as `METHOD /path -- why` entries, one per line; one without a reason, and one the ramp did reach, are both refused.                                                                                                                                                                                                                                                            |
+| `test-network`        | `""`                                | Why this repo's suite has to reach a real network. Empty runs the suite sealed in a network namespace with nothing but loopback in it, so a live call fails where it is written. The reason is the input, and it is read in review like the reason on a lint directive.                                                                                                                                      |
+| `test-suite-evidence` | `test-suite-evidence`               | The artifact name for the junit report, for a matrix that runs more than one leg.                                                                                                                                                                                                                                                                                                                            |
 
 Both evidence names default to a constant, and an artifact name may be claimed
 once per run — so a caller that runs `check.yml` as a **matrix** has to give each

@@ -10,6 +10,7 @@ import { beside, rows } from "../.github/actions/db-gate/database.ts";
 import { replayGate, upgradeDatabase } from "../.github/actions/db-gate/replay.ts";
 
 import { containing } from "./matchers.ts";
+import { SERVER } from "./postgres.ts";
 import { lineage, type Migration, migratesFrom, scripted } from "./lineage.ts";
 import { git, history, IDENTITY, type Repo, under } from "./tree.ts";
 
@@ -31,8 +32,6 @@ import { git, history, IDENTITY, type Repo, under } from "./tree.ts";
  * suite against the same Postgres, which is what two worktrees under review
  * produce, shares nothing with the first.
  */
-const SERVER =
-  Bun.env["TEST_DATABASE_URL"] ?? "postgres://postgres:postgres@localhost:5432/postgres";
 
 const JOURNALLED = new URL("./journalled-migrator.ts", import.meta.url).pathname;
 const REPLAYING = new URL("./replaying-migrator.ts", import.meta.url).pathname;

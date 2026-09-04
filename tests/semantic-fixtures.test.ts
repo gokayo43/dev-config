@@ -11,6 +11,7 @@ import { replayGate, upgradeDatabase } from "../.github/actions/db-gate/replay.t
 import { fixtureDatabase } from "../.github/actions/db-gate/semantic-fixtures.ts";
 
 import { containing } from "./matchers.ts";
+import { SERVER } from "./postgres.ts";
 import { lineage, type Migration, migratesFrom } from "./lineage.ts";
 import { history, type Repo, type Tree } from "./tree.ts";
 
@@ -26,8 +27,6 @@ import { history, type Repo, type Tree } from "./tree.ts";
  * same schema, so the upgrade gate passes both — which is what makes them the
  * right fixture for a gate written because a schema comparison cannot see this.
  */
-const SERVER =
-  Bun.env["TEST_DATABASE_URL"] ?? "postgres://postgres:postgres@localhost:5432/postgres";
 
 const MIGRATOR = new URL("./journalled-migrator.ts", import.meta.url).pathname;
 

@@ -116,8 +116,10 @@ escapes the directory is not part of a lineage and would not be put back.
 
 The tree is exactly as it was found afterwards whenever the replay _throws_ —
 which is every way it can fail on its own. A process killed outright leaves the
-base ref's files in the lineage directory; on the ephemeral runner this gate is
-built for, that workspace is discarded either way. If the restore itself fails,
+base ref's files in the lineage directory; what reclaims that workspace is
+`actions/checkout`, which cleans it at the start of the next run — the runners
+these gates run on are persistent, so nothing is discarded by the machine going
+away. If the restore itself fails,
 the run says so carrying both that failure and whatever it was already
 reporting, and the copy of the branch's files is left in place with its path in
 the diagnostic — it is the only copy there is.

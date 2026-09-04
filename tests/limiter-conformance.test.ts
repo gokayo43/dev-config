@@ -24,12 +24,12 @@ import { type Flaw, FLAWS } from "./house-limiter.ts";
 import { materialise } from "./tree.ts";
 
 /**
- * A throwaway Redis, refused rather than defaulted — which is where this parts
- * company with the Postgres suites beside it. Those create and drop databases
- * they named themselves, so a default address costs a stranger nothing; the
- * conformance suite **flushes** what it is pointed at, and a default of
- * localhost:6379 on a box that runs four stacks is a suite that wipes whichever
- * one happened to be there.
+ * A throwaway Redis, refused rather than defaulted, for the reason
+ * `tests/postgres.ts` now refuses a server too: `localhost` on the box these
+ * suites run on is a host address some stack may be publishing, and what this
+ * suite does to whatever answers is **flush** it. The two refusals differ only
+ * in how loud the damage is — this one wipes a live keyspace, that one drops
+ * databases — so neither guesses.
  */
 const REDIS_URL = required(
   "TEST_REDIS_URL",

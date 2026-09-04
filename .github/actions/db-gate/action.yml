@@ -318,8 +318,8 @@ runs:
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/route-coverage.main.ts"
 
-    # Everything the steps above wrote into the runner, which is deleted with
-    # the runner. A step that failed on the way to a number is exactly when its
+    # Everything the steps above wrote into the runner's workspace, which the
+    # next run's checkout cleans away. A step that failed on the way to a number is exactly when its
     # partial evidence is worth having — the summary of a ramp that died, the
     # two snapshots behind a floor's verdict, the output of an app that never
     # answered — and a cancelled run has nothing to say. Reproducing any of
