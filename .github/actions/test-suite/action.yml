@@ -89,14 +89,20 @@ runs:
         reason=${reason%"${reason##*[![:space:]]}"}
 
         if [ -n "$reason" ]; then
-          # A workflow command ends at the newline, so a reason written across
-          # several lines would put everything after the first outside the
+          # A workflow command ends at the end of a line, so a reason written
+          # across several would put everything after the first outside the
           # notice — and into the log as whatever those lines happen to spell.
           # Refused rather than silently truncated: half a reason in the log is
           # worse than none, because it reads like the whole one.
+          #
+          # Both terminators, because the runner honours both: it reads a
+          # child's stdout with StreamReader.ReadLine (actions/runner,
+          # ProcessInvoker.cs), which ends a line on a carriage return, a line
+          # feed, or the pair. A test for `\n` alone lets `reason\r::add-mask::x`
+          # through as one shell string and two runner lines.
           case $reason in
-            *$'\n'*)
-              echo "::error::test-network must be one line — it is read in review, and a workflow command ends at the first newline, so the rest of the reason would be swallowed"
+            *[$'\n'$'\r']*)
+              echo "::error::test-network must be one line — it is read in review, and a workflow command ends at the first carriage return or line feed, so the rest of the reason would be swallowed"
               exit 1
               ;;
           esac

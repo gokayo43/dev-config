@@ -455,3 +455,47 @@ describe("a message that is not the gate author's to trust", () => {
     expect(lines).toEqual(["::notice::coverage fell to 80%25 %0D%0Aof the floor"]);
   });
 });
+
+/**
+ * `entry` driven as its own process, because it exits: called in-process the
+ * exit would take the runner with it, and the status is the other half of what
+ * the action reads — a step that annotated correctly and returned 0 is a gate
+ * nobody notices is off.
+ */
+async function entered(thrown: string): Promise<{ status: number; lines: string[] }> {
+  const gate = new URL("../.github/actions/_lib/gate.ts", import.meta.url).pathname;
+  const source = `const { entry } = await import(${JSON.stringify(gate)});
+await entry(async () => { throw ${thrown}; });`;
+  const proc = Bun.spawn(["bun", "-e", source], { stdout: "pipe", stderr: "pipe" });
+  const stdout = await new Response(proc.stdout).text();
+  return { status: await proc.exited, lines: stdout.split("\n").filter((line) => line !== "") };
+}
+
+// What reaches `entry` is the same kind of text every other path in the file
+// escapes: `database.ts` throws quoting the query it ran, `dumpOf` names the
+// database, `repoFiles` names a root the graded repository chose. GitHub ends a
+// workflow command at the newline, so one inside a thrown message offers what
+// follows to the parser as a command in its own right — two commands out of one
+// throw, the second written by whatever the gate was reading when it died.
+describe("a gate that died mid-read", () => {
+  test("a newline in a thrown message does not start a second command", async () => {
+    const { status, lines } = await entered(
+      String.raw`new Error("could not read table \`x\` at 80%\n::notice::INJECTED-BY-THE-VALUE")`,
+    );
+
+    expect(lines).toEqual([
+      "::error::could not read table `x` at 80%25%0A::notice::INJECTED-BY-THE-VALUE",
+    ]);
+    expect(status).toBe(1);
+  });
+
+  // The other branch of the same line: a throw that is not an Error is
+  // stringified rather than read for a message, and an escape applied to one
+  // branch leaves the whole class alive through the other.
+  test("and neither does one in a thrown value that is not an Error", async () => {
+    const { status, lines } = await entered(String.raw`"plain\n::error::INJECTED-BY-THE-VALUE"`);
+
+    expect(lines).toEqual(["::error::plain%0A::error::INJECTED-BY-THE-VALUE"]);
+    expect(status).toBe(1);
+  });
+});

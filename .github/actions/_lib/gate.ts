@@ -178,7 +178,7 @@ export async function entry(run: () => Promise<void>): Promise<void> {
   try {
     await run();
   } catch (error) {
-    console.log(`::error::${error instanceof Error ? error.message : String(error)}`);
+    report([{ message: error instanceof Error ? error.message : String(error) }]);
     process.exit(1);
   }
 }

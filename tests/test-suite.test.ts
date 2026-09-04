@@ -203,12 +203,24 @@ describe("the sealed lane", () => {
     expect(status).not.toBe(0);
   });
 
-  test("a reason written across lines is refused, not truncated into the log", async () => {
-    const { status, output } = await ran(REACHES, "the sandbox API\n::error::not a reason at all");
-    expect(output).toContain("::error::test-network must be one line");
-    expect(output).not.toContain("::error::not a reason at all");
-    expect(status).not.toBe(0);
-  });
+  // Both terminators the runner honours, because it reads a child's stdout with
+  // StreamReader.ReadLine — a carriage return, a line feed, or the pair. A guard
+  // testing for the line feed alone takes the carriage-return spelling for a
+  // one-line reason and echoes it, and the runner reads the second half as a
+  // command of its own.
+  test.each([
+    ["a line feed", "the sandbox API\n::error::not a reason at all"],
+    ["a carriage return", "the sandbox API\r::error::not a reason at all"],
+    ["the pair", "the sandbox API\r\n::error::not a reason at all"],
+  ])(
+    "a reason written across lines by %s is refused, not truncated into the log",
+    async (_terminator, reason) => {
+      const { status, output } = await ran(REACHES, reason);
+      expect(output).toContain("::error::test-network must be one line");
+      expect(output).not.toContain("::error::not a reason at all");
+      expect(status).not.toBe(0);
+    },
+  );
   // The runner cancels a step by signalling the process it started and nothing
   // else, so what the step does with that signal decides whether the suite goes
   // with it. Left in the foreground, `bun test` outlives the shell that started

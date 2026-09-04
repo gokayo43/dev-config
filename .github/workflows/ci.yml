@@ -161,18 +161,17 @@ jobs:
           # is a name this repo has, and both are names a consumer could.
           mapfile -t -d '' files < <(git -c core.quotepath=false ls-files -z '*.json' |
             grep -zvE '((^|/)(\.oxlintrc|oxlint\.base)\.json|^tsconfig(\.[^/]+)?\.json)$')
-          # The ${} below are JS template literals, not shell expansions.
-          # shellcheck disable=SC2016
-          node -e '
-            const { readFileSync } = require("node:fs");
-            for (const file of process.argv.slice(1)) {
+          bun -e '
+            const { report } = await import("./.github/actions/_lib/gate.ts");
+            const problems = [];
+            for (const file of Bun.argv.slice(1)) {
               try {
-                JSON.parse(readFileSync(file, "utf8"));
+                JSON.parse(await Bun.file(file).text());
               } catch (error) {
-                console.log(`::error file=${file}::${error.message}`);
-                process.exitCode = 1;
+                problems.push({ file, message: error.message });
               }
             }
+            report(problems);
           ' "${files[@]}"
 
       # check.yml and the composite actions are the executable half of this
@@ -195,22 +194,24 @@ jobs:
           # The ${} below are JS template literals, not shell expansions.
           # shellcheck disable=SC2016
           bun -e '
+            const { report } = await import("./.github/actions/_lib/gate.ts");
             let index = 0;
+            const problems = [];
             for (const file of Bun.argv.slice(1)) {
-              const action = Bun.YAML.parse(await Bun.file(file).text());
-              const problems = [];
-              if (!action.name || !action.description) problems.push("needs a name and a description");
-              if (action.runs?.using !== "composite") problems.push("runs.using must be composite");
-              for (const step of action.runs?.steps ?? []) {
-                if (!step.run) continue;
-                if (!step.shell) problems.push(`step "${step.name ?? step.run.split("\n")[0]}" has run without shell`);
-                await Bun.write(`${process.env.RUNNER_TEMP}/composite-${index++}.sh`, step.run);
-              }
-              for (const problem of problems) {
-                console.log(`::error file=${file}::${problem}`);
-                process.exitCode = 1;
+              try {
+                const action = Bun.YAML.parse(await Bun.file(file).text());
+                if (!action.name || !action.description) problems.push({ file, message: "needs a name and a description" });
+                if (action.runs?.using !== "composite") problems.push({ file, message: "runs.using must be composite" });
+                for (const step of action.runs?.steps ?? []) {
+                  if (!step.run) continue;
+                  if (!step.shell) problems.push({ file, message: `step "${step.name ?? step.run.split("\n")[0]}" has run without shell` });
+                  await Bun.write(`${process.env.RUNNER_TEMP}/composite-${index++}.sh`, step.run);
+                }
+              } catch (error) {
+                problems.push({ file, message: error.message });
               }
             }
+            report(problems);
           ' "${actions[@]}"
           # --shell=bash because an extracted run: block has no shebang, and
           # bash is what every `shell: bash` step above declares. The libraries
