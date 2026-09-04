@@ -497,6 +497,23 @@ async function sweep(here: Checkout): Promise<void> {
     console.error("every recorded server belongs to a worktree that is still here");
 }
 
+/** How `logs` is told to follow. Everything else a command is handed is a typo, and says so. */
+const FOLLOW = new Set(["-f", "--follow"]);
+
+/** What every other command takes. */
+const NOTHING: ReadonlySet<string> = new Set();
+
+/**
+ * A command that quietly ignores what it was handed is a `--folow` that scrolls
+ * once and stops, and a person who concludes the tool is broken.
+ */
+function only(command: string, rest: readonly string[], accepted: ReadonlySet<string>): void {
+  const unknown = rest.filter((argument) => !accepted.has(argument));
+  if (unknown.length > 0) {
+    throw new Error(`\`${command}\` does not take \`${unknown.join(" ")}\`\n\n${USAGE}`);
+  }
+}
+
 const USAGE = `dev-server <up|down|status|url|logs|sweep>
 
   up      start this worktree's dev server if it is not up, and print its URL
@@ -511,21 +528,27 @@ async function main(argv: readonly string[]): Promise<void> {
   const here = await checkout(process.cwd());
   switch (command) {
     case "up": {
+      only(command, rest, NOTHING);
       return await up(here);
     }
     case "down": {
+      only(command, rest, NOTHING);
       return await down(here);
     }
     case "status": {
+      only(command, rest, NOTHING);
       return await status(here);
     }
     case "url": {
+      only(command, rest, NOTHING);
       return await url(here);
     }
     case "logs": {
-      return await logs(here, rest.includes("-f") || rest.includes("--follow"));
+      only(command, rest, FOLLOW);
+      return await logs(here, rest.length > 0);
     }
     case "sweep": {
+      only(command, rest, NOTHING);
       return await sweep(here);
     }
     default: {

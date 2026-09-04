@@ -375,6 +375,30 @@ describe("the other commands", () => {
   );
 });
 
+describe("the argument list", () => {
+  test(
+    "refuses what a command does not take, rather than ignoring it",
+    async () => {
+      // The wrong implementation reads the flags it knows and drops the rest —
+      // so `logs --folow` prints one tail and exits, and the person watching an
+      // empty terminal concludes the follow is broken rather than misspelt.
+      await using scratch = await scratchRepo(SERVES);
+
+      const misspelt = await scratch.devServer(scratch.root, "logs", "--folow");
+      const surplus = await scratch.devServer(scratch.root, "status", "--all");
+      const unknown = await scratch.devServer(scratch.root, "restart");
+
+      expect(misspelt.code).toBe(1);
+      expect(misspelt.stderr).toContain("--folow");
+      expect(surplus.code).toBe(1);
+      expect(surplus.stderr).toContain("--all");
+      expect(unknown.code).toBe(1);
+      expect(unknown.stderr).toContain("no such command");
+    },
+    CASE_MS,
+  );
+});
+
 describe("the package", () => {
   test("ships the CLI and gives it the name the commands are typed under", async () => {
     // The wrong implementation is a file that works and that nobody can reach:
