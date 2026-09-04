@@ -24,7 +24,7 @@ exact = true
 # docs/gates/test-suite.md.
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
-# Two things here execute only inside a spawned process, so the runner
+# Three things here execute only inside a spawned process, so the runner
 # instruments them and then watches them run nowhere: the file reads as
 # unreached and drags itself under the per-file floor.
 #
@@ -37,4 +37,11 @@ coverageSkipTestFiles = true
 # that `tests/limiter-conformance.test.ts` spawns. What grades it is that same
 # suite: the house build has to pass the conformance suite and every flaw has to
 # fail the case paired with it.
-coveragePathIgnorePatterns = ["anti-slop/**", "tests/house-limiter.ts"]
+#
+# `dev-server.ts` — a bin. Everything past its pure derivation runs in the
+# process `bun run dev-server` starts, which is the only place it CAN run: what
+# it is about is a detached child, a claimed port and a signal reaching a process
+# group, none of which survive being called in-process. What carries its duty is
+# `tests/dev-server.test.ts`, which drives the real binary in real worktrees and
+# names the wrong implementation each case kills.
+coveragePathIgnorePatterns = ["anti-slop/**", "tests/house-limiter.ts", "dev-server.ts"]

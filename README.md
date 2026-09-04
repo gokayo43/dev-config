@@ -1150,6 +1150,70 @@ self-hosted global configuration, and in that mode a global-only option like
 would drop the option on the floor. `--strict` makes warnings and a pending
 config migration exit non-zero rather than print.
 
+## One dev server per worktree
+
+`dev-server.ts` is the one root module a repo **runs** rather than imports:
+installing this package puts a `dev-server` binary in `node_modules/.bin`, so
+every worktree of the repo has the same six commands without a script of its
+own.
+
+| Command                     | What it does                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `bun run dev-server up`     | starts this worktree's server if it is not up, waits until it answers HTTP, prints its URL                |
+| `bun run dev-server down`   | stops it — SIGTERM to its process group, SIGKILL ten seconds later; exit 0 whether or not one was running |
+| `bun run dev-server status` | every server the repository has: branch, port, pid, whether the process is alive, and whether it answers  |
+| `bun run dev-server url`    | this worktree's URL, or exit 1 when no server is up                                                       |
+| `bun run dev-server logs`   | the tail of this worktree's log; `-f` follows it                                                          |
+| `bun run dev-server sweep`  | stops and forgets the servers of worktrees that are gone                                                  |
+
+Stdout is the answer — a URL, the table, log lines — and everything a person
+reads rather than pipes goes to stderr. So `open "$(bun run dev-server url)"` is
+a thing that works, and `up` in a script hands back a URL rather than a
+paragraph.
+
+**The whole contract with the repo is its `dev` script: it must bind `$PORT` on
+`$HOST`.** Four names are handed to it and nothing is read back out —
+`PORT`, `DEV_PORT`, `HOST=127.0.0.1` and `SITE_URL`, which are
+`project-template`'s names, so a template repo needs no edit at all. Loading a
+`.env` stays the repo's own business; this adds four variables to the
+environment it already had.
+
+**The port is derived, never allocated.** A worktree's block is ten ports, hashed
+(FNV-1a) from `<package name>/<branch>` and landing between 20000 and 60000, and
+the first port in that block nothing is holding is the one claimed. The package
+name is in the hash and not merely beside it: every repo on a machine has a
+`main`, and hashing the branch alone puts two of them in one block, where the
+second `up` lands beside the first repo's server. The primary checkout derives
+exactly as a linked worktree does — its branch is whatever it is on — and a
+detached HEAD derives from its short commit, which `status` shows in the branch
+column. Nothing is special-cased and no port is written into a repo.
+
+**A claimed port is refused, never stepped over.** If something else is
+listening on the port a worktree already claimed, `up` says so, names the port
+and exits 1. Falling forward to the next free one would keep `up` working and
+quietly break the only property the derivation is for — that this worktree's URL
+is still this worktree's URL tomorrow. `dev-server down` gives the claim up, and
+the next `up` derives again.
+
+**The records live in git's common directory** — `$(git rev-parse
+--git-common-dir)/dev-server/<branch>.json`, with the log beside it. That is one
+directory per repository whatever `git worktree` does to it: never tracked, so
+no consumer is asked for a `.gitignore` line, and still there when a worktree's
+own directory is not — which is the state `sweep` exists for. A record holds the
+worktree path, the branch, the package name, the port, the pid, the log path and
+when it started; `up` writes it **before** it waits for the first response, so a
+run killed mid-wait leaves a child something can still find.
+
+**`sweep` is the one command that reads `git worktree list`.** A record whose
+worktree is no longer there — removed with `git worktree remove`, or deleted
+outright, which git still lists as prunable — is a server nobody can stand in
+front of any more, so it is stopped and its record and log are dropped. Every
+other record is left alone.
+
+`up` waits two minutes for the first HTTP response before it gives up, prints the
+last 40 log lines and takes the child down with it. `DEV_SERVER_READY_TIMEOUT_MS`
+shortens that, which is what this repo's own suite sets.
+
 ## Secret scanning
 
 `gitleaks` guards both ends: a pre-commit hook so a key never reaches a commit,

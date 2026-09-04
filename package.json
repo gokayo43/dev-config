@@ -1,11 +1,14 @@
 {
   "name": "@gokayo43/dev-config",
-  "version": "0.53.1",
+  "version": "0.54.0",
   "description": "Shared TypeScript, oxlint, oxfmt, knip, Renovate and Lighthouse configuration for Bun projects.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gokayo43/dev-config.git"
+  },
+  "bin": {
+    "dev-server": "./dev-server.ts"
   },
   "files": [
     "tsconfig.base.json",
@@ -13,6 +16,7 @@
     "knip.base.ts",
     "lighthouserc.json",
     "route-log.ts",
+    "dev-server.ts",
     "invariant-sweep.ts",
     "limiter-conformance.ts",
     "response-schema.ts",
@@ -26,6 +30,7 @@
     "./knip.base.ts": "./knip.base.ts",
     "./lighthouserc.json": "./lighthouserc.json",
     "./route-log.ts": "./route-log.ts",
+    "./dev-server.ts": "./dev-server.ts",
     "./invariant-sweep.ts": "./invariant-sweep.ts",
     "./limiter-conformance.ts": "./limiter-conformance.ts",
     "./response-schema.ts": "./response-schema.ts",

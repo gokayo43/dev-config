@@ -16,14 +16,21 @@
   "overrides": [
     {
       "files": [
+        "dev-server.ts",
         ".github/actions/_lib/gate.ts",
         ".github/actions/db-gate/database.ts",
         ".github/actions/db-gate/probe.ts",
         ".github/actions/mutation-lane/mutation-lane.ts"
       ],
       "rules": {
+        // `dev-server.ts` is a CLI rather than a module this repo configures:
+        // it reads one variable for its value — the readiness timeout its own
+        // suite shortens — and hands the environment it was started with to the
+        // dev server it spawns. There is no `env.ts` above a bin for either to
+        // come from.
+        //
         // `gate.ts` is this repo's `env.ts` under another name, and the only
-        // file here that reads a variable for its value: `inputs()` and
+        // other file here that reads a variable for its value: `inputs()` and
         // `required()` are the choke point the rule asks for, and both throw
         // rather than default. The other three forward the environment they
         // were started with to a child process — `{ ...process.env, DATABASE_URL }`
