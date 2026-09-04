@@ -33,7 +33,7 @@ export interface PackageJson {
 
 const MANIFEST: PackageJson = {
   name: "clean",
-  packageManager: "bun@1.3.11",
+  packageManager: "bun@1.4.0",
   lifecycle: "dev",
   scripts: { "db:migrate": "bun run src/server/migrate.ts", test: "bun test" },
   devDependencies: {
