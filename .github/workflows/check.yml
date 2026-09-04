@@ -477,10 +477,6 @@ jobs:
           --health-timeout 5s
           --health-retries 30
 
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres
-      REDIS_URL: redis://localhost:${{ job.services.redis.ports['6379'] }}
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -512,10 +508,21 @@ jobs:
       #
       # PORT is the platform convention, so an app that honours it needs no
       # further wiring; one that does not sets start-command and health-url.
-      - name: Allocate a port for the app
+      #
+      # The two service URLs are written here too, rather than in the job's
+      # `env:`: the `job` context that carries a service's assigned port is
+      # available to a step and not to the job — a workflow that reads it there
+      # is refused whole before any job starts.
+      - name: Allocate a port for the app, and name the services' ports
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres
+          REDIS_URL: redis://localhost:${{ job.services.redis.ports['6379'] }}
         run: |
+          # The ${} below is a JS template literal, not a shell expansion.
+          # shellcheck disable=SC2016
           bun -e 'const s = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
                   console.log(`PORT=${s.port}`); s.stop(true);' >> "$GITHUB_ENV"
+          printf 'DATABASE_URL=%s\nREDIS_URL=%s\n' "$DATABASE_URL" "$REDIS_URL" >> "$GITHUB_ENV"
 
       - uses: gokayo43/dev-config/.github/actions/db-gate@0f085a5b5d44303719c22b47d9d9119361982266 # v0.55.0
         with:

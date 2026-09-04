@@ -220,9 +220,19 @@ describe("which packages a run is held to", () => {
       const published = record(services[name ?? ""])["ports"];
       expect(isList(published) ? published : []).toEqual([`127.0.0.1::${port}`]);
     }
-    const environment = record(DATABASE_JOB["env"]);
+    // Read off the step that writes them, not the job's `env:` — the `job`
+    // context is out of reach there, and a workflow reading it there is
+    // refused whole before any job starts (v0.55.1 shipped that way).
+    const steps = DATABASE_JOB["steps"];
+    const naming = (isList(steps) ? steps : [])
+      .map((step) => record(step))
+      .find(
+        (step) => typeof step["name"] === "string" && step["name"].startsWith("Allocate a port"),
+      );
+    const environment = record(naming?.["env"]);
     expect(environment["DATABASE_URL"]).toContain("job.services.postgres.ports['5432']");
     expect(environment["REDIS_URL"]).toContain("job.services.redis.ports['6379']");
+    expect(String(naming?.["run"])).toContain("DATABASE_URL=%s");
   });
 
   // The boot gate's app gets a port picked by the kernel, for the second half
