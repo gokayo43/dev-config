@@ -92,6 +92,18 @@ export interface Repo {
 export const IDENTITY = ["-c", "user.email=gate@example.com", "-c", "user.name=gate"];
 
 /**
+ * One instant for every fixture commit. A commit's hash covers its dates, so
+ * two fixtures built from the same trees hash the same only when they are
+ * dated the same — and a case that reads a revision off one fixture and
+ * grades another against it was passing whenever both landed inside one
+ * second, and failing on the tick.
+ */
+const DATED = {
+  GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
+  GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
+};
+
+/**
  * A repository whose history is the trees given, one commit each. A tree
  * replaces the one before it, so a commit that moves or drops a file is written
  * the way it reads: by not mentioning it.
@@ -144,7 +156,12 @@ export async function history(...trees: readonly Tree[]): Promise<Repo> {
  * Exported because a gate that reads history needs fixtures that have one.
  */
 export async function git(cwd: string, args: readonly string[]): Promise<string> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    env: { ...process.env, ...DATED },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const stdout = await new Response(proc.stdout).text();
   if ((await proc.exited) !== 0) {
     throw new Error(`git ${args.join(" ")}: ${await new Response(proc.stderr).text()}`);

@@ -490,10 +490,13 @@ describe("retiring a route deliberately", () => {
   // The same rot the ramp's allowlist is held to: an entry naming a route the
   // base ref never served waives nothing and is left behind by whoever wrote it.
   test("an entry naming a route the base ref did not serve is refused", async () => {
-    const { at } = await drive(SETTLED);
-    expect(
-      await problems({ ...SETTLED, retire: "DELETE /gone -- retired two releases ago" }),
-    ).toEqual([containing(`route-retire names DELETE /gone, which ${at} did not serve`)]);
+    const { verdict, at } = await drive({
+      ...SETTLED,
+      retire: "DELETE /gone -- retired two releases ago",
+    });
+    expect(verdict.problems.map(({ message }) => message)).toEqual([
+      containing(`route-retire names DELETE /gone, which ${at} did not serve`),
+    ]);
   });
 
   test.each(["/presets -- no method", "POST -- no path", "POST /a /b -- two paths"])(
