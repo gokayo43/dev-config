@@ -194,6 +194,17 @@ on:
         type: string
         default: ""
 
+    secrets:
+      git-ssh-key:
+        description: >-
+          A private SSH key that may READ the private git repository this repo names
+          as a dependency — a deploy key on that repository, never a personal token.
+          Written to RUNNER_TEMP for the install steps and removed at the end of every
+          job that wrote it; never the workspace the lanes read, and never a lockfile.
+          GitHub scopes a deploy key to one repository, so a second private dependency
+          is a second key on a second repo and not this one.
+        required: false
+
 permissions:
   contents: read
 
@@ -236,6 +247,13 @@ jobs:
     env:
       TURBO_AFFECTED: ${{ inputs.affected && github.event_name == 'pull_request' && '--affected' || '' }}
       TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
+
+      # Whether the caller passed a key for a private git dependency — the word,
+      # never the key. GitHub's own rule is that "secrets cannot be directly
+      # referenced in if: conditionals", and a job-level environment variable is
+      # the way it names to gate a step on one; what this holds is the
+      # comparison's answer, so no part of the key is in it.
+      HAS_GIT_SSH_KEY: ${{ secrets['git-ssh-key'] != '' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -406,6 +424,71 @@ jobs:
       - if: inputs.compose
         uses: gokayo43/dev-config/.github/actions/compose-lint@328ce38df8a0b75e23e7b42ae18398a077f9446c # v0.56.0
 
+      # A repo whose manifest names a private git dependency has no credential
+      # here: the checkout drops the runner's token deliberately, since the
+      # install below runs the repo's own dependencies in the workspace that
+      # token would sit in. So the caller passes a key of its own, and it lives
+      # in RUNNER_TEMP rather than in the workspace every lane reads.
+      # dev-config#101.
+      #
+      # The rewrite is what keeps a successful install's log readable. Bun hands
+      # git the HTTPS form of a git+ssh:// dependency first, with an empty
+      # password, and falls back to the ssh form when GitHub refuses it — so the
+      # key below is reached either way. What the fallback costs is a wasted
+      # round trip and two lines reading `fatal: Authentication failed` and
+      # `error: git failed with exit code 128` in every install that then
+      # SUCCEEDS, plus a dependence on an ordering that is Bun's internal rather
+      # than anything it documents. Rewritten, there is no HTTPS attempt to
+      # answer. BOTH spellings of the base, because the URL Bun builds keeps the
+      # dependency's userinfo — https://git@github.com/… — which the bare base
+      # does not match: `git ls-remote --get-url` answers that URL back
+      # unchanged under the bare rewrite alone and ssh://git@github.com/… under
+      # the two together (bun 1.4.0, git 2.43.0).
+      - name: Authorise the private git dependency
+        if: env.HAS_GIT_SSH_KEY == 'true'
+        env:
+          GIT_SSH_KEY: ${{ secrets['git-ssh-key'] }}
+          # GitHub publishes its own host keys here and rotates them when it has
+          # to. A copy pinned in this file would outlive a rotation and take
+          # every consumer's install down with it until the pin moved, so the
+          # run reads them over TLS from the host it is about to clone from.
+          # Each is written under both names GitHub answers on — a network with
+          # outbound :22 closed reaches it as [ssh.github.com]:443 through the
+          # machine's own ssh config, and both endpoints serve the same keys
+          # (compared with ssh-keyscan on 2026-09-10).
+          GITHUB_META_URL: https://api.github.com/meta
+        run: |
+          set -euo pipefail
+          umask 077
+          key=$RUNNER_TEMP/git-ssh-key
+          known_hosts=$RUNNER_TEMP/known_hosts
+          # ssh reads a key file whose last line carries no newline as an
+          # invalid format, and GitHub strips the trailing newline off a secret.
+          printf '%s\n' "$GIT_SSH_KEY" > "$key"
+          KNOWN_HOSTS=$known_hosts bun -e '
+            const url = process.env.GITHUB_META_URL;
+            const answer = await fetch(url);
+            if (!answer.ok) throw new Error(url + " answered " + answer.status);
+            const published = (await answer.json()).ssh_keys;
+            if (!Array.isArray(published) || published.length === 0) {
+              throw new Error(url + " published no ssh_keys");
+            }
+            await Bun.write(
+              process.env.KNOWN_HOSTS,
+              published
+                .map((hostKey) => "github.com,[ssh.github.com]:443 " + hostKey + "\n")
+                .join(""),
+            );
+          '
+          {
+            printf 'GIT_SSH_COMMAND=ssh -i %s -o IdentitiesOnly=yes -o UserKnownHostsFile=%s -o StrictHostKeyChecking=yes\n' "$key" "$known_hosts"
+            printf 'GIT_CONFIG_COUNT=2\n'
+            printf 'GIT_CONFIG_KEY_0=url.ssh://git@github.com/.insteadOf\n'
+            printf 'GIT_CONFIG_VALUE_0=https://github.com/\n'
+            printf 'GIT_CONFIG_KEY_1=url.ssh://git@github.com/.insteadOf\n'
+            printf 'GIT_CONFIG_VALUE_1=https://git@github.com/\n'
+          } >> "$GITHUB_ENV"
+
       - run: bun install --frozen-lockfile
 
       # Not narrowed, deliberately, even when the caller asked for it: a build
@@ -456,10 +539,19 @@ jobs:
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
 
+      - name: Remove the private git dependency's key
+        if: always() && env.HAS_GIT_SSH_KEY == 'true'
+        run: rm -f "$RUNNER_TEMP/git-ssh-key"
+
   database:
     if: inputs.database == 'postgres'
     runs-on: [self-hosted, linux]
     timeout-minutes: 15
+
+    # The word the key step is gated on, for the reason the static job's own env
+    # gives.
+    env:
+      HAS_GIT_SSH_KEY: ${{ secrets['git-ssh-key'] != '' }}
 
     # Empty on every run, which is the one state no developer database is ever
     # in. Images are pinned by digest for the same reason actions are, with the
@@ -513,6 +605,47 @@ jobs:
           persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      # This job installs the same private dependency from the same workspace and
+      # holds no credential either; the static job's copy of this step carries
+      # why it is here, what the rewrite is for and where the host keys come
+      # from.
+      - name: Authorise the private git dependency
+        if: env.HAS_GIT_SSH_KEY == 'true'
+        env:
+          GIT_SSH_KEY: ${{ secrets['git-ssh-key'] }}
+          GITHUB_META_URL: https://api.github.com/meta
+        run: |
+          set -euo pipefail
+          umask 077
+          key=$RUNNER_TEMP/git-ssh-key
+          known_hosts=$RUNNER_TEMP/known_hosts
+          # ssh reads a key file whose last line carries no newline as an
+          # invalid format, and GitHub strips the trailing newline off a secret.
+          printf '%s\n' "$GIT_SSH_KEY" > "$key"
+          KNOWN_HOSTS=$known_hosts bun -e '
+            const url = process.env.GITHUB_META_URL;
+            const answer = await fetch(url);
+            if (!answer.ok) throw new Error(url + " answered " + answer.status);
+            const published = (await answer.json()).ssh_keys;
+            if (!Array.isArray(published) || published.length === 0) {
+              throw new Error(url + " published no ssh_keys");
+            }
+            await Bun.write(
+              process.env.KNOWN_HOSTS,
+              published
+                .map((hostKey) => "github.com,[ssh.github.com]:443 " + hostKey + "\n")
+                .join(""),
+            );
+          '
+          {
+            printf 'GIT_SSH_COMMAND=ssh -i %s -o IdentitiesOnly=yes -o UserKnownHostsFile=%s -o StrictHostKeyChecking=yes\n' "$key" "$known_hosts"
+            printf 'GIT_CONFIG_COUNT=2\n'
+            printf 'GIT_CONFIG_KEY_0=url.ssh://git@github.com/.insteadOf\n'
+            printf 'GIT_CONFIG_VALUE_0=https://github.com/\n'
+            printf 'GIT_CONFIG_KEY_1=url.ssh://git@github.com/.insteadOf\n'
+            printf 'GIT_CONFIG_VALUE_1=https://git@github.com/\n'
+          } >> "$GITHUB_ENV"
 
       - run: bun install --frozen-lockfile
 
@@ -569,3 +702,7 @@ jobs:
           db-gate-evidence: ${{ inputs['db-gate-evidence'] }}
           route-allowlist: ${{ inputs.route-allowlist }}
           route-retire: ${{ inputs.route-retire }}
+
+      - name: Remove the private git dependency's key
+        if: always() && env.HAS_GIT_SSH_KEY == 'true'
+        run: rm -f "$RUNNER_TEMP/git-ssh-key"

@@ -1537,7 +1537,8 @@ can see.
 
 In order, the pinned workflow runs the gitleaks scan, the declarative gates
 (repo contract, stack denylist, suppression hygiene, shellcheck over the repo's
-own scripts, and the compose lint when asked), `bun install`, the optional build,
+own scripts, and the compose lint when asked), the key for a private git
+dependency where the caller passed one, `bun install`, the optional build,
 `format:check`, `lint`, `typecheck`, `knip`, the test suite, the assertion that
 the suite ran, and — where the repo asks for it — the mutation lane over the
 domain files this branch changed.
@@ -1627,6 +1628,82 @@ A repo whose types depend on generated code that is not committed — a TanStack
 route tree, a codegen client — passes `build: true`, since a clean checkout has
 none of it and both `tsc` and the type-aware lint rules would report the
 generated symbols as missing.
+
+### A private git dependency
+
+A repo whose `package.json` names a private git dependency has no credential in
+either job: both checkouts drop the runner's token deliberately, since the
+install runs the repo's own dependencies in the workspace that token would sit
+in. Without one, `bun install --frozen-lockfile` fails before the first lane and
+the gate stops there — dev-config#101 is where that was measured. One secret
+closes it, and a repo with no private dependency passes none: the steps below
+never run, and nothing about that repo's run changes.
+
+| Secret        | Required | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git-ssh-key` | no       | A private SSH key that may **read** the repository the dependency lives in. Both jobs write it to `$RUNNER_TEMP` at mode `600` immediately before their `bun install --frozen-lockfile`, export a `GIT_SSH_COMMAND` and a git URL rewrite for the rest of the job, and delete it in a last step that runs whether the job passed or failed. It never reaches the workspace the lanes read, and it is in no lockfile and no image layer. |
+
+It is a **deploy key**, never a personal access token: minted for this, added
+read-only to the dependency's own repository (`Settings → Deploy keys`), with
+the private half kept as an Actions secret in the repo whose CI installs it. A
+token carries its owner's whole account; a deploy key carries one repository,
+read-only, and revoking it is deleting one entry on that repository.
+
+GitHub scopes a deploy key to **one** repository, and `IdentitiesOnly=yes` means
+ssh offers exactly the key this step wrote — so this secret authorises one
+private dependency. A second private dependency is a second key on a second
+repository, which this secret has no room for. A public dependency needs nothing
+of it: any authenticated key may read a public repo, so the rewrite below leaves
+those installs working (measured).
+
+The caller passes it beside its inputs:
+
+```yaml
+jobs:
+  check:
+    uses: gokayo43/dev-config/.github/workflows/check.yml@<commit sha> # <release tag>
+    secrets:
+      git-ssh-key: ${{ secrets.THE_DEPLOY_KEY }}
+```
+
+**The rewrite is what keeps a successful install's log readable.** Bun hands
+`git` the HTTPS form of a `git+ssh://` dependency first, with an empty password,
+and falls back to the ssh form when GitHub refuses it — so the key is reached
+either way, and this is not what #101 was blocked on (that run's own log carries
+the `Permission denied (publickey)` of a fallback that ran and had no key to
+offer; the issue quotes the HTTPS lines alone). What the fallback costs is a
+wasted round trip and two lines reading `fatal: Authentication failed` and
+`error: git failed with exit code 128` in every install that then **succeeds** —
+a green run that prints `error:` twice teaches the next reader to skim past one —
+plus a dependence on an ordering that is Bun's internal rather than anything it
+documents. So both jobs export `url.ssh://git@github.com/.insteadOf` and there
+is no HTTPS attempt left to answer.
+
+For **both** spellings of the base, because the URL Bun builds keeps the
+dependency's userinfo:
+
+```
+execve("/usr/bin/git", ["git", "clone", …, "--bare",
+  "https://git@github.com/gokayo43/nfp-elysia-storefront-types.git", …])
+```
+
+which the bare base does not match. `git ls-remote --get-url` answers that URL
+back unchanged under the bare rewrite alone, and `ssh://git@github.com/…` under
+the two together (bun 1.4.0, git 2.43.0).
+
+**The host keys are read, not pinned.** `StrictHostKeyChecking=yes` decides
+against a `known_hosts` the step writes from `https://api.github.com/meta`,
+fetched over TLS from the host the clone is about to reach. A copy pinned in
+this repo would outlive GitHub's next rotation and take every consumer's install
+down with it until the pin moved. Each key is written under both names GitHub
+answers on — `github.com` and `[ssh.github.com]:443`, which serve identical keys
+— since a machine whose outbound `:22` is closed reaches the second through its
+own ssh config.
+
+**The `if` reads a word, never the secret.** GitHub's rule is that secrets
+cannot be referenced directly in an `if:` conditional, and the job-level
+environment variable it names as the way round is `HAS_GIT_SSH_KEY` here: what
+it holds is the comparison's answer, so no part of the key is in it.
 
 ### The suite has to have run
 
