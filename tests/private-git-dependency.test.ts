@@ -37,6 +37,9 @@ const JOBS = record(DOCUMENT["jobs"]);
 
 const SECRETS = record(record(record(DOCUMENT["on"])["workflow_call"])["secrets"]);
 
+/** How `check.yml` names this repo's own actions — by full path, never `./`. */
+const INSTALL_ACTION = "gokayo43/dev-config/.github/actions/install@";
+
 /** One string field of a mapping, or the empty string — a key absent reads as unset. */
 function textAt(held: ConfigObject, key: string): string {
   const value = held[key];
@@ -47,6 +50,22 @@ function stepsOf(job: unknown): ConfigObject[] {
   const steps = record(job)["steps"];
   return (isList(steps) ? [...steps] : []).map((step) => record(step));
 }
+
+/**
+ * The jobs that install, found by what they call rather than named here: a
+ * third job that installs is a third job that needs the key, and a list in
+ * this file is the copy that goes stale the day one is added.
+ */
+const INSTALLS = Object.entries(JOBS).filter(([, job]) =>
+  stepsOf(job).some((step) => textAt(step, "uses").startsWith(INSTALL_ACTION)),
+);
+
+/** Every `run:` block the workflow ships, whichever job it sits in. */
+const RUN_BLOCKS = Object.values(JOBS).flatMap((job) =>
+  stepsOf(job)
+    .map((step) => textAt(step, "run"))
+    .filter((script) => script !== ""),
+);
 
 /** The action's one step, as the shipped `action.yml` spells it. */
 const ACTION = record(Bun.YAML.parse(await Bun.file(join(ACTION_DIRECTORY, "action.yml")).text()));
@@ -225,12 +244,66 @@ function gitConfig(environment: Record<string, string>): Record<string, string> 
   );
 }
 
+/** What the key, its path and the git configuration are called in a script. */
+const KEY_MARKERS = ["git-ssh-key", "GIT_SSH_COMMAND", "GIT_CONFIG_"];
+
+/**
+ * What a script DOES, with what it says about itself dropped — the action's own
+ * comment explains that the key never goes into `$GITHUB_ENV`, and a scan that
+ * read prose would find the words it exists to forbid. Whole-line comments are
+ * the only ones these scripts carry.
+ */
+function withoutShellComments(script: string): string {
+  return script
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("#"))
+    .join("\n");
+}
+
 describe("what the workflow asks the action for", () => {
   // Optional is the whole of the no-secret path: a caller with no private
   // dependency passes nothing, and the action installs the way it always did.
   // Required would turn every repo in the fleet red.
   test("is a secret the caller may pass and may leave out", () => {
     expect(record(SECRETS["git-ssh-key"])["required"]).toBe(false);
+  });
+
+  // Two jobs install, and the wrong implementation gives one of them the key
+  // and forgets the other — which is exactly the state a copy per job was in,
+  // where the second copy could be broken with nothing failing. Found by what
+  // a job calls, so a job that installs some other way is a job this misses
+  // and the case below catches.
+  test("every job that installs does it through the action, with the secret handed in", () => {
+    expect(INSTALLS.length).toBeGreaterThan(1);
+    for (const [name, job] of INSTALLS) {
+      const step = stepsOf(job).find((each) => textAt(each, "uses").startsWith(INSTALL_ACTION));
+      expect(record(record(step)["with"])["git-ssh-key"], name).toBe(
+        "${{ secrets['git-ssh-key'] }}",
+      );
+    }
+  });
+
+  // There is ONE door. A `run: bun install` left anywhere is a second install
+  // with no key, no host keys and no rewrite — green on a repo with no private
+  // dependency and red on every repo with one.
+  test("no job installs any other way", () => {
+    for (const script of RUN_BLOCKS) expect(script).not.toContain("bun install");
+  });
+
+  // `$GITHUB_ENV` is the only way a step's environment outlives the step, so
+  // this is the whole of "the key is for the install and for nothing after it"
+  // that YAML can state. It is what the previous shape got wrong: it exported
+  // GIT_SSH_COMMAND through `$GITHUB_ENV`, and every later lane — format:check,
+  // lint, knip, the test suite, the artifact upload — ran carrying the path of
+  // a private key. Run 34588643668, job 103228581527.
+  test("nothing puts the key, its path or the git configuration into a later step's environment", () => {
+    const spilled = [...RUN_BLOCKS, SCRIPT]
+      .map(withoutShellComments)
+      .filter(
+        (script) =>
+          script.includes("GITHUB_ENV") && KEY_MARKERS.some((marker) => script.includes(marker)),
+      );
+    expect(spilled).toEqual([]);
   });
 
   // The secrets context is not available in a step's `if` — GitHub's own rule

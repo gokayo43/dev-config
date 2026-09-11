@@ -1537,8 +1537,8 @@ can see.
 
 In order, the pinned workflow runs the gitleaks scan, the declarative gates
 (repo contract, stack denylist, suppression hygiene, shellcheck over the repo's
-own scripts, and the compose lint when asked), the key for a private git
-dependency where the caller passed one, `bun install`, the optional build,
+own scripts, and the compose lint when asked), `bun install` — carrying the key
+for a private git dependency where the caller passed one — the optional build,
 `format:check`, `lint`, `typecheck`, `knip`, the test suite, the assertion that
 the suite ran, and — where the repo asks for it — the mutation lane over the
 domain files this branch changed.
@@ -1553,8 +1553,12 @@ rather than after a full dependency resolution.
 The steps that are shell or a script rather than a `bun run` live in
 `.github/actions/` as composite actions — `secret-scan`, `repo-contract`,
 `stack-gate`, `suppression-hygiene`, `shell-scripts`, `compose-lint`,
-`test-suite`, `db-gate`, `lint-workflows` — so the workflow above and any
-repo that has to run the same thing outside it share one copy.
+`install`, `test-suite`, `db-gate`, `lint-workflows` — so the workflow above and
+any repo that has to run the same thing outside it share one copy. `install` is
+the one that is not a gate: it is `bun install --frozen-lockfile` plus the
+credential a private git dependency needs, and it is an action for the same
+reason as the rest — both jobs run it, and a copy per job is a copy that can
+rot untested.
 `check.yml` references them by full path and SHA rather than `./`: inside a
 called workflow a relative `uses:` resolves against the _caller's_ checkout, and
 the alternative — checking this repo out into the caller's workspace — puts its
@@ -1635,26 +1639,10 @@ A repo whose `package.json` names a private git dependency has no credential in
 either job: both checkouts drop the runner's token deliberately, since the
 install runs the repo's own dependencies in the workspace that token would sit
 in. Without one, `bun install --frozen-lockfile` fails before the first lane and
-the gate stops there — dev-config#101 is where that was measured. One secret
-closes it, and a repo with no private dependency passes none: the steps below
-never run, and nothing about that repo's run changes.
-
-| Secret        | Required | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `git-ssh-key` | no       | A private SSH key that may **read** the repository the dependency lives in. Both jobs write it to `$RUNNER_TEMP` at mode `600` immediately before their `bun install --frozen-lockfile`, export a `GIT_SSH_COMMAND` and a git URL rewrite for the rest of the job, and delete it in a last step that runs whether the job passed or failed. It never reaches the workspace the lanes read, and it is in no lockfile and no image layer. |
-
-It is a **deploy key**, never a personal access token: minted for this, added
-read-only to the dependency's own repository (`Settings → Deploy keys`), with
-the private half kept as an Actions secret in the repo whose CI installs it. A
-token carries its owner's whole account; a deploy key carries one repository,
-read-only, and revoking it is deleting one entry on that repository.
-
-GitHub scopes a deploy key to **one** repository, and `IdentitiesOnly=yes` means
-ssh offers exactly the key this step wrote — so this secret authorises one
-private dependency. A second private dependency is a second key on a second
-repository, which this secret has no room for. A public dependency needs nothing
-of it: any authenticated key may read a public repo, so the rewrite below leaves
-those installs working (measured).
+the gate stops there — dev-config#101 is where that was measured. One optional
+secret, `git-ssh-key`, closes it, and a repo with no private dependency passes
+none: the `install` action's body finds it empty and installs exactly as it did
+before the secret existed.
 
 The caller passes it beside its inputs:
 
@@ -1666,6 +1654,48 @@ jobs:
       git-ssh-key: ${{ secrets.THE_DEPLOY_KEY }}
 ```
 
+**The key lives for the install and for nothing else.** Both jobs install
+through one composite action, `.github/actions/install`, whose single shell
+writes the key to `$RUNNER_TEMP` at mode `600`, exports a `GIT_SSH_COMMAND` and
+the URL rewrite below, runs `bun install --frozen-lockfile`, and removes the key
+on the way out through a `trap … EXIT` that fires whether the install passed or
+failed. Nothing goes into `$GITHUB_ENV`, which is the runner's mechanism for
+handing an environment to every LATER step — that is how the first shape of this
+leaked, with `format:check`, `lint`, `knip`, the test suite and the artifact
+upload all running with the path of a private key in their environment. The key
+reaches neither the workspace the lanes read, nor a lockfile, nor an image
+layer.
+
+It is a **deploy key**, never a personal access token: minted for this, added
+read-only to the dependency's own repository (`Settings → Deploy keys`), with
+the private half kept as an Actions secret in the repo whose CI installs it. A
+token carries its owner's whole account; a deploy key carries one repository,
+read-only, and revoking it is deleting one entry on that repository.
+
+**The secret is checked where it arrives**, with `ssh-keygen -y` — the same
+reader ssh is about to use. A secret pasted wrong otherwise reaches the install
+intact and fails three commands later as `Permission denied (publickey)`, which
+reads as a deploy key nobody added rather than as a secret that is not a key.
+
+**What one key does and does not reach**, measured 2026-09-11 against real
+repositories rather than reasoned from the rewrite:
+
+- the private repository it is registered on — yes, which is the point;
+- a **different private** repository — no: `ERROR: Repository not found`. A
+  second private dependency is a second key on a second repository, which this
+  one secret has no room for;
+- a **different public** repository over ssh — yes. A deploy key authenticates
+  as itself and public repositories are readable by anyone, so the rewrite below
+  does not break a public `git+ssh://` dependency;
+- a key registered **nowhere** — no, on public and private alike:
+  `Permission denied (publickey)`.
+
+A `github:owner/repo#sha` dependency is outside all of this: Bun resolves that
+shorthand through a tarball fetch and never runs `git` for it at all — proven by
+installing one with the rewrite pointed at `nonexistent.invalid` and
+`GIT_SSH_COMMAND=/bin/false`, which still reports `1 package installed`. The
+rewrite cannot touch what never reaches git.
+
 **The rewrite is what keeps a successful install's log readable.** Bun hands
 `git` the HTTPS form of a `git+ssh://` dependency first, with an empty password,
 and falls back to the ssh form when GitHub refuses it — so the key is reached
@@ -1676,8 +1706,9 @@ wasted round trip and two lines reading `fatal: Authentication failed` and
 `error: git failed with exit code 128` in every install that then **succeeds** —
 a green run that prints `error:` twice teaches the next reader to skim past one —
 plus a dependence on an ordering that is Bun's internal rather than anything it
-documents. So both jobs export `url.ssh://git@github.com/.insteadOf` and there
-is no HTTPS attempt left to answer.
+documents. So the action exports `url.ssh://git@github.com/.insteadOf` and there
+is no HTTPS attempt left to answer. Scoped to that one shell, so a later lane
+that clones something over HTTPS is untouched.
 
 For **both** spellings of the base, because the URL Bun builds keeps the
 dependency's userinfo:
@@ -1691,19 +1722,25 @@ which the bare base does not match. `git ls-remote --get-url` answers that URL
 back unchanged under the bare rewrite alone, and `ssh://git@github.com/…` under
 the two together (bun 1.4.0, git 2.43.0).
 
-**The host keys are read, not pinned.** `StrictHostKeyChecking=yes` decides
-against a `known_hosts` the step writes from `https://api.github.com/meta`,
-fetched over TLS from the host the clone is about to reach. A copy pinned in
-this repo would outlive GitHub's next rotation and take every consumer's install
-down with it until the pin moved. Each key is written under both names GitHub
-answers on — `github.com` and `[ssh.github.com]:443`, which serve identical keys
-— since a machine whose outbound `:22` is closed reaches the second through its
-own ssh config.
+**The host keys are read, not pinned, and the read is authenticated.**
+`StrictHostKeyChecking=yes` decides against a `known_hosts` the action writes
+from `https://api.github.com/meta`, fetched over TLS from the host the clone is
+about to reach; a copy pinned in this repo would outlive GitHub's next rotation
+and take every consumer's install down with it until the pin moved. The call
+carries the job's own `github.token`, because unauthenticated that endpoint
+allows **60 calls an hour per IP** — which every runner on one host shares —
+against 5,000 with a credential (measured 2026-09-11, `x-ratelimit-limit`), and
+a 403 there fails an install that has nothing wrong with it. `contents: read`,
+which `check.yml` already declares, is enough. Each key is written under both
+names GitHub answers on — `github.com` and `[ssh.github.com]:443`, which serve
+identical keys — since a machine whose outbound `:22` is closed reaches the
+second through its own ssh config.
 
-**The `if` reads a word, never the secret.** GitHub's rule is that secrets
-cannot be referenced directly in an `if:` conditional, and the job-level
-environment variable it names as the way round is `HAS_GIT_SSH_KEY` here: what
-it holds is the comparison's answer, so no part of the key is in it.
+**The condition is the action's body, not an `if:` on a step.** GitHub's rule is
+that secrets cannot be referenced directly in an `if:` conditional, so a step
+gated that way is gated on nothing; `[ -n "$GIT_SSH_KEY" ]` inside the shell
+that owns the decision needs no word carried in a job-level env to work around
+it.
 
 ### The suite has to have run
 

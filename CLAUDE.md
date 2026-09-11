@@ -29,8 +29,14 @@ a change to a rule usually lands here too.
   has it; `checkJs` in `tsconfig.json` is what type-checks it here.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
 - `.github/workflows/check.yml` — the gate every repo calls.
-- `.github/actions/*/` — the executable gates. Each is an `action.yml`, the gate
-  modules the suite drives, and a `*.main.ts` that GitHub runs. An action holds
+- `.github/actions/*/` — the executable steps, which are the gates plus one.
+  Each is an `action.yml`, the modules the suite drives, and a `*.main.ts` that
+  GitHub runs. `install` is the one that grades nothing: `bun install
+--frozen-lockfile`, and — where the caller passed a key for a private git
+  dependency — that key, written, used and removed inside the action's own
+  shell so no lane after it runs holding the path of a private key. It is an
+  action for the reason the gates are: both jobs of `check.yml` install, and a
+  copy of forty lines of shell per job is a copy that rots untested (#101). An action holds
   more than one module when it holds more than one subject:
   `repo-contract/live.ts` is what the word "live" derives — everything a repo
   owes because it carries people — beside the contract every repo satisfies
@@ -71,7 +77,7 @@ a change to a rule usually lands here too.
   `shellcheck.sh`, each that fetch plus one pin: the three ramps in this house
   run one k6, and everything here that reads shell reads it with one shellcheck.
   Actions, rather than scripts run out of the package every repo already
-  installs: a gate in `node_modules` runs only if the repo's own workflow
+  installs: a step in `node_modules` runs only if the repo's own workflow
   remembers to run it, and it moves whenever the lockfile moves — including on
   a Renovate automerge nobody reads. It costs the release pair under
   "Releasing", and it is why gate code is not importable by the repos it
