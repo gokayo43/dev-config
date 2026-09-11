@@ -1,0 +1,96 @@
+name: Install
+description: >-
+  `bun install --frozen-lockfile`, and — where the caller passed a key for a
+  private git dependency — the credential that one command needs. The key is
+  written, used and removed inside this step's own shell, so no lane after it
+  runs carrying the path of a private key.
+
+inputs:
+  git-ssh-key:
+    description: >-
+      A private SSH key that may READ the private git repository the manifest
+      names as a dependency: a deploy key on that repository, never a personal
+      token. Empty — the default — installs exactly as this action did before
+      it took a key.
+    default: ""
+  github-token:
+    description: >-
+      The token GitHub's host-key lookup is made with. Unauthenticated that
+      endpoint allows 60 calls an hour per IP, which every runner on one host
+      shares; `contents: read` is enough for it.
+    default: ${{ github.token }}
+  meta-url:
+    description: >-
+      Where GitHub publishes its SSH host keys. An input because a GitHub
+      Enterprise Server publishes its own, and because it is the seam this
+      repo's own suite points at a fixture server rather than reaching the
+      network in a unit lane.
+    default: https://api.github.com/meta
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GIT_SSH_KEY: ${{ inputs['git-ssh-key'] }}
+        INPUT_GITHUB_TOKEN: ${{ inputs['github-token'] }}
+        INPUT_META_URL: ${{ inputs['meta-url'] }}
+      run: |
+        set -euo pipefail
+
+        # A repo whose manifest names a private git dependency has no credential
+        # here: the checkout drops the runner's token deliberately, since this
+        # install runs the repo's own dependencies in the workspace that token
+        # would sit in. So the caller passes a key of its own, and it lives in
+        # RUNNER_TEMP for this command and is gone when the shell exits — never
+        # in the workspace every lane reads, never in $GITHUB_ENV, never in a
+        # lane after this one. dev-config#101.
+        #
+        # The condition is the body's, not an `if:` on the step: the secrets
+        # context is not available in a step's `if`, and a word carried in a
+        # job-level env to work around that is a second statement of one fact.
+        if [ -n "$GIT_SSH_KEY" ]; then
+          umask 077
+          key=$RUNNER_TEMP/git-ssh-key
+          trap 'rm -f "$key"' EXIT
+
+          # ssh reads a key file whose last line carries no newline as an
+          # invalid format, and GitHub strips the trailing newline off a secret.
+          printf '%s\n' "$GIT_SSH_KEY" > "$key"
+
+          # The same reader ssh is about to use. Without this a secret that is
+          # not a key reaches the install intact and fails three commands later
+          # as `Permission denied (publickey)`, which reads as a deploy key
+          # nobody added rather than as a secret pasted wrong.
+          if ! ssh-keygen -y -f "$key" >/dev/null 2>&1; then
+            echo "::error::the git-ssh-key secret is not an SSH private key — pass the whole private half of a deploy key, header and footer included"
+            exit 1
+          fi
+
+          KNOWN_HOSTS=$RUNNER_TEMP/known_hosts
+          export KNOWN_HOSTS
+          bun "$GITHUB_ACTION_PATH/known-hosts.main.ts"
+
+          # The rewrite is what keeps a successful install's log readable. Bun
+          # hands git the HTTPS form of a git+ssh:// dependency first, with an
+          # empty password, and falls back to the ssh form when GitHub refuses
+          # it — so the key is reached either way. What the fallback costs is a
+          # wasted round trip and two lines reading `fatal: Authentication
+          # failed` and `error: git failed with exit code 128` in every install
+          # that then SUCCEEDS, plus a dependence on an ordering that is Bun's
+          # internal rather than anything it documents.
+          #
+          # BOTH spellings of the base, because the URL Bun builds keeps the
+          # dependency's userinfo — https://git@github.com/… — which the bare
+          # base does not match: `git ls-remote --get-url` answers that URL back
+          # unchanged under the bare rewrite alone and ssh://git@github.com/…
+          # under the two together (bun 1.4.0, git 2.43.0).
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o StrictHostKeyChecking=yes"
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0=url.ssh://git@github.com/.insteadOf
+          export GIT_CONFIG_VALUE_0=https://github.com/
+          export GIT_CONFIG_KEY_1=url.ssh://git@github.com/.insteadOf
+          export GIT_CONFIG_VALUE_1=https://git@github.com/
+        fi
+
+        bun install --frozen-lockfile
