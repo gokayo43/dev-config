@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -12,6 +12,15 @@ import { materialise, type Tree } from "./tree.ts";
  * grade is whether the namespace the shipped YAML names actually holds, which
  * is the whole of what this gate claims.
  */
+// Every case here is a process tree: bash, two sudos, an unshare and a `bun
+// test` inside all of it. With the machine to itself the whole suite is under
+// three seconds, and inside a full run — behind the browser, the mutation lane
+// and three suites that drive a real Postgres — a single spawn has been seen to
+// pass five, which the default reports as a fault in the seal. The same 30s the
+// mutation lane's suite gives a spawn, for the reason it gives: what a shared
+// machine does to a spawn is not a signal about the code under test.
+setDefaultTimeout(30_000);
+
 const ACTION = new URL("../.github/actions/test-suite/action.yml", import.meta.url).pathname;
 
 const STEP = await (async (): Promise<string> => {
@@ -56,14 +65,14 @@ async function ownerOf(path: string): Promise<number | undefined> {
  * at the fixture — the junit report the step reads is per-run, and two cases
  * sharing one would grade each other's.
  */
-async function ran(tree: Tree, network = "", bun = ""): Promise<Run> {
+async function ran(tree: Tree, network = "", bun = "", nightly = "false"): Promise<Run> {
   const root = await materialise(tree);
   // The step calls `bun` by name, so which one it gets is a fact about PATH —
   // which is how a case runs the shipped shell under a bun other than this one.
   const path = bun === "" ? process.env["PATH"] : `${dirname(bun)}:${process.env["PATH"] ?? ""}`;
   const proc = Bun.spawn(["bash", "-c", STEP], {
     cwd: root,
-    env: { ...process.env, PATH: path, RUNNER_TEMP: root, TEST_NETWORK: network },
+    env: { ...process.env, PATH: path, RUNNER_TEMP: root, TEST_NETWORK: network, NIGHTLY: nightly },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -231,7 +240,7 @@ describe("the sealed lane", () => {
     const marker = join(root, "junit.xml");
     const proc = Bun.spawn(["bash", "-c", STEP], {
       cwd: root,
-      env: { ...process.env, RUNNER_TEMP: root, TEST_NETWORK: "" },
+      env: { ...process.env, RUNNER_TEMP: root, TEST_NETWORK: "", NIGHTLY: "false" },
       stdout: "ignore",
       stderr: "ignore",
     });
@@ -285,6 +294,48 @@ test("unreached", () => {
 // every test green. Graded through the report the run wrote rather than the
 // console: what makes the first case the coverage floor and not some other
 // failure is that the run's own record says nothing in it failed.
+describe("the budget a nightly gets", () => {
+  /** A suite that reports what the run gave it, which is the whole of what the budget is. */
+  const BUDGETED: Tree = {
+    "budget.test.ts": `import { expect, test } from "bun:test";
+
+test("reads its budget", () => {
+  console.log(\`factor=\${process.env.PROPERTY_RUNS_FACTOR ?? ""}\`);
+  console.log(\`limit=\${process.env.PROPERTY_TIME_LIMIT_MS ?? ""}\`);
+  expect(1).toBe(1);
+});
+`,
+  };
+
+  // The variables have to cross the two sudo hops the seal takes, and
+  // `--preserve-env` is a request sudoers may narrow: the whole reason they are
+  // written into the `env` beside the restated PATH rather than exported. A run
+  // where they were dropped is a nightly that searched exactly as far as an
+  // ordinary run and said it had searched fifty times further.
+  test("reaches the suite through the seal", async () => {
+    const { status, output } = await ran(BUDGETED, "", "", "true");
+    expect(status).toBe(0);
+    expect(output).toContain("factor=50");
+    expect(output).toContain("limit=120000");
+  });
+
+  test("and no other run is given one at all", async () => {
+    const { status, output } = await ran(BUDGETED);
+    expect(status).toBe(0);
+    expect(output).toContain("factor=");
+    expect(output).not.toContain("factor=50");
+    expect(output).not.toContain("limit=120000");
+  });
+
+  // A spelling nobody defined would otherwise read as "not nightly", and the
+  // long search would quietly never have happened.
+  test("a spelling that is neither true nor false is refused", async () => {
+    const { status, output } = await ran(CLEAN, "", "", "yes");
+    expect(status).not.toBe(0);
+    expect(output).toContain("it takes true or false");
+  });
+});
+
 describe("the coverage floor the repo declares", () => {
   test("a suite under the floor fails, with nothing failing", async () => {
     const { status, report } = await ran(floored(false));

@@ -122,6 +122,26 @@ sealed run and an open one would grade each half against the whole floor and
 fail both — a lane split that costs the coverage gate is not a lane split worth
 having.
 
+## The budget a nightly gets
+
+`nightly: true` hands the run two variables and one flag, and every property
+test in the repo reads them through
+[the property budget](../exports/property.md): `PROPERTY_RUNS_FACTOR=50`,
+`PROPERTY_TIME_LIMIT_MS=120000`, and `--timeout 600000` on `bun test`.
+
+The factor is what makes the nightly a different search from the one a developer
+waits for; the time limit is what makes the factor safe, since fifty times one
+slow property is a job that never ends. The per-test bound has to clear the
+per-property one with room for a test holding several of them — below it, every
+long property is a timeout rather than a longer search — and the job's own
+`timeout-minutes`, which `check.yml` raises under the same input, is what bounds
+the suite.
+
+They go to the suite through `env` rather than exported, so the assignment
+survives the two `sudo` hops the seal takes: `--preserve-env` is a request
+sudoers may narrow, and this is the restatement `PATH` already makes beside it
+for the same reason.
+
 ## The coverage floor
 
 The step passes `--coverage`, and that flag is what makes a repo's

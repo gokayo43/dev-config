@@ -31,6 +31,11 @@ const SWEEP =
   "Import `test` from @gokayo43/dev-config/invariant-sweep.ts — the sweep's fixture checks " +
   "every page a spec opens for console errors, uncaught errors and overflow. `expect` and the " +
   "rest of the module are unchanged.";
+const BUDGET =
+  "Import `check` from @gokayo43/dev-config/property.ts — it multiplies every property's run " +
+  "count by PROPERTY_RUNS_FACTOR, which is what lets one run search a hundred times as far as " +
+  "another. The default export is refused with it because `fc.assert` reaches the same call: " +
+  "import the generators by name.";
 
 /** And what each plugin rule says, which is the rule's own. */
 const NAMED_HOOK = "Move this effect into a named hook under `hooks/`";
@@ -249,6 +254,22 @@ export default defineConfig({ projects: [{ name: "desktop", use: devices["Deskto
 `,
   "tests/harness.ts": ASSERTIONS,
   "src/asserting.ts": ASSERTIONS,
+
+  "src/domain/total.property.test.ts": `import { assert, integer, property } from "fast-check";
+export const used = [assert, property, integer];
+`,
+  "src/domain/rounding.property.test.ts": `import fc from "fast-check";
+export const used = fc.assert;
+`,
+  "src/domain/money.property.test.ts": `import * as fc from "fast-check";
+export const used = fc.assert;
+`,
+  "src/domain/generators.ts": `import { integer, property } from "fast-check";
+export const used = [integer, property];
+`,
+  "src/domain/legacy-runner.ts": `import { assert } from "fast-check";
+export const used = assert;
+`,
 };
 
 const REPORTED = await gradedByBase(TREE);
@@ -485,6 +506,41 @@ describe("a page a spec opens", () => {
       expect(drawnIn(path)).toEqual([]);
     },
   );
+});
+
+describe("how far a property searches", () => {
+  // The dial is the house budget's, so the call every property goes through has
+  // to be the one that reads it. A test calling `fc.assert` runs the number its
+  // author typed, whatever the run asked for — which is the state the fleet was
+  // in when this entry was written.
+  test("is the run's to decide, so fast-check's own `assert` is refused", () => {
+    expect(refusedIn("src/domain/total.property.test.ts")).toEqual(["assert"]);
+    expect(adviceIn("src/domain/total.property.test.ts")).toContain(BUDGET);
+  });
+
+  // The spelling the fleet actually writes, and the reason the entry names the
+  // default export as well: `fc.assert` off a default import reaches the same
+  // call without ever naming it, and an entry listing only `assert` would have
+  // been a ban on one file in thirteen.
+  test.each(["src/domain/rounding.property.test.ts", "src/domain/money.property.test.ts"])(
+    "including %s, which reaches the call without importing its name",
+    (path) => {
+      expect(saidIn(path, BUDGET)).toBe(true);
+    },
+  );
+
+  // What is banned is the call, not the library: the generators are the whole
+  // point of the dependency and come in by name.
+  test("while the generators are untouched, which is what the module is for", () => {
+    expect(drawnIn("src/domain/generators.ts")).toEqual([]);
+  });
+
+  // The ban holds in every file, which is why it is carried as a list entry: a
+  // helper beside the suite is where an unbudgeted `assert` would be wrapped
+  // once and called by every property in the repo.
+  test("and it holds outside a test file, where a wrapper would otherwise sit", () => {
+    expect(refusedIn("src/domain/legacy-runner.ts")).toEqual(["assert"]);
+  });
 });
 
 describe("a type assertion", () => {

@@ -20,6 +20,7 @@
     "dev-server-derive.ts",
     "invariant-sweep.ts",
     "limiter-conformance.ts",
+    "property.ts",
     "response-schema.ts",
     "characterization-net.ts",
     "anti-slop"
@@ -33,6 +34,7 @@
     "./route-log.ts": "./route-log.ts",
     "./invariant-sweep.ts": "./invariant-sweep.ts",
     "./limiter-conformance.ts": "./limiter-conformance.ts",
+    "./property.ts": "./property.ts",
     "./response-schema.ts": "./response-schema.ts",
     "./characterization-net.ts": "./characterization-net.ts"
   },
@@ -55,6 +57,7 @@
     "@types/bun": "1.4.0",
     "drizzle-orm": "0.45.2",
     "elysia": "1.4.29",
+    "fast-check": "4.9.0",
     "knip": "6.32.2",
     "lefthook": "2.1.10",
     "oxfmt": "0.63.0",
@@ -66,6 +69,7 @@
     "@playwright/test": ">=1.62",
     "eslint-import-resolver-typescript": ">=4",
     "eslint-plugin-boundaries": ">=7",
+    "fast-check": ">=4",
     "knip": ">=6",
     "oxfmt": ">=0.63",
     "oxlint": ">=1.79",
@@ -80,6 +84,9 @@
       "optional": true
     },
     "eslint-plugin-boundaries": {
+      "optional": true
+    },
+    "fast-check": {
       "optional": true
     },
     "knip": {

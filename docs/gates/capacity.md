@@ -1,7 +1,7 @@
 # The capacity ramp
 
-`database: postgres` ends in a k6 ramp, after the app has booted and answered its
-health route. It publishes what it measured, and asserts three things about it:
+`database: postgres` runs a k6 ramp once the app has booted and answered its
+health route, and [fuzzes every route it serves](fuzz.md) after that. It publishes what it measured, and asserts three things about it:
 that a measurement happened, that the app answered the requests it was measured
 on, and that no route the app serves sat the ramp out.
 
@@ -219,6 +219,7 @@ the runner that produced it:
 | `route-log-before.json` | what the app declared it serves, and what the boot poll had already reached                                          |
 | `route-log-after.json`  | the same, after the ramp — the floor's verdict is the difference between the two                                     |
 | `routes.snapshot.json`  | the route table the repo's own committed snapshot must hold, so adopting or regenerating it is a copy                |
+| `fuzz.json`             | every request [the fuzzer](fuzz.md) refused an answer to, with the seed that sends the run again                     |
 | `server.log`            | what the app said while all of that happened — copied while the process still holds it open, so the tail may be torn |
 
 The upload runs whatever the steps before it did, so a floor that failed, a ramp

@@ -29,6 +29,14 @@ inputs:
       in review like the reason on a lint directive, and it is about the suite,
       never about the gate.
     default: ""
+  nightly:
+    description: >-
+      Give the suite's property tests the long budget. The two numbers, and the
+      per-test bound that has to clear them, are in the step below: a budget a
+      caller could name is a budget a caller could turn down, and what this
+      buys is that the search a nightly makes is not the one a developer waits
+      for.
+    default: "false"
   test-suite-evidence:
     description: >-
       The artifact name for the junit report. A matrix that runs more than one
@@ -46,6 +54,7 @@ runs:
       working-directory: ${{ inputs.working-directory }}
       env:
         TEST_NETWORK: ${{ inputs['test-network'] }}
+        NIGHTLY: ${{ inputs.nightly }}
       run: |
         set -euo pipefail
         report=$RUNNER_TEMP/junit.xml
@@ -75,6 +84,38 @@ runs:
         # bunfig, which is what makes the floor a CI gate instead of a tax on
         # every run its author makes: docs/gates/test-suite.md.
         flags=(--coverage --reporter=junit --reporter-outfile="$report")
+
+        # The property budget, for the run nobody is waiting on. Fifty times the
+        # runs each property asked for, and two minutes as the most any one of
+        # them may spend reaching that — the factor alone turns one slow
+        # property into a job that never ends, and the pair says "as many runs
+        # as fit in two minutes" instead. Both are read by `property.ts` at the
+        # root of this package, which is where what they mean is written; this
+        # is the one place they are spelled out rather than imported, because
+        # this end is bash.
+        #
+        # Ten minutes per test with them, against bun's five seconds: a bound
+        # below the budget turns every long property into a timeout, and the
+        # gap between the two is what a test holding several properties needs.
+        # It is a per-test bound and the job's own timeout is what bounds the
+        # suite.
+        #
+        # A spelling this does not know is refused rather than read as "not
+        # nightly": the nightly is the run nobody watches, and a typo there is a
+        # long budget that silently never happened.
+        budget=()
+        case $NIGHTLY in
+          true)
+            budget=(PROPERTY_RUNS_FACTOR=50 PROPERTY_TIME_LIMIT_MS=120000)
+            flags+=(--timeout 600000)
+            ;;
+          false) ;;
+          *)
+            echo "::error::nightly is \"$NIGHTLY\" — it takes true or false, and nothing else can be read as either"
+            exit 1
+            ;;
+        esac
+
         if [ -n "$declared" ]; then
           suite=(bun run test "${flags[@]}")
         else
@@ -134,7 +175,12 @@ runs:
         # left running on a machine about to be reclaimed — and inside a
         # namespace where nothing else can see it. Forwarding is the whole fix:
         # sudo passes the signal down, and the tree goes with it.
-        "${seal[@]}" "${suite[@]}" &
+        # Through `env` rather than exported, so the budget survives the two
+        # sudo hops the seal takes: `--preserve-env` is a request sudoers may
+        # narrow, and the assignment right here is the same restatement `PATH`
+        # already makes for the same reason. Empty off a nightly, where `env`
+        # with no assignments is the command itself.
+        "${seal[@]}" env "${budget[@]}" "${suite[@]}" &
         running=$!
         trap 'kill -TERM "$running" 2>/dev/null || true' INT TERM
         wait "$running"

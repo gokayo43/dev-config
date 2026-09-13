@@ -4,12 +4,21 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The fleet's 02:00 UTC slot, for the half of the nightly this repo can run on
+  # itself: the filing below. The other half — the long property budget — is set
+  # by the test-suite action, which this repo substitutes for (see the step that
+  # runs `bun test` and the exemptions above it), so the numbers stay in that
+  # action rather than being restated here for a suite of six properties.
+  schedule:
+    - cron: "0 2 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # The event is in the group so that a push landing at two in the morning does
+  # not cancel the nightly, and a nightly does not cancel a push.
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -237,3 +246,17 @@ jobs:
               assert.deepEqual(ci.assert.assertions[`categories:${category}`], ["error", { minScore: 1 }]);
             }
           '
+
+  # This repo files its own nightly, called by relative path: `ci-call` is
+  # exempted because a commit cannot pin its own SHA, and a local `./` reference
+  # needs no pin — the same reason every action above is reached that way. So the
+  # workflow that ships the filing is a repo that runs it.
+  nightly:
+    if: ${{ !cancelled() && github.event_name == 'schedule' }}
+    needs: check
+    permissions:
+      issues: write
+      actions: read
+    uses: ./.github/workflows/nightly-issue.yml
+    with:
+      result: ${{ needs.check.result }}

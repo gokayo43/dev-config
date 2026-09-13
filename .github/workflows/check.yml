@@ -24,6 +24,17 @@ on:
           --affected selects nothing and main is the full run.
         type: boolean
         default: false
+      nightly:
+        description: >-
+          The run nobody is waiting on: the property tests get fifty times the runs
+          they ask for, the fuzzer gets ten minutes instead of twenty seconds, and both
+          jobs get a timeout that fits. The caller supplies the schedule and passes
+          `github.event_name == 'schedule'`. What a red one leaves behind is
+          nightly-issue.yml beside this file, called as a second job of the caller's
+          own, because the permission that filing needs can only be widened there —
+          README's "The nightly run" is the whole wiring.
+        type: boolean
+        default: false
       database:
         description: >-
           Which database gates run. `postgres` replays the migrations onto an empty
@@ -170,6 +181,13 @@ on:
           test-suite's own name, which is where that default lives.
         type: string
         default: ""
+      fuzz-seed:
+        description: >-
+          The seed the fuzzer generates from: paste the number a failing run printed
+          to send that run again. Empty derives one from the run's id, so a re-run
+          searches somewhere new rather than repeating a run that found nothing.
+        type: string
+        default: ""
       route-allowlist:
         description: >-
           Routes the capacity ramp cannot cover, as `METHOD /path -- why` entries,
@@ -224,7 +242,13 @@ jobs:
     # than failing. That, and what a shared persistent machine changes about
     # service ports and the workspace: README, "Where it runs".
     runs-on: [self-hosted, linux]
-    timeout-minutes: 15
+    # An hour under the nightly, against fifteen minutes for the run somebody
+    # is waiting on. The property budget is what needs it: two minutes per
+    # property is a suite of them costing far more than the whole of an
+    # ordinary run, and a bound left at fifteen would cancel the long search
+    # rather than shorten it. It still has to end well before this box's 04:00
+    # reboot window, which is why the schedule README documents is 02:00.
+    timeout-minutes: ${{ inputs.nightly && 60 || 15 }}
 
     # `--affected` is turbo's, and it is a CLI flag with no environment form — so
     # a workflow that runs a repo's root scripts by name has nowhere to say it
@@ -294,6 +318,7 @@ jobs:
           CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
           DB_GATE_EVIDENCE: ${{ inputs['db-gate-evidence'] }}
           ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
+          FUZZ_SEED: ${{ inputs['fuzz-seed'] }}
           ROUTE_RETIRE: ${{ inputs.route-retire }}
           TIMESTAMP_ALLOWLIST: ${{ inputs.timestamp-allowlist }}
           BACKFILL_COMMAND: ${{ inputs.backfill-command }}
@@ -361,6 +386,7 @@ jobs:
             needs_postgres capacity-script "$CAPACITY_SCRIPT" "the ramp runs against the app the database job boots"
             needs_postgres db-gate-evidence "$DB_GATE_EVIDENCE" "it names the artifact the database job uploads"
             needs_postgres route-allowlist "$ROUTE_ALLOWLIST" "the route floor is measured across the database job's ramp"
+            needs_postgres fuzz-seed "$FUZZ_SEED" "the fuzzer generates from it against the app the database job boots"
             needs_postgres route-retire "$ROUTE_RETIRE" "the routes the base ref served are held against the app the database job boots"
             needs_postgres timestamp-allowlist "$TIMESTAMP_ALLOWLIST" "the column types are read from the database that job migrates"
             needs_postgres backfill-command "$BACKFILL_COMMAND" "the backfill runs against a database the database job builds"
@@ -449,6 +475,7 @@ jobs:
 
       - uses: gokayo43/dev-config/.github/actions/test-suite@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
         with:
+          nightly: ${{ inputs.nightly }}
           test-network: ${{ inputs['test-network'] }}
           test-suite-evidence: ${{ inputs['test-suite-evidence'] }}
 
@@ -473,7 +500,9 @@ jobs:
   database:
     if: inputs.database == 'postgres'
     runs-on: [self-hosted, linux]
-    timeout-minutes: 15
+    # Half an hour under the nightly: the fuzzer's long budget is ten minutes
+    # of it, and everything before the fuzzer costs what it always costs.
+    timeout-minutes: ${{ inputs.nightly && 30 || 15 }}
 
     # Empty on every run, which is the one state no developer database is ever
     # in. Images are pinned by digest for the same reason actions are, with the
@@ -585,3 +614,5 @@ jobs:
           db-gate-evidence: ${{ inputs['db-gate-evidence'] }}
           route-allowlist: ${{ inputs.route-allowlist }}
           route-retire: ${{ inputs.route-retire }}
+          nightly: ${{ inputs.nightly }}
+          fuzz-seed: ${{ inputs['fuzz-seed'] }}

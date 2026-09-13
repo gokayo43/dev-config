@@ -17,6 +17,7 @@
     {
       "files": [
         "dev-server.ts",
+        "property.ts",
         ".github/actions/_lib/gate.ts",
         ".github/actions/db-gate/database.ts",
         ".github/actions/db-gate/probe.ts",
@@ -29,13 +30,19 @@
         // dev server it spawns. There is no `env.ts` above a bin for either to
         // come from.
         //
-        // `gate.ts` is this repo's `env.ts` under another name, and the only
-        // other file here that reads a variable for its value: `inputs()` and
-        // `required()` are the choke point the rule asks for, and both throw
-        // rather than default. The other three forward the environment they
-        // were started with to a child process — `{ ...process.env, DATABASE_URL }`
-        // — which reads no variable and has none to validate. Named one file at
-        // a time so a fifth reader fails rather than joining a glob.
+        // `property.ts` is a module a consuming repo imports, so the `env.ts`
+        // the rule points at is that repo's and cannot be reached from here:
+        // the run's property budget arrives as two variables because a workflow
+        // step has no other way to reach a `bun test`, and this is the one call
+        // every property goes through to read them.
+        //
+        // `gate.ts` is this repo's `env.ts` under another name: `inputs()` and
+        // `required()` are the choke point the rule asks for. All three throw
+        // on a value they cannot read rather than defaulting. The other three
+        // files forward the environment they were started with to a child
+        // process — `{ ...process.env, DATABASE_URL }` — which reads no variable
+        // and has none to validate. Named one file at a time so a seventh
+        // reader fails rather than joining a glob.
         "anti-slop/no-env-access": "off"
       }
     }

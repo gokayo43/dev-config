@@ -80,6 +80,8 @@ interface Action {
   /** The steps that upload, and everything else, split once so each case reads one of them. */
   readonly uploads: unknown[];
   readonly rest: unknown[];
+  /** Every step in the order the action runs them, for the one rule that is about order. */
+  readonly steps: unknown[];
 }
 
 async function actionIn(file: string): Promise<Action> {
@@ -90,6 +92,7 @@ async function actionIn(file: string): Promise<Action> {
     name: file.replace("/action.yml", ""),
     uploads: steps.filter(isUpload),
     rest: steps.filter((step) => !isUpload(step)),
+    steps,
   };
 }
 
@@ -120,5 +123,35 @@ describe("what a published action keeps", () => {
   // before it failing, and a cancelled run has nothing to say.
   test.each(publishing)("$name uploads even after the step before it failed", ({ uploads }) => {
     for (const step of uploads) expect(record(step)["if"]).toBe("${{ !cancelled() }}");
+  });
+});
+
+/**
+ * The other thing that lives in YAML and in no module: the order two steps run
+ * in. Only one pair here has an order that decides what a gate measures rather
+ * than merely what it can read, and nothing driving either module could catch
+ * it — both are pure functions of files somebody else writes.
+ */
+describe("what the order of two steps decides", () => {
+  const DB_GATE = actions.find(({ name }) => name === "db-gate");
+
+  /** Where a step sits, found by something in its own body rather than by its name. */
+  function at(names: string): number {
+    const found = (DB_GATE?.steps ?? []).findIndex((step) =>
+      stringsIn(step).some((text) => text.includes(names)),
+    );
+    if (found < 0) throw new Error(`db-gate has no step naming ${names}`);
+    return found;
+  }
+
+  // Route coverage is the difference between two snapshots of the app's own
+  // counters. The fuzzer's traffic is invisible to it only because the second
+  // snapshot is already on disk when the fuzzer starts — a fuzz step ordered
+  // before that capture would have every route credited with this step's
+  // requests, and a route the ramp never touched would clear the floor on a
+  // request that was never a scenario's. docs/gates/fuzz.md argues it; this is
+  // what holds it.
+  test("the fuzzer runs after the ramp has captured the second route log", () => {
+    expect(at("fuzz.main.ts")).toBeGreaterThan(at("route-log-after.json"));
   });
 });

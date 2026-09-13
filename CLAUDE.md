@@ -29,6 +29,13 @@ a change to a rule usually lands here too.
   has it; `checkJs` in `tsconfig.json` is what type-checks it here.
 - `default.json` — the Renovate preset, resolved by a bare `github>owner/repo`.
 - `.github/workflows/check.yml` — the gate every repo calls.
+  `.github/workflows/nightly-issue.yml` beside it is what a red nightly leaves
+  behind: one issue per repo, filed while red and closed when green. It is a
+  second workflow rather than a job of check.yml's because a job inside a called
+  workflow that asks for a permission its caller has not granted invalidates the
+  whole run before anything starts, `if:` and `needs` included
+  (actions/runner#4151) — so filing lives where the caller's own job can carry
+  `issues: write`, and a repo with no nightly never names the file.
 - `.github/actions/*/` — the executable steps, which are the gates plus one.
   Each is an `action.yml`, the modules the suite drives, and a `*.main.ts` that
   GitHub runs. `install` is the one that grades nothing: `bun install
@@ -47,7 +54,7 @@ a change to a rule usually lands here too.
   once the package scripts it goes through are followed, since reading a command
   for the program it runs is a subject of its own and the rule that asks the
   question is not about it.
-  `db-gate` holds five beside its replay: `semantic-fixtures.ts`, since what
+  `db-gate` holds six beside its replay: `semantic-fixtures.ts`, since what
   the base ref's replay proves about a _schema_ and what it proves about the
   _rows_ are two subjects and the second is the only gate here that grades data;
   `base-lineage.ts`, the lineage as the base ref carried it and the rollback that
@@ -58,9 +65,14 @@ a change to a rule usually lands here too.
   while the _holding_ of the base ref's routes is `live`-only — a second subject
   over the route table `route-coverage.ts` grades, since "was this route ramped"
   and "is this route still here" are different questions and only the second
-  reaches outside the run; and `route-table.ts`, which is what those two floors
+  reaches outside the run; `route-table.ts`, which is what those two floors
   share and neither is about: how a route is named, and the three questions a
-  reasoned hatch over a set of routes is asked. What more than
+  reasoned hatch over a set of routes is asked; and `fuzz.ts`, the third
+  question asked of that same table and the only one about _answers_ rather than
+  about the table — it reads the route log the coverage floor was graded on
+  rather than the app, which is what keeps its own traffic out of that floor
+  whatever order the steps are put in, and it carries a generator and a PRNG of
+  its own because an action runs from a checkout with no install. What more than
   one **action** reads lives in `_lib/`: `gate.ts` — which is where `plainly`
   sits, the environment a child whose output a gate reads is given, now that two
   actions spawn one — `dependency-specs.ts` —
@@ -95,7 +107,7 @@ a change to a rule usually lands here too.
   repo's manifest is what puts them under its lockfile, its exact pins and its
   release-age window.
 - The `*.ts` at the root are what a consuming repo reaches directly, as against
-  the gates, which run over it from CI. Five of them are **exports** it imports
+  the gates, which run over it from CI. Six of them are **exports** it imports
   and calls; the two `dev-server*` files below are a bin it runs and the module
   that bin imports. Each is in
   `files` and `exports`, and each is here rather than in an action for the same
@@ -106,7 +118,10 @@ a change to a rule usually lands here too.
   sanitised sentence and nothing else; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
   block a repo's limiter has to pass; `response-schema.ts` grades an Elysia
   app's own route table; `characterization-net.ts` is the harness under a golden
-  suite. Their pages are `docs/exports/`.
+  suite; `property.ts` is `fc.assert` with the run's budget applied — the one
+  call every property test goes through, so a nightly can multiply how far each
+  of them searches with no test changing, and the one root module that reads the
+  environment for a value. Their pages are `docs/exports/`.
   Two of them register tests rather than answering with problems, and the split
   is by subject rather than by taste: a route table is a value one call can
   grade, and a limiter is a sequence of attempts against a live Redis that only
@@ -175,7 +190,14 @@ a change to a rule usually lands here too.
   same argument one level down: that gate is a shell script rather than a
   module, so the suite extracts the step out of the shipped `action.yml` and
   runs it over fixture suites of its own. It needs passwordless sudo, because
-  what it is grading is a network namespace.
+  what it is grading is a network namespace. `nightly-issue.test.ts` is that
+  argument once more, over the one step in this repo whose subject is an effect
+  that leaves the system: it extracts the filing step out of its workflow and
+  runs it with a `gh` of the suite's own on the path — one that logs every call
+  and then runs the step's own `--jq` program over canned API JSON with the real
+  `jq`, so a filter selecting the wrong issues fails here rather than on
+  GitHub. What it grades is which calls the step made, because for that step the
+  calls are the contract.
   The exports' suites are the same shape once more. `house-limiter.ts` is
   STACK's limiter plus every named way of building a wrong one — a bucket in the
   process, a key that includes the path, a chain read in the wrong order — and
@@ -185,7 +207,15 @@ a change to a rule usually lands here too.
   wrote a case for does not exist. `sweep-fixture.ts` serves the pages the
   invariant sweep is driven over and runs one Playwright process across every
   spec: a browser and a server, because every fact that fixture claims is a
-  browser fact. `@sinclair/typebox` is a devDependency nothing here imports:
+  browser fact. `property.test.ts` is the limiter's argument once more — a
+  `bun test` spawned per case, because what `check` does is hand fast-check a
+  bigger number and the only thing that says whether it worked is how many times
+  the predicate ran; the default it multiplies is graded as a difference against
+  `fc.assert` rather than against the literal 100, which is fast-check's to
+  change. `fuzz.test.ts` drives the fuzzer against a real server on a real port,
+  since each of its four invariants is a statement about a response — and the
+  route that never answers is why that fixture disposes without awaiting
+  `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
   fixture app's schemas with — is typebox under elysia's re-export.
 - `docs/gates/*.md` — a reference page per gate; `docs/exports/*.md` — one per
@@ -209,10 +239,10 @@ them and then watches them run nowhere. What carries their duty instead is
 trees with the shipped binary — a block of cases per rule, and a check that the
 base enables exactly the rules the plugin defines.
 
-`tests/house-limiter.ts` and `dev-server.ts` are out for the same reason and
-carry their duty the same way — a suite that spawns the real thing. `bunfig.toml`
-names which suite, per file, and says why `dev-server-derive.ts` is not with
-them.
+`tests/house-limiter.ts`, `dev-server.ts` and `property.ts` are out for the same
+reason and carry their duty the same way — a suite that spawns the real thing.
+`bunfig.toml` names which suite, per file, and says why `dev-server-derive.ts`
+is not with them.
 
 `bun test` needs a Postgres, a Redis, a chromium and passwordless sudo. The
 first because the replay gate's property is what two databases end up holding
@@ -247,7 +277,8 @@ commit cannot reference its own SHA:
 2. the commit that repoints `check.yml` at (1) — bump `version` again, tag
    that.
 
-Consumers pin the actions at (1) and the workflow call at (2). A tag must sit on
+Consumers pin the actions at (1) and either workflow call — `check.yml`,
+`nightly-issue.yml` — at (2). A tag must sit on
 exactly the commit its pins name. A change here reaches a repo when its pin
 moves and not before, which is the point: a new gate cannot turn the fleet red
 overnight, and the diff that adopts it is one line someone reviewed.

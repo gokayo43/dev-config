@@ -1,0 +1,206 @@
+name: Nightly issue
+
+# What a red nightly leaves behind, held in one place and called by reference:
+#   jobs.nightly.uses: gokayo43/dev-config/.github/workflows/nightly-issue.yml@<sha>
+#
+# A run nobody is waiting on is a run nobody reads, so a red one at 02:00 is a
+# fact about the repo until somebody notices it. This files it where that repo's
+# work is already tracked: one issue, found by an exact title, and the same run
+# green again closes it.
+#
+# ## Why this is not a job inside check.yml
+#
+# Because filing needs `issues: write`, and a job inside a called workflow that
+# asks for a permission its caller has not granted does not run without it — it
+# makes the whole run invalid before any job starts, and neither `if:` nor
+# `needs` prevents that (actions/runner#4151). A nightly job in `check.yml`
+# would therefore have failed every repo that bumped its pin and did not also
+# widen its token, `nightly: false` and all.
+#
+# Here it is the caller's own job that carries the permissions, which is the
+# one place they can be widened, and a repo that has not wired up a nightly
+# never references this file at all. README's "The nightly run" is the wiring,
+# and this repo's own `ci.yml` calls it by relative path — the workflow that
+# ships the filing is a repo that runs one.
+on:
+  workflow_call:
+    inputs:
+      result:
+        description: >-
+          What the check came to — `needs.<the check job>.result`, which is one
+          value over every job that workflow ran. `failure` files or comments on
+          the issue; `success` and `skipped` close it; anything else, which is a
+          run that never finished, says nothing at all.
+        type: string
+        required: true
+
+# Declared here rather than left to the caller's grant alone, so that a repo
+# wiring this up without widening its token is told which permission is missing
+# at the moment it wires it up, rather than by a 403 at two in the morning. It
+# is safe to state here and unsafe to state in check.yml for the reason above:
+# nothing reaches this workflow by accident.
+permissions:
+  issues: write
+  actions: read
+
+jobs:
+  file:
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 10
+
+    steps:
+      # Every artifact the run produced, rather than one by name: the database
+      # job's is named by whichever caller runs a matrix, and the one place that
+      # name is defaulted is db-gate's own action.yml — a second statement of it
+      # here would be a second thing to get wrong. The fuzz report is found by
+      # its filename instead.
+      #
+      # Optional, and the reason is the commonest red nightly there is: a run
+      # that failed its linter never reached a step that uploads anything, and a
+      # download failing there would mean the issue about it was never filed.
+      - name: Whatever the run left behind
+        continue-on-error: true
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: ${{ runner.temp }}/evidence
+
+      - name: File the nightly, or close it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ inputs.result }}
+          # The title is the identity of the issue: the search below is an exact
+          # match on it, so a run that spelled it differently would file a second
+          # issue every night instead of commenting on the first.
+          TITLE: Nightly is red
+        run: |
+          set -euo pipefail
+
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          issues="/repos/$GITHUB_REPOSITORY/issues"
+
+          # A run that neither passed nor failed says nothing about the repo, so
+          # it neither files nor closes. Cancelled is the case: the caller's own
+          # `if:` keeps most of those away, and a job the runner lost arrives
+          # here.
+          case $RESULT in
+            failure) red=true ;;
+            success | skipped) red=false ;;
+            *)
+              echo "::notice::the nightly says nothing: the check came to $RESULT"
+              exit 0
+              ;;
+          esac
+
+          # Everything below that only *describes* the run is optional, and goes
+          # through this: what the issue is for is the run link, and a reader
+          # that did not answer must not be able to stop the issue being filed.
+          # It is the same argument the artifact download's `continue-on-error`
+          # makes one step up, and one helper so that three readers cannot
+          # disagree about it. What is missing says so in the body rather than
+          # being absent, because a section that is simply not there reads as a
+          # run that had nothing to say.
+          enrich() {
+            local what=$1 answer
+            shift
+            if answer=$("$@"); then
+              printf '%s\n' "$answer"
+            else
+              printf 'unavailable: %s\n' "$what"
+            fi
+          }
+
+          # The body, written before anything is searched for, so the one thing
+          # it may never be without is in it before any decision is made: an
+          # issue naming no run is an issue nobody can act on.
+          body=$RUNNER_TEMP/nightly.md
+          printf 'The nightly run is red: %s\n' "$run_url" > "$body"
+
+          # Which job, and which step of it. The result above is one value over
+          # the whole run; the step is only in the API, and it is the half that
+          # says where to look.
+          {
+            printf '\n## What failed\n\n'
+            enrich "which job and step failed: the run's own API did not answer" \
+              gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" \
+              --jq '.jobs[] | select(.conclusion == "failure")
+                    | "- \(.name): \([.steps[]? | select(.conclusion == "failure") | .name] | join(", "))"'
+          } >> "$body"
+
+          # The fuzzer's own two facts, which are the ones no log line replaces:
+          # the seed replays the whole run and the first failure's command
+          # replays the one request. One section per report rather than the
+          # first one found: a caller running a matrix uploads an artifact per
+          # leg, and each leg fuzzed with a seed of its own.
+          #
+          # The `find` runs in a process substitution, where its own failure is
+          # invisible — which is right here and wrong for the search below: an
+          # evidence directory that is not there and a `find` that could not read
+          # one are the same thing to a section of prose, while a search that did
+          # not answer decides whether an issue is filed.
+          while IFS= read -r report; do
+            {
+              printf '\n## Fuzzer (%s)\n\n' "$(basename "$(dirname "$report")")"
+              # The backticks below are markdown inside a jq program, not command
+              # substitution: the whole argument is jq's language and the shell
+              # never looks inside it.
+              # shellcheck disable=SC2016
+              enrich "the fuzzer's seed and first failure: its report could not be read" \
+                jq -r '"Seed `\(.seed)` — pass it as `fuzz-seed` to send this run again.",
+                       (if (.failures | length) > 0
+                          then "", "First failure: \(.failures[0].method) \(.failures[0].path) \(.failures[0].broke)", "",
+                               "```sh", .failures[0].curl, "```"
+                          else empty end)' "$report"
+            } >> "$body"
+          done < <(find "$RUNNER_TEMP/evidence" -name fuzz.json 2> /dev/null | sort)
+
+          # Search, then act. Every path below starts here, so a re-run of a red
+          # or a green nightly repeats a comment at worst and never files a
+          # second issue. The one window it cannot close is between this search
+          # and the create: two runs inside it file two issues, which is what the
+          # oldest-wins rule below cleans up on the next run.
+          #
+          # Captured rather than piped into `mapfile` through a process
+          # substitution, which is where this reads its own failure as an
+          # answer: an empty list is "nothing open", so one rate-limited read a
+          # night is one duplicate issue a night for as long as the repo stays
+          # red. A search that did not answer is not an answer.
+          if ! found=$(gh api --paginate -X GET "$issues" -f state=open -f per_page=100 \
+            --jq '.[] | select(.pull_request == null) | select(.title == env.TITLE) | .number'); then
+            echo "::error::the nightly could not read this repo's open issues, so it neither filed nor closed — re-run it once the API answers"
+            exit 1
+          fi
+          open=()
+          if [ -n "$found" ]; then mapfile -t open < <(printf '%s\n' "$found" | sort -n); fi
+
+          comment_on() {
+            jq -n --rawfile body "$2" '{body: $body}' |
+              gh api -X POST "$issues/$1/comments" --input - --jq '.html_url'
+          }
+
+          close_with() {
+            printf '%s\n' "$2" > "$RUNNER_TEMP/nightly-closing.md"
+            comment_on "$1" "$RUNNER_TEMP/nightly-closing.md"
+            gh api -X PATCH "$issues/$1" -f state=closed -f state_reason=completed --jq '.html_url'
+          }
+
+          if [ "$red" = true ]; then
+            if [ "${#open[@]}" -eq 0 ]; then
+              jq -n --arg title "$TITLE" --rawfile body "$body" '{title: $title, body: $body}' |
+                gh api -X POST "$issues" --input - --jq '.html_url'
+              exit 0
+            fi
+            # The oldest is the one this repo's nightly has been reporting into,
+            # so it is the one that gets this run. Anything else open under the
+            # same title came out of the window above and is closed as the
+            # duplicate it is, rather than left for somebody to read as a second
+            # failure.
+            comment_on "${open[0]}" "$body"
+            for number in "${open[@]:1}"; do
+              close_with "$number" "Closed as a duplicate of #${open[0]}, which is where this repo's nightly reports: two runs searched for this title before either of them had filed it."
+            done
+            exit 0
+          fi
+
+          for number in "${open[@]}"; do
+            close_with "$number" "The nightly is green again: $run_url"
+          done

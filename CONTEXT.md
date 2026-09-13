@@ -98,6 +98,19 @@ a route has been under load once, or that it is still there at all; it says
 nothing about whether that load resembled production, or whether the route still
 answers what it used to.
 
+**Nightly** — a run of the shared check that nobody is waiting on: the same
+gates over the same tree, with the searches that scale given room to run, and
+one issue per repo for as long as it stays red. Distinct from the schedule that
+starts it, which is the caller's own trigger, and from a gate: nothing new is
+asserted, the same assertions are made harder to satisfy.
+
+**Budget** — what a search is allowed to spend, decided by the run rather than
+written into the code being searched: a wall clock for the fuzzer, a multiplier
+and a time limit for a property. Distinct from a timeout, which bounds something
+that has gone wrong; a budget bounds something that could go on forever and is
+worth more the longer it does. A budget is never a bar to clear — what it stops
+is a pass.
+
 **Trend line and claim** — the two things a capacity ramp can produce, from one
 script and one reader. On a CI runner the app shares a machine with a Postgres,
 a Redis and a neighbour nobody chose, so the number is only comparable with the

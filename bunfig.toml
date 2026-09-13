@@ -24,9 +24,9 @@ exact = true
 # docs/gates/test-suite.md.
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
-# Three things here execute only inside a spawned process, so the runner
-# instruments them and then watches them run nowhere: the file reads as
-# unreached and drags itself under the per-file floor.
+# Four files here are graded by a suite that spawns a process rather than by the
+# runner watching them execute, so the coverage they report is not the coverage
+# they have. Each names the suite that carries its duty instead.
 #
 # `anti-slop/**` — the plugin's rules run inside a spawned oxlint.
 # `tests/anti-slop*.test.ts` is what actually grades them, by linting fixture
@@ -44,7 +44,21 @@ coverageSkipTestFiles = true
 # the runner watches this file run nowhere. `tests/dev-server.test.ts` carries
 # its duty, naming the wrong implementation each case kills.
 #
+# `property.ts` — what it does is hand fast-check a bigger number, and the only
+# thing that says whether that worked is how many times a predicate ran in a
+# process the run's environment was set for. `tests/property.test.ts` spawns a
+# `bun test` per case and reads that number back. It is here rather than left to
+# the floor because it would otherwise be *nearly* covered by accident:
+# `tests/fuzz.test.ts` calls `check` for its own properties, which walks the
+# happy path and nothing else, and a floor met that way is a floor measuring
+# somebody else's suite.
+#
 # `dev-server-derive.ts` is deliberately NOT here: everything that can be
 # answered without a machine was split into it for exactly that reason, and it is
 # graded by the floor like anything else.
-coveragePathIgnorePatterns = ["anti-slop/**", "tests/house-limiter.ts", "dev-server.ts"]
+coveragePathIgnorePatterns = [
+  "anti-slop/**",
+  "tests/house-limiter.ts",
+  "dev-server.ts",
+  "property.ts",
+]

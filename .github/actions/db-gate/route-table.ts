@@ -50,6 +50,26 @@ function routeFrom(entry: string): Route | undefined {
 }
 
 /**
+ * The routes an allowlist names, by `key`, for a reader of the hatch rather
+ * than a grader of it.
+ *
+ * An entry that is not a route is passed over in silence here, which is the
+ * opposite of what `waivedBy` does and is right for the same reason: the floor
+ * that owns the input is already refusing that entry by name, and a second
+ * diagnostic about one mistake is two findings for one edit. What reads this is
+ * the fuzzer, which asks only "was this route waived" — a question a malformed
+ * line answers with no.
+ */
+export function routesIn(allowlist: Allowlist): ReadonlySet<string> {
+  return new Set(
+    allowlist.entries
+      .map((entry) => routeFrom(entry))
+      .filter((route) => route !== undefined)
+      .map((route) => key(route)),
+  );
+}
+
+/**
  * The three ways an entry earns a diagnostic, phrased by the floor that owns
  * the hatch: what "not a route", "not one of mine" and "waives nothing" mean is
  * the caller's, and which of the three a reader is told is not.

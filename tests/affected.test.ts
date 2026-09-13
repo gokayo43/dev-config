@@ -16,6 +16,8 @@ import { materialise, type Tree } from "./tree.ts";
  */
 const CHECK = new URL("../.github/workflows/check.yml", import.meta.url).pathname;
 
+const PAGE = await Bun.file(new URL("../README.md", import.meta.url)).text();
+
 const DOCUMENT = record(Bun.YAML.parse(await Bun.file(CHECK).text()));
 
 const STATIC = record(record(DOCUMENT["jobs"])["static"]);
@@ -100,6 +102,7 @@ const NOTHING_SET = {
   DB_GATE_EVIDENCE: "",
   ROUTE_ALLOWLIST: "",
   ROUTE_RETIRE: "",
+  FUZZ_SEED: "",
   TIMESTAMP_ALLOWLIST: "",
   BACKFILL_COMMAND: "",
   BACKFILL_SEED: "",
@@ -133,6 +136,27 @@ async function ran(script: string, tree: Tree, environment: Record<string, strin
   ]);
   return { status: await proc.exited, stdout: out, output: out + err };
 }
+
+/** The rows of README's input table, by the input each names. */
+const DOCUMENTED = ((): Map<string, string> => {
+  const rows = new Map<string, string>();
+  for (const line of PAGE.split("\n")) {
+    const named = /^\| `([a-z-]+)`\s+\|/u.exec(line);
+    if (named?.[1] !== undefined) rows.set(named[1], line);
+  }
+  return rows;
+})();
+
+describe("the inputs that need the database job", () => {
+  // The paragraph under that table used to enumerate these by hand, and had
+  // already gone stale — `fuzz-seed` was refused by the step and absent from the
+  // list. The row is where the fact belongs, since that is what a caller reads
+  // before passing an input, and this is what keeps the next one from being
+  // missing from it.
+  test.each(REFUSED_WHEN_EMPTY)("%s says so in its own row of the README", (input) => {
+    expect(DOCUMENTED.get(input) ?? `${input}: no row`).toContain("Needs `database: postgres`");
+  });
+});
 
 describe("which packages a run is held to", () => {
   /**
