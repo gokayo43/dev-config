@@ -194,6 +194,18 @@ on:
         type: string
         default: ""
 
+    secrets:
+      git-ssh-key:
+        description: >-
+          A private SSH key that may READ the private git repository this repo names
+          as a dependency — a deploy key on that repository, never a personal token.
+          It is written, used and removed inside the one step that installs, so no lane
+          after it runs carrying the path of a private key; it reaches neither the
+          workspace the lanes read nor a lockfile. GitHub scopes a deploy key to one
+          repository, so a second private dependency is a second key on a second repo
+          and not this one.
+        required: false
+
 permissions:
   contents: read
 
@@ -406,7 +418,9 @@ jobs:
       - if: inputs.compose
         uses: gokayo43/dev-config/.github/actions/compose-lint@328ce38df8a0b75e23e7b42ae18398a077f9446c # v0.56.0
 
-      - run: bun install --frozen-lockfile
+      - uses: gokayo43/dev-config/.github/actions/install@e19667ededfde01c435c37f16e99e263624514b3 # v0.58.0
+        with:
+          git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
       # Not narrowed, deliberately, even when the caller asked for it: a build
       # is what produces the generated sources the whole-repo lanes below then
@@ -514,7 +528,9 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - run: bun install --frozen-lockfile
+      - uses: gokayo43/dev-config/.github/actions/install@e19667ededfde01c435c37f16e99e263624514b3 # v0.58.0
+        with:
+          git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
       - if: inputs.build
         run: bun run build
