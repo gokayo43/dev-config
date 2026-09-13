@@ -112,6 +112,11 @@
         "name": "bun:test",
         "importNames": ["beforeEach", "afterEach"],
         "message": "Set a case up with a call it makes itself, and tear it down with `await using` — beforeAll/afterAll stay for shared immutable resources."
+      },
+      {
+        "name": "@playwright/test",
+        "importNames": ["test"],
+        "message": "Import `test` from @gokayo43/dev-config/invariant-sweep.ts — the sweep's fixture checks every page a spec opens for console errors, uncaught errors and overflow. `expect` and the rest of the module are unchanged."
       }
     ],
     "unicorn/prefer-node-protocol": "error",

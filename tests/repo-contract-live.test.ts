@@ -21,8 +21,9 @@ import {
   CLEAN,
   contract,
   DEFAULTS,
+  LIVE_STATIC,
+  liveManifest,
   manifestWith,
-  type PackageJson,
   PIN,
 } from "./repo-contract-fixture.ts";
 import { git, history, materialise, type Tree, under, without } from "./tree.ts";
@@ -93,27 +94,6 @@ async function live(
 interface LiveOptions extends Partial<Contract> {
   readonly executable?: readonly string[];
 }
-
-/**
- * The manifest a live static site ships, and whatever a case changes about it.
- * Stated once: the lifecycle cases below differ from this tree by one field,
- * and rebuilding the other three around each of them is how two definitions of
- * "a live static repo" start disagreeing about which fault a case is showing.
- */
-function liveManifest(change: (contents: PackageJson) => void = () => {}): Tree {
-  return manifestWith((contents) => {
-    contents.lifecycle = "live";
-    contents.dependencies = { "@sentry/astro": "10.24.0" };
-    delete contents.scripts?.["db:migrate"];
-    change(contents);
-  });
-}
-
-/** A live repo with no database of its own: a marketing site, and half the fleet. */
-const LIVE_STATIC: Tree = {
-  ...without(without(liveManifest(), BACKUP), RESTORE_DRILL),
-  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
-};
 
 // The field is the switch, so a repo that has not thrown it is graded against
 // neither set of rules — the gate says only that nobody has said which repo

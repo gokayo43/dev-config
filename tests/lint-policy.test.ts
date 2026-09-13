@@ -27,6 +27,10 @@ const MEMOISATION =
 const CASE_SETUP =
   "Set a case up with a call it makes itself, and tear it down with `await using` — " +
   "beforeAll/afterAll stay for shared immutable resources.";
+const SWEEP =
+  "Import `test` from @gokayo43/dev-config/invariant-sweep.ts — the sweep's fixture checks " +
+  "every page a spec opens for console errors, uncaught errors and overflow. `expect` and the " +
+  "rest of the module are unchanged.";
 
 /** And what each plugin rule says, which is the rule's own. */
 const NAMED_HOOK = "Move this effect into a named hook under `hooks/`";
@@ -224,6 +228,25 @@ export const used = query.useQuery;
   "case.test.ts": `import { afterAll, afterEach, beforeAll, beforeEach, test } from "bun:test";
 export const used = [afterAll, afterEach, beforeAll, beforeEach, test];
 ${ASSERTIONS}`,
+
+  "e2e/home.spec.ts": `import { test } from "@playwright/test";
+export const used = test;
+`,
+  "e2e/renamed.spec.ts": `import { test as base } from "@playwright/test";
+export const used = base;
+`,
+  "e2e/namespaced.spec.ts": `import * as playwright from "@playwright/test";
+export const used = playwright.test;
+`,
+  "e2e/fixtures.ts": `import { test } from "@playwright/test";
+export const used = test;
+`,
+  "e2e/asserting.spec.ts": `import { expect } from "@playwright/test";
+export const used = expect;
+`,
+  "playwright.config.ts": `import { defineConfig, devices } from "@playwright/test";
+export default defineConfig({ projects: [{ name: "desktop", use: devices["Desktop Chrome"] }] });
+`,
   "tests/harness.ts": ASSERTIONS,
   "src/asserting.ts": ASSERTIONS,
 };
@@ -425,6 +448,43 @@ describe("a case's setup", () => {
     expect(refusedIn("case.test.ts")).not.toContain("beforeAll");
     expect(refusedIn("case.test.ts")).not.toContain("afterAll");
   });
+});
+
+describe("a page a spec opens", () => {
+  // The one name of that module the sweep replaces. What the ban buys is that
+  // the three invariants are a property of visiting a page at all, rather than
+  // assertions every spec has to remember — so the spec that forgot the import
+  // is exactly the spec they would be missing from.
+  test("is swept, so Playwright's own `test` is refused in a spec", () => {
+    expect(refusedIn("e2e/home.spec.ts")).toEqual(["test"]);
+    expect(adviceIn("e2e/home.spec.ts")).toContain(SWEEP);
+  });
+
+  // Renamed is the spelling the fixture module itself uses, and a namespace
+  // import names no specifier at all — one edit away from a rule that reads
+  // only the import statement.
+  test.each(["e2e/renamed.spec.ts", "e2e/namespaced.spec.ts"])(
+    "including in %s, which reaches the name without importing it plainly",
+    (path) => {
+      expect(saidIn(path, SWEEP)).toBe(true);
+    },
+  );
+
+  // The ban holds in every file, which is why it is carried as a list entry: a
+  // fixture module beside the specs is where an unswept `test` would be wrapped
+  // once and inherited by every spec that imports it.
+  test("and in a helper beside the specs, which is not a spec file at all", () => {
+    expect(refusedIn("e2e/fixtures.ts")).toEqual(["test"]);
+  });
+
+  // What is banned is the name, not the module: the assertion library is
+  // Playwright's and so is the config's own builder.
+  test.each(["e2e/asserting.spec.ts", "playwright.config.ts"])(
+    "while %s keeps the rest of the module",
+    (path) => {
+      expect(drawnIn(path)).toEqual([]);
+    },
+  );
 });
 
 describe("a type assertion", () => {

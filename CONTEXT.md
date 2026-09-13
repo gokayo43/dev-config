@@ -42,12 +42,12 @@ property of what the repo _is_, and it is visible in the caller's diff.
 **Lifecycle** — whether a repo is carrying real people, declared by the repo in
 one field and inferred by nothing: `dev` or `live`. Distinct from a deployment,
 which is a thing that has happened, and from an exemption, which is about what a
-repo _is_ — this is about who it owes. `live` is what the crash
-reporting is derived from, and — for a repo that owns migrations — the backups,
-the rehearsed restore and the upgrade gate as well. All of it read from the repo
-rather than from a workflow input, so that going live is one word rather than a
-checklist somebody does half of, and cannot be undone by editing the workflow
-those rules govern. It only moves up: `dev` says nothing about anyone, `live`
+repo _is_ — this is about who it owes. `live` is what the crash reporting is
+derived from; the swept browser suite for a repo that ships pages; and — for a
+repo that owns migrations — the backups, the rehearsed restore and the upgrade
+gate as well. All of it read from the repo rather than from a workflow input, so
+that going live is one word rather than a checklist somebody does half of, and
+cannot be undone by editing the workflow those rules govern. It only moves up: `dev` says nothing about anyone, `live`
 says people are on the other end, and a repo that is genuinely being wound down
 says so with an exemption rather than with a deleted line.
 

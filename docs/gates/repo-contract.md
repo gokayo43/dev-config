@@ -237,11 +237,16 @@ of.
 | `scripts/backup.sh` exists and is executable                             | the repo owns a database, and `data-jobs-external` is empty | an undumped database is one nobody has                                                                                                                          |
 | `scripts/restore-drill.sh` exists and is executable                      | the repo owns a database, and `data-jobs-external` is empty | a backup nobody has restored is a backup nobody has                                                                                                             |
 | a timer/service pair that runs each of them                              | the repo owns a database, and `data-jobs-external` is empty | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
+| `@playwright/test` among what the workspace declares                     | the repo ships a browser surface: `react-dom` or `astro`    | a page nobody opens in CI is one that breaks in front of a user                                                                                                 |
+| a spec written with `@gokayo43/dev-config/invariant-sweep.ts`            | the repo ships a browser surface: `react-dom` or `astro`    | a spec on Playwright's own `test` passes without noticing a console error, an uncaught error or a page scrolling sideways                                       |
+| a `ci.yml` step that runs `playwright test`                              | the repo ships a browser surface: `react-dom` or `astro`    | a suite CI never runs is one that ran the day it was written                                                                                                    |
 
-Only crash reporting is owed by every live repo. The rest is about a database,
-and half this fleet is a static site with a hostname and no schema — demanding a
-backup script of one would teach people to write a script that does nothing in
-order to get past a gate. The upgrade gate is scoped the same way for a harder
+Only crash reporting is owed by every live repo. The rest is scoped to what the
+repo is: the data rules are about a database, and half this fleet is a static
+site with a hostname and no schema — demanding a backup script of one would
+teach people to write a script that does nothing in order to get past a gate.
+The three browser rules are the same shape from the other side, and an API owes
+none of them. The upgrade gate is scoped the same way for a harder
 reason than symmetry: `check.yml` **refuses** `upgrade-gate: true` without
 `database: postgres`, so asking for it there would be this contract demanding
 the one configuration the shared workflow rejects. `external` is that same state
@@ -315,6 +320,39 @@ would fail the first repo on a runtime nobody had thought of. A devDependency
 builds and tests the repo and reaches no deployment, and a peer range states
 what a consumer may bring, so an SDK in either is a repo whose crashes nobody
 hears.
+
+**"Ships a browser surface" is read the same way, off the same two fields.** The
+two names are STACK's web picks: TanStack Start and Vite React both ship
+`react-dom`, and a static site ships `astro`. An Expo app ships `react-native`,
+and an API or a worker ships neither — exactly the set with no page for a
+browser to open. Names rather than a prefix, unlike Sentry's, because
+`@sentry/astro` is a crash SDK and not a page, and `react-native` is a runtime
+Playwright cannot drive.
+
+A repo that has one owes three separate things, because each is a different file
+to fix. The runner has to be **declared** — `devDependencies` or `dependencies`,
+in any manifest in the workspace. At least one `*.spec.ts` or `*.spec.tsx` has to
+import `@gokayo43/dev-config/invariant-sweep.ts`, which is what makes every page
+its specs visit checked for console errors, uncaught errors and sideways scroll;
+a spec on Playwright's own `test` passes while noticing none of it, and the base
+config's `no-restricted-imports` refuses that import for the same reason. And
+`ci.yml` has to run the suite.
+
+How many flows the suite has is deliberately not graded. E2E is few and
+structural (testing.md), so a floor on flow count would be this gate asking for
+the opposite of the rule it derives from.
+
+**Running the suite is read by words, and through the scripts.** A step counts
+when its `run:` invokes `playwright test` — directly, as `bunx`/`bun x`, or out
+of `node_modules/.bin` — or when it runs a package script that reaches it:
+`bun run <script>` and `bun <script>` in the root manifest, `bun run --cwd <dir>
+<script>` in that directory's, and `turbo run <task>` in whichever workspace
+declares it. Script chains are followed (`e2e` runs `test:e2e:ci` runs the
+binary) and a script that calls itself terminates rather than recursing. Words
+rather than text, because the ordinary Playwright job installs a browser:
+`playwright install --with-deps chromium` names the binary and runs no suite, a
+`#` line runs nothing at all, and a script whose _name_ carries the word runs
+whatever its command says.
 
 ### A scheduled job is three files
 
@@ -417,8 +455,8 @@ as well, and the two are compared:
 | `live`   | absent    | refused — the same edit, less visible      |
 
 Writing `dev` over `live`, or deleting the field, sheds backups, a rehearsed
-restore, crash reporting and the upgrade gate in one edit that reviews as a
-whitespace change. Deleting the manifest outright is refused a line earlier, by
+restore, crash reporting, the swept browser suite and the upgrade gate in one
+edit that reviews as a whitespace change. Deleting the manifest outright is refused a line earlier, by
 the rule that a repo has a `package.json` at all.
 
 The base ref is the merge base with the branch a pull request targets, or the

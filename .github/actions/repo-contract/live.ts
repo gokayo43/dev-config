@@ -5,11 +5,11 @@
  * The rest of the contract grades a repo the same way whether or not anyone is
  * on the other end of it: a package manager is pinned or it is not. This half
  * grades what having users costs — a dump nobody took, a restore nobody
- * rehearsed, a crash nobody was told about, a migration nobody proved upgrades
- * — and every rule in it is reached through one field. Its own file, because
- * one word deciding whether a whole rule set applies is a different subject
- * from the facts that always apply, and the diff of a new live rule should read
- * as a rule rather than as a change to the contract.
+ * rehearsed, a crash nobody was told about, a migration nobody proved upgrades,
+ * a page nobody opened — and every rule in it is reached through one field. Its
+ * own file, because one word deciding whether a whole rule set applies is a
+ * different subject from the facts that always apply, and the diff of a new
+ * live rule should read as a rule rather than as a change to the contract.
  */
 import type { Stats } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -28,15 +28,17 @@ import {
 } from "../_lib/gate.ts";
 import { type Declared, type Lifecycle, lifecycleOf } from "../_lib/lifecycle.ts";
 import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
+import { runsProgram } from "./package-scripts.ts";
 
 /**
  * The field only ever moves up. `dev` is where every repo starts and says
  * nothing about anyone, so anything is reachable from it; `live` says people
  * are on the other end, and that does not stop being true because a line was
  * tidied out of a manifest. Deleting it — or writing `dev` over it — sheds
- * backups, a rehearsed restore, crash reporting and the upgrade gate in one
- * edit that reviews as a whitespace change, which is the whole reason this is
- * read from the base ref rather than trusted from the tree in front of us.
+ * backups, a rehearsed restore, crash reporting, the swept browser suite and
+ * the upgrade gate in one edit that reviews as a whitespace change, which is
+ * the whole reason this is read from the base ref rather than trusted from the
+ * tree in front of us.
  *
  * A repo really is retired sometimes, and that is a decision rather than a
  * diff: `lifecycle-retire` is where it gets written down.
@@ -134,7 +136,7 @@ export function checkLifecycle(
       : [
           {
             file: "package.json",
-            message: `lifecycle was "live" at ${base.liveAt} and now ${declared.found} — a repo does not stop carrying people because a field was tidied away, and everything "live" derives goes with it: backups, a rehearsed restore, crash reporting and the upgrade gate. Put it back, or name the lifecycle-retire exemption at the call site, which is what a deliberate retirement looks like.`,
+            message: `lifecycle was "live" at ${base.liveAt} and now ${declared.found} — a repo does not stop carrying people because a field was tidied away, and everything "live" derives goes with it: backups, a rehearsed restore, crash reporting, the swept browser suite and the upgrade gate. Put it back, or name the lifecycle-retire exemption at the call site, which is what a deliberate retirement looks like.`,
           },
         ];
   }
@@ -170,7 +172,7 @@ function notDeclared({ found, is }: Declared): Problem[] {
   return [
     {
       file: "package.json",
-      message: `lifecycle ${found} — it says "dev" or "live", and moving it to "live" is the commit that declares this repo carries real users: from then on it owes backups, a rehearsed restore, crash reporting and the upgrade gate`,
+      message: `lifecycle ${found} — it says "dev" or "live", and moving it to "live" is the commit that declares this repo carries real users: from then on it owes backups, a rehearsed restore, crash reporting, the swept browser suite and the upgrade gate`,
     },
   ];
 }
@@ -657,14 +659,116 @@ function hasSentry(contents: ConfigObject): boolean {
 }
 
 /**
- * What the caller's workflow asked check.yml for — the half of these rules that
- * is not read off the repo, and the only half that may be.
+ * What shipping pages looks like in a manifest, which is STACK's two web picks:
+ * TanStack Start and Vite React both ship `react-dom`, and a static site ships
+ * `astro`. An Expo app ships `react-native` and an API or a worker ships
+ * neither — exactly the set with no page for a browser to open, which is why
+ * the list is these names and not a runtime prefix the way Sentry's is.
+ */
+const BROWSER_SURFACE = ["react-dom", "astro"] as const;
+
+/** Whether anything in the workspace ships pages, among what it actually ships. */
+function hasBrowserSurface(all: readonly Manifest[]): boolean {
+  return all.some(({ value }) =>
+    SHIPPED_FIELDS.some((field) =>
+      BROWSER_SURFACE.some((name) => record(value[field])[name] !== undefined),
+    ),
+  );
+}
+
+const PLAYWRIGHT = "@playwright/test";
+const PLAYWRIGHT_BIN = "playwright";
+
+/** The export a swept spec imports, which is the whole of what makes it swept. */
+const SWEEP = "@gokayo43/dev-config/invariant-sweep.ts";
+
+/**
+ * Where a test runner is declared. Both fields, because a runner builds and
+ * runs the suite rather than shipping — `devDependencies` is where it belongs
+ * and `dependencies` is a repo that put it one line up, which is a packaging
+ * opinion rather than a suite that does not exist.
+ */
+const RUNNER_FIELDS = ["devDependencies", "dependencies"] as const;
+
+/**
+ * A spec, by the suffix that tells an E2E spec from a unit test in this house.
+ * `*.test.ts` is the unit lane — asking a unit test to import a browser fixture
+ * would be this rule refusing every repo that has one. Git pathspecs, so the
+ * listing is what a scaffolder has just written as well as what is committed,
+ * and `*` crosses directories.
+ */
+const SPECS = ["*.spec.ts", "*.spec.tsx"] as const;
+
+/** The lead-in every one of these three problems shares, since one missing suite is what they are all about. */
+const A_SWEPT_SUITE = "a live repo with a browser surface carries a structural Playwright suite";
+
+/**
+ * The structural browser suite, in the three states that make it one: a runner
+ * the repo has, specs written through the sweep, and a CI run. Three problems
+ * rather than one, because each names a different file to fix — and all three
+ * at once for a repo that has none of it, the way a missing data job reports
+ * per job rather than as "the data jobs are missing".
+ *
+ * How many flows the suite has is deliberately not asked. E2E is few and
+ * structural (testing.md), so a floor on flow count would be this gate asking
+ * for the opposite of the rule it is derived from.
+ */
+async function checkBrowserSuite(
+  root: string,
+  all: readonly Manifest[],
+  steps: readonly string[],
+): Promise<Problem[]> {
+  const problems: Problem[] = [];
+
+  const declared = all.some(({ value }) =>
+    RUNNER_FIELDS.some((field) => record(value[field])[PLAYWRIGHT] !== undefined),
+  );
+  if (!declared) {
+    problems.push({
+      file: "package.json",
+      message: `${A_SWEPT_SUITE} — declare ${PLAYWRIGHT}, since a page nobody opens in CI is one that breaks in front of a user`,
+    });
+  }
+
+  const specs = await repoFiles(root, SPECS);
+  const swept = await Promise.all(
+    specs.map(async (file) => (await Bun.file(`${root}/${file}`).text()).includes(SWEEP)),
+  );
+  if (!swept.includes(true)) {
+    // The first spec, where there is one, and no file at all where there is
+    // none: a repo with specs has somewhere to make the change, and a repo with
+    // none is being told to write one.
+    const [first] = specs;
+    const message = `${A_SWEPT_SUITE} — write its specs with the invariant sweep's \`test\` (${SWEEP}), so every page a spec visits is checked for console errors, uncaught errors and overflow`;
+    problems.push(first === undefined ? { message } : { file: first, message });
+  }
+
+  if (!steps.some((step) => runsProgram(step, PLAYWRIGHT_BIN, "test", all))) {
+    problems.push({
+      file: CI_WORKFLOW,
+      message: `${A_SWEPT_SUITE} — have ${CI_WORKFLOW} run it: add a job that runs \`${PLAYWRIGHT_BIN} test\` (directly or through a package script), since a suite CI never runs is one that ran the day it was written`,
+    });
+  }
+
+  return problems;
+}
+
+/**
+ * What the caller's workflow holds — what its call asked check.yml for, and
+ * what its own steps run. The half of these rules that is not read off the
+ * repo, and the only half that may be.
  */
 interface Asked {
   /** Which database gates the call runs — `none` is the one value under which nothing replays the schema. */
   readonly database: DatabaseGates;
   /** The `with:` block of the job that calls check.yml, or nothing when the call is itself a problem. */
   readonly call: ConfigObject | undefined;
+  /**
+   * Every `run:` the workflow's own steps carry, in job order. Read there and
+   * handed here, so that one parse of the file answers both the questions asked
+   * of it and this module never opens it.
+   */
+  readonly steps: readonly string[];
   /**
    * Where the deployment runs this repo's backup and restore drill, when they
    * are not this repo's own scripts. The reason **is** the waiver: there is no
@@ -732,10 +836,12 @@ async function checkDataJobs(root: string, external: string): Promise<Problem[]>
  * so going live is one commit and not a checklist somebody works half of.
  *
  * Scoped to what the repo actually is. Crash reporting is owed by anything with
- * users; everything else here is about a database, and is owed exactly when the
- * repo owns one. A live marketing site has no database to dump, no lineage to
- * upgrade and no drill to rehearse — demanding them would teach people to write
- * a script that does nothing in order to get past a gate.
+ * users; the data rules are about a database and are owed exactly when the repo
+ * owns one; the swept browser suite is about pages and is owed exactly when the
+ * repo ships them. A live marketing site has no database to dump, no lineage to
+ * upgrade and no drill to rehearse, and an API has no page to open — demanding
+ * either would teach people to write something that does nothing in order to
+ * get past a gate.
  */
 export async function checkLive(
   root: string,
@@ -805,6 +911,12 @@ export async function checkLive(
       file: "package.json",
       message: `a live repo reports its crashes — declare the ${SENTRY} SDK for whatever it runs on, since a failure only the user sees is one nobody fixes`,
     });
+  }
+
+  // Pages are the other thing a repo can be. What testing.md asks of every one
+  // of them is the sweep, and what CI never runs is not asked of them at all.
+  if (hasBrowserSurface(all)) {
+    problems.push(...(await checkBrowserSuite(root, all, asked.steps)));
   }
 
   return problems;

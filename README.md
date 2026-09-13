@@ -349,20 +349,22 @@ switched on and answering for nothing.
 
 ### The imports a pick has already answered
 
-Four of the stack's picks are decisions about which import to reach for, and
+Five of the stack's picks are decisions about which import to reach for, and
 this is where they stop being a thing to remember. Each diagnostic names **what
 the import lost to**, because it is the only place the loser of that decision is
 standing:
 
-| Import                                                 | From                    | Where                 | Instead                                                 | Carrier                        |
-| ------------------------------------------------------ | ----------------------- | --------------------- | ------------------------------------------------------- | ------------------------------ |
-| `useMemo`, `useCallback`                               | `react`                 | everywhere            | the React Compiler inserts the memo; delete the wrapper | `no-restricted-imports`        |
-| `beforeEach`, `afterEach`                              | `bun:test`              | everywhere            | a call the case makes itself, and `await using`         | `no-restricted-imports`        |
-| `useEffect`, `useLayoutEffect`, `useSyncExternalStore` | `react`                 | outside `**/hooks/**` | a named hook whose name says what it subscribes to      | `anti-slop/no-unnamed-effects` |
-| `useQuery`, `useInfiniteQuery`                         | `@tanstack/react-query` | under `**/routes/**`  | the loader's `ensureQueryData` and `useSuspenseQuery`   | `anti-slop/no-raw-query-hooks` |
+| Import                                                 | From                    | Where                 | Instead                                                             | Carrier                        |
+| ------------------------------------------------------ | ----------------------- | --------------------- | ------------------------------------------------------------------- | ------------------------------ |
+| `useMemo`, `useCallback`                               | `react`                 | everywhere            | the React Compiler inserts the memo; delete the wrapper             | `no-restricted-imports`        |
+| `beforeEach`, `afterEach`                              | `bun:test`              | everywhere            | a call the case makes itself, and `await using`                     | `no-restricted-imports`        |
+| `test`                                                 | `@playwright/test`      | everywhere            | the invariant sweep's `test`, which watches every page a spec opens | `no-restricted-imports`        |
+| `useEffect`, `useLayoutEffect`, `useSyncExternalStore` | `react`                 | outside `**/hooks/**` | a named hook whose name says what it subscribes to                  | `anti-slop/no-unnamed-effects` |
+| `useQuery`, `useInfiniteQuery`                         | `@tanstack/react-query` | under `**/routes/**`  | the loader's `ensureQueryData` and `useSuspenseQuery`               | `anti-slop/no-raw-query-hooks` |
 
-The suspense pair, `beforeAll`/`afterAll`, and every other React hook are
-untouched: what is banned is the name, not the module.
+The suspense pair, `beforeAll`/`afterAll`, Playwright's `expect` and
+`defineConfig`, and every other React hook are untouched: what is banned is
+the name, not the module.
 
 **Why two carriers.** A ban that holds in every file is an entry in
 `no-restricted-imports`, which is what that rule is for. A ban a file's position
@@ -383,9 +385,10 @@ The two carriers differ in what they can see, and both differences are graded in
   also leave a **type-only** import alone: `import type { useEffect }` borrows
   the signature without reaching the value.
 - `no-restricted-imports` refuses a namespace import and a renamed one, and
-  refuses a type-only import as well, which it gives no way to allow. Neither
-  `useMemo` nor `beforeEach` has a use as a type, so that costs nothing here —
-  and the day a name on that list does, it is the carrier that has to change.
+  refuses a type-only import as well, which it gives no way to allow. None of
+  `useMemo`, `beforeEach` and Playwright's `test` has a use as a type, so that
+  costs nothing here — and the day a name on that list does, it is the carrier
+  that has to change.
 
 The grant is the directory, which is the limit both scoped rules carry: inside
 `hooks/` every spelling of the effect trio is allowed, a barrel re-exporting it

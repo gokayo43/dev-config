@@ -106,6 +106,32 @@ export function withSpec(name: string, spec: string): Tree {
 }
 
 /**
+ * The manifest a live static site ships, and whatever a case changes about it.
+ * Stated once: the lifecycle cases differ from this tree by one field, and
+ * rebuilding it around each of them is how two definitions of "a live static
+ * repo" start disagreeing about which fault a case is showing.
+ */
+export function liveManifest(change: (contents: PackageJson) => void = () => {}): Tree {
+  return manifestWith((contents) => {
+    contents.lifecycle = "live";
+    contents.dependencies = { "@sentry/astro": "10.24.0" };
+    delete contents.scripts?.["db:migrate"];
+    change(contents);
+  });
+}
+
+/**
+ * A live repo with no database of its own: a marketing site, and half the
+ * fleet. Shared, because it is the smallest thing "live" can be and both live
+ * suites start every case from it — the one that grades what a database costs,
+ * and the one that grades what pages do.
+ */
+export const LIVE_STATIC: Tree = {
+  ...liveManifest(),
+  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
+};
+
+/**
  * A config with the reason above one of its switch-offs taken out, which is the
  * only way to ask the off-reason walker whether it would find one missing —
  * asserting that a config draws no findings is a test a walker returning nothing

@@ -59,6 +59,7 @@
  * in this page, which is a fact about responses the browser received and not
  * one any page can write.
  */
+// oxlint-disable-next-line eslint/no-restricted-imports -- the one import the base's ban points at: this module is what wraps `test`, so the fixture every spec is told to use has to reach the fixture it wraps
 import { expect, type Page, test as base } from "@playwright/test";
 
 /** The name the page-side script calls, and the name the fixture exposes. One constant, two ends. */

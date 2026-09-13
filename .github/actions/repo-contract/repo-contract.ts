@@ -586,36 +586,59 @@ async function checkDocs(root: string): Promise<Problem[]> {
 interface Call {
   /** The `with:` block of the job that calls check.yml, or nothing when no job does. */
   readonly asked: ConfigObject | undefined;
+  /**
+   * Every `run:` the workflow's own steps carry, in job order — what this file
+   * says the repo does for itself, as against what it asked the shared workflow
+   * for. Empty where the file is missing or unreadable, which is a workflow
+   * that runs nothing either way.
+   */
+  readonly steps: readonly string[];
   readonly problems: Problem[];
 }
 
+/** Every step of every job that runs something, as the command it runs. */
+function stepsIn(jobs: ConfigObject): string[] {
+  return Object.values(jobs).flatMap((job) => {
+    const steps = record(job)["steps"];
+    if (!isList(steps)) return [];
+    return steps.flatMap((step) => {
+      const run = record(step)["run"];
+      return typeof run === "string" ? [run] : [];
+    });
+  });
+}
+
 /**
- * Read once and handed to everyone who has a question about it. Two rules turn
- * on this file — that the call exists and is pinned, and that a live repo's
- * copy of it asks for the upgrade gate — and they belong to different subjects:
- * one is about the workflow, the other about the lifecycle. Threading a
- * `live` boolean into the first would put the second inside a check that is not
- * about it, and hide the fact that `ci-call` waives both.
+ * Read once and handed to everyone who has a question about it. Three rules turn
+ * on this file — that the call exists and is pinned, that a live repo's copy of
+ * it asks for the upgrade gate, and that a live repo with pages runs its browser
+ * suite somewhere in it — and they belong to different subjects: one is about
+ * the workflow, the other two about the lifecycle. Threading a `live` boolean
+ * into the first would put them inside a check that is not about them, and hide
+ * the fact that `ci-call` waives the pin and the upgrade gate together.
  */
 async function checkCall(root: string): Promise<Call> {
   if (!(await Bun.file(`${root}/${CI_WORKFLOW}`).exists())) {
     return {
       asked: undefined,
+      steps: [],
       problems: [{ file: CI_WORKFLOW, message: "the repo has no CI workflow" }],
     };
   }
 
   const workflow = await readConfig(root, CI_WORKFLOW, "YAML");
   if (workflow.contents === undefined)
-    return { asked: undefined, problems: [...workflow.problems] };
+    return { asked: undefined, steps: [], problems: [...workflow.problems] };
 
   const jobs = record(workflow.contents["jobs"]);
+  const steps = stepsIn(jobs);
   const call = Object.values(jobs)
     .map((job) => record(job))
     .find(({ uses }) => typeof uses === "string" && CHECK_CALL.test(uses));
   if (call === undefined) {
     return {
       asked: undefined,
+      steps,
       problems: [
         {
           file: CI_WORKFLOW,
@@ -625,7 +648,7 @@ async function checkCall(root: string): Promise<Call> {
       ],
     };
   }
-  return { asked: record(call["with"]), problems: [] };
+  return { asked: record(call["with"]), steps, problems: [] };
 }
 
 export interface Contract {
@@ -709,11 +732,13 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
 
   const declared = declaredIn(rootManifest.value);
 
-  // One read of the workflow, two subjects asking about it — and `ci-call`
-  // waives both, which is a thing to be able to see rather than to discover.
-  // A repo whose CI is not a call into check.yml has no call to pass
-  // `upgrade-gate: true` to.
-  const call = exempt("ci-call") ? { asked: undefined, problems: [] } : await checkCall(root);
+  // One read of the workflow, three subjects asking about it — and `ci-call`
+  // waives two of them, which is a thing to be able to see rather than to
+  // discover. A repo whose CI is not a call into check.yml has no call to pass
+  // `upgrade-gate: true` to. What it does have is steps: the browser suite is a
+  // job the repo runs itself, so the exemption drops the call and keeps them.
+  const read = await checkCall(root);
+  const call: Call = exempt("ci-call") ? { ...read, asked: undefined, problems: [] } : read;
 
   // One read of .oxlintrc.json, two subjects asking about it — where it
   // inherits from, and whether every switch-off in it carries a reason. Awaited
@@ -740,6 +765,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
         ? checkLive(root, all.read, {
             database: contract.database,
             call: call.asked,
+            steps: call.steps,
             dataJobsExternal: contract.dataJobsExternal,
           })
         : none,
