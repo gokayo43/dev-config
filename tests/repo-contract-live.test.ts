@@ -22,7 +22,7 @@ import {
   contract,
   DEFAULTS,
   LIVE_STATIC,
-  liveManifest,
+  liveSite,
   manifestWith,
   PIN,
 } from "./repo-contract-fixture.ts";
@@ -485,16 +485,12 @@ describe("a live repo with no database of its own", () => {
   });
 
   test("still owes the crash reporting", async () => {
-    const blind = manifestWith((contents) => {
-      contents.lifecycle = "live";
-      delete contents.scripts?.["db:migrate"];
+    const blind = liveSite((contents) => {
+      contents.dependencies = {};
     });
-    expect(
-      await live(
-        { ...LIVE_STATIC, "package.json": blind["package.json"] ?? "" },
-        { database: "none" },
-      ),
-    ).toEqual([containing("a live repo reports its crashes")]);
+    expect(await live(blind, { database: "none" })).toEqual([
+      containing("a live repo reports its crashes"),
+    ]);
   });
 
   // Owning a schema is read from the repo, so turning the CI job on does not
@@ -710,11 +706,10 @@ describe("ci-call waives the upgrade-gate rule with the call it is about", () =>
  * differs from its neighbour by the field and never by a backup script.
  */
 function declaring(value: string | undefined): Tree {
-  const manifest = liveManifest((contents) => {
+  return liveSite((contents) => {
     if (value === undefined) delete contents.lifecycle;
     else contents.lifecycle = value;
   });
-  return { ...LIVE_STATIC, "package.json": manifest["package.json"] ?? "" };
 }
 
 /** What a push of this branch tells the gate: the tip it had before. */

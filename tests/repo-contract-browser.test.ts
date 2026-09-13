@@ -4,10 +4,10 @@
  * declares, specs written through this package's invariant sweep, and a CI job
  * that runs them — three facts, because each of them is a different file to fix.
  *
- * Its own file beside `repo-contract-live.test.ts` for the reason that one is
- * beside the contract's: what a database costs a live repo and what pages cost
- * one are two subjects, and `repo-contract-fixture.ts` holds the live static
- * site both start every case from.
+ * Its own file beside `repo-contract-live.test.ts` the way `browser-suite.ts`
+ * is its own module beside `live.ts`: what a database costs a live repo and
+ * what pages cost one are two subjects, and `repo-contract-fixture.ts` holds
+ * the live static site both start every case from.
  *
  * What is deliberately never asked is how many flows the suite has. E2E is few
  * and structural, so a floor on flow count would be this gate asking for the
@@ -21,63 +21,76 @@ import { containing } from "./matchers.ts";
 import {
   contract,
   LIVE_STATIC,
-  liveManifest,
+  liveSite,
   manifestWith,
   type PackageJson,
 } from "./repo-contract-fixture.ts";
 import type { Tree } from "./tree.ts";
 
-describe("a live repo that ships a browser surface", () => {
-  const SPEC = "e2e/home.spec.ts";
+const SPEC = "e2e/home.spec.ts";
 
-  /** A spec written through the sweep, which is the whole of what makes its pages swept. */
-  const SWEPT = `import { test } from "@gokayo43/dev-config/invariant-sweep.ts";
+/** A spec written through the sweep, which is the whole of what makes its pages swept. */
+const SWEPT = `import { test } from "@gokayo43/dev-config/invariant-sweep.ts";
 
 test("the home page loads", async ({ page }) => {
   await page.goto("/");
 });
 `;
 
-  /** The same spec against Playwright's own \`test\`: a suite that exists and sweeps nothing. */
-  const UNSWEPT = SWEPT.replace('"@gokayo43/dev-config/invariant-sweep.ts"', '"@playwright/test"');
+/** The same spec against Playwright's own `test`: a suite that exists and sweeps nothing. */
+const UNSWEPT = SWEPT.replace('"@gokayo43/dev-config/invariant-sweep.ts"', '"@playwright/test"');
 
-  /** The static site's own call, plus a job this repo runs itself. */
-  function running(...commands: readonly string[]): Tree {
-    const steps = commands.map((command) => `      - run: ${JSON.stringify(command)}\n`).join("");
-    return {
-      ".github/workflows/ci.yml": `${LIVE_STATIC[".github/workflows/ci.yml"] ?? ""}  e2e:\n    runs-on: ubuntu-latest\n    steps:\n${steps}`,
-    };
-  }
+/** That spec with the specifier present as prose, which is a spec nobody has moved yet. */
+const PROMISED = `// TODO: move this to @gokayo43/dev-config/invariant-sweep.ts\n${UNSWEPT}`;
 
-  /** A live static site that ships pages, and whatever a case changes about its manifest. */
-  function pages(change: (contents: PackageJson) => void = () => {}): Tree {
-    return {
-      ...LIVE_STATIC,
-      "package.json":
-        liveManifest((contents) => {
-          contents.dependencies = { ...contents.dependencies, "react-dom": "19.2.0" };
-          change(contents);
-        })["package.json"] ?? "",
-    };
-  }
+/** And present as a value, which is the other way the bytes carry it and the imports do not. */
+const QUOTED = `${UNSWEPT}export const swept = "@gokayo43/dev-config/invariant-sweep.ts";\n`;
 
-  /** The same site with the whole suite: the runner, a swept spec, and CI running it. */
-  const SWEPT_SUITE: Tree = {
+/** A live static site that ships pages, and whatever a case changes about its manifest. */
+function pages(change: (contents: PackageJson) => void = () => {}): Tree {
+  return liveSite((contents) => {
+    contents.dependencies = { ...contents.dependencies, "react-dom": "19.2.0" };
+    change(contents);
+  });
+}
+
+/** The site's own check.yml call, plus a job this repo runs itself. */
+function running(...commands: readonly string[]): Tree {
+  const steps = commands.map((command) => `      - run: ${JSON.stringify(command)}\n`).join("");
+  return {
+    ".github/workflows/ci.yml": `${LIVE_STATIC[".github/workflows/ci.yml"] ?? ""}  e2e:\n    runs-on: ubuntu-latest\n    steps:\n${steps}`,
+  };
+}
+
+/** The same site with the whole suite: the runner, a swept spec, and CI running it. */
+const SWEPT_SUITE: Tree = {
+  ...pages((contents) => {
+    contents.devDependencies["@playwright/test"] = "1.62.1";
+  }),
+  [SPEC]: SWEPT,
+  ...running("bunx playwright test"),
+};
+
+/** That site with a manifest of its own, which is the graft most cases here make. */
+function suiteWith(change: (contents: PackageJson) => void): Tree {
+  return {
+    ...SWEPT_SUITE,
     ...pages((contents) => {
       contents.devDependencies["@playwright/test"] = "1.62.1";
+      change(contents);
     }),
-    [SPEC]: SWEPT,
-    ...running("bunx playwright test"),
   };
+}
 
-  async function pageSite(tree: Tree, overrides: Partial<Contract> = {}): Promise<string[]> {
-    return await contract(tree, { database: "none", ...overrides });
-  }
+async function pageSite(tree: Tree, overrides: Partial<Contract> = {}): Promise<string[]> {
+  return await contract(tree, { database: "none", ...overrides });
+}
 
-  const DECLARE = "declare @playwright/test";
-  const SWEEP = "write its specs with the invariant sweep's `test`";
-  const RUN_IT = "have .github/workflows/ci.yml run it";
+const DECLARE = "declare @playwright/test";
+const SWEEP = "write its specs with the invariant sweep's `test`";
+const RUN_IT = "have .github/workflows/ci.yml run it";
 
+describe("a live repo that ships a browser surface", () => {
   test("owes a runner, a swept spec and a CI run, each naming its own file", async () => {
     expect(await pageSite(pages())).toEqual([
       containing(DECLARE),
@@ -89,6 +102,37 @@ test("the home page loads", async ({ page }) => {
   test("and owes nothing once it has all three", async () => {
     expect(await pageSite(SWEPT_SUITE)).toEqual([]);
   });
+
+  // Both web picks are the surface, and the second is graded exactly as the
+  // first — the list is two names rather than one and a prefix.
+  test("which is either web pick, so an astro site owes the same three", async () => {
+    const site = liveSite((contents) => {
+      contents.dependencies = { ...contents.dependencies, astro: "5.16.2" };
+    });
+    expect(await pageSite(site)).toEqual([
+      containing(DECLARE),
+      containing(SWEEP),
+      containing(RUN_IT),
+    ]);
+  });
+
+  // The field says what a deployment runs, which is the crash SDK's question
+  // and not this one. A static site generator builds every page from
+  // `devDependencies`, and a bundled SPA emits the same artifact either way —
+  // so the pages are there whichever line the framework was declared on.
+  test.each(["astro", "react-dom"])(
+    "and %s in devDependencies is a page a browser opens all the same",
+    async (name) => {
+      const built = liveSite((contents) => {
+        contents.devDependencies[name] = "5.16.2";
+      });
+      expect(await pageSite(built)).toEqual([
+        containing(DECLARE),
+        containing(SWEEP),
+        containing(RUN_IT),
+      ]);
+    },
+  );
 
   // `ci-call` waives the call into check.yml and the upgrade gate that call
   // carries. It does not waive this, and the steps are still read out of the
@@ -113,12 +157,9 @@ test("the home page loads", async ({ page }) => {
     ],
     [
       "the root's dependencies",
-      {
-        "package.json":
-          pages((contents) => {
-            contents.dependencies = { ...contents.dependencies, "@playwright/test": "1.62.1" };
-          })["package.json"] ?? "",
-      },
+      pages((contents) => {
+        contents.dependencies = { ...contents.dependencies, "@playwright/test": "1.62.1" };
+      }),
     ],
   ])("takes the runner from %s", async (_where, declared) => {
     expect(
@@ -130,12 +171,31 @@ test("the home page loads", async ({ page }) => {
       }),
     ).toEqual([]);
   });
+});
 
-  // The wrong implementation the fact exists against: a check satisfied by the
-  // presence of a spec file. A spec on Playwright's own `test` runs, passes,
-  // and notices nothing about the pages it opened.
-  test("is not satisfied by a spec that imports Playwright's own test", async () => {
-    expect(await pageSite({ ...SWEPT_SUITE, [SPEC]: UNSWEPT })).toEqual([containing(SWEEP)]);
+// The fact is the import, and the wrong implementations are all the ways a file
+// carries those bytes without making one: the spec on Playwright's own `test`,
+// the note above it promising the move, and the specifier as a value. A gate
+// reading the bytes passes all three, and each is a page nothing sweeps.
+describe("a spec is swept by importing the sweep", () => {
+  test.each([
+    ["Playwright's own test", UNSWEPT],
+    ["a TODO naming the sweep above the import it has not made", PROMISED],
+    ["the specifier as a string, imported from nowhere", QUOTED],
+  ])("is not satisfied by a spec with %s", async (_what, source) => {
+    expect(await pageSite({ ...SWEPT_SUITE, [SPEC]: source })).toEqual([containing(SWEEP)]);
+  });
+
+  // The specifier is read in the position that imports it, so both quotings and
+  // a dynamic import are the same import.
+  test.each([
+    ["single quotes, which is what a formatter may write", SWEPT.replaceAll('"', "'")],
+    [
+      "a dynamic import",
+      'const { test } = await import("@gokayo43/dev-config/invariant-sweep.ts");\nexport const used = test;\n',
+    ],
+  ])("and is satisfied by %s", async (_what, source) => {
+    expect(await pageSite({ ...SWEPT_SUITE, [SPEC]: source })).toEqual([]);
   });
 
   test("and one swept spec anywhere in the tree is what the rule asks for", async () => {
@@ -146,32 +206,34 @@ test("the home page loads", async ({ page }) => {
     };
     expect(await pageSite(nested)).toEqual([]);
   });
+});
 
-  // The wrong implementation the CI fact exists against: a grep of the workflow
-  // for the word. Installing the browser is the ordinary step every Playwright
-  // job has, and a comment is not a command at all.
-  test("is not satisfied by a workflow that only mentions playwright", async () => {
-    const mentions: Tree = {
-      ...SWEPT_SUITE,
-      ...running(
-        "# playwright test runs in the nightly workflow\nplaywright install --with-deps chromium",
-      ),
-    };
-    expect(await pageSite(mentions)).toEqual([containing(RUN_IT)]);
+// The wrong implementation this fact exists against is a grep of the workflow
+// for the word. Every Playwright job installs a browser and most of them print
+// advice about the binary, so the word is in the ordinary passing workflow and
+// in the ordinary failing one alike.
+describe("CI runs the suite when a command runs it", () => {
+  test.each([
+    ["the install step every Playwright job has", "playwright install --with-deps chromium"],
+    ["a comment above it", "# playwright test runs in the nightly workflow\nplaywright install"],
+    ["advice echoed to the log", "echo Run playwright test locally to reproduce"],
+    ["the same advice as a workflow command", 'echo "::notice::run playwright test to reproduce"'],
+    [
+      "a command whose ARGUMENT looks like one",
+      "echo Running playwright\ntest -f playwright.config.ts",
+    ],
+  ])("is not satisfied by %s", async (_what, command) => {
+    expect(await pageSite({ ...SWEPT_SUITE, ...running(command) })).toEqual([containing(RUN_IT)]);
   });
 
   // Nor by a script whose NAME carries the word while its command installs.
   test("nor by a script named for the binary that does not run it", async () => {
-    const named: Tree = {
-      ...SWEPT_SUITE,
-      "package.json":
-        pages((contents) => {
-          contents.devDependencies["@playwright/test"] = "1.62.1";
-          contents.scripts = { ...contents.scripts, "playwright:setup": "playwright install" };
-        })["package.json"] ?? "",
-      ...running("bun run playwright:setup"),
-    };
-    expect(await pageSite(named)).toEqual([containing(RUN_IT)]);
+    const named = suiteWith((contents) => {
+      contents.scripts = { ...contents.scripts, "playwright:setup": "playwright install" };
+    });
+    expect(await pageSite({ ...named, ...running("bun run playwright:setup") })).toEqual([
+      containing(RUN_IT),
+    ]);
   });
 
   test.each([
@@ -180,6 +242,7 @@ test("the home page loads", async ({ page }) => {
     ["bun x", "bun x playwright test"],
     ["the local binary", "./node_modules/.bin/playwright test"],
     ["a chain after a build", "bun run build && playwright test"],
+    ["a command carrying its own environment", "CI=1 PWTEST_SKIP=0 playwright test"],
   ])("counts a step that runs it through %s", async (_how, command) => {
     expect(await pageSite({ ...SWEPT_SUITE, ...running(command) })).toEqual([]);
   });
@@ -187,54 +250,51 @@ test("the home page loads", async ({ page }) => {
   // A repo runs its suite through the script it named it, and a script runs
   // another: `e2e` is what a person types and `test:e2e:ci` is what CI needs.
   test("follows a package script, and a chain of them", async () => {
-    const throughScripts: Tree = {
-      ...SWEPT_SUITE,
-      "package.json":
-        pages((contents) => {
-          contents.devDependencies["@playwright/test"] = "1.62.1";
-          contents.scripts = {
-            ...contents.scripts,
-            e2e: "bun run test:e2e:ci",
-            "test:e2e:ci": "playwright test --project=desktop",
-          };
-        })["package.json"] ?? "",
-      ...running("bun run e2e"),
-    };
-    expect(await pageSite(throughScripts)).toEqual([]);
+    const throughScripts = suiteWith((contents) => {
+      contents.scripts = {
+        ...contents.scripts,
+        e2e: "bun run test:e2e:ci",
+        "test:e2e:ci": "playwright test --project=desktop",
+      };
+    });
+    expect(await pageSite({ ...throughScripts, ...running("bun run e2e") })).toEqual([]);
   });
 
   // A script that calls itself is a run that never starts, and a walk that
   // followed it would be a gate that never answers. The case passing at all is
   // the assertion; the message is what it answers with once it terminates.
   test("and terminates on a script that calls itself", async () => {
-    const circular: Tree = {
-      ...SWEPT_SUITE,
-      "package.json":
-        pages((contents) => {
-          contents.devDependencies["@playwright/test"] = "1.62.1";
-          contents.scripts = {
-            ...contents.scripts,
-            e2e: "bun run ci:e2e",
-            "ci:e2e": "bun run e2e",
-          };
-        })["package.json"] ?? "",
-      ...running("bun run e2e"),
-    };
-    expect(await pageSite(circular)).toEqual([containing(RUN_IT)]);
+    const circular = suiteWith((contents) => {
+      contents.scripts = { ...contents.scripts, e2e: "bun run ci:e2e", "ci:e2e": "bun run e2e" };
+    });
+    expect(await pageSite({ ...circular, ...running("bun run e2e") })).toEqual([
+      containing(RUN_IT),
+    ]);
   });
+});
 
-  // A monorepo runs the suite in the workspace that owns the pages, by the two
-  // spellings this house has: bun pointed at the directory, and turbo pointed
-  // at the task.
+/**
+ * A monorepo runs the suite in the workspace that owns the pages, and every
+ * flag that takes a value has to be consumed with it: read as a bare word, the
+ * value IS the script name, and `bun run --filter web test:e2e` becomes a run
+ * of the script `web` — a suite reported missing while CI runs it every push.
+ */
+describe("a suite a workspace declares", () => {
   const WORKSPACE_SUITE = JSON.stringify({
     name: "web",
     scripts: { "test:e2e": "playwright test" },
   });
 
   test.each([
-    ["bun --cwd", "bun run --cwd apps/web test:e2e"],
-    ["turbo run", "turbo run test:e2e"],
-  ])("finds the suite a workspace declares, through %s", async (_how, command) => {
+    ["--cwd names the directory", "bun run --cwd apps/web test:e2e"],
+    ["--cwd=, written with an equals", "bun run --cwd=apps/web test:e2e"],
+    ["--cwd with a path a person typed", "bun run --cwd ./apps/web/ test:e2e"],
+    ["--filter selects across the workspace", "bun run --filter web test:e2e"],
+    ["--filter=, written with an equals", "bun run --filter=web test:e2e"],
+    ["-F, which is what bun's own help calls it", "bun run -F web test:e2e"],
+    ["turbo runs the task", "turbo run test:e2e"],
+    ["turbo with a filter of its own", "turbo run --filter web test:e2e"],
+  ])("is found where %s", async (_how, command) => {
     const monorepo: Tree = {
       ...SWEPT_SUITE,
       "apps/web/package.json": WORKSPACE_SUITE,
@@ -243,8 +303,16 @@ test("the home page loads", async ({ page }) => {
     expect(await pageSite(monorepo)).toEqual([]);
   });
 
+  // The root is a directory like any other, and `.` is how a step spells it.
+  test("and `--cwd .` is the root manifest, not a directory called `.`", async () => {
+    const atTheRoot = suiteWith((contents) => {
+      contents.scripts = { ...contents.scripts, "test:e2e": "playwright test" };
+    });
+    expect(await pageSite({ ...atTheRoot, ...running("bun run --cwd . test:e2e") })).toEqual([]);
+  });
+
   // `--cwd` names the manifest, so a script of that name in a different one is
-  // not the script this step runs.
+  // not the script this step runs. `--filter` is the opposite by design.
   test("but --cwd reads the manifest it names, not whichever one has the script", async () => {
     const elsewhere: Tree = {
       ...SWEPT_SUITE,
@@ -255,20 +323,10 @@ test("the home page loads", async ({ page }) => {
   });
 });
 
-// Which repos have pages is read off what they ship, and the two names are
-// STACK's web picks. A prefix or a substring answers yes for the runtime that
-// has no page at all, and for a crash SDK named after one.
+// Which repos have pages is read off the two names STACK picks. A prefix or a
+// substring answers yes for the runtime that has no page at all, and for a
+// crash SDK named after one.
 describe("a repo with no browser surface owes none of it", () => {
-  function shipping(dependencies: Record<string, string>): Tree {
-    return {
-      ...LIVE_STATIC,
-      "package.json":
-        liveManifest((contents) => {
-          contents.dependencies = dependencies;
-        })["package.json"] ?? "",
-    };
-  }
-
   test.each([
     [
       "an Expo app, which ships react-native",
@@ -277,41 +335,17 @@ describe("a repo with no browser surface owes none of it", () => {
     ["a crash SDK named after a web pick", { "@sentry/astro": "10.24.0" }],
     ["an API, which ships neither", { "@sentry/bun": "10.24.0" }],
   ])("%s is asked for no Playwright suite", async (_what, dependencies) => {
-    expect(await contract(shipping(dependencies), { database: "none" })).toEqual([]);
+    const site = liveSite((contents) => {
+      contents.dependencies = dependencies;
+    });
+    expect(await pageSite(site)).toEqual([]);
   });
+});
 
-  // Declaring is not shipping, the same way it is not for the crash reporting:
-  // a build-time dependency on a framework reaches no deployment.
-  test("and react-dom in devDependencies alone ships no page", async () => {
-    const built: Tree = {
-      ...LIVE_STATIC,
-      "package.json":
-        liveManifest((contents) => {
-          contents.devDependencies["react-dom"] = "19.2.0";
-        })["package.json"] ?? "",
-    };
-    expect(await contract(built, { database: "none" })).toEqual([]);
-  });
-
-  // Both web picks are the surface, so the second one is graded as the first is.
-  test("while a site that ships astro owes the suite", async () => {
-    const site: Tree = {
-      ...LIVE_STATIC,
-      "package.json":
-        liveManifest((contents) => {
-          contents.dependencies = { ...contents.dependencies, astro: "5.16.2" };
-        })["package.json"] ?? "",
-    };
-    expect(await contract(site, { database: "none" })).toEqual([
-      containing("declare @playwright/test"),
-      containing("write its specs with the invariant sweep's `test`"),
-      containing("have .github/workflows/ci.yml run it"),
-    ]);
-  });
-
-  // The whole rule set is reached through the one field: a dev repo with pages
-  // and no suite is a dev repo, which is what `dev` is for.
-  test("and a dev repo that ships pages owes nothing at all", async () => {
+// The whole rule set is reached through the one field: a repo with pages and no
+// suite is a complete `dev` repo, which is what `dev` is for.
+describe("the browser rules are reached through the lifecycle field", () => {
+  test("a dev repo that ships pages owes nothing at all", async () => {
     const shipped = manifestWith((contents) => {
       contents.dependencies = { "react-dom": "19.2.0" };
     });

@@ -737,8 +737,13 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   // discover. A repo whose CI is not a call into check.yml has no call to pass
   // `upgrade-gate: true` to. What it does have is steps: the browser suite is a
   // job the repo runs itself, so the exemption drops the call and keeps them.
+  // It drops the parse problems with the call, so an exempt repo whose ci.yml
+  // is not readable YAML is told to add a job that runs the suite rather than
+  // that its workflow will not parse.
   const read = await checkCall(root);
-  const call: Call = exempt("ci-call") ? { ...read, asked: undefined, problems: [] } : read;
+  const call: Call = exempt("ci-call")
+    ? { asked: undefined, steps: read.steps, problems: [] }
+    : read;
 
   // One read of .oxlintrc.json, two subjects asking about it — where it
   // inherits from, and whether every switch-off in it carries a reason. Awaited

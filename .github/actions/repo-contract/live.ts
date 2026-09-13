@@ -27,8 +27,8 @@ import {
   repoFiles,
 } from "../_lib/gate.ts";
 import { type Declared, type Lifecycle, lifecycleOf } from "../_lib/lifecycle.ts";
+import { checkBrowserSuite, hasBrowserSurface } from "./browser-suite.ts";
 import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
-import { runsProgram } from "./package-scripts.ts";
 
 /**
  * The field only ever moves up. `dev` is where every repo starts and says
@@ -651,106 +651,13 @@ const EXECUTABLE = 0o111;
  */
 const SHIPPED_FIELDS = ["dependencies", "optionalDependencies"] as const;
 
-/** Any of Sentry's per-runtime SDKs, among what a manifest actually ships. */
-function hasSentry(contents: ConfigObject): boolean {
-  return SHIPPED_FIELDS.some((field) =>
-    Object.keys(record(contents[field])).some((name) => name.startsWith(SENTRY)),
-  );
-}
-
-/**
- * What shipping pages looks like in a manifest, which is STACK's two web picks:
- * TanStack Start and Vite React both ship `react-dom`, and a static site ships
- * `astro`. An Expo app ships `react-native` and an API or a worker ships
- * neither — exactly the set with no page for a browser to open, which is why
- * the list is these names and not a runtime prefix the way Sentry's is.
- */
-const BROWSER_SURFACE = ["react-dom", "astro"] as const;
-
-/** Whether anything in the workspace ships pages, among what it actually ships. */
-function hasBrowserSurface(all: readonly Manifest[]): boolean {
+/** Any of Sentry's per-runtime SDKs, anywhere in the workspace, among what a manifest actually ships. */
+function hasSentry(all: readonly Manifest[]): boolean {
   return all.some(({ value }) =>
     SHIPPED_FIELDS.some((field) =>
-      BROWSER_SURFACE.some((name) => record(value[field])[name] !== undefined),
+      Object.keys(record(value[field])).some((name) => name.startsWith(SENTRY)),
     ),
   );
-}
-
-const PLAYWRIGHT = "@playwright/test";
-const PLAYWRIGHT_BIN = "playwright";
-
-/** The export a swept spec imports, which is the whole of what makes it swept. */
-const SWEEP = "@gokayo43/dev-config/invariant-sweep.ts";
-
-/**
- * Where a test runner is declared. Both fields, because a runner builds and
- * runs the suite rather than shipping — `devDependencies` is where it belongs
- * and `dependencies` is a repo that put it one line up, which is a packaging
- * opinion rather than a suite that does not exist.
- */
-const RUNNER_FIELDS = ["devDependencies", "dependencies"] as const;
-
-/**
- * A spec, by the suffix that tells an E2E spec from a unit test in this house.
- * `*.test.ts` is the unit lane — asking a unit test to import a browser fixture
- * would be this rule refusing every repo that has one. Git pathspecs, so the
- * listing is what a scaffolder has just written as well as what is committed,
- * and `*` crosses directories.
- */
-const SPECS = ["*.spec.ts", "*.spec.tsx"] as const;
-
-/** The lead-in every one of these three problems shares, since one missing suite is what they are all about. */
-const A_SWEPT_SUITE = "a live repo with a browser surface carries a structural Playwright suite";
-
-/**
- * The structural browser suite, in the three states that make it one: a runner
- * the repo has, specs written through the sweep, and a CI run. Three problems
- * rather than one, because each names a different file to fix — and all three
- * at once for a repo that has none of it, the way a missing data job reports
- * per job rather than as "the data jobs are missing".
- *
- * How many flows the suite has is deliberately not asked. E2E is few and
- * structural (testing.md), so a floor on flow count would be this gate asking
- * for the opposite of the rule it is derived from.
- */
-async function checkBrowserSuite(
-  root: string,
-  all: readonly Manifest[],
-  steps: readonly string[],
-): Promise<Problem[]> {
-  const problems: Problem[] = [];
-
-  const declared = all.some(({ value }) =>
-    RUNNER_FIELDS.some((field) => record(value[field])[PLAYWRIGHT] !== undefined),
-  );
-  if (!declared) {
-    problems.push({
-      file: "package.json",
-      message: `${A_SWEPT_SUITE} — declare ${PLAYWRIGHT}, since a page nobody opens in CI is one that breaks in front of a user`,
-    });
-  }
-
-  const specs = await repoFiles(root, SPECS);
-  const swept = await Promise.all(
-    specs.map(async (file) => (await Bun.file(`${root}/${file}`).text()).includes(SWEEP)),
-  );
-  if (!swept.includes(true)) {
-    // The first spec, where there is one, and no file at all where there is
-    // none: a repo with specs has somewhere to make the change, and a repo with
-    // none is being told to write one.
-    const [first] = specs;
-    const message = `${A_SWEPT_SUITE} — write its specs with the invariant sweep's \`test\` (${SWEEP}), so every page a spec visits is checked for console errors, uncaught errors and overflow`;
-    problems.push(first === undefined ? { message } : { file: first, message });
-  }
-
-  if (!steps.some((step) => runsProgram(step, PLAYWRIGHT_BIN, "test", all))) {
-    problems.push({
-      file: CI_WORKFLOW,
-      message: `${A_SWEPT_SUITE} — have ${CI_WORKFLOW} run it: add a job that runs \`${PLAYWRIGHT_BIN} test\` (directly or through a package script), since a suite CI never runs is one that ran the day it was written`,
-    });
-  }
-
-  return problems;
 }
 
 /**
@@ -906,7 +813,7 @@ export async function checkLive(
     problems.push(...(await checkDataJobs(root, asked.dataJobsExternal.trim())));
   }
 
-  if (!all.some(({ value }) => hasSentry(value))) {
+  if (!hasSentry(all)) {
     problems.push({
       file: "package.json",
       message: `a live repo reports its crashes — declare the ${SENTRY} SDK for whatever it runs on, since a failure only the user sees is one nobody fixes`,

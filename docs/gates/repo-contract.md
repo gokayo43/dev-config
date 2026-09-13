@@ -321,13 +321,21 @@ builds and tests the repo and reaches no deployment, and a peer range states
 what a consumer may bring, so an SDK in either is a repo whose crashes nobody
 hears.
 
-**"Ships a browser surface" is read the same way, off the same two fields.** The
-two names are STACK's web picks: TanStack Start and Vite React both ship
-`react-dom`, and a static site ships `astro`. An Expo app ships `react-native`,
-and an API or a worker ships neither — exactly the set with no page for a
-browser to open. Names rather than a prefix, unlike Sentry's, because
-`@sentry/astro` is a crash SDK and not a page, and `react-native` is a runtime
-Playwright cannot drive.
+**"Ships a browser surface" is two names, in any dependency field.** The names
+are STACK's web picks: TanStack Start and Vite React both ship `react-dom`, and
+a static site ships `astro`. An Expo app ships `react-native`, and an API or a
+worker ships neither — exactly the set with no page for a browser to open. Names
+rather than a prefix, unlike Sentry's, because `@sentry/astro` is a crash SDK
+and not a page, and `react-native` is a runtime Playwright cannot drive.
+
+Every field, and not the shipped two the crash SDK is read from. That question
+is what a deployment _runs_, so a Sentry SDK in `devDependencies` is a repo
+whose crashes nobody hears; this question is what a browser _opens_, and the
+field says nothing about it — a static site generator builds every page from
+`devDependencies`, and a bundled SPA emits the same artifact whichever field its
+framework was declared in. The cost, named: an Expo app that lists `react-dom`
+for its web target owes the suite from that line, which is right whenever that
+target ships.
 
 A repo that has one owes three separate things, because each is a different file
 to fix. The runner has to be **declared** — `devDependencies` or `dependencies`,
@@ -342,17 +350,33 @@ How many flows the suite has is deliberately not graded. E2E is few and
 structural (testing.md), so a floor on flow count would be this gate asking for
 the opposite of the rule it derives from.
 
-**Running the suite is read by words, and through the scripts.** A step counts
-when its `run:` invokes `playwright test` — directly, as `bunx`/`bun x`, or out
-of `node_modules/.bin` — or when it runs a package script that reaches it:
-`bun run <script>` and `bun <script>` in the root manifest, `bun run --cwd <dir>
-<script>` in that directory's, and `turbo run <task>` in whichever workspace
-declares it. Script chains are followed (`e2e` runs `test:e2e:ci` runs the
-binary) and a script that calls itself terminates rather than recursing. Words
-rather than text, because the ordinary Playwright job installs a browser:
-`playwright install --with-deps chromium` names the binary and runs no suite, a
-`#` line runs nothing at all, and a script whose _name_ carries the word runs
-whatever its command says.
+**Running the suite is read out of the workflow's own steps, and this is the
+one rule that reads them.** Everything else about `ci.yml` is read off the call
+into `check.yml`, because a repo can write the words of a gate in a comment and
+only the call is the fact. There is no call to read here and no input that would
+help: `check.yml`'s only app-booting job is the database job, which never runs
+for the static sites this rule is mostly about, and a browser suite needs _this_
+repo's app booted with _its_ browsers against _its_ fixtures. The run is a job
+the repo owns, so the job is where the fact is.
+
+Which is why the reading is careful. A `run:` block is read as a shell reads it
+— as commands split at newlines, `;`, `|` and `&`, each with a head, `#` ending
+its line — and the program counts only at a command's head, after any leading
+`KEY=value`, with `bunx` and `bun x` as the one wrapper before it. A step counts
+when a command runs `playwright test` (directly, wrapped, or out of
+`node_modules/.bin`) or runs a package script that reaches it: `bun run
+<script>` in the root manifest, `--cwd <dir>` in that directory's, `--filter` /
+`-F` and `turbo run <task>` in whichever workspace declares it — each
+value-taking flag consumed with its value in both spellings, since a value read
+as a bare word IS the script name. Script chains are followed (`e2e` runs
+`test:e2e:ci` runs the binary) and a script that calls itself terminates rather
+than recursing.
+
+None of that is pedantry: the ordinary Playwright job installs a browser and
+prints advice about the binary. `playwright install --with-deps chromium`, `echo
+"run playwright test to reproduce"` and a `#` line all carry the words and run
+no suite, and a script whose _name_ carries the word runs whatever its command
+says.
 
 ### A scheduled job is three files
 
@@ -456,8 +480,8 @@ as well, and the two are compared:
 
 Writing `dev` over `live`, or deleting the field, sheds backups, a rehearsed
 restore, crash reporting, the swept browser suite and the upgrade gate in one
-edit that reviews as a whitespace change. Deleting the manifest outright is refused a line earlier, by
-the rule that a repo has a `package.json` at all.
+edit that reviews as a whitespace change. Deleting the manifest outright is
+refused a line earlier, by the rule that a repo has a `package.json` at all.
 
 The base ref is the merge base with the branch a pull request targets, or the
 tip a push had before — the same resolution [the upgrade

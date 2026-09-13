@@ -111,8 +111,8 @@ export function withSpec(name: string, spec: string): Tree {
  * rebuilding it around each of them is how two definitions of "a live static
  * repo" start disagreeing about which fault a case is showing.
  */
-export function liveManifest(change: (contents: PackageJson) => void = () => {}): Tree {
-  return manifestWith((contents) => {
+export function liveManifestJson(change: (contents: PackageJson) => void = () => {}): string {
+  return manifestJson(MANIFEST, (contents) => {
     contents.lifecycle = "live";
     contents.dependencies = { "@sentry/astro": "10.24.0" };
     delete contents.scripts?.["db:migrate"];
@@ -127,9 +127,19 @@ export function liveManifest(change: (contents: PackageJson) => void = () => {})
  * and the one that grades what pages do.
  */
 export const LIVE_STATIC: Tree = {
-  ...liveManifest(),
+  ...CLEAN,
+  "package.json": liveManifestJson(),
   ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
 };
+
+/**
+ * That site with one thing about its manifest changed — the graft both live
+ * suites were writing by hand, each with a fallback for a key it had just
+ * written itself.
+ */
+export function liveSite(change: (contents: PackageJson) => void): Tree {
+  return { ...LIVE_STATIC, "package.json": liveManifestJson(change) };
+}
 
 /**
  * A config with the reason above one of its switch-offs taken out, which is the

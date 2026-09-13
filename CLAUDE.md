@@ -34,10 +34,13 @@ a change to a rule usually lands here too.
   more than one module when it holds more than one subject:
   `repo-contract/live.ts` is what the word "live" derives — everything a repo
   owes because it carries people — beside the contract every repo satisfies
-  whether or not anyone is on the other end, and `repo-contract/package-scripts.ts`
-  is what a workflow step ends up running once the package scripts it goes
-  through are followed: reading a command for the program it runs is a subject
-  of its own, and the rule that asks the question is not about it.
+  whether or not anyone is on the other end; `repo-contract/browser-suite.ts` is
+  the half of that word about pages rather than about a schema, which is a
+  second subject reached through the one field; and
+  `repo-contract/package-scripts.ts` is what a workflow step ends up running
+  once the package scripts it goes through are followed, since reading a command
+  for the program it runs is a subject of its own and the rule that asks the
+  question is not about it.
   `db-gate` holds five beside its replay: `semantic-fixtures.ts`, since what
   the base ref's replay proves about a _schema_ and what it proves about the
   _rows_ are two subjects and the second is the only gate here that grades data;
@@ -156,7 +159,8 @@ a change to a rule usually lands here too.
   one word deciding whether a whole rule set applies is its own subject), what
   pages cost a live repo in `repo-contract-browser.test.ts` (a second subject
   under that same word, and the reason the live static site is in the fixture
-  rather than in either), and how a dependency spec is read; `journalled-migrator.ts`, `replaying-migrator.ts` and
+  rather than in either), and how a dependency spec is read;
+  `journalled-migrator.ts`, `replaying-migrator.ts` and
   `schema-migrator.ts` are the three `db:migrate` shapes the database gates are
   written for — a journalled one, a hand-rolled runner with no journal, and the
   per-lineage journals a repo with more than one lineage has to have; and `mutation-lane.test.ts` links this repo's own `node_modules` into
