@@ -16,7 +16,7 @@
  * `install` below is about.
  */
 import { cp, mkdir, readdir, symlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
 import { type ConfigObject, isList, plainly, record } from "../.github/actions/_lib/gate.ts";
 import { ENDPOINT } from "../route-log.ts";
@@ -44,6 +44,20 @@ const LATE = 400;
  * frame a flush could wait for, and inside the window a document goes quiet in.
  */
 const AFTER_LOAD = 100;
+
+/**
+ * How often the animated page writes a style, in ms. Shorter than the quiet
+ * window, so the document never goes quiet and the drain has to end on the
+ * cutoff for a document that is changing without pause.
+ */
+const EVERY = 100;
+
+/**
+ * How long the self-closing popup waits before it goes, in ms. Shorter than the
+ * quiet window, so it goes while its own drain is in flight — which is the whole
+ * of what that fixture is for.
+ */
+const BEFORE_QUIET = 200;
 
 /**
  * What the fixture server answers, by path. Each page is one invariant broken
@@ -141,6 +155,38 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
         type: "application/json",
         body: JSON.stringify({ routeTable: [{ method: "GET", path: "/clean" }], counts: [] }),
       },
+      // A popup with no URL of its own, written into by its opener: its document
+      // carries `about:blank`, the URL the page every context starts on carries
+      // too, and it is swept and drained like any other all the same.
+      "/opens-blank": {
+        type: "text/html",
+        body: html(
+          `<button id="open">open</button><script>document.getElementById("open").addEventListener("click", () => { const w = window.open(); w.document.write('<div id="wide" style="width:${TOO_WIDE}px;height:10px"></div>'); })</script>`,
+        ),
+      },
+      // Writes a style forever, faster than the quiet window: a document that
+      // has nothing more to say and no gap in which to say so.
+      "/animated": {
+        type: "text/html",
+        body: html(
+          `<div id="spinner" style="height:10px;background:#333"></div><script>let n = 0; setInterval(() => { document.getElementById("spinner").style.width = ((++n % 40) + 1) + "px"; }, ${EVERY})</script>`,
+        ),
+      },
+      // Opens the page below in a tab of its own, which is the only way a page
+      // that closes itself is not the page the spec is standing on.
+      "/opens-self-closing": {
+        type: "text/html",
+        body: html(`<a id="open" href="/self-closing" target="_blank">open</a>`),
+      },
+      // A real violation, and then the page goes — while the drain that would
+      // have flushed it is still waiting. What it measured has already crossed;
+      // what must not happen is the run reporting the closure instead.
+      "/self-closing": {
+        type: "text/html",
+        body: html(
+          `<script>console.error("the popup is unhappy"); setTimeout(() => window.close(), ${BEFORE_QUIET})</script>`,
+        ),
+      },
       // Two page names, one a prefix of the other: what an unanchored pattern
       // cannot tell apart.
       "/cleanish": {
@@ -232,6 +278,8 @@ export interface Outcome {
   readonly ok: boolean;
   /** Everything the run wrote about why it failed, joined — what a diagnostic is asserted against. */
   readonly said: string;
+  /** How long the case took, in ms, which is the only place a drain's cost is visible. */
+  readonly took: number;
 }
 
 /**
@@ -249,15 +297,27 @@ function specsIn(node: ConfigObject): ConfigObject[] {
   return [...listAt(node, "specs"), ...listAt(node, "suites").flatMap((suite) => specsIn(suite))];
 }
 
+/** Every result the reporter wrote for one spec, however many retries there were. */
+function resultsOf(spec: ConfigObject): ConfigObject[] {
+  return listAt(spec, "tests").flatMap((each) => listAt(each, "results"));
+}
+
 /** What one spec's results said went wrong, joined — the whole of what a diagnostic is asserted against. */
 function saidBy(spec: ConfigObject): string {
-  return listAt(spec, "tests")
-    .flatMap((each) => listAt(each, "results"))
+  return resultsOf(spec)
     .map((result) => {
       const message = record(result["error"])["message"];
       return typeof message === "string" ? message : "";
     })
     .join("\n");
+}
+
+/** What one spec spent, in ms: the longest result, since a retry runs the case again. */
+function tookBy(spec: ConfigObject): number {
+  const spent = resultsOf(spec).map((result) =>
+    typeof result["duration"] === "number" ? result["duration"] : 0,
+  );
+  return Math.max(0, ...spent);
 }
 
 const CONFIG = `import { defineConfig } from "@playwright/test";
@@ -288,17 +348,29 @@ export default defineConfig({
  */
 async function install(root: string): Promise<void> {
   const modules = join(root, "node_modules");
-  await mkdir(modules, { recursive: true });
   const installed = join(HERE, "node_modules");
+  const manifest = record(await Bun.file(join(HERE, "package.json")).json());
+  const name = String(manifest["name"]);
+  const [scope = name] = name.split("/");
+
+  // The package's own scope is a real directory holding links to whatever the
+  // install already has under it, rather than a link to the scope itself: the
+  // day a second `@gokayo43/*` package is installed here, a link would put the
+  // copy below inside this repo's own `node_modules`.
+  await mkdir(join(modules, scope), { recursive: true });
+  const link = async (entry: string): Promise<void> => {
+    await symlink(join(installed, entry), join(modules, entry), "dir");
+  };
   await Promise.all(
-    (await readdir(installed)).map(
-      async (entry) => await symlink(join(installed, entry), join(modules, entry), "dir"),
-    ),
+    (await readdir(installed)).map(async (entry) => {
+      if (entry !== scope) return await link(entry);
+      const siblings = await readdir(join(installed, entry));
+      await Promise.all(siblings.map(async (child) => await link(join(entry, child))));
+    }),
   );
 
-  const manifest = record(await Bun.file(join(HERE, "package.json")).json());
-  const shipped = join(modules, String(manifest["name"]));
-  await mkdir(dirname(shipped), { recursive: true });
+  const shipped = join(modules, name);
+  await mkdir(shipped, { recursive: true });
   const files = isList(manifest["files"]) ? manifest["files"].map(String) : [];
   await Promise.all(
     ["package.json", ...files].map(
@@ -347,6 +419,7 @@ export async function sweeping(
     outcomes.set(typeof title === "string" ? title : "", {
       ok: spec["ok"] === true,
       said: saidBy(spec),
+      took: tookBy(spec),
     });
   }
   // A run that collected no spec at all is the fixture having failed, not a case

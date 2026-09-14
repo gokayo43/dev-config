@@ -1,12 +1,7 @@
 /**
- * The committed `dist/`, held equal to a fresh build.
- *
- * The two exports a Playwright spec imports ship built, because the runner that
- * imports them is node and node refuses to strip types from anything under
- * `node_modules`. They are committed because a consumer installs this package
- * from git, where no build step of ours ever runs: a git dependency's lifecycle
- * scripts are withheld behind `trustedDependencies` under Bun and run under npm,
- * and neither is a build a host should own.
+ * The committed `dist/`, held equal to a fresh build. Which two exports are built
+ * and why is `tsdown.config.ts`; that the result is committed rather than built
+ * on install is STACK.md's bargain for a git dependency.
  *
  * A committed artifact is a second copy of the source, so something has to hold
  * the two together — and it is a test rather than a CI step because the pre-push
@@ -19,7 +14,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { plainly } from "../.github/actions/_lib/gate.ts";
-import { materialise } from "./tree.ts";
+import { scratch } from "./tree.ts";
 
 const HERE = join(import.meta.dir, "..");
 
@@ -38,11 +33,13 @@ async function written(root: string): Promise<Map<string, string>> {
 
 describe("the committed dist", () => {
   test("is what the build writes", async () => {
-    const fresh = await materialise({});
+    const fresh = await scratch();
     const build = Bun.spawn([join(HERE, "node_modules", ".bin", "tsdown"), "--out-dir", fresh], {
       cwd: HERE,
       env: plainly(Bun.env),
-      stdout: "pipe",
+      // The build's own progress is not this case's evidence, and what it writes
+      // to the directory is; only what it says when it fails is kept.
+      stdout: "ignore",
       stderr: "pipe",
     });
     const said = await new Response(build.stderr).text();

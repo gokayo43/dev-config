@@ -37,6 +37,22 @@ ${body}
 `;
 }
 
+/**
+ * What one departure from a page may cost, in ms.
+ *
+ * The drain is the document's own answer, and a document that is changing
+ * without pause gives it at twice the quiet window — a second, whatever the page
+ * is doing. The rest of the budget is the browser's own navigation and enough
+ * slack that a loaded box does not decide a verdict. What it is a bound against
+ * is the shape that had the runner hold the clock: a page that never went quiet
+ * cost the runner's whole cap every time it was left, which measured 5s a
+ * departure and 25s across the five below.
+ */
+const A_DEPARTURE = 2_000;
+
+/** How many times the animated case leaves the page, which is what its budget multiplies. */
+const DEPARTURES = 5;
+
 /** Each case's spec, by the title the reporter will call it. */
 const CASES = {
   "a page that breaks nothing passes": spec(
@@ -69,6 +85,35 @@ const CASES = {
   "a page that overflows after load and is left at once is swept": spec(
     "a page that overflows after load and is left at once is swept",
     `  await page.goto("/after-load");\n  await page.goto("/clean");`,
+  ),
+  // A document that is changing without pause has nothing more to say and no
+  // gap in which to say so, so leaving it is bounded by the cutoff rather than
+  // by a cap the runner holds. What this asserts is the cost, since the page
+  // breaks no invariant either way.
+  "leaving an animated page costs no more than its budget": spec(
+    "leaving an animated page costs no more than its budget",
+    Array.from({ length: DEPARTURES }, () => `  await page.goto("/animated");`).join("\n"),
+  ),
+  // The middle one is a fragment: a navigation with no new document behind it.
+  // Nothing re-runs in the page, so a drain waiting on anything the runner arms
+  // per navigation waits for a word that can no longer be spoken.
+  "a same-document navigation does not stall the next one": spec(
+    "a same-document navigation does not stall the next one",
+    `  await page.goto("/clean");\n  await page.goto("/clean#section");\n  await page.goto("/clean");`,
+  ),
+  // The popup logs its violation and then goes, while the drain that would have
+  // flushed it is still waiting. What it measured has already crossed; the run
+  // must report that and not the closure.
+  "a popup that closes itself still reports what it measured": spec(
+    "a popup that closes itself still reports what it measured",
+    `  await page.goto("/opens-self-closing");\n  const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);\n  await popup.waitForLoadState();`,
+  ),
+  // A popup its opener wrote into carries the URL of the page every context
+  // starts on, and nothing about the sweep reads that URL: it is watched,
+  // measured and drained like any other document.
+  "an opener-written blank popup is swept like any other": spec(
+    "an opener-written blank popup is swept like any other",
+    `  await page.goto("/opens-blank");\n  await Promise.all([context.waitForEvent("page"), page.click("#open")]);`,
   ),
   // The page the spec ended on is clean. A sweep that looked once, at the end,
   // reports nothing here.
@@ -249,6 +294,7 @@ describe("what the sweep catches", () => {
     ["overflow that appears after the page loaded fails", "overflow", "in a 800px viewport"],
     ["a page the test navigated away from is still swept", "overflow", "/overflow"],
     ["a page that overflows after load and is left at once is swept", "overflow", "/after-load"],
+    ["an opener-written blank popup is swept like any other", "overflow", "about:blank"],
     ["a page reached by clicking a link is swept", "overflow", "/overflow"],
     [
       "an allowlist that matches nothing tolerates nothing",
@@ -331,6 +377,17 @@ describe("what the sweep catches", () => {
     expect(detail.indexOf("::error")).toBeGreaterThan(0);
   });
 
+  // The verdict is the list the sweep spent the test collecting. A page that
+  // goes while its own drain is in flight has nothing left to drain — whatever
+  // it measured crossed as it was measured — and the one thing that must not
+  // happen is the closure being reported in place of the violation.
+  test("a page closing itself does not replace the verdict", () => {
+    const { ok, said } = outcome("a popup that closes itself still reports what it measured");
+    expect(ok).toBe(false);
+    expect(said).toContain("the popup is unhappy");
+    expect(said).not.toContain("Target page, context or browser has been closed");
+  });
+
   // The diagnostic names the element, because "something is 800px too wide" is
   // a page nobody can fix and `div#wide` is one somebody can.
   test("an overflow diagnostic names what is sticking out", () => {
@@ -343,12 +400,28 @@ describe("what the sweep catches", () => {
   });
 });
 
-// The one way a consumer never imports these: by path. Playwright's runner is
-// node, and node refuses to strip types from anything under `node_modules` —
-// which is where every consumer has this package, so what a `.ts` specifier
-// resolves to there cannot load at all (dev-config#113). What has to hold is
-// that the built files under `dist/` do, by the extensionless specifiers the
-// repo contract and the base config name.
+// Draining is a wait, and a wait nobody bounds is a suite nobody runs. Both
+// cases here are about what leaving a page costs, and both were minutes rather
+// than seconds when the runner held the clock instead of the document.
+describe("what leaving a page costs", () => {
+  test("an animated page is bounded by its cutoff, not by a cap", () => {
+    const { ok, took } = outcome("leaving an animated page costs no more than its budget");
+    expect(ok).toBe(true);
+    expect(took).toBeLessThan(DEPARTURES * A_DEPARTURE);
+  });
+
+  test("and a same-document navigation waits for nothing", () => {
+    const { ok, took } = outcome("a same-document navigation does not stall the next one");
+    expect(ok).toBe(true);
+    expect(took).toBeLessThan(A_DEPARTURE);
+  });
+});
+
+// The one way a consumer never imports these: by path. Every case above does,
+// and none of them would notice what dev-config#113 was — that under the runner
+// Playwright brings, a specifier resolving to a `.ts` inside `node_modules`
+// cannot load at all (`tsdown.config.ts` has why). What has to hold is that
+// these two do, by the specifiers the repo contract and the base config name.
 describe("the exports a spec imports", () => {
   test("load from an installed package under Playwright's own runner", () => {
     const ran = installed.get("a consumer's spec runs");

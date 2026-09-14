@@ -27,9 +27,11 @@ Both lists name a route _as its router registered it_: `/presets/42` as
 guessed would credit coverage to a route that served nothing.
 
 Like [the invariant sweep](invariant-sweep.md), and for the same reason, it
-ships built: an app's instrument may be loaded by node, which refuses to strip
-types from anything under `node_modules`. The source stays `route-log.ts`; what
-the specifier resolves to is `dist/route-log.js`.
+ships built: a repo's Playwright specs import this constant to reach the
+endpoint, and Playwright's runner is node. `tsdown.config.ts` in the package
+carries why, and STACK.md's shared UI library carries the bargain a committed
+`dist/` is. The source stays `route-log.ts`; the specifier resolves to
+`dist/route-log.js`.
 
 Unlike the other exports here, this one is a data contract rather than a check:
 nothing in it fails a build. What reads it is `db-gate` — the capacity step

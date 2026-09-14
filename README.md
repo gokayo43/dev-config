@@ -52,25 +52,23 @@ settings every repo shares; what a single gate asserts, and why, lives beside it
 Beside the gates CI runs are the modules a consuming repo **imports**. A gate
 refuses a tree from the outside; an export is code the repo calls, and it is the
 shape a rule takes when what it grades is only visible from inside the repo — an
-app's own route table, its own limiter, its own browser. Each is in `files` and
-`exports`, and each has a page of its own:
+app's own route table, its own limiter, its own browser. Each is reachable
+through `files` and `exports`, and each has a page of its own:
 
-| Export                                                            | Imported by                    | What it holds                                                            |
-| ----------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
-| [`route-log`](docs/exports/route-log.md)                          | the app, for the capacity ramp | the protocol between an app and the two floors over its route table      |
-| [`invariant-sweep`](docs/exports/invariant-sweep.md)              | the Playwright specs           | zero console errors and no sideways scroll, on every page a test opens   |
-| [`limiter-conformance.ts`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                      |
-| [`property.ts`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further |
-| [`response-schema.ts`](docs/exports/response-schema.md)           | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip      |
-| [`characterization-net.ts`](docs/exports/characterization-net.md) | a golden suite and its updater | the harness rules that keep a large golden net honest                    |
+| Export                                                         | Imported by                    | What it holds                                                            |
+| -------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
+| [`route-log`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the two floors over its route table      |
+| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | zero console errors and no sideways scroll, on every page a test opens   |
+| [`limiter-conformance`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                      |
+| [`property`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further |
+| [`response-schema`](docs/exports/response-schema.md)           | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip      |
+| [`characterization-net`](docs/exports/characterization-net.md) | a golden suite and its updater | the harness rules that keep a large golden net honest                    |
 
-The first two carry no extension because what they name is **built**. Their
-importer is a Playwright spec, and Playwright's runner is node, which refuses to
-strip types from anything under `node_modules` — so those two ship as JavaScript
-with declarations under `dist/`, written by `bun run build`, committed (a git
-dependency runs no build of ours), and held equal to a fresh build by
-`tests/dist.test.ts`. The other three are imported by `bun test`, which strips
-types, so their source is what ships. `.ts` sources stay the sources either way.
+No specifier carries an extension, and what one resolves to is this package's
+business: the first two are **built** — `bun run build` writes them to `dist/`,
+which is committed and held equal to a fresh build by `tests/dist.test.ts` — and
+the other four ship their source. `tsdown.config.ts` has why those two and no
+others. Either way the `.ts` files stay the sources.
 
 Gate code is deliberately **not** importable by the repos it gates — a gate in
 `node_modules` runs only if the repo's workflow remembers to, and it moves

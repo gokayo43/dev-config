@@ -43,12 +43,14 @@ afterEach(async () => {
 });
 
 /**
- * Materialises a tree as a real git repository, because the gates ask git what
- * is tracked and what is ignored. Nothing is committed: the answer for an
- * untracked-but-not-ignored file is part of what they read, and a scaffolder
- * has just written exactly those.
+ * An empty directory under the same registry, cleaned up the same way, and
+ * nothing else in it. What wants this rather than `materialise` is a case whose
+ * subject is a directory some tool owns outright — a build's output directory,
+ * which the tool empties before it writes: a git repository put there to be
+ * empty is one the tool silently deletes, and a case that passes because of
+ * that is a case grading its own setup.
  */
-export async function materialise(tree: Tree, tracked: readonly string[] = []): Promise<string> {
+export async function scratch(): Promise<string> {
   const root = join(FIXTURES, `${made++}`);
   // Whatever a killed run left at this exact path, rather than a sweep of the
   // directory: a sweep is how two runs sharing a server delete each other's
@@ -56,6 +58,17 @@ export async function materialise(tree: Tree, tracked: readonly string[] = []): 
   await rm(root, { recursive: true, force: true });
   await mkdir(root, { recursive: true });
   live.push(root);
+  return root;
+}
+
+/**
+ * Materialises a tree as a real git repository, because the gates ask git what
+ * is tracked and what is ignored. Nothing is committed: the answer for an
+ * untracked-but-not-ignored file is part of what they read, and a scaffolder
+ * has just written exactly those.
+ */
+export async function materialise(tree: Tree, tracked: readonly string[] = []): Promise<string> {
+  const root = await scratch();
   for (const [path, contents] of Object.entries(tree)) {
     await Bun.write(join(root, path), contents);
   }

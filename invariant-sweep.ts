@@ -74,27 +74,23 @@ import {
 /** The name the page-side script calls, and the name the fixture exposes. One constant, two ends. */
 const REPORTER = "__invariantSweep";
 
-/** The same, for the other thing a document says: that it has stopped changing. */
-const SETTLED = "__invariantSweepSettled";
+/** The name the page-side drain answers to, and the name the fixture calls. One constant, two ends. */
+const DRAINER = "__invariantSweepDrain";
 
 /**
- * How long a document has to go unchanged before it calls itself settled, in ms.
- * Playwright calls a page idle after 500ms with no network activity, which is
- * the same judgement about the same kind of page; this applies it to the DOM.
+ * How long a document has to go unchanged before it has nothing further to
+ * report, in ms. Playwright calls a page idle after 500ms with no network
+ * activity, which is the same judgement about the same kind of page; this
+ * applies it to the DOM.
  */
 const QUIET = 500;
 
 /**
- * How long the fixture waits for that word, in ms. A document that changes more
- * often than the quiet window never sends it — an animation is one — and such a
- * document has been measured on every one of those changes anyway, so waiting
- * for it is a courtesy and this is its cap: the 5s Playwright's own `expect`
- * gives a page to come good.
+ * How long a document that never armed — one whose `load` or whose fonts never
+ * arrive — is waited out, in ms: the 5s Playwright's own `expect` gives a page
+ * to come good.
  */
-const BOUND = 5_000;
-
-/** Where a Playwright page sits before anything has navigated it. */
-const BLANK = "about:blank";
+const CAP = 5_000;
 
 /** How far past the viewport an element has to reach before it counts, in CSS pixels. */
 const SLACK = 1;
@@ -112,8 +108,15 @@ const OFFENDERS = 3;
 /** How much of a page's own sentence reaches the failure message. */
 const DETAIL_LIMIT = 300;
 
-/** What Playwright says when the page navigated out from under an evaluate. */
-const DESTROYED = "Execution context was destroyed";
+/**
+ * What Playwright says when there is no longer anything to evaluate in: the
+ * first when the page navigated out from under the call, the second when the
+ * page — a popup that closed itself, say — or the whole context has gone.
+ */
+const GONE = [
+  "Execution context was destroyed",
+  "Target page, context or browser has been closed",
+] as const;
 
 /** The resource kinds whose URLs a violation may be attributed to. */
 const ADDRESSABLE = new Set(["document", "script"]);
@@ -132,10 +135,10 @@ interface Violation {
 }
 
 /**
- * Two frames, as an expression rather than a function for the same reason
- * `WATCH` is one: there is no DOM lib here to type `requestAnimationFrame` with.
+ * Asking the document to drain, as an expression rather than a function for the
+ * same reason `WATCH` is one: there is no DOM lib here to type it with.
  */
-const FLUSH = "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))";
+const DRAIN = `window.${DRAINER}()`;
 
 /**
  * The measuring, as source rather than as a function, for two reasons that both
@@ -153,11 +156,19 @@ const FLUSH = "new Promise((done) => requestAnimationFrame(() => requestAnimatio
  * scrolling sideways inside its own box is the embed's business, and
  * `documentElement` there is not the page.
  *
- * The same four moments are what the document counts its quiet from. Once it
- * has loaded and its fonts have swapped in — the last two reflows anything
- * schedules for it — a run of `QUIET` with none of them is the document saying
- * it has nothing further to report, which is the word the fixture waits for
- * before it lets a navigation replace the document.
+ * The same four moments are what draining waits on, and the document owns that
+ * too: it is asked, and it answers when it has nothing further to report. The
+ * runner holds no clock and no promise per document, so there is nothing for a
+ * same-document navigation or a page closing itself to orphan — the state is in
+ * the document, and it goes when the document does.
+ *
+ * Three ways to have nothing further to report, and a document reaches whichever
+ * comes first. It has **gone quiet**: armed — loaded, with its fonts swapped in,
+ * the last two reflows anything schedules for it — and `QUIET` since the last of
+ * the four moments. It has been **changing without pause** since it armed for
+ * twice that, which is an animation: it is measured on every one of those
+ * changes, so waiting for a gap that will not come buys nothing. Or it **never
+ * armed** at all, and `CAP` has passed since the script ran.
  */
 const WATCH = `(() => {
   if (window.top !== window) return;
@@ -184,16 +195,12 @@ const WATCH = `(() => {
     seen.add(detail);
     window.${REPORTER}(detail);
   };
+  const started = Date.now();
+  let armed = 0;
+  let changed = 0;
   let queued = false;
-  let armed = false;
-  let idle;
-  const rest = () => {
-    if (!armed) return;
-    clearTimeout(idle);
-    idle = setTimeout(() => window.${SETTLED}(), ${QUIET});
-  };
   const soon = () => {
-    rest();
+    changed = Date.now();
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => { queued = false; check(); });
@@ -204,7 +211,20 @@ const WATCH = `(() => {
     : new Promise((done) => window.addEventListener("load", done, { once: true }));
   fonts.then(soon);
   loaded.then(soon);
-  Promise.all([fonts, loaded]).then(() => { armed = true; rest(); });
+  Promise.all([fonts, loaded]).then(() => { armed = Date.now(); soon(); });
+  const until = () => armed === 0
+    ? started + ${CAP}
+    : Math.min(Math.max(changed, armed) + ${QUIET}, armed + ${QUIET * 2});
+  window.${DRAINER} = () => new Promise((done) => {
+    const wait = () => {
+      const left = until() - Date.now();
+      // Capped, so that a document arming mid-wait is noticed rather than slept
+      // through: once armed, the deadline is never further off than this.
+      if (left > 0) return void setTimeout(wait, Math.min(left, ${QUIET}));
+      requestAnimationFrame(() => requestAnimationFrame(done));
+    };
+    wait();
+  });
   // Capture phase: a subresource's own load event does not bubble, and an
   // image's bytes are what carry its width.
   document.addEventListener("load", soon, true);
@@ -260,68 +280,43 @@ function describe({ kind, at, detail }: Violation): string {
   return `${kind} at ${at} — ${detail}`;
 }
 
-/** What keeps a promise until its own constructor has handed the real one over. */
-const UNKEPT = (): void => {};
-
-/** A promise held open for something else to keep: here, one document going quiet. */
-interface Deferred {
-  readonly kept: Promise<void>;
-  readonly keep: () => void;
-}
-
-function deferred(): Deferred {
-  let keep = UNKEPT;
-  const kept = new Promise<void>((done) => {
-    keep = (): void => done();
-  });
-  return { kept, keep };
-}
-
-/** The promise or the clock, whichever comes first, leaving no timer behind either way. */
-async function within(ms: number, kept: Promise<void>): Promise<void> {
-  const capped = deferred();
-  const timer = setTimeout(capped.keep, ms);
-  try {
-    await Promise.race([kept, capped.kept]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /**
  * Gives one document its last chance to report before it is replaced or the test
  * ends, and never costs the assertion.
  *
- * Two waits, because a document can be behind in two ways. It may not have
+ * A document can be behind in two ways, and one ask covers both. It may not have
  * *measured* yet: a page that lays its overflow out on a timer after `load` has
  * nothing to say when `goto` resolves, and a spec that navigates on that instant
- * destroys the document before the layout it would have failed on. So the wait
- * is for the document's own word that it has gone quiet — bounded, since a
- * document that changes forever never sends it and has been measured on every
- * one of those changes anyway. And it may have measured without the report
- * having *crossed*: a report leaves on the frame after the check runs, so two
- * frames follow — the first lets a pending check run, the second lets a check
- * that frame scheduled land.
+ * destroys the document before the layout it would have failed on. And it may
+ * have measured without the report having *crossed*: a report leaves on the
+ * frame after the check runs, so two frames follow the wait. `WATCH` above owns
+ * what each of those costs and answers when both are spent.
  *
- * A page that navigates on a timer destroys the context the flush runs in, and a
- * page the spec closed has none. Both are pages with nothing left to drain, and
- * letting either throw here would replace the sweep's verdict — the list it
- * spent the whole test collecting — with a message about the flush.
+ * A page that navigates, or that closes itself, while this runs has nothing left
+ * to drain — whatever it measured crossed as it was measured — and every way
+ * that surfaces is admitted here. Letting one through would replace the sweep's
+ * verdict, the list it spent the whole test collecting, with a message about the
+ * flush.
  */
-async function drain(page: Page, settled: Promise<void>): Promise<void> {
-  if (page.isClosed() || page.url() === BLANK) return;
-  await within(BOUND, settled);
+async function drain(page: Page): Promise<void> {
+  if (page.isClosed()) return;
   try {
-    await page.evaluate(FLUSH);
+    await page.evaluate(DRAIN);
   } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes(DESTROYED)) throw error;
+    if (page.isClosed()) return;
+    if (!(error instanceof Error) || !GONE.some((gone) => error.message.includes(gone)))
+      throw error;
   }
 }
 
 /**
  * Playwright's `test`, with the browser context replaced by one that watches
  * every page it opens. A repo swaps its import and every spec it already has is
- * swept:
+ * swept.
+ *
+ * Annotated rather than inferred because the declaration emitter needs a type it
+ * can name: left to infer, the `.d.ts` reaches through `@playwright/test` and
+ * names `playwright/test`, a package a consumer never declared.
  *
  * ```ts
  * import { test } from "@gokayo43/dev-config/invariant-sweep";
@@ -352,16 +347,6 @@ export const test: TestType<
     const violations: Violation[] = [];
     /** Every URL the browser actually loaded a document or a script from. */
     const fetched = new Set<string>();
-    /** Where each open page's *current* document is with going quiet. */
-    const settles = new Map<Page, Deferred>();
-
-    const settleOf = (page: Page): Deferred => {
-      const held = settles.get(page);
-      if (held !== undefined) return held;
-      const fresh = deferred();
-      settles.set(page, fresh);
-      return fresh;
-    };
 
     const record = (violation: Violation): void => {
       if (allowed.some((pattern) => pattern.test(violation.at))) return;
@@ -378,37 +363,21 @@ export const test: TestType<
       claimed !== undefined && fetched.has(claimed) ? claimed : page.url();
 
     const watch = (page: Page): void => {
-      settles.set(page, deferred());
-      // Whatever the document that has just gone said about itself is not this
-      // one's, and this one has not spoken yet.
-      page.on("framenavigated", (frame) => {
-        if (frame === page.mainFrame()) settles.set(page, deferred());
-      });
-
-      // Every call that replaces the document, wrapped so that the outgoing one
-      // is drained first. A navigation the page performs itself — a redirect, a
-      // link the spec clicked — is out of reach of this and is drained only by
-      // whatever comes next.
-      const goBack = page.goBack.bind(page);
-      const goForward = page.goForward.bind(page);
-      const goto = page.goto.bind(page);
-      const reload = page.reload.bind(page);
-      page.goto = async (url, options) => {
-        await drain(page, settleOf(page).kept);
-        return await goto(url, options);
-      };
-      page.reload = async (options) => {
-        await drain(page, settleOf(page).kept);
-        return await reload(options);
-      };
-      page.goBack = async (options) => {
-        await drain(page, settleOf(page).kept);
-        return await goBack(options);
-      };
-      page.goForward = async (options) => {
-        await drain(page, settleOf(page).kept);
-        return await goForward(options);
-      };
+      // Every call that replaces this page's document, drained before it does.
+      // A navigation the page performs for itself — a redirect, a link the spec
+      // clicked — goes through none of these, and is drained by whatever comes
+      // next instead.
+      const draining =
+        <Args extends unknown[], Answer>(replace: (...args: Args) => Promise<Answer>) =>
+        async (...args: Args): Promise<Answer> => {
+          await drain(page);
+          return await replace(...args);
+        };
+      page.goto = draining(page.goto.bind(page));
+      page.reload = draining(page.reload.bind(page));
+      page.goBack = draining(page.goBack.bind(page));
+      page.goForward = draining(page.goForward.bind(page));
+      page.setContent = draining(page.setContent.bind(page));
 
       page.on("response", (response) => {
         if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
@@ -443,17 +412,13 @@ export const test: TestType<
       if (frame !== page.mainFrame()) return;
       record({ kind: "overflow", at: frame.url(), detail: sanitized(detail) });
     });
-    await context.exposeBinding(SETTLED, ({ frame, page }) => {
-      if (frame !== page.mainFrame()) return;
-      settleOf(page).keep();
-    });
     await context.addInitScript(WATCH);
     context.on("page", watch);
     for (const open of context.pages()) watch(open);
 
     await provide(context);
 
-    await Promise.all(context.pages().map(async (page) => await drain(page, settleOf(page).kept)));
+    await Promise.all(context.pages().map(async (page) => await drain(page)));
 
     expect(
       violations.map(describe),

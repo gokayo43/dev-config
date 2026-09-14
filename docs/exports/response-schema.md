@@ -1,6 +1,6 @@
 # Response-schema coverage
 
-`@gokayo43/dev-config/response-schema.ts` exports `responseSchemaGaps`, which
+`@gokayo43/dev-config/response-schema` exports `responseSchemaGaps`, which
 holds a composed Elysia app's own route table to one invariant:
 
 > every route the app serves either declares a `response` schema, or is listed
@@ -9,7 +9,7 @@ holds a composed Elysia app's own route table to one invariant:
 The whole of what a repo writes:
 
 ```ts
-import { responseSchemaGaps, type Skip } from "@gokayo43/dev-config/response-schema.ts";
+import { responseSchemaGaps, type Skip } from "@gokayo43/dev-config/response-schema";
 import { app } from "../src/app.ts";
 
 /** Greenfield APIs ship this empty. */

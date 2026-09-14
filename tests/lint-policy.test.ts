@@ -32,7 +32,7 @@ const SWEEP =
   "every page a spec opens for console errors, uncaught errors and overflow. `expect` and the " +
   "rest of the module are unchanged.";
 const BUDGET =
-  "Import `check` from @gokayo43/dev-config/property.ts — it multiplies every property's run " +
+  "Import `check` from @gokayo43/dev-config/property — it multiplies every property's run " +
   "count by PROPERTY_RUNS_FACTOR, which is what lets one run search a hundred times as far as " +
   "another. The default export is refused with it because `fc.assert` reaches the same call: " +
   "import the generators by name.";

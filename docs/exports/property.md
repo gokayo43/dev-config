@@ -1,10 +1,10 @@
 # The property budget
 
-`@gokayo43/dev-config/property.ts` exports `check`, which is `fc.assert` with
+`@gokayo43/dev-config/property` exports `check`, which is `fc.assert` with
 one thing added: the run decides how far every property searches.
 
 ```ts
-import { check } from "@gokayo43/dev-config/property.ts";
+import { check } from "@gokayo43/dev-config/property";
 import { integer, property } from "fast-check";
 
 test("a total is never less than its largest part", () => {
@@ -77,7 +77,7 @@ added.
 `oxlint.base.json` refuses `assert` and the default export from `fast-check`:
 
 ```
-Import `check` from @gokayo43/dev-config/property.ts — it multiplies every
+Import `check` from @gokayo43/dev-config/property — it multiplies every
 property's run count by PROPERTY_RUNS_FACTOR, which is what lets one run search
 a hundred times as far as another. The default export is refused with it because
 `fc.assert` reaches the same call: import the generators by name.

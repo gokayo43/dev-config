@@ -126,16 +126,13 @@ a change to a rule usually lands here too.
   is by subject rather than by taste: a route table is a value one call can
   grade, and a limiter is a sequence of attempts against a live Redis that only
   a test framework can sequence.
-  Two of them **ship built**, and it is the same fact `anti-slop/` above turns
-  on: `route-log.ts` and `invariant-sweep.ts` are imported by a Playwright spec,
-  Playwright's runner is node, and node refuses to strip types under
-  `node_modules`. `tsdown.config.ts` names those two entries and nothing else —
-  the other three are imported by `bun test`, which strips types — and
-  `bun run build` writes `dist/{route-log,invariant-sweep}.{js,d.ts}`, which
-  `exports` points the two extensionless specifiers at. `dist/` is **committed**,
-  because a consumer installs this package from git and a git dependency's
-  lifecycle scripts are withheld (Bun) or run (npm) and neither is a build a host
-  should own; `tests/dist.test.ts` holds it equal to a fresh build, and
+  Every one is spelled **without an extension**, and what a specifier resolves
+  to is this package's business rather than a caller's: two of them are built and
+  four ship their source, and no import says which. `tsdown.config.ts` is where
+  that decision lives and why — the same fact `anti-slop/` above turns on — and
+  STACK.md's shared UI library is where a committed `dist/` is argued.
+  `bun run build` writes `dist/{route-log,invariant-sweep}.{js,d.ts}`;
+  `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
 - `dev-server.ts` and `dev-server-derive.ts` — one supervised dev server per git
   worktree, on a port the worktree derives, reached as `bun run dev-server <cmd>`

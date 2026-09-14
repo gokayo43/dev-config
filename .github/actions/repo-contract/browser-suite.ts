@@ -51,8 +51,9 @@ const PLAYWRIGHT_BIN = "playwright";
 
 /**
  * The export a swept spec imports, which is the whole of what makes it swept.
- * Extensionless, and the built file behind it is the reason: Playwright's runner
- * is node, and node refuses to strip types from anything under `node_modules`.
+ * Every export of that package is spelled without an extension; what a given one
+ * resolves to is the package's business, and `tsdown.config.ts` there has why
+ * this one is built.
  */
 const SWEEP = "@gokayo43/dev-config/invariant-sweep";
 
@@ -68,9 +69,7 @@ const SWEEP = "@gokayo43/dev-config/invariant-sweep";
  * comment quoting an import statement verbatim, which is the one spelling left
  * that would fool it.
  */
-const IMPORTED_FROM = new RegExp(
-  String.raw`\b(?:from|import)\s*\(?\s*["']${SWEEP.replaceAll(".", String.raw`\.`)}["']`,
-);
+const IMPORTED_FROM = new RegExp(String.raw`\b(?:from|import)\s*\(?\s*["']${SWEEP}["']`);
 
 /**
  * Where a test runner is declared. Both fields, because a runner builds and

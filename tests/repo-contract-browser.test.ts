@@ -47,11 +47,10 @@ const PROMISED = `// TODO: move this to @gokayo43/dev-config/invariant-sweep\n${
 const QUOTED = `${UNSWEPT}export const swept = "@gokayo43/dev-config/invariant-sweep";\n`;
 
 /**
- * The source spelling: a specifier this package does not export and node cannot
- * load, since Playwright's runner is node and node refuses to strip types from
- * anything under `node_modules` (dev-config#113). A spec written this way
- * collects no tests at all, so the gate that accepted it would be certifying a
- * suite that cannot run.
+ * The source spelling: a specifier this package does not export, and one node
+ * could not load if it did — `tsdown.config.ts` there has why (dev-config#113).
+ * A spec written this way collects no tests at all, so a gate that accepted it
+ * would be certifying a suite that cannot run.
  */
 const SOURCE = SWEPT.replace('/invariant-sweep"', '/invariant-sweep.ts"');
 

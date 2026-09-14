@@ -1,6 +1,6 @@
 # The rate-limiter conformance suite
 
-`@gokayo43/dev-config/limiter-conformance.ts` exports `conformsAsLimiter`, a
+`@gokayo43/dev-config/limiter-conformance` exports `conformsAsLimiter`, a
 `describe` block a repo registers against its own rate limiter.
 
 STACK.md gives the house one inbound limiter — a Redis token bucket keyed on
@@ -10,7 +10,7 @@ pointing at one repo's implementation, and prose cannot say whether a limiter
 still holds after a refactor.
 
 ```ts
-import { conformsAsLimiter } from "@gokayo43/dev-config/limiter-conformance.ts";
+import { conformsAsLimiter } from "@gokayo43/dev-config/limiter-conformance";
 import { limiterOn } from "../src/http/ratelimit.ts";
 
 const REDIS_URL = process.env["TEST_REDIS_URL"];

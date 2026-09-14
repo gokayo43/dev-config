@@ -1,6 +1,6 @@
 # The characterization net
 
-`@gokayo43/dev-config/characterization-net.ts` is the harness under a golden —
+`@gokayo43/dev-config/characterization-net` is the harness under a golden —
 characterization — suite: `assertNet` and `rebaselineNet`, over a `Net` the repo
 declares.
 
@@ -12,7 +12,7 @@ compared against bytes that no longer resemble what the normaliser emits. Every
 rule here closes one of those.
 
 ```ts
-import { assertNet, rebaselineNet, type Net } from "@gokayo43/dev-config/characterization-net.ts";
+import { assertNet, rebaselineNet, type Net } from "@gokayo43/dev-config/characterization-net";
 
 const net: Net<Endpoint, Payload> = {
   cases: ENDPOINTS,

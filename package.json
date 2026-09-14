@@ -38,10 +38,10 @@
       "types": "./dist/invariant-sweep.d.ts",
       "default": "./dist/invariant-sweep.js"
     },
-    "./limiter-conformance.ts": "./limiter-conformance.ts",
-    "./property.ts": "./property.ts",
-    "./response-schema.ts": "./response-schema.ts",
-    "./characterization-net.ts": "./characterization-net.ts"
+    "./limiter-conformance": "./limiter-conformance.ts",
+    "./property": "./property.ts",
+    "./response-schema": "./response-schema.ts",
+    "./characterization-net": "./characterization-net.ts"
   },
   "scripts": {
     "build": "tsdown",

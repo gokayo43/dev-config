@@ -14,7 +14,11 @@ export interface InvariantSweep {
 /**
  * Playwright's `test`, with the browser context replaced by one that watches
  * every page it opens. A repo swaps its import and every spec it already has is
- * swept:
+ * swept.
+ *
+ * Annotated rather than inferred because the declaration emitter needs a type it
+ * can name: left to infer, the `.d.ts` reaches through `@playwright/test` and
+ * names `playwright/test`, a package a consumer never declared.
  *
  * ```ts
  * import { test } from "@gokayo43/dev-config/invariant-sweep";

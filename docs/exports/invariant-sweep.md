@@ -14,11 +14,10 @@ test("the pricing page loads", async ({ page }) => {
 });
 ```
 
-The specifier carries no extension because what it names is built: Playwright's
-runner is node, and node refuses to strip types from anything under
-`node_modules`, so this export and [the route log](route-log.md) ship as
-JavaScript under `dist/` — committed, and held equal to a fresh build by
-`tests/dist.test.ts`.
+No export here carries an extension. This one and [the route log](route-log.md)
+resolve to built JavaScript under `dist/`, because the runner that imports them
+is node — `tsdown.config.ts` in the package carries why, and STACK.md's shared
+UI library carries the bargain a committed `dist/` is.
 
 Three invariants, on every page the test visits:
 
@@ -179,7 +178,8 @@ had to visit every allowlisted page.
   page that has been still for half a second and then reflows a second later is
   past it. A spec that stays on the page is not: the check runs there whenever
   the page changes, however late.
-- **A navigation the page performs for itself** — a redirect, or a link the spec
-  clicked — replaces the document without going through a call the fixture can
-  wrap, so the outgoing document is drained by whatever comes next rather than
-  before it goes.
+- **What a page laid out after a navigation it performed for itself.** A
+  redirect, or a link the spec clicked, replaces the document without going
+  through a call the fixture can wrap, so that document is never asked to drain:
+  everything it had already measured has crossed and is in the verdict, and only
+  what it would have measured in its last moments is lost.
