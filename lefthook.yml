@@ -6,11 +6,16 @@
 pre-commit:
   parallel: true
   commands:
+    # `dist/` is build output, which both configs already exclude — but a commit
+    # that stages only built files would hand each tool a list it excludes
+    # entirely, and both call that an error rather than a clean run.
     format:
       glob: "*.{js,ts,json,md}"
+      exclude: ["dist/*"]
       run: bunx oxfmt --check {staged_files}
     lint:
       glob: "*.{js,ts}"
+      exclude: ["dist/*"]
       # The same flag the `lint` script and CI carry: a directive that no longer
       # suppresses anything is an error there, so it has to be one here too.
       #

@@ -1,1 +1,8 @@
-{ "printWidth": 100 }
+{
+  // `dist/` is what `bun run build` writes, and `tests/dist.test.ts` holds it
+  // equal to a fresh build. Formatting it would make the two disagree on every
+  // build; oxfmt reads .gitignore and this directory is committed, so the
+  // exclusion has to be stated here.
+  "ignorePatterns": ["dist/**"],
+  "printWidth": 100
+}

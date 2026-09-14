@@ -1,6 +1,6 @@
 # The route log
 
-`@gokayo43/dev-config/route-log.ts` is the protocol between an app and the two
+`@gokayo43/dev-config/route-log` is the protocol between an app and the two
 floors the database job holds its route table to — the capacity ramp's route
 coverage, and [the compatibility floor](../gates/route-compat.md) that asks
 whether a route it used to serve is still there. Two strings and three shapes,
@@ -25,6 +25,11 @@ Both lists name a route _as its router registered it_: `/presets/42` as
 `/presets/:id`. Where routes overlap — a literal `/presets/new` beside
 `/presets/:id` — only the router knows which one answered, and a gate that
 guessed would credit coverage to a route that served nothing.
+
+Like [the invariant sweep](invariant-sweep.md), and for the same reason, it
+ships built: an app's instrument may be loaded by node, which refuses to strip
+types from anything under `node_modules`. The source stays `route-log.ts`; what
+the specifier resolves to is `dist/route-log.js`.
 
 Unlike the other exports here, this one is a data contract rather than a check:
 nothing in it fails a build. What reads it is `db-gate` — the capacity step

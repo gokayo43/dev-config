@@ -2,7 +2,15 @@
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
   "extends": ["./oxlint.base.json"],
   "env": { "node": true, "es2024": true },
-  "ignorePatterns": ["node_modules/**", ".claude/**", ".github/actions/db-gate/capacity.js"],
+  // `dist/**` is what `bun run build` writes from the two exports a node runner
+  // imports; linting a build is linting its inputs twice, and every rule that
+  // reads types reads none there.
+  "ignorePatterns": [
+    "node_modules/**",
+    ".claude/**",
+    "dist/**",
+    ".github/actions/db-gate/capacity.js"
+  ],
   "rules": {
     // One of the base's own rules, off here and nowhere else. Every gate in
     // this repo reads a file it does not own — another repo's package.json,

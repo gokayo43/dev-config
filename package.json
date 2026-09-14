@@ -15,10 +15,9 @@
     "oxlint.base.json",
     "knip.base.ts",
     "lighthouserc.json",
-    "route-log.ts",
+    "dist",
     "dev-server.ts",
     "dev-server-derive.ts",
-    "invariant-sweep.ts",
     "limiter-conformance.ts",
     "response-schema.ts",
     "characterization-net.ts",
@@ -30,13 +29,20 @@
     "./oxlint.base.json": "./oxlint.base.json",
     "./knip.base.ts": "./knip.base.ts",
     "./lighthouserc.json": "./lighthouserc.json",
-    "./route-log.ts": "./route-log.ts",
-    "./invariant-sweep.ts": "./invariant-sweep.ts",
+    "./route-log": {
+      "types": "./dist/route-log.d.ts",
+      "default": "./dist/route-log.js"
+    },
+    "./invariant-sweep": {
+      "types": "./dist/invariant-sweep.d.ts",
+      "default": "./dist/invariant-sweep.js"
+    },
     "./limiter-conformance.ts": "./limiter-conformance.ts",
     "./response-schema.ts": "./response-schema.ts",
     "./characterization-net.ts": "./characterization-net.ts"
   },
   "scripts": {
+    "build": "tsdown",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint --report-unused-disable-directives-severity=error",
@@ -60,6 +66,7 @@
     "oxfmt": "0.63.0",
     "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2001",
+    "tsdown": "0.23.0",
     "typescript": "7.0.2"
   },
   "peerDependencies": {

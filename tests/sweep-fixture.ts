@@ -9,15 +9,21 @@
  * would be this repo asserting its own idea of a browser.
  *
  * Playwright resolves its own package from the test file's directory upward, so
- * the fixture directory is given this repo's `node_modules` as a symlink — the
- * same thing `mutation-lane.test.ts` does to run Stryker against a fixture tree,
- * and for the same reason: the tool has to be the installed one.
+ * the fixture directory is given this repo's `node_modules`, entry by entry as
+ * symlinks — the same thing `mutation-lane.test.ts` does to run Stryker against
+ * a fixture tree, and for the same reason: the tool has to be the installed one.
+ * Beside them sits this package itself, copied rather than linked, which is what
+ * `install` below is about.
  */
-import { symlink } from "node:fs/promises";
-import { join } from "node:path";
+import { cp, mkdir, readdir, symlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import { type ConfigObject, isList, plainly, record } from "../.github/actions/_lib/gate.ts";
+import { ENDPOINT } from "../route-log.ts";
 import { materialise } from "./tree.ts";
+
+/** This checkout, which is both the package under test and where its install comes from. */
+const HERE = join(import.meta.dir, "..");
 
 /** The viewport every case is measured in, so "overflow" is a number and not a machine's. */
 const VIEWPORT = { width: 800, height: 600 } as const;
@@ -31,6 +37,13 @@ function html(body: string): string {
 
 /** How long the slow subresource takes, in ms — long past `load` and past two frames. */
 const LATE = 400;
+
+/**
+ * How long after its own `load` event the late page lays its overflow out, in ms
+ * — the delay the gap was reported at (dev-config#113's review): past every
+ * frame a flush could wait for, and inside the window a document goes quiet in.
+ */
+const AFTER_LOAD = 100;
 
 /**
  * What the fixture server answers, by path. Each page is one invariant broken
@@ -65,6 +78,15 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
         type: "text/html",
         body: html(
           `<script>setTimeout(() => { const d = document.createElement("div"); d.style.cssText = "width:${TOO_WIDE}px;height:10px"; document.body.append(d); }, 50)</script>`,
+        ),
+      },
+      // Overflow laid out on a timer started by the page's own `load` event.
+      // Nothing has measured it when `goto` resolves, so a spec that navigates
+      // on that instant destroys the document before the layout it would fail on.
+      "/after-load": {
+        type: "text/html",
+        body: html(
+          `<script>addEventListener("load", () => setTimeout(() => { const d = document.createElement("div"); d.style.cssText = "width:${TOO_WIDE}px;height:10px"; document.body.append(d); }, ${AFTER_LOAD}))</script>`,
         ),
       },
       // Our own console error, wearing the vendor's name. `sourceURL` is a
@@ -111,6 +133,13 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/popup": {
         type: "text/html",
         body: html(`<a id="open" href="/console" target="_blank">open</a>`),
+      },
+      // The route log's own endpoint, answered the way the protocol says an app
+      // answers it — so the spec that imports the constant reaches a real one
+      // with it rather than asserting the string against itself.
+      [ENDPOINT]: {
+        type: "application/json",
+        body: JSON.stringify({ routeTable: [{ method: "GET", path: "/clean" }], counts: [] }),
       },
       // Two page names, one a prefix of the other: what an unanchored pattern
       // cannot tell apart.
@@ -245,6 +274,40 @@ export default defineConfig({
 `;
 
 /**
+ * The fixture's `node_modules`, holding this repo's own installs and this
+ * package beside them.
+ *
+ * The installs are linked and the package is **copied**, and the difference is
+ * the point: node resolves a module to its real path before it decides anything
+ * about it, so a link would put this package's real path outside any
+ * `node_modules` and node would strip types from a `.ts` under it — the one
+ * thing it refuses to do for a consumer. Only a copy is what a consumer has.
+ *
+ * What is copied is what the manifest ships, so the fixture installs the package
+ * as published rather than a list kept in step with `files` by hand.
+ */
+async function install(root: string): Promise<void> {
+  const modules = join(root, "node_modules");
+  await mkdir(modules, { recursive: true });
+  const installed = join(HERE, "node_modules");
+  await Promise.all(
+    (await readdir(installed)).map(
+      async (entry) => await symlink(join(installed, entry), join(modules, entry), "dir"),
+    ),
+  );
+
+  const manifest = record(await Bun.file(join(HERE, "package.json")).json());
+  const shipped = join(modules, String(manifest["name"]));
+  await mkdir(dirname(shipped), { recursive: true });
+  const files = isList(manifest["files"]) ? manifest["files"].map(String) : [];
+  await Promise.all(
+    ["package.json", ...files].map(
+      async (entry) => await cp(join(HERE, entry), join(shipped, entry), { recursive: true }),
+    ),
+  );
+}
+
+/**
  * Runs every spec given, and reports how each came out by its title. One
  * Playwright process for all of them: starting the runner costs more than the
  * cases do, and nothing here depends on a case running alone.
@@ -254,7 +317,7 @@ export async function sweeping(
   specs: Readonly<Record<string, string>>,
 ): Promise<Map<string, Outcome>> {
   const root = await materialise({ "playwright.config.ts": CONFIG, ...specs });
-  await symlink(join(import.meta.dir, "..", "node_modules"), join(root, "node_modules"), "dir");
+  await install(root);
 
   const proc = Bun.spawn(
     [join(root, "node_modules", ".bin", "playwright"), "test", "--reporter=json"],
@@ -285,6 +348,16 @@ export async function sweeping(
       ok: spec["ok"] === true,
       said: saidBy(spec),
     });
+  }
+  // A run that collected no spec at all is the fixture having failed, not a case
+  // having come out badly — a spec whose imports do not load is reported here
+  // and nowhere else, and reading it as "every case is missing" would hide the
+  // one message that says why.
+  if (outcomes.size === 0) {
+    const refused = listAt(record(report), "errors")
+      .map((error) => (typeof error["message"] === "string" ? error["message"] : ""))
+      .join("\n");
+    throw new Error(`the Playwright run collected no spec:\n${refused}`);
   }
   return outcomes;
 }
