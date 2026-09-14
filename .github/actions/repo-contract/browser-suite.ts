@@ -49,8 +49,12 @@ const PLAYWRIGHT = "@playwright/test";
 
 const PLAYWRIGHT_BIN = "playwright";
 
-/** The export a swept spec imports, which is the whole of what makes it swept. */
-const SWEEP = "@gokayo43/dev-config/invariant-sweep.ts";
+/**
+ * The export a swept spec imports, which is the whole of what makes it swept.
+ * Extensionless, and the built file behind it is the reason: Playwright's runner
+ * is node, and node refuses to strip types from anything under `node_modules`.
+ */
+const SWEEP = "@gokayo43/dev-config/invariant-sweep";
 
 /**
  * The specifier in the position that imports it, rather than anywhere in the

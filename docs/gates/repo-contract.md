@@ -238,7 +238,7 @@ of.
 | `scripts/restore-drill.sh` exists and is executable                      | the repo owns a database, and `data-jobs-external` is empty | a backup nobody has restored is a backup nobody has                                                                                                             |
 | a timer/service pair that runs each of them                              | the repo owns a database, and `data-jobs-external` is empty | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
 | `@playwright/test` among what the workspace declares                     | the repo ships a browser surface: `react-dom` or `astro`    | a page nobody opens in CI is one that breaks in front of a user                                                                                                 |
-| a spec written with `@gokayo43/dev-config/invariant-sweep.ts`            | the repo ships a browser surface: `react-dom` or `astro`    | a spec on Playwright's own `test` passes without noticing a console error, an uncaught error or a page scrolling sideways                                       |
+| a spec written with `@gokayo43/dev-config/invariant-sweep`               | the repo ships a browser surface: `react-dom` or `astro`    | a spec on Playwright's own `test` passes without noticing a console error, an uncaught error or a page scrolling sideways                                       |
 | a `ci.yml` step that runs `playwright test`                              | the repo ships a browser surface: `react-dom` or `astro`    | a suite CI never runs is one that ran the day it was written                                                                                                    |
 
 Only crash reporting is owed by every live repo. The rest is scoped to what the
@@ -340,7 +340,7 @@ target ships.
 A repo that has one owes three separate things, because each is a different file
 to fix. The runner has to be **declared** — `devDependencies` or `dependencies`,
 in any manifest in the workspace. At least one `*.spec.ts` or `*.spec.tsx` has to
-import `@gokayo43/dev-config/invariant-sweep.ts`, which is what makes every page
+import `@gokayo43/dev-config/invariant-sweep`, which is what makes every page
 its specs visit checked for console errors, uncaught errors and sideways scroll;
 a spec on Playwright's own `test` passes while noticing none of it, and the base
 config's `no-restricted-imports` refuses that import for the same reason. And

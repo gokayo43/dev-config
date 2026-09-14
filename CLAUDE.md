@@ -109,7 +109,7 @@ a change to a rule usually lands here too.
 - The `*.ts` at the root are what a consuming repo reaches directly, as against
   the gates, which run over it from CI. Six of them are **exports** it imports
   and calls; the two `dev-server*` files below are a bin it runs and the module
-  that bin imports. Each is in
+  that bin imports. Each is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: what it grades is only visible from inside the repo. `route-log.ts` is
   the protocol between an app and the two floors over its route table;
@@ -126,6 +126,17 @@ a change to a rule usually lands here too.
   is by subject rather than by taste: a route table is a value one call can
   grade, and a limiter is a sequence of attempts against a live Redis that only
   a test framework can sequence.
+  Two of them **ship built**, and it is the same fact `anti-slop/` above turns
+  on: `route-log.ts` and `invariant-sweep.ts` are imported by a Playwright spec,
+  Playwright's runner is node, and node refuses to strip types under
+  `node_modules`. `tsdown.config.ts` names those two entries and nothing else —
+  the other three are imported by `bun test`, which strips types — and
+  `bun run build` writes `dist/{route-log,invariant-sweep}.{js,d.ts}`, which
+  `exports` points the two extensionless specifiers at. `dist/` is **committed**,
+  because a consumer installs this package from git and a git dependency's
+  lifecycle scripts are withheld (Bun) or run (npm) and neither is a build a host
+  should own; `tests/dist.test.ts` holds it equal to a fresh build, and
+  `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
 - `dev-server.ts` and `dev-server-derive.ts` — one supervised dev server per git
   worktree, on a port the worktree derives, reached as `bun run dev-server <cmd>`
   through the `bin` entry. Neither is an export: there is nothing in either for a
@@ -226,6 +237,7 @@ a change to a rule usually lands here too.
 ```sh
 bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites
+bun run build   # rewrites the committed dist/ from the two built exports
 ```
 
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's

@@ -8,6 +8,11 @@
  * only overflows after it has finished loading. A sweep that measured once, at
  * the end, would pass the first two and a sweep that measured on `load` would
  * pass the third — and all three would keep claiming the same sentence.
+ *
+ * The last block is a different subject, run on its own: the two exports a spec
+ * imports, reached through a `node_modules` of the fixture's own under the
+ * runner Playwright actually brings. Every case above imports the sweep by path,
+ * which is the one way a consumer never has it.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
@@ -55,6 +60,15 @@ const CASES = {
   "overflow that appears after the page loaded fails": spec(
     "overflow that appears after the page loaded fails",
     `  await page.goto("/late");\n  await page.waitForTimeout(300);`,
+  ),
+  // Overflow the page lays out on a timer started by its own `load` event, on a
+  // page the spec leaves at once. Nothing has measured it when `goto` resolves,
+  // so what has to hold is that the outgoing document is given its say before
+  // the navigation replaces it — a flush of the frames already scheduled finds
+  // nothing here, because the layout that breaks has not happened yet.
+  "a page that overflows after load and is left at once is swept": spec(
+    "a page that overflows after load and is left at once is swept",
+    `  await page.goto("/after-load");\n  await page.goto("/clean");`,
   ),
   // The page the spec ended on is clean. A sweep that looked once, at the end,
   // reports nothing here.
@@ -147,7 +161,32 @@ const CASES = {
   ),
 };
 
+/**
+ * A spec exactly as a consumer writes one: both exports by the specifiers the
+ * repo contract names, and `expect` from Playwright's own package. Its own
+ * Playwright run, because a spec whose imports do not load takes the whole run
+ * down with it — the runner collects nothing and reports no case rather than
+ * failing one, so sharing a process would answer every question above with this
+ * question's failure.
+ */
+const INSTALLED = `import { expect } from "@playwright/test";
+import { test } from "@gokayo43/dev-config/invariant-sweep";
+import { ENDPOINT } from "@gokayo43/dev-config/route-log";
+
+test("a consumer's spec runs", async ({ page }) => {
+  // The runner is the whole question: a bun wearing node's name on PATH — the
+  // workaround this change exists to delete — loads a \`.ts\` under node_modules
+  // happily, and would leave this case proving nothing.
+  expect(process.versions.bun).toBeUndefined();
+  const answered = await page.goto(ENDPOINT);
+  expect(answered?.status()).toBe(200);
+  await page.goto("/clean");
+  await expect(page.locator("p")).toHaveText("nothing wrong here");
+});
+`;
+
 let outcomes = new Map<string, Outcome>();
+let installed = new Map<string, Outcome>();
 let stop = async (): Promise<void> => {};
 
 beforeAll(async () => {
@@ -159,6 +198,7 @@ beforeAll(async () => {
       Object.values(CASES).map((written, index) => [`case-${index}.spec.ts`, written]),
     ),
   );
+  installed = await sweeping(server.origin, { "consumer.spec.ts": INSTALLED });
 }, 180_000);
 
 afterAll(async () => {
@@ -208,6 +248,7 @@ describe("what the sweep catches", () => {
     ["a page wider than its viewport fails", "overflow", "1600px of content in a 800px viewport"],
     ["overflow that appears after the page loaded fails", "overflow", "in a 800px viewport"],
     ["a page the test navigated away from is still swept", "overflow", "/overflow"],
+    ["a page that overflows after load and is left at once is swept", "overflow", "/after-load"],
     ["a page reached by clicking a link is swept", "overflow", "/overflow"],
     [
       "an allowlist that matches nothing tolerates nothing",
@@ -299,5 +340,19 @@ describe("what the sweep catches", () => {
   // What to do, not what went wrong: the allowlist is the other half of the fix.
   test("the diagnostic says what to do about it", () => {
     expect(outcome("a page wider than its viewport fails").said).toContain("sweepAllowlist");
+  });
+});
+
+// The one way a consumer never imports these: by path. Playwright's runner is
+// node, and node refuses to strip types from anything under `node_modules` —
+// which is where every consumer has this package, so what a `.ts` specifier
+// resolves to there cannot load at all (dev-config#113). What has to hold is
+// that the built files under `dist/` do, by the extensionless specifiers the
+// repo contract and the base config name.
+describe("the exports a spec imports", () => {
+  test("load from an installed package under Playwright's own runner", () => {
+    const ran = installed.get("a consumer's spec runs");
+    expect(ran?.said).toBe("");
+    expect(ran?.ok).toBe(true);
   });
 });

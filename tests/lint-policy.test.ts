@@ -28,7 +28,7 @@ const CASE_SETUP =
   "Set a case up with a call it makes itself, and tear it down with `await using` — " +
   "beforeAll/afterAll stay for shared immutable resources.";
 const SWEEP =
-  "Import `test` from @gokayo43/dev-config/invariant-sweep.ts — the sweep's fixture checks " +
+  "Import `test` from @gokayo43/dev-config/invariant-sweep — the sweep's fixture checks " +
   "every page a spec opens for console errors, uncaught errors and overflow. `expect` and the " +
   "rest of the module are unchanged.";
 const BUDGET =

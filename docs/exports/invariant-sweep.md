@@ -1,11 +1,11 @@
 # The invariant sweep
 
-`@gokayo43/dev-config/invariant-sweep.ts` exports one thing: `test`, which is
+`@gokayo43/dev-config/invariant-sweep` exports one thing: `test`, which is
 `@playwright/test`'s own `test` with the **browser context** replaced by one
 that watches every page it opens. A repo swaps its import and every spec it already has is swept:
 
 ```ts
-import { test } from "@gokayo43/dev-config/invariant-sweep.ts";
+import { test } from "@gokayo43/dev-config/invariant-sweep";
 import { expect } from "@playwright/test";
 
 test("the pricing page loads", async ({ page }) => {
@@ -13,6 +13,12 @@ test("the pricing page loads", async ({ page }) => {
   await expect(page.getByRole("heading")).toBeVisible();
 });
 ```
+
+The specifier carries no extension because what it names is built: Playwright's
+runner is node, and node refuses to strip types from anything under
+`node_modules`, so this export and [the route log](route-log.md) ship as
+JavaScript under `dist/` — committed, and held equal to a fresh build by
+`tests/dist.test.ts`.
 
 Three invariants, on every page the test visits:
 
@@ -32,17 +38,19 @@ The word is the whole claim, so it is worth being precise about how it is kept.
 
 The measuring runs **in the page**, installed by a Playwright init script that
 runs in every document before anything else, and reports back through an exposed
-binding. It checks on `load`, again when `document.fonts` settles, and on the
-frame after any mutation of the document — which is what covers a
-client-rendered route change that fires no `load` at all.
+binding. It checks on `load`, again when `document.fonts` settles, when any
+subresource finishes loading, and on the frame after any mutation of the
+document — which is what covers a client-rendered route change that fires no
+`load` at all.
 
-That covers three cases a simpler design would quietly miss:
+That covers four cases a simpler design would quietly miss:
 
-| The page                                      | A check after each `goto` | A check at the end of the test | This |
-| --------------------------------------------- | ------------------------- | ------------------------------ | ---- |
-| navigated to by clicking a link               | missed                    | seen if it is the last one     | seen |
-| the test navigated away from                  | seen                      | missed                         | seen |
-| that only overflows after it finished loading | missed                    | seen if it is the last one     | seen |
+| The page                                       | A check after each `goto` | A check at the end of the test | This |
+| ---------------------------------------------- | ------------------------- | ------------------------------ | ---- |
+| navigated to by clicking a link                | missed                    | seen if it is the last one     | seen |
+| the test navigated away from                   | seen                      | missed                         | seen |
+| that only overflows after it finished loading  | missed                    | seen if it is the last one     | seen |
+| that overflows shortly after `load`, then left | missed                    | missed                         | seen |
 
 There is also nothing to race. A check run from the test process is a
 `page.evaluate`, and a spec that navigates again immediately destroys the
@@ -54,12 +62,32 @@ The fixture is the **context** and not the page for the last row: a popup is a
 page the context opened and the spec may never name, so a `page` fixture cannot
 reach it at all.
 
-The teardown waits two animation frames on every open page before it asserts, so
-a spec that ends the instant `goto` resolves is not asserted against a report
+## The horizon a document is measured to
+
+A document is drained before it goes: at the end of the test, and before any
+call that replaces it — `goto`, `reload`, `goBack`, `goForward`, all wrapped for
+this. Draining is two waits, because a document can be behind in two ways.
+
+It may not have **measured** yet. A page that lays its overflow out on a timer
+after `load` has nothing to say when `goto` resolves, and a spec that navigates
+on that instant destroys the document before the layout it would have failed on
+ever happens. So the drain waits for the document's own word that it has gone
+quiet — 500ms without a load, a mutation or a font settling, which is
+Playwright's own idea of an idle page applied to the DOM. A spec that did its
+own work between two `goto`s has already spent that window and waits for
+nothing.
+
+And it may have measured without the report having **crossed**. A report leaves
+on the frame after the check runs, so two animation frames follow — otherwise a
+spec that ends the instant `goto` resolves would be asserted against a report
 that had not arrived yet. A page that navigates on a timer destroys the context
 that flush runs in; that one rejection is caught, and the verdict is given on
 what was collected — letting it through would replace the list the sweep spent
 the whole test building with a message about the flush.
+
+The wait for quiet is capped at 5s. A document that changes more often than the
+quiet window never goes quiet — an animation is one — and it has been measured
+on every one of those changes anyway, so the cap costs it nothing but time.
 
 ## What a page is allowed to say about itself
 
@@ -146,3 +174,12 @@ had to visit every allowlisted page.
 - **A page that only overflows under an interaction the spec never performs.**
   That is the spec's own assertion to make; this is a floor under what every
   spec already does.
+- **A change a page makes long after it went quiet, on a page the spec has
+  left.** The horizon above is what "before the document is replaced" means; a
+  page that has been still for half a second and then reflows a second later is
+  past it. A spec that stays on the page is not: the check runs there whenever
+  the page changes, however late.
+- **A navigation the page performs for itself** — a redirect, or a link the spec
+  clicked — replaces the document without going through a call the fixture can
+  wrap, so the outgoing document is drained by whatever comes next rather than
+  before it goes.

@@ -30,7 +30,7 @@ import type { Tree } from "./tree.ts";
 const SPEC = "e2e/home.spec.ts";
 
 /** A spec written through the sweep, which is the whole of what makes its pages swept. */
-const SWEPT = `import { test } from "@gokayo43/dev-config/invariant-sweep.ts";
+const SWEPT = `import { test } from "@gokayo43/dev-config/invariant-sweep";
 
 test("the home page loads", async ({ page }) => {
   await page.goto("/");
@@ -38,13 +38,22 @@ test("the home page loads", async ({ page }) => {
 `;
 
 /** The same spec against Playwright's own `test`: a suite that exists and sweeps nothing. */
-const UNSWEPT = SWEPT.replace('"@gokayo43/dev-config/invariant-sweep.ts"', '"@playwright/test"');
+const UNSWEPT = SWEPT.replace('"@gokayo43/dev-config/invariant-sweep"', '"@playwright/test"');
 
 /** That spec with the specifier present as prose, which is a spec nobody has moved yet. */
-const PROMISED = `// TODO: move this to @gokayo43/dev-config/invariant-sweep.ts\n${UNSWEPT}`;
+const PROMISED = `// TODO: move this to @gokayo43/dev-config/invariant-sweep\n${UNSWEPT}`;
 
 /** And present as a value, which is the other way the bytes carry it and the imports do not. */
-const QUOTED = `${UNSWEPT}export const swept = "@gokayo43/dev-config/invariant-sweep.ts";\n`;
+const QUOTED = `${UNSWEPT}export const swept = "@gokayo43/dev-config/invariant-sweep";\n`;
+
+/**
+ * The source spelling: a specifier this package does not export and node cannot
+ * load, since Playwright's runner is node and node refuses to strip types from
+ * anything under `node_modules` (dev-config#113). A spec written this way
+ * collects no tests at all, so the gate that accepted it would be certifying a
+ * suite that cannot run.
+ */
+const SOURCE = SWEPT.replace('/invariant-sweep"', '/invariant-sweep.ts"');
 
 /** A live static site that ships pages, and whatever a case changes about its manifest. */
 function pages(change: (contents: PackageJson) => void = () => {}): Tree {
@@ -182,6 +191,7 @@ describe("a spec is swept by importing the sweep", () => {
     ["Playwright's own test", UNSWEPT],
     ["a TODO naming the sweep above the import it has not made", PROMISED],
     ["the specifier as a string, imported from nowhere", QUOTED],
+    ["the source spelling, which this package does not export", SOURCE],
   ])("is not satisfied by a spec with %s", async (_what, source) => {
     expect(await pageSite({ ...SWEPT_SUITE, [SPEC]: source })).toEqual([containing(SWEEP)]);
   });
@@ -192,7 +202,7 @@ describe("a spec is swept by importing the sweep", () => {
     ["single quotes, which is what a formatter may write", SWEPT.replaceAll('"', "'")],
     [
       "a dynamic import",
-      'const { test } = await import("@gokayo43/dev-config/invariant-sweep.ts");\nexport const used = test;\n',
+      'const { test } = await import("@gokayo43/dev-config/invariant-sweep");\nexport const used = test;\n',
     ],
   ])("and is satisfied by %s", async (_what, source) => {
     expect(await pageSite({ ...SWEPT_SUITE, [SPEC]: source })).toEqual([]);
