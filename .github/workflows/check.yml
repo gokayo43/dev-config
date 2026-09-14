@@ -415,36 +415,36 @@ jobs:
           fi
           exit "$wrong"
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
           data-jobs-external: ${{ inputs['data-jobs-external'] }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
         with:
           stack-allowlist: ${{ inputs.stack-allowlist }}
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.
-      - uses: gokayo43/dev-config/.github/actions/lint-workflows@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
 
       # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
-      - uses: gokayo43/dev-config/.github/actions/shell-scripts@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/shell-scripts@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/install@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
@@ -473,7 +473,7 @@ jobs:
           bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
         with:
           nightly: ${{ inputs.nightly }}
           test-network: ${{ inputs['test-network'] }}
@@ -493,7 +493,7 @@ jobs:
       # every step before it down with it.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
-        uses: gokayo43/dev-config/.github/actions/mutation-lane@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+        uses: gokayo43/dev-config/.github/actions/mutation-lane@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
 
@@ -557,7 +557,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/install@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
@@ -589,7 +589,7 @@ jobs:
                   console.log(`PORT=${s.port}`); s.stop(true);' >> "$GITHUB_ENV"
           printf 'DATABASE_URL=%s\nREDIS_URL=%s\n' "$DATABASE_URL" "$REDIS_URL" >> "$GITHUB_ENV"
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@92cf530612d20e112588bfe6cbca181917ce5873 # v0.59.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@05488dabca760939e06e21ddaa99c661c4a45fad # v0.60.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}
