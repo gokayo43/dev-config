@@ -178,6 +178,10 @@ had to visit every allowlisted page.
   page that has been still for half a second and then reflows a second later is
   past it. A spec that stays on the page is not: the check runs there whenever
   the page changes, however late.
+- **What a document written with `document.write` does next.** The write reopens
+  the document, and the observer installed before it does not survive that: the
+  written markup itself is measured, and nothing appended afterwards is
+  (dev-config#118).
 - **What a page laid out after a navigation it performed for itself.** A
   redirect, or a link the spec clicked, replaces the document without going
   through a call the fixture can wrap, so that document is never asked to drain:
