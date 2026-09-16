@@ -155,11 +155,12 @@ jobs:
 
       # Every JSON file nothing else here reads. What is skipped is a file some
       # other tool already parses, in a dialect `JSON.parse` refuses: oxlint's
-      # schema declares `allowComments` and `allowTrailingCommas` and TypeScript
-      # has always taken both, and `bun run check` above fails loudly on a broken
-      # one. So the skip has to match where that tool actually looks. oxlint
-      # reads a config from the directory it is linting, at any depth, and the
-      # base it extends with it; `tsc` here is given the root project alone, so a
+      # schema declares `allowComments` and `allowTrailingCommas`, oxfmt reads
+      # its own config the same way, and TypeScript has always taken both; `bun
+      # run check` above fails loudly on a broken one. So the skip has to match
+      # where that tool actually looks. oxlint reads a config from the directory
+      # it is linting, at any depth, and the base it extends with it; oxfmt reads
+      # the one at the root; `tsc` here is given the root project alone, so a
       # tsconfig in a subdirectory is parsed by nothing and belongs in this step.
       - name: Parse every JSON config
         run: |
@@ -169,7 +170,7 @@ jobs:
           # `core.quotepath`, and a newline in one would be two entries. Neither
           # is a name this repo has, and both are names a consumer could.
           mapfile -t -d '' files < <(git -c core.quotepath=false ls-files -z '*.json' |
-            grep -zvE '((^|/)(\.oxlintrc|oxlint\.base)\.json|^tsconfig(\.[^/]+)?\.json)$')
+            grep -zvE '((^|/)(\.oxlintrc|oxlint\.base)\.json|^\.oxfmtrc\.json|^tsconfig(\.[^/]+)?\.json)$')
           bun -e '
             const { report } = await import("./.github/actions/_lib/gate.ts");
             const problems = [];
