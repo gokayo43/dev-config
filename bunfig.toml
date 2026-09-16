@@ -14,6 +14,9 @@ minimumReleaseAge = 604800 # 7 days, in seconds
 exact = true
 
 [test]
+# What a run inherits from whoever started it, which under a git hook includes
+# the repository that hook is acting on: tests/git-free-environment.ts.
+preload = ["./tests/git-free-environment.ts"]
 # A floor, not a target: it catches "shipped without tests", it is not something
 # to chase. Bun exits non-zero on a breach WITHOUT printing why — a `bun test`
 # that reports every test passing and still fails is this — and it applies the

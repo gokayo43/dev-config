@@ -241,6 +241,12 @@ Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
 `--coverage` applies it, so `bun test --coverage` is the run CI makes —
 `docs/gates/test-suite.md`.
 
+`bunfig.toml` also preloads `tests/git-free-environment.ts`, which takes the
+`GIT_` prefix out of the environment the run and everything it spawns inherit:
+the pre-push hook running `bun test` is a run git has handed the location of the
+repository being pushed, and the fixtures commit there instead of into their own
+roots without it.
+
 `anti-slop/**` sits outside that floor, in `bunfig.toml`: its rules run inside a
 spawned oxlint and never execute in the test process, so the runner instruments
 them and then watches them run nowhere. What carries their duty instead is
