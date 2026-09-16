@@ -81,12 +81,13 @@ function state(repository: Sacrificial) {
  * call forms of each of `Bun.spawn` and `Bun.spawnSync` handing it none. The
  * second group is the half a scrub of `process.env` alone does not reach, and
  * the synchronous one is a wrapper of its own — deleting it leaves this file's
- * other cases green.
+ * other cases green. It grades the identity its commits carry as well as where
+ * they landed, since a hook exports both and only one of them moves a branch.
  */
 const COMMITTING = `
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { history, scratch } from ${JSON.stringify(join(HERE, "tests", "tree.ts"))};
+import { IDENTITY, history, scratch } from ${JSON.stringify(join(HERE, "tests", "tree.ts"))};
 
 const WHO = ["-c", "user.email=probe@example.com", "-c", "user.name=probe"];
 
@@ -101,10 +102,25 @@ function ranSync(options) {
   expect(done.exitCode, done.stderr.toString()).toBe(0);
 }
 
-test("the fixture builder commits into its own root", async () => {
+test("the fixture builder commits into its own root, under the identity it states", async () => {
   const repo = await history({ "one.txt": "one" }, { "two.txt": "two" });
   expect(repo.revs).toHaveLength(2);
   expect(await Bun.file(join(repo.root, ".git", "HEAD")).exists()).toBe(true);
+  // Where the commits landed is only half of it. A hook's GIT_AUTHOR_* outranks
+  // the -c pair tree.ts passes, so a scrub that took the variables naming a
+  // location and left those would put every fixture commit under whoever was
+  // pushing — and tree.ts pins the committer precisely so that two fixtures
+  // built from the same trees hash the same.
+  const stated = Object.fromEntries(
+    IDENTITY.filter((each) => each !== "-c").map((pair) => pair.split("=")),
+  );
+  const who = Bun.spawnSync(["git", "log", "-1", "--format=%an <%ae>"], {
+    cwd: repo.root,
+    stdout: "pipe",
+  });
+  expect(who.stdout.toString().trim()).toBe(
+    stated["user.name"] + " <" + stated["user.email"] + ">",
+  );
 });
 
 test("a spawn that states no env commits into its own root", async () => {
@@ -187,7 +203,7 @@ const HOOKS = [
       GIT_AUTHOR_NAME: "hook",
       GIT_CONFIG_PARAMETERS: "'user.name=hook'",
     }),
-    "a scrub that keeps the variables naming an identity rather than a location, which decide what a fixture commit contains and so what it hashes to",
+    "a scrub of the variables naming a location only, leaving the `GIT_AUTHOR_*` that outrank the committer a fixture states and so change what its commits hash to",
   ],
   [
     "pre-push and a work tree besides",
