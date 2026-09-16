@@ -1,14 +1,14 @@
 /**
  * The suite, run the way a git hook runs it, against a repository it must not
- * touch. lefthook's `pre-push` runs `bun test`, and git hands every hook the
- * location of the repository it is acting on — so the fixtures' own
+ * touch. `lefthook.yml` runs `bun test` from `pre-push`, and git hands every
+ * hook the location of the repository it is acting on — so the fixtures' own
  * `git init` / `git add` / `git commit` land in that repository instead of in
  * the temp directory they were given, which is how a push once rewrote its own
  * branch into `commit 0`, `commit 1` and flipped `core.bare` to `true`.
  *
- * Observed from outside: a `bun test` child is given the hook's variables
- * pointed at a sacrificial repository this case builds, and what is graded is
- * that repository afterwards. Grading it from inside would ask the damaged
+ * Observed from outside: a `bun test` child is given a hook's variables pointed
+ * at a sacrificial repository this case builds, and what is graded is that
+ * repository afterwards. Grading it from inside would ask the damaged
  * repository about itself — every read a fixture makes under those variables
  * answers from the sacrificial repository too, so a case that asks the fixture
  * whether it has its commits passes on the unfixed tree.
@@ -26,18 +26,20 @@ const HERE = join(import.meta.dir, "..");
  * A read of the sacrificial repository that survives the repository being
  * broken, which is the state the unfixed tree leaves it in: a `git` that throws
  * on a non-zero exit reports the first damaged read instead of the whole diff.
+ * Synchronous because a snapshot is one value, and because it is this file's
+ * own use of the second wrapper the preload installs.
  */
-async function reads(cwd: string, args: readonly string[]): Promise<string> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-  const [out, bad] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  return ((await proc.exited) === 0 ? out : bad).trim();
+function reads(cwd: string, args: readonly string[]): string {
+  const done = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const said = done.exitCode === 0 ? done.stdout : done.stderr;
+  return said.toString().trim();
 }
 
+/** Asked rather than written down: the value is this machine's, and a fixture stating one states a lie on the next. */
+const EXEC_PATH = reads(HERE, ["--exec-path"]);
+
 interface Sacrificial {
-  /** What the hook would put in `GIT_DIR`: a linked worktree's git dir, which is where the incident's was. */
+  /** What a hook puts in `GIT_DIR`: a linked worktree's git dir, which is where the incident's was. */
   readonly gitDir: string;
   readonly worktree: string;
   readonly main: string;
@@ -58,24 +60,28 @@ async function sacrificial(): Promise<Sacrificial> {
 }
 
 /** Everything the acceptance contract says a run must leave alone. */
-async function state(repository: Sacrificial): Promise<Record<string, string>> {
+function state(repository: Sacrificial) {
   const { main, worktree } = repository;
   return {
-    head: await reads(worktree, ["rev-parse", "HEAD"]),
-    branch: await reads(worktree, ["rev-parse", "--abbrev-ref", "HEAD"]),
-    log: await reads(worktree, ["log", "--oneline"]),
-    tracked: await reads(worktree, ["ls-tree", "-r", "--name-only", "HEAD"]),
-    index: await reads(worktree, ["status", "--porcelain"]),
-    reflog: await reads(worktree, ["reflog", "show", "probe"]),
-    bare: await reads(main, ["config", "--get", "core.bare"]),
+    head: reads(worktree, ["rev-parse", "HEAD"]),
+    branch: reads(worktree, ["rev-parse", "--abbrev-ref", "HEAD"]),
+    log: reads(worktree, ["log", "--oneline"]),
+    tracked: reads(worktree, ["ls-tree", "-r", "--name-only", "HEAD"]),
+    index: reads(worktree, ["status", "--porcelain"]),
+    reflog: reads(worktree, ["reflog", "show", "probe"]),
+    bare: reads(main, ["config", "--get", "core.bare"]),
+    // The one field the hook's `GIT_AUTHOR_*` would rewrite rather than add to.
+    author: reads(worktree, ["log", "-1", "--format=%an <%ae> %aI"]),
   };
 }
 
 /**
- * A test file that commits through every spawn shape the suite uses: the shared
- * fixture builder, which hands `Bun.spawn` an `env` of its own, and a bare
- * `Bun.spawn` in each of its two call forms, which hand it none. The second
- * group is the half a scrub of `process.env` alone does not reach.
+ * A test file that commits through every spawn shape this suite uses: the
+ * shared fixture builder, which hands `Bun.spawn` an `env` of its own, and both
+ * call forms of each of `Bun.spawn` and `Bun.spawnSync` handing it none. The
+ * second group is the half a scrub of `process.env` alone does not reach, and
+ * the synchronous one is a wrapper of its own — deleting it leaves this file's
+ * other cases green.
  */
 const COMMITTING = `
 import { expect, test } from "bun:test";
@@ -88,6 +94,11 @@ async function ran(options) {
   const proc = Bun.spawn(options);
   const said = await new Response(proc.stderr).text();
   expect(await proc.exited, said).toBe(0);
+}
+
+function ranSync(options) {
+  const done = Bun.spawnSync(options);
+  expect(done.exitCode, done.stderr.toString()).toBe(0);
 }
 
 test("the fixture builder commits into its own root", async () => {
@@ -106,6 +117,21 @@ test("a spawn that states no env commits into its own root", async () => {
   // The object call form, which is the other half of the same public API.
   const log = Bun.spawn({ cmd: ["git", "log", "--oneline"], cwd: root, stdout: "pipe" });
   expect(await new Response(log.stdout).text()).toContain("raw");
+});
+
+test("a synchronous spawn that states no env commits into its own root", async () => {
+  const root = await scratch();
+  await Bun.write(join(root, "sync.txt"), "sync");
+  ranSync({ cmd: ["git", "init", "--quiet", "--initial-branch=main"], cwd: root, stderr: "pipe" });
+  ranSync({ cmd: ["git", ...WHO, "add", "--all"], cwd: root, stderr: "pipe" });
+  // The array form of the synchronous spawn, so both of its call forms are driven.
+  const done = Bun.spawnSync(["git", ...WHO, "commit", "--quiet", "--message", "sync"], {
+    cwd: root,
+    stderr: "pipe",
+  });
+  expect(done.exitCode, done.stderr.toString()).toBe(0);
+  const log = Bun.spawnSync(["git", "log", "--oneline"], { cwd: root, stdout: "pipe" });
+  expect(log.stdout.toString()).toContain("sync");
 });
 `;
 
@@ -130,40 +156,59 @@ async function runs(exported: Record<string, string>): Promise<{ code: number; s
   return { code: await proc.exited, said: `${out}\n${bad}` };
 }
 
-describe("a suite run from a git hook", () => {
-  test("leaves the repository the hook is acting on untouched", async () => {
-    const repository = await sacrificial();
-    const before = await state(repository);
+/** What git exports to `pre-push`, which is the hook `lefthook.yml` runs the suite from. */
+function prePush({ gitDir }: Sacrificial) {
+  return { GIT_DIR: gitDir, GIT_EDITOR: "true", GIT_EXEC_PATH: EXEC_PATH, GIT_PREFIX: "" };
+}
 
-    // Exactly what git exports to a `pre-commit` run from a linked worktree,
-    // probed against git 2.43: the location absolute, the index beside it.
-    const { code, said } = await runs({
-      GIT_DIR: repository.gitDir,
-      GIT_INDEX_FILE: join(repository.gitDir, "index"),
-      GIT_PREFIX: "",
-      GIT_EXEC_PATH: "/usr/lib/git-core",
+/**
+ * One hook environment per case, each with the wrong implementation it exists to
+ * kill — reported as the failure's message, so a case that goes red says which
+ * guarantee went with it rather than only which bytes moved.
+ *
+ * Every set is what git 2.43.0 was probed exporting from a linked worktree,
+ * except `GIT_CONFIG_PARAMETERS`, which git adds only when the invocation
+ * carried `-c` — a hook can be run under one, so the prefix has to take it too.
+ */
+const HOOKS = [
+  [
+    "pre-push",
+    prePush,
+    "a preload that removes the variables from `process.env` and stops there, leaving every spawn site that states no `env` reading the block the process launched with",
+  ],
+  [
+    "pre-commit, which carries an index and an author besides",
+    (repository: Sacrificial) => ({
+      ...prePush(repository),
       GIT_EDITOR: ":",
-    });
-
-    expect(await state(repository)).toEqual(before);
-    expect(code, said).toBe(0);
-  });
-
-  test("leaves it untouched when the hook also exports a work tree", async () => {
-    const repository = await sacrificial();
-    const before = await state(repository);
-
-    // `GIT_WORK_TREE` is not in the set git exports to a hook, and is here
-    // because an implementation that removed that set rather than the whole
-    // `GIT_` prefix would pass the case above and commit here.
-    const { code, said } = await runs({
-      GIT_DIR: repository.gitDir,
       GIT_INDEX_FILE: join(repository.gitDir, "index"),
-      GIT_WORK_TREE: repository.worktree,
-      GIT_PREFIX: "",
-    });
+      GIT_AUTHOR_DATE: "@1700000000 +0000",
+      GIT_AUTHOR_EMAIL: "hook@example.com",
+      GIT_AUTHOR_NAME: "hook",
+      GIT_CONFIG_PARAMETERS: "'user.name=hook'",
+    }),
+    "a scrub that keeps the variables naming an identity rather than a location, which decide what a fixture commit contains and so what it hashes to",
+  ],
+  [
+    "pre-push and a work tree besides",
+    (repository: Sacrificial) => ({ ...prePush(repository), GIT_WORK_TREE: repository.worktree }),
+    "a scrub of the set a hook is known to carry rather than of the whole `GIT_` prefix",
+  ],
+] as const;
 
-    expect(await state(repository)).toEqual(before);
+describe("a suite run from a git hook", () => {
+  test.each(HOOKS)("leaves the repository it is acting on untouched: %s", async (_, set, kills) => {
+    const repository = await sacrificial();
+    const before = state(repository);
+
+    const { code, said } = await runs(set(repository));
+
+    // Both, and in this order. The repository is the guarantee; the exit status
+    // is what catches an implementation that leaves it alone only because git
+    // refused the environment it was handed — `GIT_WORK_TREE` surviving without
+    // `GIT_DIR` is refused outright, so the third case reaches the child's own
+    // failure rather than the repository state.
+    expect(state(repository), kills).toEqual(before);
     expect(code, said).toBe(0);
   });
 });

@@ -10,22 +10,27 @@
  * and the whole prefix goes rather than the set a hook is known to carry.
  */
 
-// git exports the repository a hook is acting on to that hook: from a linked
-// worktree, `GIT_DIR` and `GIT_INDEX_FILE` absolute (githooks(7), probed
-// against git 2.43). `GIT_DIR` outranks the working directory a child is given,
-// so a suite run from lefthook's `pre-push` builds its fixtures inside the
-// repository being pushed — `git init` with no work tree making it bare, every
-// fixture commit rewriting its branch.
+// `lefthook.yml` runs `bun test` from `pre-push`, and git hands a hook the
+// repository it is acting on: from a linked worktree that is `GIT_DIR`,
+// absolute, beside `GIT_EDITOR`, `GIT_EXEC_PATH` and `GIT_PREFIX` — and no
+// index (githooks(7); probed against git 2.43.0, where `pre-commit` is the one
+// that also carries `GIT_INDEX_FILE` and the `GIT_AUTHOR_*`). `GIT_DIR`
+// outranks the working directory a child is given, so without this the fixtures
+// are built inside the repository being pushed: `git init` with no work tree
+// makes it bare, and every fixture commit rewrites its branch.
 for (const name of Object.keys(process.env)) {
   if (name.startsWith("GIT_")) delete process.env[name];
 }
 
-// bun documents `Bun.spawn`'s `env` as defaulting to `process.env`, but on bun
-// 1.4.0 that default is the block the process started with: probed, neither
-// deleting from `process.env` nor libc `unsetenv` reaches a child spawned
-// without an `env` of its own. Honouring the documented default is what carries
-// the removal above to the spawn sites that state no environment — four of them
-// run git — and to everything those in turn spawn.
+// `Bun.spawn`'s `env` defaults to the environment block the process launched
+// with. That is by design and by declaration — "Changes to `process.env` at
+// runtime won't automatically be reflected in the default value. For that, you
+// can pass `process.env` explicitly" (bun-types, `SpawnOptions.BaseOptions`) —
+// so the removal above reaches a child only where the site passes it. Making
+// bun's own remedy the default is what carries it to the sites that state no
+// `env`, four of which run git, and to everything those in turn spawn. One
+// variable travels the other way for the same reason: `bun test` sets
+// `NODE_ENV` after launch, and it is now in what those children are given.
 const inherited = { spawn: Bun.spawn, spawnSync: Bun.spawnSync };
 
 type Streamed = Bun.SpawnOptions.Writable & Bun.SpawnOptions.Readable;

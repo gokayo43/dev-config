@@ -226,6 +226,20 @@ a change to a rule usually lands here too.
   `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
   fixture app's schemas with — is typebox under elysia's re-export.
+  `git-free-environment.ts` is the one file here that is not a suite and not a
+  fixture: `bunfig.toml` preloads it, so it runs before the first test file of
+  every `bun test`. It takes the whole `GIT_` prefix out of the environment,
+  because git hands a hook the location of the repository it is acting on and a
+  `pre-push` run of this suite would otherwise build its fixtures inside the
+  repository being pushed. Doing that to `process.env` reaches only the spawn
+  sites that pass one, since bun's `env` default is the block the process
+  launched with — so it also replaces `Bun.spawn` and `Bun.spawnSync` for the
+  whole test process. **That is the repo-wide gotcha**: a `Bun.spawn(cmd,
+{ cwd })` written in any suite here is given the environment as it stands, not
+  bun's default, and one variable rides along that bun would have left out —
+  `NODE_ENV`, which `bun test` sets after launch.
+  `git-free-environment.test.ts` holds all of it from outside, against a
+  sacrificial repository it builds.
 - `docs/gates/*.md` — a reference page per gate; `docs/exports/*.md` — one per
   package export. README holds both maps.
 
@@ -240,12 +254,6 @@ bun run build   # rewrites the committed dist/ from the two built exports
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
 `--coverage` applies it, so `bun test --coverage` is the run CI makes —
 `docs/gates/test-suite.md`.
-
-`bunfig.toml` also preloads `tests/git-free-environment.ts`, which takes the
-`GIT_` prefix out of the environment the run and everything it spawns inherit:
-the pre-push hook running `bun test` is a run git has handed the location of the
-repository being pushed, and the fixtures commit there instead of into their own
-roots without it.
 
 `anti-slop/**` sits outside that floor, in `bunfig.toml`: its rules run inside a
 spawned oxlint and never execute in the test process, so the runner instruments
