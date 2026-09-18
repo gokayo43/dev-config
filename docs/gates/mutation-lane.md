@@ -105,8 +105,14 @@ zero in it — Stryker's own definition of the score, kept rather than reinvente
 **A mutant the run produced no verdict for is the third thing**, and the one
 place that definition cannot be kept. `RuntimeError` and `Pending` leave the
 ratio the same way, so a run in which every mutant errored scores nothing at
-all — and exits 0. What separates the two cases is the report's own `static`
-field:
+all — and exits 0. Measured on fec-program: 121 of 121 mutants `RuntimeError`,
+86 of them not static, Stryker exit 0, and a lane that reported the changed
+files as holding no mutants and passed.
+
+**Everything below depends on the suite passing unmutated**, which is the check
+the section after this one is about. Only then does "the mutant is why this
+mutant has no verdict" follow at all — and only then is the report's own `static`
+field a reading of anything:
 
 | `static`           | What an errored mutant means                                                 | What the lane does                                            |
 | ------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -118,14 +124,11 @@ one, and a `// Stryker disable` on a line the branch wrote counts here as a
 mutant nothing caught — so failing it would be a red with no exit.
 
 Every other ungraded mutant is a statement about the run rather than about the
-branch. The suite Stryker ran did not load, or the runner could not select it,
-and the score is then published over whatever fraction of the mutants got a
-verdict. So it fails the lane wherever those mutants sit, own lines or not, as
-**one** problem for the whole class — the count, and the head of what the
-failing suite wrote, which is the only thing in the report that names the file
-that would not load. Measured on fec-program: 121 of 121 mutants `RuntimeError`,
-86 of them not static, Stryker exit 0 — and a lane that reported the changed
-files as holding no mutants, and passed.
+branch, and the score would be published over whatever fraction of the mutants
+got a verdict. So it fails the lane wherever those mutants sit, own lines or not,
+as **one** problem for the whole class. With the baseline guaranteed clean this
+is boundary validation rather than a state anything has been seen to reach: it
+refuses a report the runner should not be able to write.
 
 **`Ignored` — a `// Stryker disable` in the source — is the one status whose
 worth depends on where it sits.** Out of the ratio it takes the mutant from
@@ -142,15 +145,17 @@ tree to the same rule whichever tool reads it. Stryker honours the reason in any
 of its three spellings — bare, `: reason` and ` -- reason` — so carrying one
 costs the directive nothing.
 
-## Which suite the run loads
+## Which suite the run loads, and whether it passed
 
 `@hughescr/stryker-bun-runner` finds the tests itself. It walks the project for
-every `*.test.*` and `*.spec.*` file — skipping `node_modules`, `dist`, `build`,
-`.stryker-tmp` and `.git` — and hands that list to `bun test`. It reads neither
-the repo's own `test` script nor any argument this lane could pass, so a browser
-suite sitting in the tree is loaded whatever else is supposed to run it, and a
-Playwright spec throws where it stands: _Playwright Test did not expect test() to
-be called here._
+every file whose name ends `.test.` or `.spec.` followed by `ts`, `tsx`, `js`,
+`jsx`, `mts` or `mjs` — skipping `node_modules`, `dist`, `build`, `.stryker-tmp`
+and `.git` — and hands that list to `bun test`. Its `bun.testFiles` option would
+override the walk, and this lane does not set it: which files in a repo are its
+unit suite is not something a gate can work out from outside, and the repo
+already says so in `bunfig.toml`. So a browser suite sitting in the tree is
+loaded whatever else is supposed to run it, and a Playwright spec throws where it
+stands: _Playwright Test did not expect test() to be called here._
 
 What scopes the run is the repo's own `bunfig.toml`, which the runner forwards
 into the sandbox it builds:
@@ -165,13 +170,39 @@ reaches a list the runner built rather than one a flag selected. On fec-program
 it turned a run of 121 mutants, every one of them `RuntimeError`, into 115
 Killed, 4 Timeout, 1 Survived and 1 static `RuntimeError`.
 
+**Until that is done, nothing in the report means anything**, and Stryker will
+not say so: its dry run over a suite with a throwing spec in it logs
+`Initial test run succeeded`. What the lane reads instead is the runner's own
+line, logged at default level whenever bun exited non-zero and no test it could
+name accounts for it:
+
+```
+WARN BunTestRunner Bun exited with code 1 and its console output reported 1 failed
+test(s), but no failing test could be identified from inspector or console data.
+… Last 500 chars of stderr:
+```
+
+That line present, the lane refuses the run and quotes the stderr the runner kept
+— which is what names the file that would not load. It is read on **every** exit,
+before the report is opened, for the reason the unresolved-pattern check is: the
+run it belongs to is otherwise green.
+
+It matters in both directions. A spec that throws before the unit tests run turns
+every mutant into a `RuntimeError` that the `static` reading above would then
+misread as an exemption — the measured case is a one-line branch whose own
+survivor came back `RuntimeError, static: true`, and the lane called it an
+exemption and passed. A spec that throws _after_ them is worse: the tests have
+already printed, so a mutant nothing killed can come back `Killed`, and no
+reading of statuses recovers that.
+
 ## The score, and the floor
 
 The mutation score over the files the branch touched goes to the run summary
 every time, passing or failing, with the undetected mutants on the branch's own
 lines listed under it and a **Not graded** row counting the mutants the run
 produced no verdict for — which, on any run that reaches the summary at all, are
-exactly the static ones. Counted there rather than left silent, because a
+exactly the static ones, because the run's suite passed unmutated and every other
+no-verdict mutant is a refusal. Counted there rather than left silent, because a
 campaign that graded fewer mutants than it made is the thing a score cannot say.
 
 `mutation-floor` is what turns that number into a bound, and it is empty by
@@ -255,3 +286,9 @@ not export, so without that line the run dies on any repo that has a
   scaffolded a project at a time, which is a real state and a worse trade.
 - **How long a campaign may take.** Stryker's `timeoutMS` is per mutant, not per
   run, so the bound is a `timeout-minutes` on the calling step in `check.yml`.
+- **A dirty baseline the runner stops announcing.** The check above reads a log
+  line `@hughescr/stryker-bun-runner` writes — verified in 1.3.8 and 1.4.0 — and
+  nothing in the report states the same fact, so a runner that stopped logging it
+  would stop being refused here. What notices is this repo's own suite: its
+  mutation-lane cases drive real Stryker over a fixture with a throwing spec in
+  it, so the day that line changes they go red rather than green.

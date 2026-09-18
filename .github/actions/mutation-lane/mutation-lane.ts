@@ -57,7 +57,7 @@ const STATUSES = [
 
 type Status = (typeof STATUSES)[number];
 
-type Worth = "detected" | "undetected" | "outside" | "errored";
+type Worth = "detected" | "undetected" | "outside";
 
 /**
  * What every mutant is worth to the score, as a total function of the schema's
@@ -67,13 +67,9 @@ type Worth = "detected" | "undetected" | "outside" | "errored";
  *
  * `undetected` is the finding — `Survived` means tests ran the line and all
  * passed, `NoCoverage` means none ran it, the same statement one step earlier.
- * `outside` is Stryker's own reading of a mutant that is neither caught nor
- * missed: one the config declined, and one no checker would compile.
- *
- * `errored` is the third thing, and out of the ratio for a reason that is not
- * Stryker's: the run produced no verdict at all. Where that is a mutant's own
- * doing it is honest — see `neverGraded` — and where it is not, the score is
- * being computed over a fraction of what was mutated.
+ * `outside` is Stryker's own reading: a mutant that would not compile, that
+ * errored, or that the config declined is neither caught nor missed, so it is
+ * out of the ratio rather than a zero in it.
  */
 const WORTH = {
   Killed: "detected",
@@ -81,10 +77,19 @@ const WORTH = {
   Survived: "undetected",
   NoCoverage: "undetected",
   CompileError: "outside",
+  RuntimeError: "outside",
   Ignored: "outside",
-  RuntimeError: "errored",
-  Pending: "errored",
+  Pending: "outside",
 } as const satisfies Record<Status, Worth>;
+
+/**
+ * The statuses that say the run came back with no verdict for the mutant. A
+ * separate reading of the same vocabulary from `WORTH` above, because they
+ * answer different questions: that one is what a mutant is worth to the score,
+ * this one is what the run managed to do. Every status here is outside the
+ * ratio, and most of what is outside the ratio is not here.
+ */
+const NO_VERDICT = new Set<Status>(["RuntimeError", "Pending"]);
 
 /**
  * The one status whose worth depends on where it sits. `Ignored` is a
@@ -345,8 +350,6 @@ interface Mutant {
   readonly status: Status;
   /** The report's own word for a mutant that runs at module load, and so before any test does. */
   readonly static: boolean;
-  /** What the run wrote about it: for a mutant nothing graded, the output of the suite that failed. */
-  readonly reason: string;
 }
 
 /**
@@ -396,12 +399,10 @@ function asMutant(file: string, value: ConfigObject): Mutant {
     mutator: text("mutatorName"),
     replacement: text("replacement"),
     status,
-    // A mutant the report does not call static is read as one that is not,
-    // which is the loud reading: `coverageAnalysis: "perTest"` puts the field on
-    // every mutant, and taking an absent one for static would exempt precisely
-    // the mutants `neverGraded` exists to catch.
+    // `coverageAnalysis: "perTest"` puts this field on every mutant, and an
+    // absent one is read as not static: the exemption below is the whole of what
+    // this lane lets past, so it is granted only where the report claims it.
     static: value["static"] === true,
-    reason: text("statusReason"),
   };
 }
 
@@ -490,62 +491,43 @@ function survivorProblem(mutant: Mutant): Problem {
   return { file: mutant.file, message };
 }
 
-/**
- * The mutants the run produced no verdict for and that cannot be the cause of
- * it: the whole of what this lane refuses beyond an undetected mutant.
- *
- * A **static** mutant runs at module load, so one that makes the module throw
- * on import really does break every test before any runs. Nothing anyone could
- * write would catch it, and a `Stryker disable` on a line this branch wrote
- * counts here as a mutant nothing caught — so failing the branch on one would be
- * a red with no exit. Stryker's reading of those, outside the ratio, is kept.
- *
- * Every other ungraded mutant is only ever active inside a test, and a mutant
- * inside a test cannot stop the suite from loading. So the suite Stryker ran did
- * not load, or the runner could not select it, and either way the score is being
- * published over whatever fraction of the mutants did get a verdict. That is a
- * failure of the run rather than of the branch, which is why it fails the lane
- * wherever the mutants sit rather than only on the lines this branch wrote.
- */
-function neverGraded(graded: readonly Graded[]): Mutant[] {
-  return graded
-    .filter((each) => each.worth === "errored" && !each.mutant.static)
-    .map((each) => each.mutant);
-}
-
-/** How much of what the run wrote an annotation can carry before it is a stack trace in a tooltip. */
-const QUOTE_LIMIT = 240;
-
-/**
- * The head of what the run wrote about a mutant, as a code span it cannot end
- * early. For a mutant nothing graded this is the failing suite's own output,
- * which is the only thing in the report that names the file that would not load.
- */
-function quote(reason: string): string {
-  const flat = reason.replace(/\s+/g, " ").trim();
-  if (flat === "") return "nothing";
-  return span(flat.length > QUOTE_LIMIT ? `${flat.slice(0, QUOTE_LIMIT)}…` : flat);
-}
-
 function plural(many: number, noun: string): string {
   return `${many} ${noun}${many === 1 ? "" : "s"}`;
 }
 
 /**
- * One problem for the whole class rather than one per mutant: a suite that will
- * not load leaves every mutant in the run ungraded, and the eighty-six
- * identical annotations measured on fec-program are one finding.
+ * What the runner logs, at its default level, when the run it was asked to grade
+ * did not pass before anything was mutated: bun exited non-zero, and no test it
+ * could name accounts for that. Verified present in both 1.3.8 and 1.4.0, and
+ * absent from every clean run measured.
  *
- * The exit is in the message because it is not guessable from the failure. The
- * runner walks the project for `*.test.*` and `*.spec.*` itself — it reads
- * neither the repo's `test` script nor any argument the lane could pass — so a
- * browser suite sitting in the tree is loaded by `bun test` and throws where it
- * stands. What scopes the run is the repo's own `bunfig.toml`.
+ * The capture is the stderr the runner kept, whose 500-character bound is the
+ * runner's own and is restated here rather than chosen.
  */
-function ungradedProblem(first: Mutant, never: readonly Mutant[]): Problem {
-  const files = new Set(never.map((mutant) => mutant.file)).size;
+const DIRTY_BASELINE =
+  /but no failing test could be identified[\s\S]{0,200}?Last 500 chars of stderr:\n([\s\S]{0,500})/;
+
+function dirtyBaseline(wrote: string): string | undefined {
+  const found = DIRTY_BASELINE.exec(wrote);
+  return found === null ? undefined : (found[1] ?? "");
+}
+
+/**
+ * The cause is offered rather than stated: what the lane established is that the
+ * suite failed unmutated, and the exit that fixes it most often is not something
+ * the report can confirm.
+ */
+function baselineProblem(kept: string): Problem {
   return {
-    message: `scope this repo's unit suite in \`bunfig.toml\`: ${plural(never.length, "mutant")} in ${plural(files, "file")} came back with no verdict, so the score would be published over a fraction of what was mutated. A mutant is only ever active inside a test, so none of them could have stopped the suite from loading — the suite did that itself, and what it wrote is ${quote(first.reason)}. The run loads every \`*.test.*\` and \`*.spec.*\` file under the project whatever the repo's test script selects, and \`[test] pathIgnorePatterns\` is what keeps out the files that are not its unit suite.`,
+    message: `make the suite this lane runs pass before reading anything into the mutants: the unmutated run already failed, and the runner could not attribute that failure to any test it ran — so no status in the report means what it says, a kill least of all. What the runner kept of that run's stderr: ${span(kept)}. The run loads the test and spec files it finds by walking the project rather than the ones the repo's own script selects, so the usual cause is a suite in the tree that was never meant for \`bun test\`, and \`[test] pathIgnorePatterns\` in \`bunfig.toml\` is what keeps one out.`,
+  };
+}
+
+/** One problem for the class: the same finding however many mutants carry it. */
+function ungradedProblem(ungraded: readonly Mutant[]): Problem {
+  const files = new Set(ungraded.map((mutant) => mutant.file)).size;
+  return {
+    message: `read the run output above: ${plural(ungraded.length, "mutant")} in ${plural(files, "file")} came back with no verdict, so a score would be published over a fraction of what was mutated. A mutant is only ever active inside a test, so none of them can be why no test ran — and this run passed unmutated, so what did not happen is the runner selecting or grading the tests that cover them.`,
   };
 }
 
@@ -626,8 +608,8 @@ export interface Input {
 /**
  * Mutates what this branch changed inside the repo's pure domain, publishes the
  * score, and fails on a mutant the branch's own lines left undetected — or on a
- * run that graded mutants it cannot have been stopped by, which is a score over
- * a partial set rather than a branch with something wrong in it.
+ * run nothing read off can mean anything: one whose suite was already failing
+ * before a mutant was applied, and one that graded only part of what it mutated.
  *
  * Selective because the alternative is not affordable: a full campaign over a
  * domain layer is minutes to hours, and a gate that costs that runs nightly or
@@ -715,6 +697,18 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
         problems: missing,
       };
 
+    // Read where the unresolved patterns are, and for the same reason: the run
+    // this refuses exits 0 and writes a report, and every number in that report
+    // is a statement about a suite that was already failing.
+    const kept = dirtyBaseline(wrote);
+    if (kept !== undefined) {
+      return {
+        note: "the suite this run mutated does not pass unmutated",
+        log: wrote,
+        problems: [baselineProblem(kept)],
+      };
+    }
+
     if (status !== 0) {
       return {
         note: "the mutation run did not finish",
@@ -727,7 +721,7 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
       };
     }
 
-    return verdict(await Bun.file(report).text(), changed, bound);
+    return verdict(await Bun.file(report).text(), changed, bound, wrote);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -774,28 +768,38 @@ function verdict(
   text: string,
   changed: ReadonlyMap<string, ReadonlySet<number>>,
   bound: number | undefined,
+  wrote: string,
 ): Verdict {
-  const graded = parseReport(text).map((mutant): Graded => {
+  const mutants = parseReport(text);
+  // Graded first, because `linesOf` refuses a report naming a file the lane
+  // never asked it to mutate — a report that is not the one this run requested
+  // outranks anything read out of it.
+  const graded = mutants.map((mutant): Graded => {
     const own = inTheChange(mutant, linesOf(changed, mutant.file));
     return { mutant, own, worth: worthOf(mutant.status, own) };
   });
   const files = plural(changed.size, "changed domain file");
 
-  const never = neverGraded(graded);
-  const first = never[0];
+  // Everything the run came back with no verdict for, and then the part of that
+  // which cannot be the reason there was none: a mutant is only ever active
+  // inside a test, so one that is not static cannot be why no test ran. Why the
+  // static ones are exempt at all: docs/gates/mutation-lane.md.
+  const noVerdict = mutants.filter((mutant) => NO_VERDICT.has(mutant.status));
+  const ungraded = noVerdict.filter((mutant) => !mutant.static);
   // Before the score, and instead of it: a number computed over the mutants that
   // did get a verdict is a claim about a campaign that did not happen.
-  if (first !== undefined) {
+  if (ungraded.length > 0) {
     return {
       note: `part of the run over ${files} was never graded`,
-      problems: [ungradedProblem(first, never)],
+      log: wrote,
+      problems: [ungradedProblem(ungraded)],
     };
   }
 
-  const ungraded = graded.filter((each) => each.worth === "errored").length;
   const counted = tally(graded);
   if (counted === undefined) {
-    return { note: heldNothing(graded.length, ungraded, files), problems: [] };
+    const outside = graded.filter((each) => each.worth === "outside").length;
+    return { note: heldNothing(mutants.length, noVerdict.length, outside, files), problems: [] };
   }
 
   const surviving = graded
@@ -811,7 +815,7 @@ function verdict(
 
   return {
     note: `mutation score ${percent(counted.score)} over ${files}`,
-    table: table(counted, surviving, ungraded, bound),
+    table: table(counted, surviving, noVerdict.length, bound),
     problems,
   };
 }
@@ -823,16 +827,16 @@ function verdict(
  * and calling that "no mutants" is the lane stating something untrue about a
  * report it is holding.
  */
-function heldNothing(mutants: number, ungraded: number, files: string): string {
+function heldNothing(mutants: number, notGraded: number, outside: number, files: string): string {
   if (mutants === 0) return `${files} held no mutants`;
-  return `no mutant in ${files} counted toward a score: ${ungraded} not graded, ${mutants - ungraded} outside the ratio`;
+  return `no mutant in ${files} counted toward a score: ${notGraded} not graded, ${outside} outside the ratio`;
 }
 
 /** The measurement, in the shape the coverage floor's own README paragraph argues for. */
 function table(
   counted: Tally,
   surviving: readonly Mutant[],
-  ungraded: number,
+  notGraded: number,
   bound: number | undefined,
 ): string {
   return [
@@ -844,7 +848,7 @@ function table(
     `| Caught | ${counted.detected} |`,
     `| Undetected | ${counted.undetected} |`,
     `| Undetected on this branch's own lines | ${surviving.length} |`,
-    `| Not graded | ${ungraded} |`,
+    `| Not graded | ${notGraded} |`,
     `| Floor | ${bound === undefined ? "none — published, not enforced" : percent(bound)} |`,
     "",
     ...surviving.map(
@@ -856,8 +860,9 @@ function table(
     "pins it. Raise it only once the score comfortably exceeds it.",
     "",
     "Not graded counts mutants that run at module load, where breaking one breaks",
-    "every test before any runs — outside the ratio, and the only mutant without a",
-    "verdict this lane lets past.",
+    "every test before any runs. Nothing could have caught those, so they stay out",
+    "of the ratio — which is only true because the lane refuses a run whose suite",
+    "was already failing before anything was mutated.",
     "",
   ].join("\n");
 }

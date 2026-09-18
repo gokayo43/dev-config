@@ -1,11 +1,12 @@
 name: Mutation lane
 description: >-
   Mutates the domain files this branch changed and fails on a mutant its own
-  lines left undetected, or on a run that graded only part of what it mutated,
-  publishing the score over those files to the run summary. Why it is selective,
-  where the domain is read from, which mutants count, which suite the run loads
-  and what the floor means: docs/gates/mutation-lane.md, which is the one place
-  any of that is argued.
+  lines left undetected, on a run whose suite was already failing before anything
+  was mutated, or on one that graded only part of what it mutated, publishing the
+  score over those files to the run summary. Why it is selective, where the domain
+  is read from, which mutants count, which suite the run loads and what the floor
+  means: docs/gates/mutation-lane.md, which is the one place any of that is
+  argued.
 
 inputs:
   working-directory:
@@ -15,8 +16,8 @@ inputs:
     description: >-
       The mutation score the changed domain files must hold, as a fraction
       between 0 and 1 — the way bunfig.toml writes coverageThreshold. Empty
-      publishes the score and fails on nothing but the two above. A floor, not a
-      target: docs/gates/mutation-lane.md.
+      publishes the score and bounds nothing; every refusal this lane makes without
+      one it still makes. A floor, not a target: docs/gates/mutation-lane.md.
     default: ""
 
 runs:

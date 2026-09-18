@@ -165,8 +165,8 @@ const CENTS = "\nexport type Cents = number;\n";
 
 /**
  * A spec beside the unit suite that throws the moment it is loaded — a browser
- * suite whose harness is not `bun test`, which is what the runner's own walk of
- * the tree for `*.test.*` and `*.spec.*` hands `bun test` regardless.
+ * suite whose harness is not `bun test`, and which the runner's own walk of the
+ * tree hands `bun test` regardless of what the repo's script selects.
  */
 const BROWSER_SPEC = `throw new Error("the browser suite runs under its own harness");
 
@@ -182,6 +182,22 @@ pathIgnorePatterns = ["e2e/**"]
 function withBrowserSuite(tree: Tree): Tree {
   return repo({ "e2e/pages.spec.ts": BROWSER_SPEC, ...tree });
 }
+
+/**
+ * A constant and the one derived from it: the derived line is what a branch
+ * adds, and its only mutant is static — so a run that cannot grade static
+ * mutants honestly cannot grade this branch at all.
+ */
+const RATE = "export const RATE = 21;\n";
+const RATE_AND_LIMIT = `${RATE}export const LIMIT = RATE * 2;\n`;
+
+const RATE_TEST = `import { expect, test } from "bun:test";
+import { RATE } from "../src/domain/rate.ts";
+
+test("the rate is a percentage", () => {
+  expect(RATE).toBe(21);
+});
+`;
 
 /**
  * A module-level guard, the shape a domain file gives a constant it cannot work
@@ -744,14 +760,66 @@ describe("the mutation lane", () => {
     expect(verdict.table).toBeUndefined();
   });
 
-  // THE CLASS these five cases belong to, and the one the four above cannot
-  // reach: a run that finishes, exits 0 and writes a report in which nothing was
-  // graded. Stryker's own reading of an errored mutant is "outside the ratio",
-  // so before this rule the lane scored the run over the empty set, said "held no
-  // mutants" and passed — a false statement and a green gate. Measured on
-  // fec-program: 121 of 121 mutants `RuntimeError`, Stryker exit 0, because two
-  // Playwright specs in the tree throw the moment `bun test` loads them.
+  // THE CLASS these cases belong to: a run that finishes, exits 0 and writes a
+  // report nothing in it can be trusted from. Stryker's own reading of an
+  // errored mutant is "outside the ratio", so before these rules the lane scored
+  // such a run over the empty set, said "held no mutants" and passed. Measured
+  // on fec-program: 121 of 121 mutants `RuntimeError`, Stryker exit 0, because
+  // two Playwright specs in the tree throw the moment `bun test` loads them.
 
+  // The premise every other case here rests on. A static mutant is exempt
+  // BECAUSE the mutant is what broke the run — and nothing said so until this
+  // check: with the spec in the tree, this branch's own survivor came back
+  // `RuntimeError, static: true` and the lane read the exemption instead.
+  test("a suite that fails unmutated is refused before anything is read off the report", async () => {
+    const verdict = await lane([
+      withBrowserSuite({ "src/domain/rate.ts": RATE, "tests/rate.test.ts": RATE_TEST }),
+      withBrowserSuite({ "src/domain/rate.ts": RATE_AND_LIMIT, "tests/rate.test.ts": RATE_TEST }),
+    ]);
+
+    const [only] = messages(verdict);
+    expect(messages(verdict)).toHaveLength(1);
+    expect(only).toEqual(containing("the unmutated run already failed"));
+    // The stderr the runner kept, which is what names the file that would not load.
+    expect(only).toEqual(containing("e2e/pages.spec.ts"));
+    // Offered as the usual cause, not stated as this run's.
+    expect(only).toEqual(containing("the usual cause is"));
+    expect(only).toEqual(containing("`[test] pathIgnorePatterns`"));
+    expect(verdict.note).toBe("the suite this run mutated does not pass unmutated");
+    // The two halves of what the reader gets. Stryker's own log carries this
+    // line — its dry run called a failing suite a success, which is why the lane
+    // cannot take its word — and the annotation carries the bounded stderr the
+    // runner kept, not everything written after it.
+    expect(verdict.log).toEqual(containing("Initial test run succeeded"));
+    expect(only).not.toEqual(containing("Initial test run succeeded"));
+    expect(verdict.table).toBeUndefined();
+  });
+
+  // Without the check, this is the worse half of the same class: the load error
+  // fires after the unit tests have printed, so mutants come back with verdicts
+  // that were decided by something other than the mutant.
+  test("a spec that fails after the unit tests have run is refused too", async () => {
+    const verdict = await lane([
+      repo({
+        "src/domain/rate.ts": RATE,
+        "tests/rate.test.ts": RATE_TEST,
+        "zzz/late.spec.ts": BROWSER_SPEC,
+      }),
+      repo({
+        "src/domain/rate.ts": RATE_AND_LIMIT,
+        "tests/rate.test.ts": RATE_TEST,
+        "zzz/late.spec.ts": BROWSER_SPEC,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([containing("the unmutated run already failed")]);
+    expect(messages(verdict)).toEqual([containing("zzz/late.spec.ts")]);
+    expect(verdict.note).toBe("the suite this run mutated does not pass unmutated");
+  });
+
+  // What the reader of the fec shape now sees. The report behind it is still 4
+  // of 4 `RuntimeError`, but nothing is read off it: the run that produced it
+  // was already failing.
   test("a suite the run cannot load fails the lane rather than passing with nothing graded", async () => {
     const verdict = await lane([
       withBrowserSuite({ "src/domain/pricing.ts": PRICING, "tests/pricing.test.ts": TOTAL_TEST }),
@@ -761,17 +829,8 @@ describe("the mutation lane", () => {
       }),
     ]);
 
-    // One problem for the class, not one per mutant: four here, eighty-six on
-    // fec, and every one of them the same finding.
-    const [only] = messages(verdict);
-    expect(messages(verdict)).toHaveLength(1);
-    expect(only).toEqual(containing("4 mutants in 1 file came back with no verdict"));
-    // The only thing in the report that names what would not load.
-    expect(only).toEqual(containing("e2e/pages.spec.ts"));
-    expect(only).toEqual(containing("`[test] pathIgnorePatterns`"));
-    // No score at all, rather than one computed over the mutants that did get a
-    // verdict — which here is none of them.
-    expect(verdict.note).toBe("part of the run over 1 changed domain file was never graded");
+    expect(messages(verdict)).toEqual([containing("e2e/pages.spec.ts")]);
+    expect(verdict.note).toBe("the suite this run mutated does not pass unmutated");
     expect(verdict.table).toBeUndefined();
   });
 
@@ -794,11 +853,29 @@ describe("the mutation lane", () => {
     expect(verdict.table).toEqual(containing("| Not graded | 0 |"));
   });
 
+  // And the branch the first case is about, graded: the survivor the exemption
+  // was swallowing is reported the moment the suite it was measured against
+  // passes.
+  test("the survivor a dirty run turned into an exemption is reported once the run is clean", async () => {
+    const verdict = await lane([
+      repo({ "src/domain/rate.ts": RATE, "tests/rate.test.ts": RATE_TEST }),
+      repo({ "src/domain/rate.ts": RATE_AND_LIMIT, "tests/rate.test.ts": RATE_TEST }),
+    ]);
+
+    expect(messages(verdict)).toEqual([
+      containing(
+        "src/domain/rate.ts: write the case that fails on `RATE / 2` (ArithmeticOperator) at line 2",
+      ),
+    ]);
+    expect(verdict.table).toEqual(containing("| Not graded | 0 |"));
+  });
+
   // The exemption, and the whole of it: a mutant that runs at module load breaks
   // every test before one runs, so there is no test anyone could write and a
   // `Stryker disable` would count here as a mutant nothing caught — failing the
   // branch on one would be a red with no exit. Measured on tcs-pricing-engine,
-  // where `src/money.ts` carries seven of them.
+  // where `src/money.ts` carries seven of them. The run is clean, which is what
+  // makes "the mutant broke it" the only reading left.
   test("a mutant that throws on import is outside the ratio and counted in the summary", async () => {
     const verdict = await lane([
       repo({
@@ -816,24 +893,6 @@ describe("the mutation lane", () => {
     // Visible rather than silent: the count is why the ratio is over seven
     // mutants and the file holds nine.
     expect(verdict.table).toEqual(containing("| Not graded | 2 |"));
-  });
-
-  // Blame is what the containment rule decides, and this is not a question of
-  // blame: the score published is over a partial set whoever wrote the lines the
-  // ungraded mutants sit on. Here the branch's own change carries no mutant at
-  // all, so a lane checking only its own lines finds nothing and passes.
-  test("ungraded mutants outside this branch's own lines still fail it", async () => {
-    const verdict = await lane([
-      withBrowserSuite({ "src/domain/pricing.ts": PRICING, "tests/pricing.test.ts": TOTAL_TEST }),
-      withBrowserSuite({
-        "src/domain/pricing.ts": PRICING + CENTS,
-        "tests/pricing.test.ts": TOTAL_TEST,
-      }),
-    ]);
-
-    expect(messages(verdict)).toEqual([
-      containing("2 mutants in 1 file came back with no verdict"),
-    ]);
   });
 
   // "Held no mutants" is a statement about the report, and this report holds
