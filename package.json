@@ -59,7 +59,7 @@
     "@oxlint/plugins": "1.80.0",
     "@playwright/test": "1.62.1",
     "@sinclair/typebox": "0.34.52",
-    "@stryker-mutator/core": "9.6.1",
+    "@stryker-mutator/core": "10.0.0",
     "@types/bun": "1.4.0",
     "drizzle-orm": "0.45.2",
     "elysia": "1.4.29",
