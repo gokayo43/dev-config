@@ -98,9 +98,34 @@ different things:
 | `NoCoverage` | no test reached the line at all               | a test that reaches it               |
 | `Ignored`    | a `// Stryker disable` took it out of the run | the test, or the directive gone      |
 
-`Killed` and `Timeout` are caught. A mutant that would not compile or that
-errored is neither caught nor missed: it is outside the ratio rather than a zero
-in it — Stryker's own definition of the score, kept rather than reinvented.
+`Killed` and `Timeout` are caught. A mutant that would not compile, and one the
+config declined, is neither caught nor missed: outside the ratio rather than a
+zero in it — Stryker's own definition of the score, kept rather than reinvented.
+
+**A mutant the run produced no verdict for is the third thing**, and the one
+place that definition cannot be kept. `RuntimeError` and `Pending` leave the
+ratio the same way, so a run in which every mutant errored scores nothing at
+all — and exits 0. What separates the two cases is the report's own `static`
+field:
+
+| `static`           | What an errored mutant means                                                 | What the lane does                                            |
+| ------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `true`             | it runs at module load, so making it throw breaks every test before one runs | leaves it out of the ratio, counted in the **Not graded** row |
+| `false`, or absent | it is only ever active inside a test, so it cannot be why no test ran        | fails the lane, wherever in the file it sits                  |
+
+A static mutant never fails the branch: there is no test anyone could write for
+one, and a `// Stryker disable` on a line the branch wrote counts here as a
+mutant nothing caught — so failing it would be a red with no exit.
+
+Every other ungraded mutant is a statement about the run rather than about the
+branch. The suite Stryker ran did not load, or the runner could not select it,
+and the score is then published over whatever fraction of the mutants got a
+verdict. So it fails the lane wherever those mutants sit, own lines or not, as
+**one** problem for the whole class — the count, and the head of what the
+failing suite wrote, which is the only thing in the report that names the file
+that would not load. Measured on fec-program: 121 of 121 mutants `RuntimeError`,
+86 of them not static, Stryker exit 0 — and a lane that reported the changed
+files as holding no mutants, and passed.
 
 **`Ignored` — a `// Stryker disable` in the source — is the one status whose
 worth depends on where it sits.** Out of the ratio it takes the mutant from
@@ -117,11 +142,37 @@ tree to the same rule whichever tool reads it. Stryker honours the reason in any
 of its three spellings — bare, `: reason` and ` -- reason` — so carrying one
 costs the directive nothing.
 
+## Which suite the run loads
+
+`@hughescr/stryker-bun-runner` finds the tests itself. It walks the project for
+every `*.test.*` and `*.spec.*` file — skipping `node_modules`, `dist`, `build`,
+`.stryker-tmp` and `.git` — and hands that list to `bun test`. It reads neither
+the repo's own `test` script nor any argument this lane could pass, so a browser
+suite sitting in the tree is loaded whatever else is supposed to run it, and a
+Playwright spec throws where it stands: _Playwright Test did not expect test() to
+be called here._
+
+What scopes the run is the repo's own `bunfig.toml`, which the runner forwards
+into the sandbox it builds:
+
+```toml
+[test]
+pathIgnorePatterns = ["e2e/**"]
+```
+
+Bun honours that key even for a file named on the command line, which is how it
+reaches a list the runner built rather than one a flag selected. On fec-program
+it turned a run of 121 mutants, every one of them `RuntimeError`, into 115
+Killed, 4 Timeout, 1 Survived and 1 static `RuntimeError`.
+
 ## The score, and the floor
 
 The mutation score over the files the branch touched goes to the run summary
 every time, passing or failing, with the undetected mutants on the branch's own
-lines listed under it.
+lines listed under it and a **Not graded** row counting the mutants the run
+produced no verdict for — which, on any run that reaches the summary at all, are
+exactly the static ones. Counted there rather than left silent, because a
+campaign that graded fewer mutants than it made is the thing a score cannot say.
 
 `mutation-floor` is what turns that number into a bound, and it is empty by
 default — publish only. It is written as a fraction between 0 and 1, the way

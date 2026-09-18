@@ -144,6 +144,55 @@ const NOT_DISABLED = `
 export const fee = (cents: number): number => cents + 50;
 `;
 
+/**
+ * A file whose every mutant carries a disable, so the report holds mutants and
+ * the ratio holds none of them.
+ */
+const ALL_DISABLED = `// Stryker disable next-line all -- the fee is a product decision, not arithmetic
+export const fee = (cents: number): number => cents + 50;
+`;
+
+const FEE_ONLY_TEST = `import { expect, test } from "bun:test";
+import { fee } from "../src/domain/pricing.ts";
+
+test("adds the fee", () => {
+  expect(fee(100)).toBe(150);
+});
+`;
+
+/** A change to a domain file that carries no mutants of its own, so every mutant reported is somebody else's. */
+const CENTS = "\nexport type Cents = number;\n";
+
+/**
+ * A spec beside the unit suite that throws the moment it is loaded — a browser
+ * suite whose harness is not `bun test`, which is what the runner's own walk of
+ * the tree for `*.test.*` and `*.spec.*` hands `bun test` regardless.
+ */
+const BROWSER_SPEC = `throw new Error("the browser suite runs under its own harness");
+
+export {};
+`;
+
+/** The `bunfig.toml` the lane's diagnostic asks for, and the whole of what it takes to scope the run. */
+const SCOPED = `[test]
+pathIgnorePatterns = ["e2e/**"]
+`;
+
+/** A repository with a browser suite sitting in the tree beside its unit tests. */
+function withBrowserSuite(tree: Tree): Tree {
+  return repo({ "e2e/pages.spec.ts": BROWSER_SPEC, ...tree });
+}
+
+/**
+ * A module-level guard, the shape a domain file gives a constant it cannot work
+ * without. The mutants that make it hold throw on import, so they break every
+ * test before one runs: static, and the one ungraded mutant nothing could have
+ * caught.
+ */
+const GUARD = `const RATE = 21;
+if (RATE < 0) throw new RangeError("the rate is a percentage");
+`;
+
 const BEFORE = repo({
   "src/domain/pricing.ts": PRICING,
   "tests/pricing.test.ts": TOTAL_TEST,
@@ -692,6 +741,117 @@ describe("the mutation lane", () => {
 
     expect(messages(verdict)).toEqual([containing("fix what the run reported above")]);
     expect(verdict.log).toEqual(containing("Stryker"));
+    expect(verdict.table).toBeUndefined();
+  });
+
+  // THE CLASS these five cases belong to, and the one the four above cannot
+  // reach: a run that finishes, exits 0 and writes a report in which nothing was
+  // graded. Stryker's own reading of an errored mutant is "outside the ratio",
+  // so before this rule the lane scored the run over the empty set, said "held no
+  // mutants" and passed — a false statement and a green gate. Measured on
+  // fec-program: 121 of 121 mutants `RuntimeError`, Stryker exit 0, because two
+  // Playwright specs in the tree throw the moment `bun test` loads them.
+
+  test("a suite the run cannot load fails the lane rather than passing with nothing graded", async () => {
+    const verdict = await lane([
+      withBrowserSuite({ "src/domain/pricing.ts": PRICING, "tests/pricing.test.ts": TOTAL_TEST }),
+      withBrowserSuite({
+        "src/domain/pricing.ts": PRICING + WITH_FEE,
+        "tests/pricing.test.ts": FEE_TEST,
+      }),
+    ]);
+
+    // One problem for the class, not one per mutant: four here, eighty-six on
+    // fec, and every one of them the same finding.
+    const [only] = messages(verdict);
+    expect(messages(verdict)).toHaveLength(1);
+    expect(only).toEqual(containing("4 mutants in 1 file came back with no verdict"));
+    // The only thing in the report that names what would not load.
+    expect(only).toEqual(containing("e2e/pages.spec.ts"));
+    expect(only).toEqual(containing("`[test] pathIgnorePatterns`"));
+    // No score at all, rather than one computed over the mutants that did get a
+    // verdict — which here is none of them.
+    expect(verdict.note).toBe("part of the run over 1 changed domain file was never graded");
+    expect(verdict.table).toBeUndefined();
+  });
+
+  test("the same repo grades normally once bunfig keeps that spec out of the run", async () => {
+    const verdict = await lane([
+      withBrowserSuite({
+        "bunfig.toml": SCOPED,
+        "src/domain/pricing.ts": PRICING,
+        "tests/pricing.test.ts": TOTAL_TEST,
+      }),
+      withBrowserSuite({
+        "bunfig.toml": SCOPED,
+        "src/domain/pricing.ts": PRICING + WITH_FEE,
+        "tests/pricing.test.ts": FEE_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe("mutation score 100.0% over 1 changed domain file");
+    expect(verdict.table).toEqual(containing("| Not graded | 0 |"));
+  });
+
+  // The exemption, and the whole of it: a mutant that runs at module load breaks
+  // every test before one runs, so there is no test anyone could write and a
+  // `Stryker disable` would count here as a mutant nothing caught — failing the
+  // branch on one would be a red with no exit. Measured on tcs-pricing-engine,
+  // where `src/money.ts` carries seven of them.
+  test("a mutant that throws on import is outside the ratio and counted in the summary", async () => {
+    const verdict = await lane([
+      repo({
+        "src/domain/pricing.ts": GUARD + PRICING,
+        "tests/pricing.test.ts": TOTAL_TEST,
+      }),
+      repo({
+        "src/domain/pricing.ts": GUARD + PRICING + WITH_FEE,
+        "tests/pricing.test.ts": FEE_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe("mutation score 57.1% over 1 changed domain file");
+    // Visible rather than silent: the count is why the ratio is over seven
+    // mutants and the file holds nine.
+    expect(verdict.table).toEqual(containing("| Not graded | 2 |"));
+  });
+
+  // Blame is what the containment rule decides, and this is not a question of
+  // blame: the score published is over a partial set whoever wrote the lines the
+  // ungraded mutants sit on. Here the branch's own change carries no mutant at
+  // all, so a lane checking only its own lines finds nothing and passes.
+  test("ungraded mutants outside this branch's own lines still fail it", async () => {
+    const verdict = await lane([
+      withBrowserSuite({ "src/domain/pricing.ts": PRICING, "tests/pricing.test.ts": TOTAL_TEST }),
+      withBrowserSuite({
+        "src/domain/pricing.ts": PRICING + CENTS,
+        "tests/pricing.test.ts": TOTAL_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([
+      containing("2 mutants in 1 file came back with no verdict"),
+    ]);
+  });
+
+  // "Held no mutants" is a statement about the report, and this report holds
+  // two. Said of one that merely scored none of them, it sends the reader to
+  // write tests for a file whose mutants are all disabled.
+  test("a report whose mutants all left the ratio is not called a report with none", async () => {
+    const verdict = await lane([
+      repo({ "src/domain/pricing.ts": ALL_DISABLED, "tests/pricing.test.ts": FEE_ONLY_TEST }),
+      repo({
+        "src/domain/pricing.ts": ALL_DISABLED + CENTS,
+        "tests/pricing.test.ts": FEE_ONLY_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe(
+      "no mutant in 1 changed domain file counted toward a score: 0 not graded, 2 outside the ratio",
+    );
     expect(verdict.table).toBeUndefined();
   });
 
