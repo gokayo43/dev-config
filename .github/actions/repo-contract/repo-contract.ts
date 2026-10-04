@@ -22,10 +22,21 @@ import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
 
 const DEV_CONFIG = "@gokayo43/dev-config";
 
+const OXLINT_BASE = "oxlint.base.json";
+
 const DESIGN_SYSTEM_BASE = "design-system.base.json";
 
 /** The oxlint configs this repo ships, which are the only files a repo's `extends` may name. */
-const SHARED_BASES = ["oxlint.base.json", DESIGN_SYSTEM_BASE] as const;
+const SHARED_BASES = [OXLINT_BASE, DESIGN_SYSTEM_BASE] as const;
+
+type SharedBase = (typeof SHARED_BASES)[number];
+
+/** `.oxlintrc.json` as read, and which shared base each of its `extends` entries names. */
+interface LintConfig {
+  readonly file: ConfigFile;
+  /** One per entry, in order; `undefined` for an entry that names none of them. */
+  readonly bases: readonly (SharedBase | undefined)[];
+}
 
 const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 
@@ -317,37 +328,59 @@ async function checkNestedConfigs(root: string): Promise<Problem[]> {
 }
 
 /**
+ * Which shared base each `extends` entry names — the one reading of the list
+ * that every question about it is answered from, so whether a repo inherits
+ * the base, whether it names anything else and whether a Tailwind repo reads
+ * the design-system base cannot disagree about one entry. A base is the file
+ * at the path the package installs it to, written the way README writes it:
+ * a path that merely ends in the package's is a copy laid out to look like it.
+ * `config-lineage` waives where a base is read from, so under it a base is
+ * known by its file name.
+ */
+function readLintConfig(file: ConfigFile, exempt: boolean): LintConfig {
+  const bases = extendsList(file.contents?.["extends"]).map((entry) =>
+    SHARED_BASES.find((base) =>
+      exempt
+        ? entry === base || entry.endsWith(`/${base}`)
+        : entry === `./node_modules/${DEV_CONFIG}/${base}`,
+    ),
+  );
+  return { file, bases };
+}
+
+/**
  * A repo that builds its pages with Tailwind owes the design-system base,
  * which is what fails a page whose colours, values or shared components have
  * drifted from the product's theme. Keyed to `tailwindcss` in any manifest and
  * any dependency field, because that is the package every such repo declares
- * whichever plugin wires it into the build. No exemption reaches it:
- * `config-lineage` waives where the shared base is read from, not whether a
- * Tailwind repo reads this one.
+ * whichever plugin wires it into the build. No exemption waives it:
+ * `config-lineage` changes where the base may be read from, never whether a
+ * Tailwind repo reads it.
  */
-function checkDesignSystem(all: readonly Manifest[], targets: readonly string[]): Problem[] {
-  const declaring = all.flatMap(({ file, value }) =>
-    specOf(value, "tailwindcss") === undefined ? [] : [file],
+function checkDesignSystem(
+  all: readonly Manifest[],
+  { file, bases }: LintConfig,
+  exempt: boolean,
+): Problem[] {
+  const declaring = all.flatMap(({ file: manifest, value }) =>
+    specOf(value, "tailwindcss") === undefined ? [] : [manifest],
   );
-  if (
-    declaring.length === 0 ||
-    targets.some((entry) => entry.endsWith(`${DEV_CONFIG}/${DESIGN_SYSTEM_BASE}`))
-  ) {
+  if (declaring.length === 0 || file.contents === undefined || bases.includes(DESIGN_SYSTEM_BASE)) {
     return [];
   }
+  const path = exempt ? DESIGN_SYSTEM_BASE : `./node_modules/${DEV_CONFIG}/${DESIGN_SYSTEM_BASE}`;
   return [
     {
       file: ".oxlintrc.json",
-      message: `${declaring.join(", ")} depends on tailwindcss — add ./node_modules/${DEV_CONFIG}/${DESIGN_SYSTEM_BASE} to extends after the shared base, and @shadcn/lint to devDependencies, so a page using a raw colour, an arbitrary value or a restyled shared component fails lint`,
+      message: `${declaring.join(", ")} depends on tailwindcss — add ${path} to extends beside ${OXLINT_BASE}, and @shadcn/lint to devDependencies, so a page using a raw colour, an arbitrary value or a restyled shared component fails lint`,
     },
   ];
 }
 
 async function checkLineage(
   root: string,
-  all: readonly Manifest[],
   contents: ConfigObject,
-  reading: Promise<ConfigFile>,
+  linting: Promise<LintConfig>,
   exempt: boolean,
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
@@ -365,40 +398,28 @@ async function checkLineage(
     });
   }
 
-  const oxlintrc = await reading;
+  const { file: oxlintrc, bases } = await linting;
   problems.push(...oxlintrc.problems);
   if (oxlintrc.contents !== undefined) {
-    const targets = extendsList(oxlintrc.contents["extends"]);
-    const inherits = targets.some((entry) => entry.endsWith(`${DEV_CONFIG}/oxlint.base.json`));
+    const inherits = bases.includes(OXLINT_BASE);
     // A second target is read after the first and wins over it, so anything a
     // file of the repo's own switches off is switched off in a file this gate
     // never opens. Refused rather than followed: the bases are this repo's, and
     // `overrides` is where a per-directory difference already belongs. Graded
     // even under `config-lineage`, which waives WHERE a config inherits from
-    // and never how many places it inherits from — so under it a base is known
-    // by its file name, and otherwise by the package path.
-    const named = targets.map((entry) =>
-      SHARED_BASES.find((base) =>
-        exempt
-          ? entry === base || entry.endsWith(`/${base}`)
-          : entry.endsWith(`${DEV_CONFIG}/${base}`),
-      ),
-    );
-    if (targets.length > 1 && (named.includes(undefined) || new Set(named).size < named.length)) {
+    // and never how many places it inherits from.
+    if (bases.length > 1 && (bases.includes(undefined) || new Set(bases).size < bases.length)) {
       problems.push({
         file: ".oxlintrc.json",
-        message: `extends must name the shared bases and nothing else, each once — ${SHARED_BASES.join(
-          " and ",
-        )}; the gate reads .oxlintrc.json, so put the override there`,
+        message: `extends must name the shared bases and nothing else, each once — ${OXLINT_BASE}, and ${DESIGN_SYSTEM_BASE} beside it where tailwindcss is a dependency; the gate reads .oxlintrc.json, so put the override there`,
       });
     }
     if (!inherits && !exempt) {
       problems.push({
         file: ".oxlintrc.json",
-        message: `.oxlintrc.json must extend ./node_modules/${DEV_CONFIG}/oxlint.base.json`,
+        message: `.oxlintrc.json must extend ./node_modules/${DEV_CONFIG}/${OXLINT_BASE}`,
       });
     }
-    problems.push(...checkDesignSystem(all, targets));
     // Only the base turns the type-aware rules on, so only a repo that
     // inherits it needs the package that runs them.
     if (inherits && specOf(contents, "oxlint-tsgolint") === undefined) {
@@ -789,36 +810,51 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     ? { asked: undefined, steps: read.steps, problems: [] }
     : read;
 
-  // One read of .oxlintrc.json, two subjects asking about it — where it
-  // inherits from, and whether every switch-off in it carries a reason. Awaited
-  // in the batch rather than before it, so the second subject is a member of
-  // the batch like any other.
+  // One read of .oxlintrc.json, three subjects asking about it — where it
+  // inherits from, whether a Tailwind repo inherits the design-system base, and
+  // whether every switch-off in it carries a reason. The first two ask about
+  // the same `extends` list, so they share one reading of it. Awaited in the
+  // batch rather than before it, so each subject is a member of the batch like
+  // any other.
   const reading = readConfig(root, ".oxlintrc.json");
+  const linting = reading.then((file) => readLintConfig(file, exempt("config-lineage")));
 
   const none = Promise.resolve<Problem[]>([]);
-  const [base, lockfiles, lineage, nested, offReasons, bunfig, lefthook, secrets, docs, live] =
-    await Promise.all([
-      // Nothing else in this batch reads the base ref, and it is the one entry
-      // that spawns a process per question — so it runs beside them rather than
-      // ahead of them.
-      lifecycleAtBase(root, contract.event),
-      checkLockfiles(root),
-      checkLineage(root, all.read, rootManifest.value, reading, exempt("config-lineage")),
-      checkNestedConfigs(root),
-      reading.then(checkOffReasons),
-      checkBunfig(root),
-      checkLefthook(root),
-      exempt("secrets") ? none : checkSecrets(root),
-      exempt("docs-spine") ? none : checkDocs(root),
-      declared.is === "live"
-        ? checkLive(root, all.read, {
-            database: contract.database,
-            call: call.asked,
-            steps: call.steps,
-            dataJobsExternal: contract.dataJobsExternal,
-          })
-        : none,
-    ]);
+  const [
+    base,
+    lockfiles,
+    lineage,
+    designSystem,
+    nested,
+    offReasons,
+    bunfig,
+    lefthook,
+    secrets,
+    docs,
+    live,
+  ] = await Promise.all([
+    // Nothing else in this batch reads the base ref, and it is the one entry
+    // that spawns a process per question — so it runs beside them rather than
+    // ahead of them.
+    lifecycleAtBase(root, contract.event),
+    checkLockfiles(root),
+    checkLineage(root, rootManifest.value, linting, exempt("config-lineage")),
+    linting.then((lint) => checkDesignSystem(all.read, lint, exempt("config-lineage"))),
+    checkNestedConfigs(root),
+    reading.then(checkOffReasons),
+    checkBunfig(root),
+    checkLefthook(root),
+    exempt("secrets") ? none : checkSecrets(root),
+    exempt("docs-spine") ? none : checkDocs(root),
+    declared.is === "live"
+      ? checkLive(root, all.read, {
+          database: contract.database,
+          call: call.asked,
+          steps: call.steps,
+          dataJobsExternal: contract.dataJobsExternal,
+        })
+      : none,
+  ]);
 
   // Spelled out rather than flattened from the batch, because the order is the
   // thing being decided here — it is what a reader of a failing run sees, and
@@ -831,6 +867,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     ...checkPins(all.read),
     ...lockfiles,
     ...lineage,
+    ...designSystem,
     ...nested,
     ...offReasons,
     ...bunfig,

@@ -127,9 +127,15 @@ resolves the config nearest the file it is linting, so a config in a
 subdirectory REPLACES the root's rules for that whole subtree rather than adding
 to them — an empty one turns the base off wherever it sits. Neither is followed,
 because a per-directory difference already has a home the gate can read:
-`overrides` in the root config. The `config-lineage` exemption waives _where_ a
-config inherits from and never how many places it inherits from, so under it a
-base is recognised by its file name rather than by the package path.
+`overrides` in the root config. A base is the file at the path the package
+installs it to, written as README writes it —
+`./node_modules/@gokayo43/dev-config/oxlint.base.json` — and a path that merely
+ends the same way is a copy laid out to look like it. The `config-lineage`
+exemption waives _where_ a config inherits from and never how many places it
+inherits from, so under it a base is recognised by its file name instead. One
+reading of the `extends` list answers every question asked of it here: whether
+it inherits the shared base, whether it names anything else, and whether a
+Tailwind repo reads the design-system base.
 
 **A Tailwind repo reads the design-system base.** A repo whose tree has
 `tailwindcss` in any manifest, under any dependency field, has to name
@@ -140,8 +146,11 @@ wires Tailwind into its build — `@tailwindcss/vite` among them — and a name
 rather than a prefix, since `tailwind-merge` is a class-joining helper a repo
 can carry with no Tailwind build at all. A shared component library that states
 Tailwind as a peer owes the base too: its components are written in the classes
-the other five rules read. No exemption reaches the fact, `config-lineage`
-included, and a repo with no `tailwindcss` anywhere owes nothing here. What the
+every rule but `no-restyle` reads, and `no-restyle` is the one a repo switches
+off inside its own components directory. No exemption waives the fact:
+`config-lineage` changes where the base may be read from, by its file name as
+for the shared base, and never whether a Tailwind repo reads it. A repo with no
+`tailwindcss` anywhere owes nothing here. What the
 base enforces, and what a repo declares beside it, is
 [README's "Design system"](../../README.md#design-system).
 

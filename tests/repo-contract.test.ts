@@ -896,7 +896,7 @@ describe("a repo that builds its pages with Tailwind", () => {
     "tailwindcss in %s %s without the base is refused, naming the manifest and what to add",
     async (path, field) => {
       expect(await contract(tailwindAt(path, field, [BASES.oxlint]))).toEqual([
-        `${path} depends on tailwindcss — add ./node_modules/@gokayo43/dev-config/design-system.base.json to extends after the shared base, and @shadcn/lint to devDependencies, so a page using a raw colour, an arbitrary value or a restyled shared component fails lint`,
+        `${path} depends on tailwindcss — add ./node_modules/@gokayo43/dev-config/design-system.base.json to extends beside oxlint.base.json, and @shadcn/lint to devDependencies, so a page using a raw colour, an arbitrary value or a restyled shared component fails lint`,
       ]);
     },
   );
@@ -924,6 +924,42 @@ describe("a repo that builds its pages with Tailwind", () => {
       "knip.ts": 'import { base } from "./knip.base.ts";\nexport default { ...base };\n',
     };
     expect(await contract(own, { exemptions: ["config-lineage"] })).toEqual([
+      containing("package.json depends on tailwindcss"),
+    ]);
+  });
+
+  // The bug the first cut shipped: three readings of one `extends` list, and
+  // the design-system one ignored the exemption, so this repo — which extends
+  // its own bases by relative path and declares Tailwind for its suite —
+  // failed its own contract.
+  test("config-lineage reads the design-system base by its file name too", async () => {
+    const own = {
+      ...tailwindAt("package.json", "devDependencies", [
+        "./oxlint.base.json",
+        "./design-system.base.json",
+      ]),
+      "tsconfig.json": JSON.stringify({ extends: "./tsconfig.base.json" }),
+      "knip.ts": 'import { base } from "./knip.base.ts";\nexport default { ...base };\n',
+    };
+    expect(await contract(own, { exemptions: ["config-lineage"] })).toEqual([]);
+  });
+
+  // A path that merely ends in the package's is a copy laid out to look like
+  // it: two empty files there passed as both bases.
+  test("a copy of both bases under a look-alike path is refused", async () => {
+    const vendor = "./vendor/@gokayo43/dev-config";
+    expect(
+      await contract({
+        ...tailwindAt("package.json", "devDependencies", [
+          `${vendor}/oxlint.base.json`,
+          `${vendor}/design-system.base.json`,
+        ]),
+        "vendor/@gokayo43/dev-config/oxlint.base.json": "{}",
+        "vendor/@gokayo43/dev-config/design-system.base.json": "{}",
+      }),
+    ).toEqual([
+      containing("extends must name the shared bases and nothing else"),
+      containing(".oxlintrc.json must extend ./node_modules/@gokayo43/dev-config/oxlint.base.json"),
       containing("package.json depends on tailwindcss"),
     ]);
   });

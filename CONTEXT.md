@@ -141,9 +141,11 @@ the contract.
 commit that ships the composite actions, one on the commit whose workflows pin
 them. A consumer pins the second.
 
-**Queue vocabulary** — the two labels an issue may carry. An open issue with no
-label is a proposal, and GitHub's close reasons say whether a closed one was
-completed or declined; `roadmap` marks an agreed direction with no date, and
-`commitment` means the body names the event that makes the issue due. Nothing
-in CI reads any of it — it is a convention, kept because agents rather than
-people are the ones re-reading the queue.
+**Queue vocabulary** — the three labels an issue may carry, each set only on the
+owner's word. An open issue with no label is new: nobody has ruled on it.
+`parked` means the owner has seen it, has not decided, and does not want it
+raised again; `roadmap` marks an agreed direction with no date; `commitment` is
+agreed work whose **Trigger:** line says when to check it. GitHub's close
+reasons say whether a closed one was completed or declined. Nothing in CI reads
+any of it — it is a convention, kept because agents rather than people are the
+ones re-reading the queue.

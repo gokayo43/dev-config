@@ -20,9 +20,10 @@ a change to a rule usually lands here too.
   specifier that resolves from the consuming repo's own install, so the plugin
   is an optional peer here rather than a file this package ships. Its suite is
   `tests/design-system-base.test.ts`, which links the shipped bases, the plugin
-  and `tailwindcss` into a fixture product file by file — oxlint follows
-  symlinks into every `.oxlintrc.json` below the directory it lints, so a link
-  to this whole checkout hands it the config of any directory here.
+  and `tailwindcss` into a fixture product file by file; `linted` there says why
+  not this whole checkout. This repo's own `.oxlintrc.json` extends both bases,
+  because it declares `tailwindcss` for that suite and the repo contract it runs
+  on itself holds it to the base like any other.
 - `anti-slop/` — the oxlint JS plugin `oxlint.base.json` names in `jsPlugins`,
   ported from dmmulroy/anti-slop, plus the house rules that carry a pick a file's
   position decides (README has the rule tables and the credit).
@@ -62,7 +63,8 @@ a change to a rule usually lands here too.
   once the package scripts it goes through are followed, since reading a command
   for the program it runs is a subject of its own and the rule that asks the
   question is not about it.
-  `db-gate` holds six beside its replay: `semantic-fixtures.ts`, since what
+  Of what `db-gate` holds beside its replay, six need their reason stated:
+  `semantic-fixtures.ts`, since what
   the base ref's replay proves about a _schema_ and what it proves about the
   _rows_ are two subjects and the second is the only gate here that grades data;
   `base-lineage.ts`, the lineage as the base ref carried it and the rollback that

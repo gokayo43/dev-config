@@ -4,8 +4,9 @@ import { dirname, join } from "node:path";
 
 import { plugin } from "@shadcn/lint";
 
-import { configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
-import { type Diagnostic, lintAt } from "./lint-fixture.ts";
+import { type ConfigObject, configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
+import { designSystemDependencies } from "../knip.base.ts";
+import { byFile, type Diagnostic, lintAt } from "./lint-fixture.ts";
 import { materialise, type Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -48,7 +49,6 @@ const PRODUCT: Tree = {
     private: true,
     type: "module",
     devDependencies: {
-      "@gokayo43/dev-config": "github:gokayo43/dev-config#0b0af716bad80fd46a212d05a4c4b2de034ba215",
       "@shadcn/lint": "0.2.0",
       tailwindcss: "4.3.3",
     },
@@ -157,11 +157,12 @@ async function linted(tree: Tree): Promise<ReadonlyMap<string, readonly Diagnost
   for (const name of SHIPPED) await symlink(join(REPO, name), join(devConfig, name));
   await symlink(join(REPO, "node_modules", "@shadcn", "lint"), join(modules, "@shadcn", "lint"));
   await symlink(join(REPO, "node_modules", "tailwindcss"), join(modules, "tailwindcss"));
-  const grouped = new Map<string, Diagnostic[]>();
-  for (const diagnostic of await lintAt(root)) {
-    grouped.set(diagnostic.filename, [...(grouped.get(diagnostic.filename) ?? []), diagnostic]);
-  }
-  return grouped;
+  return byFile(await lintAt(root));
+}
+
+/** The base as this package ships it. */
+async function shipped(): Promise<ConfigObject> {
+  return record((await configObjects(REPO, ["design-system.base.json"])).read[0]?.value);
 }
 
 describe("the design-system base", () => {
@@ -200,7 +201,7 @@ describe("the design-system base", () => {
   // plugin ships that the base leaves off is drift nobody is told about, and a
   // version that adds one fails here, on the bump that has to decide it.
   test("the base enables every rule the plugin defines, each at error", async () => {
-    const base = record((await configObjects(REPO, ["design-system.base.json"])).read[0]?.value);
+    const base = await shipped();
     const rules = Object.entries(record(base["rules"])).map(([name, setting]) => [
       name,
       isList(setting) ? setting[0] : setting,
@@ -210,5 +211,12 @@ describe("the design-system base", () => {
         .map((name) => [`shadcn/${name}`, "error"])
         .toSorted(([left], [right]) => String(left).localeCompare(String(right))),
     );
+  });
+
+  // The names a repo tells knip to ignore are the plugins this base loads: a
+  // plugin added to one and not the other is reported unused in every repo
+  // that extends the base, or ignored there for nothing.
+  test("knip is told to ignore exactly the plugins the base loads", async () => {
+    expect((await shipped())["jsPlugins"]).toEqual([...designSystemDependencies]);
   });
 });

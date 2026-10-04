@@ -1201,8 +1201,8 @@ export TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5497/postgres
 
 Two runs may share one server: every name either the suite or a gate puts on it
 carries what tells the runs apart — the process for the suite's own databases,
-and the checkout being worked on for the two a gate builds for itself
-(`upgrade_path_<digest>` and `backfill_<digest>`).
+and the checkout being worked on for the three a gate builds for itself
+(`upgrade_path_<digest>`, `semantic_fixtures_<digest>` and `backfill_<digest>`).
 
 The limiter conformance suite needs a Redis, since what it grades is a bucket
 shared by two processes and a limiter whose Redis is gone. It **flushes** what it

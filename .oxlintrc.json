@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
-  "extends": ["./oxlint.base.json"],
+  "extends": ["./oxlint.base.json", "./design-system.base.json"],
   "env": { "node": true, "es2024": true },
   // `dist/**` is what `bun run build` writes from the two exports a node runner
   // imports; linting a build is linting its inputs twice, and every rule that
