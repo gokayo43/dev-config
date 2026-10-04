@@ -2,10 +2,10 @@
 
 One source of truth for the tooling policy shared by my Bun projects: TypeScript
 strictness, the oxlint rule set including its type-aware rules, the architecture
-boundaries wiring, the formatter width, the workspace-agnostic knip settings, the
-Renovate policy, the coverage floor, the secret-scanning gate, the stack
-denylist, the contract a repo declares about itself, and the CI workflow every
-repo calls.
+boundaries wiring, the design-system rules a Tailwind repo inherits, the
+formatter width, the workspace-agnostic knip settings, the Renovate policy, the
+coverage floor, the secret-scanning gate, the stack denylist, the contract a
+repo declares about itself, and the CI workflow every repo calls.
 
 Repos install it straight from GitHub — no registry, no build step, the files are
 consumed exactly as they are committed:
@@ -18,7 +18,8 @@ bun add -d github:gokayo43/dev-config \
 
 The tools are peer dependencies, all optional: a repo installs the ones it uses.
 `oxlint-tsgolint` is not optional in practice — without it `oxlint` skips every
-type-aware rule (see below).
+type-aware rule (see below). A repo that builds its pages with Tailwind adds
+`@shadcn/lint` ([Design system](#design-system)).
 
 Consuming repos keep only their own facts locally (paths, JSX, globals, entry
 points, ignore globs, the layer matrix) and inherit everything else. If a repo has
@@ -29,6 +30,7 @@ to override a shared setting, the override carries a comment naming the reason.
 | `tsconfig.base.json`           | `tsc`          | `extends` by package name                  |
 | `oxlint.base.json`             | `oxlint`       | `extends` by `node_modules` path           |
 | `anti-slop/`                   | `oxlint`       | `jsPlugins` in `oxlint.base.json`          |
+| `design-system.base.json`      | `oxlint`       | `extends` beside it, in a Tailwind repo    |
 | `knip.base.ts`                 | `knip`         | imported by `knip.ts`                      |
 | `lighthouserc.json`            | `lhci`         | `configPath` into `node_modules`           |
 | `default.json`                 | Renovate       | `extends` by GitHub preset name            |
@@ -911,6 +913,78 @@ An element `pattern` names a folder, not a file glob: `src/domain` classifies
 everything under it, while `src/domain/*.ts` matches nothing and leaves the files
 unclassified.
 
+## Design system
+
+A product's design system is its stylesheet theme and its shared components
+directory. `design-system.base.json` is what fails a page that steps outside
+them. It runs `@shadcn/lint` under oxlint's JS-plugin support with six rules at
+`error`, and each diagnostic names what to use instead, read out of the repo's
+own theme and components:
+
+| Rule                            | Refuses                                                                      | The diagnostic names                                                        |
+| ------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `shadcn/no-raw-colors`          | a palette colour (`bg-pink-500`), or a colour the theme does not declare     | the nearest theme colours, or the declared list                             |
+| `shadcn/no-arbitrary-values`    | an arbitrary value (`p-[13px]`)                                              | the scale class with the same value (`p-3.25`)                              |
+| `shadcn/no-restyle`             | a class on a shared component beyond placing it (`<Button className="p-4">`) | the component's sizes or variants, and margin or a parent's gap for spacing |
+| `shadcn/no-inline-styles`       | `style={{ … }}` and `<style>`                                                | classes, and a CSS custom property for a value known only at runtime        |
+| `shadcn/no-unknown-classes`     | a class the repo's own Tailwind cannot generate (`rounded-xll`)              | the class it most likely meant                                              |
+| `shadcn/require-static-classes` | a component class built at runtime (`` `mt-${gap}` ``)                       | static class strings                                                        |
+
+Which rules are on, and that a page may only place a shared component, is the
+fleet's and lives in the base: `no-restyle` allows the `layout` category —
+margin, width, position, visibility — and refuses colour, typography, spacing,
+shape, effects and motion, which are the component's through its variants.
+Everything keyed to the repo's own paths is the repo's, in `.oxlintrc.json`:
+
+```jsonc
+{
+  "extends": [
+    "./node_modules/@gokayo43/dev-config/oxlint.base.json",
+    "./node_modules/@gokayo43/dev-config/design-system.base.json",
+  ],
+  "settings": {
+    "shadcn": { "ui": "~/components/ui" },
+  },
+  "overrides": [
+    {
+      "files": ["src/components/ui/**"],
+      "rules": {
+        // A shared component styles itself; the rule is about the pages that use it.
+        "shadcn/no-restyle": "off",
+      },
+    },
+  ],
+}
+```
+
+- `settings.shadcn.ui` is the import prefix the shared components are imported
+  through, and `componentImports` takes regexes for any more. A repo with a
+  `components.json` has its alias read from there instead. With neither, only a
+  `components/ui` or `src/components/ui` directory under the package root is
+  recognised, and `no-restyle` and `require-static-classes` see no component
+  anywhere else.
+- The override is a switch-off, so it carries its reason like any other
+  ([the repo contract](docs/gates/repo-contract.md)).
+- The theme is found rather than named: without `components.json`, it is the
+  stylesheet under the package root that imports `tailwindcss` and declares the
+  most colour tokens. `no-unknown-classes` asks the repo's own installed
+  `tailwindcss` which classes exist.
+- A repo that writes its own `shadcn/no-restyle` entry, for per-component
+  `contracts` or its own `message`, **restates `allow: ["layout"]`** in it: a
+  rule's options in the repo's config replace the base's rather than merging
+  with them (probed, oxlint 1.80.0). Leaving it out makes the rule stricter, not
+  looser — every margin on a shared component starts failing.
+
+The base names the plugin by a bare specifier, so it resolves from the repo's
+own install: `@shadcn/lint` goes in the devDependencies of the manifest that
+declares this package, and it needs oxlint 1.80 or later. A repo extending the
+base without the plugin installed fails to load its config rather than linting
+without the rules. knip reads `jsPlugins` from the repo's own config only, so
+the repo also spreads `designSystemDependencies` ([knip](#knip)).
+
+Whether a repo owes the base is not its call: the repo contract refuses a tree
+with `tailwindcss` in any manifest whose `.oxlintrc.json` does not extend it.
+
 ## Formatting
 
 `oxfmt` has no `extends`, so the config is copied into each repo as
@@ -951,6 +1025,11 @@ otherwise report as unused. A repo that runs the lane spreads it into its own
 because `treatConfigHintsAsErrors` makes an ignore matching no declared
 dependency an error — carrying it in the base would fail knip in every repo that
 does not run the lane.
+
+`designSystemDependencies` is the same shape for a repo extending
+[the design-system base](#design-system): the base names `@shadcn/lint` in its
+`jsPlugins`, and knip reads `jsPlugins` out of the repo's own `.oxlintrc.json`
+without following `extends`, so it reports the package as unused.
 
 ## Tests and coverage
 

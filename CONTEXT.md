@@ -5,9 +5,13 @@ in `README.md`, and why a choice was made lives at the choke point that made it:
 a comment where the code decides, or a line in `CLAUDE.md`.
 
 **Base** — a configuration file here that a consuming repo inherits rather than
-copies: `tsconfig.base.json`, `oxlint.base.json`, `knip.base.ts`,
-`lighthouserc.json`. A base holds what is true of every repo; anything keyed to
-a repo's own paths is not a base's business.
+copies: `tsconfig.base.json`, `oxlint.base.json`, `design-system.base.json`,
+`knip.base.ts`, `lighthouserc.json`. A base holds what is true of every repo it
+applies to; anything keyed to a repo's own paths is not a base's business.
+
+**Design system** — a product's stylesheet theme plus its shared components
+directory. A page that uses a colour, a value or a component style from outside
+them has drifted from it.
 
 **Gate** — a check that can fail a build. A gate has a name, a diagnostic that
 says what to do about it, and a fixture suite proving it refuses a violating

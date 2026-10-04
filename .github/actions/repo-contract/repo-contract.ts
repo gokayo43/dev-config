@@ -7,6 +7,7 @@ import {
   isList,
   isObject,
   isTracked,
+  type Manifest,
   manifests,
   type Problem,
   readConfig,
@@ -20,6 +21,11 @@ import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
 import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
 
 const DEV_CONFIG = "@gokayo43/dev-config";
+
+const DESIGN_SYSTEM_BASE = "design-system.base.json";
+
+/** The oxlint configs this repo ships, which are the only files a repo's `extends` may name. */
+const SHARED_BASES = ["oxlint.base.json", DESIGN_SYSTEM_BASE] as const;
 
 const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 
@@ -310,8 +316,36 @@ async function checkNestedConfigs(root: string): Promise<Problem[]> {
   }));
 }
 
+/**
+ * A repo that builds its pages with Tailwind owes the design-system base,
+ * which is what fails a page whose colours, values or shared components have
+ * drifted from the product's theme. Keyed to `tailwindcss` in any manifest and
+ * any dependency field, because that is the package every such repo declares
+ * whichever plugin wires it into the build. No exemption reaches it:
+ * `config-lineage` waives where the shared base is read from, not whether a
+ * Tailwind repo reads this one.
+ */
+function checkDesignSystem(all: readonly Manifest[], targets: readonly string[]): Problem[] {
+  const declaring = all.flatMap(({ file, value }) =>
+    specOf(value, "tailwindcss") === undefined ? [] : [file],
+  );
+  if (
+    declaring.length === 0 ||
+    targets.some((entry) => entry.endsWith(`${DEV_CONFIG}/${DESIGN_SYSTEM_BASE}`))
+  ) {
+    return [];
+  }
+  return [
+    {
+      file: ".oxlintrc.json",
+      message: `${declaring.join(", ")} depends on tailwindcss — add ./node_modules/${DEV_CONFIG}/${DESIGN_SYSTEM_BASE} to extends after the shared base, and @shadcn/lint to devDependencies, so a page using a raw colour, an arbitrary value or a restyled shared component fails lint`,
+    },
+  ];
+}
+
 async function checkLineage(
   root: string,
+  all: readonly Manifest[],
   contents: ConfigObject,
   reading: Promise<ConfigFile>,
   exempt: boolean,
@@ -336,17 +370,26 @@ async function checkLineage(
   if (oxlintrc.contents !== undefined) {
     const targets = extendsList(oxlintrc.contents["extends"]);
     const inherits = targets.some((entry) => entry.endsWith(`${DEV_CONFIG}/oxlint.base.json`));
-    // A second target is read after the base and wins over it, so anything it
-    // switches off is switched off in a file this gate never opens. Refused
-    // rather than followed: one file to read is the property that makes every
-    // rule below checkable, and `overrides` is where a per-directory difference
-    // already belongs. Graded even under `config-lineage`, which waives WHERE a
-    // config inherits from and never how many places it inherits from.
-    if (targets.length > 1) {
+    // A second target is read after the first and wins over it, so anything a
+    // file of the repo's own switches off is switched off in a file this gate
+    // never opens. Refused rather than followed: the bases are this repo's, and
+    // `overrides` is where a per-directory difference already belongs. Graded
+    // even under `config-lineage`, which waives WHERE a config inherits from
+    // and never how many places it inherits from — so under it a base is known
+    // by its file name, and otherwise by the package path.
+    const named = targets.map((entry) =>
+      SHARED_BASES.find((base) =>
+        exempt
+          ? entry === base || entry.endsWith(`/${base}`)
+          : entry.endsWith(`${DEV_CONFIG}/${base}`),
+      ),
+    );
+    if (targets.length > 1 && (named.includes(undefined) || new Set(named).size < named.length)) {
       problems.push({
         file: ".oxlintrc.json",
-        message:
-          "extends must name the shared base and nothing else — the gate reads .oxlintrc.json; put the override there",
+        message: `extends must name the shared bases and nothing else, each once — ${SHARED_BASES.join(
+          " and ",
+        )}; the gate reads .oxlintrc.json, so put the override there`,
       });
     }
     if (!inherits && !exempt) {
@@ -355,6 +398,7 @@ async function checkLineage(
         message: `.oxlintrc.json must extend ./node_modules/${DEV_CONFIG}/oxlint.base.json`,
       });
     }
+    problems.push(...checkDesignSystem(all, targets));
     // Only the base turns the type-aware rules on, so only a repo that
     // inherits it needs the package that runs them.
     if (inherits && specOf(contents, "oxlint-tsgolint") === undefined) {
@@ -759,7 +803,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
       // ahead of them.
       lifecycleAtBase(root, contract.event),
       checkLockfiles(root),
-      checkLineage(root, rootManifest.value, reading, exempt("config-lineage")),
+      checkLineage(root, all.read, rootManifest.value, reading, exempt("config-lineage")),
       checkNestedConfigs(root),
       reading.then(checkOffReasons),
       checkBunfig(root),

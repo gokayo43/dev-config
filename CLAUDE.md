@@ -15,6 +15,14 @@ a change to a rule usually lands here too.
 
 - `*.base.json` / `knip.base.ts` / `lighthouserc.json` — the bases repos inherit.
   Anything keyed to a repo's own paths does not belong in one.
+  `design-system.base.json` is the second oxlint base, which a Tailwind repo
+  extends beside the first: it turns on `@shadcn/lint`'s rules, named by a bare
+  specifier that resolves from the consuming repo's own install, so the plugin
+  is an optional peer here rather than a file this package ships. Its suite is
+  `tests/design-system-base.test.ts`, which links the shipped bases, the plugin
+  and `tailwindcss` into a fixture product file by file — oxlint follows
+  symlinks into every `.oxlintrc.json` below the directory it lints, so a link
+  to this whole checkout hands it the config of any directory here.
 - `anti-slop/` — the oxlint JS plugin `oxlint.base.json` names in `jsPlugins`,
   ported from dmmulroy/anti-slop, plus the house rules that carry a pick a file's
   position decides (README has the rule tables and the credit).

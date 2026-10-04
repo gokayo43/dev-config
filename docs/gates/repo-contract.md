@@ -5,24 +5,25 @@ Every gate above rests on a string somewhere: a `packageManager` field, an
 deleted, renamed or never written, and when one is, the gate it feeds does not
 fail — it stops existing. `repo-contract` reads them and says so.
 
-| Fact                                                                                                            | Why it is load-bearing                                                                            |
-| --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `packageManager` reads `bun@<version>`                                                                          | `setup-bun` takes the runner's Bun from it; without it CI and the dev machine drift               |
-| No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                         | a second lockfile installs a second dependency tree                                               |
-| Every spec outside `peerDependencies` resolves to one thing                                                     | a lockfile refresh must not be able to change what is installed                                   |
-| Every `peerDependencies` range refuses some version                                                             | a range that accepts everything says what declaring no peer says, and `bun add` writes one        |
-| `typescript` major ≥ 7                                                                                          | the shared tsconfig is written against TypeScript 7                                               |
-| `oxlint-tsgolint` present, when `.oxlintrc.json` extends the base                                               | without it oxlint runs the base's type-aware rules over nothing and reports clean                 |
-| `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`   | a repo that stopped inheriting stops inheriting silently                                          |
-| `bunfig.toml` declares `minimumReleaseAge`, `exact`, and a coverage floor a run can fail                        | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them |
-| every rule, category and option `.oxlintrc.json` switches off carries a reason above it                         | a switch-off nobody wrote a reason for reads the same as one added to get a run green             |
-| `.oxlintrc.json` `extends` the shared base and nothing else, and no oxlint config sits below the root           | a second config is read after the root's and wins over it, in a file this gate never opens        |
-| `lefthook.yml` runs a staged gitleaks scan pre-commit and typecheck + tests pre-push                            | the hooks are the half of the gate that runs before a push                                        |
-| `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern | a blanket `.env.*` rule silently deletes the two files that have to ship                          |
-| `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                 | the docs spine                                                                                    |
-| `db:migrate` exists, when `database` is anything but `none`                                                     | whichever gate replays this repo's migrations replays them through it                             |
-| a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                           | a tag is a name someone else can repoint                                                          |
-| `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                | it is what every rule under "Going live" below reconfigures off                                   |
+| Fact                                                                                                              | Why it is load-bearing                                                                              |
+| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `packageManager` reads `bun@<version>`                                                                            | `setup-bun` takes the runner's Bun from it; without it CI and the dev machine drift                 |
+| No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                           | a second lockfile installs a second dependency tree                                                 |
+| Every spec outside `peerDependencies` resolves to one thing                                                       | a lockfile refresh must not be able to change what is installed                                     |
+| Every `peerDependencies` range refuses some version                                                               | a range that accepts everything says what declaring no peer says, and `bun add` writes one          |
+| `typescript` major ≥ 7                                                                                            | the shared tsconfig is written against TypeScript 7                                                 |
+| `oxlint-tsgolint` present, when `.oxlintrc.json` extends `oxlint.base.json`                                       | without it oxlint runs the base's type-aware rules over nothing and reports clean                   |
+| `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`     | a repo that stopped inheriting stops inheriting silently                                            |
+| `bunfig.toml` declares `minimumReleaseAge`, `exact`, and a coverage floor a run can fail                          | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them   |
+| every rule, category and option `.oxlintrc.json` switches off carries a reason above it                           | a switch-off nobody wrote a reason for reads the same as one added to get a run green               |
+| `.oxlintrc.json` `extends` the shared bases and nothing else, each once, and no oxlint config sits below the root | a second config is read after the root's and wins over it, in a file this gate never opens          |
+| `.oxlintrc.json` extends `design-system.base.json`, when any manifest depends on `tailwindcss`                    | without it a page using a raw colour, an arbitrary value or a restyled shared component passes lint |
+| `lefthook.yml` runs a staged gitleaks scan pre-commit and typecheck + tests pre-push                              | the hooks are the half of the gate that runs before a push                                          |
+| `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern   | a blanket `.env.*` rule silently deletes the two files that have to ship                            |
+| `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                   | the docs spine                                                                                      |
+| `db:migrate` exists, when `database` is anything but `none`                                                       | whichever gate replays this repo's migrations replays them through it                               |
+| a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                             | a tag is a name someone else can repoint                                                            |
+| `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                  | it is what every rule under "Going live" below reconfigures off                                     |
 
 ## What decides which rules run
 
@@ -116,16 +117,33 @@ are compared, so `"\u006ff\u0066"` is the same switch-off as `"off"`: oxlint
 decodes before it reads a setting, and a gate comparing raw bytes disagrees with
 the linter about the file in front of both of them.
 
-**One config, not a chain of them.** `extends` names the shared base and nothing
-else, and no `.oxlintrc.*` or `oxlint.config.*` may sit below the repository
-root. Both are ways a rule ends up switched off in a file this gate never opens:
-a second `extends` target is read after the base and wins over it, and oxlint
+**One config, not a chain of them.** `extends` names the shared bases and
+nothing else — `oxlint.base.json`, and `design-system.base.json` beside it in a
+Tailwind repo — each once, and no `.oxlintrc.*` or `oxlint.config.*` may sit
+below the repository root. Both are ways a rule ends up switched off in a file
+this gate never opens: a second `extends` target of the repo's own is read after
+the base and wins over it, and so is a copy of a base at another path, and oxlint
 resolves the config nearest the file it is linting, so a config in a
 subdirectory REPLACES the root's rules for that whole subtree rather than adding
 to them — an empty one turns the base off wherever it sits. Neither is followed,
 because a per-directory difference already has a home the gate can read:
 `overrides` in the root config. The `config-lineage` exemption waives _where_ a
-config inherits from and never how many places it inherits from.
+config inherits from and never how many places it inherits from, so under it a
+base is recognised by its file name rather than by the package path.
+
+**A Tailwind repo reads the design-system base.** A repo whose tree has
+`tailwindcss` in any manifest, under any dependency field, has to name
+`./node_modules/@gokayo43/dev-config/design-system.base.json` in its root
+`.oxlintrc.json`; the diagnostic names the manifests that declare Tailwind and
+what to add. That package is the one every such repo declares whichever plugin
+wires Tailwind into its build — `@tailwindcss/vite` among them — and a name
+rather than a prefix, since `tailwind-merge` is a class-joining helper a repo
+can carry with no Tailwind build at all. A shared component library that states
+Tailwind as a peer owes the base too: its components are written in the classes
+the other five rules read. No exemption reaches the fact, `config-lineage`
+included, and a repo with no `tailwindcss` anywhere owes nothing here. What the
+base enforces, and what a repo declares beside it, is
+[README's "Design system"](../../README.md#design-system).
 
 `ignorePatterns` is deliberately not graded, and the honest reason is not that it
 is a different kind of setting — it silences every rule for the paths it names,

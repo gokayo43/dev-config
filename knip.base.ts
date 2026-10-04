@@ -34,3 +34,18 @@ export const mutationLaneDependencies = [
   "@stryker-mutator/core",
   "@hughescr/stryker-bun-runner",
 ] as const;
+
+/**
+ * What a repo extending `design-system.base.json` has to ignore, for the repo
+ * to spread into its own `ignoreDependencies` beside anything else it ignores:
+ *
+ * ```ts
+ * ignoreDependencies: [...designSystemDependencies],
+ * ```
+ *
+ * The base names the plugin in its `jsPlugins`, and knip reads `jsPlugins` out
+ * of the repo's own `.oxlintrc.json` without following `extends` (knip 6.32.2),
+ * so it reports the package as unused in every repo that declares it. The
+ * spread is the repo's for the reason the mutation lane's is.
+ */
+export const designSystemDependencies = ["@shadcn/lint"] as const;
