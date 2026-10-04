@@ -1,6 +1,6 @@
 {
   "name": "@gokayo43/dev-config",
-  "version": "0.63.1",
+  "version": "0.64.0",
   "description": "Shared TypeScript, oxlint, oxfmt, knip, Renovate and Lighthouse configuration for Bun projects.",
   "license": "MIT",
   "repository": {
@@ -21,6 +21,7 @@
     "dev-server-derive.ts",
     "limiter-conformance.ts",
     "property.ts",
+    "interleaving.ts",
     "response-schema.ts",
     "characterization-net.ts",
     "anti-slop"
@@ -42,6 +43,7 @@
     },
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
+    "./interleaving": "./interleaving.ts",
     "./response-schema": "./response-schema.ts",
     "./characterization-net": "./characterization-net.ts"
   },
@@ -65,6 +67,7 @@
     "@stryker-mutator/core": "9.6.1",
     "@types/bun": "1.4.0",
     "drizzle-orm": "0.45.2",
+    "effect": "3.22.0",
     "elysia": "1.4.29",
     "fast-check": "4.9.0",
     "knip": "6.32.2",
@@ -79,6 +82,7 @@
   "peerDependencies": {
     "@playwright/test": ">=1.62",
     "@shadcn/lint": ">=0.2",
+    "effect": ">=3.22 <4",
     "eslint-import-resolver-typescript": ">=4",
     "eslint-plugin-boundaries": ">=7",
     "fast-check": ">=4",
@@ -93,6 +97,9 @@
       "optional": true
     },
     "@shadcn/lint": {
+      "optional": true
+    },
+    "effect": {
       "optional": true
     },
     "eslint-import-resolver-typescript": {

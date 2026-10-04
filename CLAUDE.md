@@ -117,7 +117,7 @@ a change to a rule usually lands here too.
   repo's manifest is what puts them under its lockfile, its exact pins and its
   release-age window.
 - The `*.ts` at the root are what a consuming repo reaches directly, as against
-  the gates, which run over it from CI. Six of them are **exports** it imports
+  the gates, which run over it from CI. Seven of them are **exports** it imports
   and calls; the two `dev-server*` files below are a bin it runs and the module
   that bin imports. Each is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
@@ -131,15 +131,18 @@ a change to a rule usually lands here too.
   app's own route table; `characterization-net.ts` is the harness under a golden
   suite; `property.ts` is `fc.assert` with the run's budget applied — the one
   call every property test goes through, so a nightly can multiply how far each
-  of them searches with no test changing. It and `invariant-sweep.ts` are the
-  two exports that read the environment for a value. Their pages are `docs/exports/`.
+  of them searches with no test changing; `interleaving.ts` runs an Effect
+  program under a `Scheduler` whose every choice comes from fast-check data, so
+  a property generates the order overlapping fibers run in. `property.ts` and
+  `invariant-sweep.ts` are the two exports that read the environment for a
+  value. Their pages are `docs/exports/`.
   Two of them register tests rather than answering with problems, and the split
   is by subject rather than by taste: a route table is a value one call can
   grade, and a limiter is a sequence of attempts against a live Redis that only
   a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
   to is this package's business rather than a caller's: two of them are built and
-  four ship their source, and no import says which. `tsdown.config.ts` is where
+  five ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
   `bun run build` writes `dist/{route-log,invariant-sweep}.{js,d.ts}`;
@@ -231,8 +234,10 @@ a change to a rule usually lands here too.
   bigger number and the only thing that says whether it worked is how many times
   the predicate ran; the default it multiplies is graded as a difference against
   `fc.assert` rather than against the literal 100, which is fast-check's to
-  change. `fuzz.test.ts` drives the fuzzer against a real server on a real port,
-  since each of its four invariants is a statement about a response — and the
+  change. `interleaving.test.ts` searches its racy fixtures on fresh seeds, over
+  a run count measured from their kill rates, the way the export's page tells a
+  consumer to. `fuzz.test.ts` drives the fuzzer against a real server on a real
+  port, since each of its four invariants is a statement about a response — and the
   route that never answers is why that fixture disposes without awaiting
   `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
