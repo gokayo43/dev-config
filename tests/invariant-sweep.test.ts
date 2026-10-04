@@ -9,6 +9,9 @@
  * the end, would pass the first two and a sweep that measured on `load` would
  * pass the third — and all three would keep claiming the same sentence.
  *
+ * Recording is a subject of its own too, with runs of its own, because the
+ * switch is read from the environment a whole Playwright process starts with.
+ *
  * The last block is a different subject, run on its own: the two exports a spec
  * imports, reached through a `node_modules` of the fixture's own under the
  * runner Playwright actually brings. Every case above imports the sweep by path,
@@ -16,18 +19,18 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { type Outcome, serving, sweeping } from "./sweep-fixture.ts";
+import { type Outcome, serving, sweeping, type Use } from "./sweep-fixture.ts";
 
 const SWEEP = JSON.stringify(`${import.meta.dir}/../invariant-sweep.ts`);
 
 /**
- * One spec: the fixture's `test` under an optional allowlist, doing whatever the
- * body does. `expect` comes from Playwright's own package rather than through
- * this one, which is the import pair a consuming repo writes.
+ * One spec: the fixture's `test` under the options the file sets with
+ * `test.use`, if any, doing whatever the body does. `expect` comes from
+ * Playwright's own package rather than through this one, which is the import
+ * pair a consuming repo writes.
  */
-function spec(title: string, body: string, allowlist?: Record<string, string>): string {
-  const use =
-    allowlist === undefined ? "" : `test.use({ sweepAllowlist: ${JSON.stringify(allowlist)} });\n`;
+function spec(title: string, body: string, options?: Use): string {
+  const use = options === undefined ? "" : `test.use(${JSON.stringify(options)});\n`;
   return `import { expect } from "@playwright/test";
 import { test } from ${SWEEP};
 
@@ -53,27 +56,18 @@ const A_DEPARTURE = 2_000;
 /** How many times the animated case leaves the page, which is what its budget multiplies. */
 const DEPARTURES = 5;
 
-/** Each case's spec, by the title the reporter will call it. */
-const CASES = {
-  "a page that breaks nothing passes": spec(
+/** Every case's spec; the reporter's outcome for each is found by its title. */
+const CASES = [
+  spec(
     "a page that breaks nothing passes",
     `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
   ),
-  "a console error fails the test that visited it": spec(
-    "a console error fails the test that visited it",
-    `  await page.goto("/console");`,
-  ),
-  "a page that throws fails the test that visited it": spec(
-    "a page that throws fails the test that visited it",
-    `  await page.goto("/throws");`,
-  ),
-  "a page wider than its viewport fails": spec(
-    "a page wider than its viewport fails",
-    `  await page.goto("/overflow");`,
-  ),
+  spec("a console error fails the test that visited it", `  await page.goto("/console");`),
+  spec("a page that throws fails the test that visited it", `  await page.goto("/throws");`),
+  spec("a page wider than its viewport fails", `  await page.goto("/overflow");`),
   // Overflow that appears after `load`, with no navigation of any kind: what a
   // client-rendered route change looks like from the outside.
-  "overflow that appears after the page loaded fails": spec(
+  spec(
     "overflow that appears after the page loaded fails",
     `  await page.goto("/late");\n  await page.waitForTimeout(300);`,
   ),
@@ -82,7 +76,7 @@ const CASES = {
   // so what has to hold is that the outgoing document is given its say before
   // the navigation replaces it — a flush of the frames already scheduled finds
   // nothing here, because the layout that breaks has not happened yet.
-  "a page that overflows after load and is left at once is swept": spec(
+  spec(
     "a page that overflows after load and is left at once is swept",
     `  await page.goto("/after-load");\n  await page.goto("/clean");`,
   ),
@@ -90,97 +84,93 @@ const CASES = {
   // gap in which to say so, so leaving it is bounded by the cutoff rather than
   // by a cap the runner holds. What this asserts is the cost, since the page
   // breaks no invariant either way.
-  "leaving an animated page costs no more than its budget": spec(
+  spec(
     "leaving an animated page costs no more than its budget",
     Array.from({ length: DEPARTURES }, () => `  await page.goto("/animated");`).join("\n"),
   ),
   // The middle one is a fragment: a navigation with no new document behind it.
   // Nothing re-runs in the page, so a drain waiting on anything the runner arms
   // per navigation waits for a word that can no longer be spoken.
-  "a same-document navigation does not stall the next one": spec(
+  spec(
     "a same-document navigation does not stall the next one",
     `  await page.goto("/clean");\n  await page.goto("/clean#section");\n  await page.goto("/clean");`,
   ),
   // The popup logs its violation and then goes, while the drain that would have
   // flushed it is still waiting. What it measured has already crossed; the run
   // must report that and not the closure.
-  "a popup that closes itself still reports what it measured": spec(
+  spec(
     "a popup that closes itself still reports what it measured",
     `  await page.goto("/opens-self-closing");\n  const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);\n  await popup.waitForLoadState();`,
   ),
   // A popup its opener wrote into carries the URL of the page every context
   // starts on, and nothing about the sweep reads that URL: it is watched,
   // measured and drained like any other document.
-  "an opener-written blank popup is swept like any other": spec(
+  spec(
     "an opener-written blank popup is swept like any other",
     `  await page.goto("/opens-blank");\n  await Promise.all([context.waitForEvent("page"), page.click("#open")]);`,
   ),
   // The page the spec ended on is clean. A sweep that looked once, at the end,
   // reports nothing here.
-  "a page the test navigated away from is still swept": spec(
+  spec(
     "a page the test navigated away from is still swept",
     `  await page.goto("/overflow");\n  await page.getByRole("link").click();\n  await expect(page.locator("p")).toBeVisible();`,
   ),
   // Arrived at by a click, so nothing called `goto` for it.
-  "a page reached by clicking a link is swept": spec(
+  spec(
     "a page reached by clicking a link is swept",
     `  await page.goto("/clean");\n  await page.getByRole("link").click();\n  await expect(page.locator("#wide")).toBeAttached();`,
   ),
   // The console error comes from /embed.js, so the allowlist names the embed
   // rather than every page that carries it.
-  "an allowlisted embed's console error is tolerated": spec(
-    "an allowlisted embed's console error is tolerated",
-    `  await page.goto("/embedded");`,
-    { "/embed\\.js$": "the embed logs a failed beacon on every load; it is not ours to fix" },
-  ),
+  spec("an allowlisted embed's console error is tolerated", `  await page.goto("/embedded");`, {
+    sweepAllowlist: {
+      "/embed\\.js$": "the embed logs a failed beacon on every load; it is not ours to fix",
+    },
+  }),
   // The keys are written by hand in a config file, so a bad one has to say
   // which key and which option rather than surfacing as a bare SyntaxError.
-  "an allowlist key that is not a pattern says so": spec(
-    "an allowlist key that is not a pattern says so",
-    `  await page.goto("/clean");`,
-    { "(unclosed": "a pattern nobody balanced" },
-  ),
+  spec("an allowlist key that is not a pattern says so", `  await page.goto("/clean");`, {
+    sweepAllowlist: { "(unclosed": "a pattern nobody balanced" },
+  }),
   // A `//# sourceURL=` comment is a claim any script can make about itself, and
   // the console repeats the claim. Honouring it unchecked lets an inline script
   // of *ours* wear a vendor's name and land in the vendor's allowlist bucket.
-  "our own error cannot wear a vendor's name": spec(
-    "our own error cannot wear a vendor's name",
-    `  await page.goto("/forged-source");`,
-    { "cdn\\.vendor": "the vendor embed logs a failed beacon on every load" },
-  ),
+  spec("our own error cannot wear a vendor's name", `  await page.goto("/forged-source");`, {
+    sweepAllowlist: { "cdn\\.vendor": "the vendor embed logs a failed beacon on every load" },
+  }),
   // A frame from another origin calling the bridge: it can neither invent a
   // violation nor choose which bucket one lands in.
-  "a frame cannot report a violation for the page carrying it": spec(
+  spec(
     "a frame cannot report a violation for the page carrying it",
     `  await page.goto("/hostile-frame");\n  await page.waitForTimeout(300);`,
   ),
   // An embed's own thrown error is the embed's, and the allowlist has to be able
   // to reach it by the embed's address rather than by the page's.
-  "an embed's thrown error is attributed to the embed": spec(
+  spec(
     "an embed's thrown error is attributed to the embed",
     `  await page.goto("/frame-throws");\n  await page.waitForTimeout(300);`,
-    { "throws\\.html$": "the embed throws on load; it is not ours to fix" },
+    { sweepAllowlist: { "throws\\.html$": "the embed throws on load; it is not ours to fix" } },
   ),
   // A page that navigates out from under the flush still gets its verdict.
-  "a page that navigates on a timer still reports what it measured": spec(
+  spec(
     "a page that navigates on a timer still reports what it measured",
     `  await page.goto("/self-navigating");\n  await page.waitForTimeout(200);`,
   ),
   // Opened in a tab of its own: a page fixture never sees it, and a context one
   // does.
-  "a popup is swept like any other page": spec(
+  spec(
     "a popup is swept like any other page",
     `  await page.goto("/popup");\n  const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);\n  await popup.waitForLoadState();`,
   ),
   // A real violation whose description is hostile: the page writes the escape
   // codes and the workflow command, and the annotation must carry neither.
-  "a violation's own text cannot carry an escape or a workflow command": spec(
+  spec(
     "a violation's own text cannot carry an escape or a workflow command",
     `  await page.goto("/noisy-overflow");\n  await page.waitForTimeout(200);`,
   ),
   // Overflow that arrives with an image's bytes, long after load and without a
   // single change to the DOM.
-  "overflow that arrives with a subresource is swept": spec(
+  spec(
     "overflow that arrives with a subresource is swept",
     `  await page.goto("/late-image");\n  await page.waitForTimeout(700);`,
   ),
@@ -188,23 +178,17 @@ const CASES = {
   // is a prefix of its neighbour's. Pinned in both directions, because the
   // alternative — anchoring a key that happens to contain no metacharacter —
   // would anchor exactly the keys that are not URLs, every real one having a dot.
-  "an unanchored key reaches the page next door": spec(
-    "an unanchored key reaches the page next door",
-    `  await page.goto("/cleanish");`,
-    { "/clean": "the clean page's own embed" },
-  ),
-  "an anchored key stops at the page it names": spec(
-    "an anchored key stops at the page it names",
-    `  await page.goto("/cleanish");`,
-    { "/clean$": "the clean page's own embed" },
-  ),
+  spec("an unanchored key reaches the page next door", `  await page.goto("/cleanish");`, {
+    sweepAllowlist: { "/clean": "the clean page's own embed" },
+  }),
+  spec("an anchored key stops at the page it names", `  await page.goto("/cleanish");`, {
+    sweepAllowlist: { "/clean$": "the clean page's own embed" },
+  }),
   // ...and an allowlist that names something else does not quietly cover it.
-  "an allowlist that matches nothing tolerates nothing": spec(
-    "an allowlist that matches nothing tolerates nothing",
-    `  await page.goto("/embedded");`,
-    { "/analytics\\.js$": "a pattern for an embed this page does not carry" },
-  ),
-};
+  spec("an allowlist that matches nothing tolerates nothing", `  await page.goto("/embedded");`, {
+    sweepAllowlist: { "/analytics\\.js$": "a pattern for an embed this page does not carry" },
+  }),
+];
 
 /**
  * A spec exactly as a consumer writes one: both exports by the specifiers the
@@ -230,31 +214,99 @@ test("a consumer's spec runs", async ({ page }) => {
 });
 `;
 
+/**
+ * The specs a recorded run is graded on: one page, two pages, a page that
+ * breaks an invariant, since recording must not cost the sweep, and a file that
+ * sets `video` for itself, which Playwright applies after every fixture the
+ * package defines.
+ */
+const RECORDED = [
+  spec(
+    "one page leaves one video",
+    `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+  ),
+  spec(
+    "a popup leaves a video of its own",
+    `  await page.goto("/opens-clean");\n  const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);\n  await expect(popup.locator("p")).toHaveText("nothing wrong here");`,
+  ),
+  spec("a console error still fails while recording", `  await page.goto("/console");`),
+  spec(
+    "a spec file's own video setting wins",
+    `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+    { video: "off" },
+  ),
+];
+
+/** One page that breaks nothing, for the runs that grade what decides recording rather than what is recorded. */
+const PLAIN = [
+  spec(
+    "a plain page",
+    `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+  ),
+];
+
+/** Specs as the files one run is handed, named by their position so no two collide. */
+function files(prefix: string, specs: readonly string[]): Record<string, string> {
+  return Object.fromEntries(specs.map((written, index) => [`${prefix}-${index}.spec.ts`, written]));
+}
+
+/** The frames a config's `video.size` asks for, which no default comes to. */
+const SIZE = { width: 320, height: 240 } as const;
+
 let outcomes = new Map<string, Outcome>();
 let installed = new Map<string, Outcome>();
+let recorded = new Map<string, Outcome>();
+let sized = new Map<string, Outcome>();
+let configured = new Map<string, Outcome>();
+let blank = new Map<string, Outcome>();
+const refusals = new Map<string, string>();
 let stop = async (): Promise<void> => {};
 
 beforeAll(async () => {
   const server = serving();
   stop = server.stop;
-  outcomes = await sweeping(
-    server.origin,
-    Object.fromEntries(
-      Object.values(CASES).map((written, index) => [`case-${index}.spec.ts`, written]),
-    ),
-  );
+  const on = { E2E_VIDEO: "on" };
+  // The config switches video off outright, which is what a default the config
+  // replaces would lose to: the switch has to win over the config, not over
+  // Playwright's own default.
+  recorded = await sweeping(server.origin, files("recorded", RECORDED), {
+    env: on,
+    use: { video: "off" },
+  });
+  // The config's video in its object form, off, with a size of its own: the
+  // switch turns it on and keeps the size.
+  sized = await sweeping(server.origin, files("sized", PLAIN), {
+    env: on,
+    use: { video: { mode: "off", size: SIZE } },
+  });
+  // No switch, and a config that asks for video itself: what decides is the
+  // config, as it did before the switch existed.
+  configured = await sweeping(server.origin, files("plain", PLAIN), { use: { video: "on" } });
+  // A blank switch is what a CI step exporting an empty input writes, and it is
+  // unset.
+  blank = await sweeping(server.origin, files("plain", PLAIN), { env: { E2E_VIDEO: " " } });
+  for (const value of ["true", "off"]) {
+    refusals.set(
+      value,
+      await sweeping(server.origin, files("plain", PLAIN), { env: { E2E_VIDEO: value } }).then(
+        () => "",
+        (error: Error) => error.message,
+      ),
+    );
+  }
+  outcomes = await sweeping(server.origin, files("case", CASES));
   installed = await sweeping(server.origin, { "consumer.spec.ts": INSTALLED });
-}, 180_000);
+}, 300_000);
 
 afterAll(async () => {
   await stop();
 });
 
-function outcome(title: string): Outcome {
-  const found = outcomes.get(title);
+function outcome(title: string, run = outcomes): Outcome {
+  const found = run.get(title);
   if (found === undefined) {
     throw new Error(
-      `the Playwright run reported nothing for ${title}; it reported ${[...outcomes.keys()].join(", ")}`,
+      `the Playwright run reported nothing for ${title}; it reported ${[...run.keys()].join(", ")}`,
     );
   }
   return found;
@@ -414,6 +466,58 @@ describe("what leaving a page costs", () => {
     const { ok, took } = outcome("a same-document navigation does not stall the next one");
     expect(ok).toBe(true);
     expect(took).toBeLessThan(A_DEPARTURE);
+  });
+});
+
+describe("recording a video of every page", () => {
+  test.each([
+    ["one page leaves one video", 1],
+    ["a popup leaves a video of its own", 2],
+  ])("%s, under a config that switched video off", (title, pages) => {
+    const { ok, videos } = outcome(title, recorded);
+    expect(ok).toBe(true);
+    expect(videos).toHaveLength(pages);
+    for (const { bytes } of videos) expect(bytes).toBeGreaterThan(0);
+  });
+
+  test("a recorded page is still swept", () => {
+    const { ok, said, videos } = outcome("a console error still fails while recording", recorded);
+    expect(ok).toBe(false);
+    expect(said).toContain("a request this page depends on failed");
+    expect(videos).toHaveLength(1);
+  });
+
+  test("the config's own video size is kept", () => {
+    const { videos } = outcome("a plain page", sized);
+    expect(videos.map(({ width, height }) => ({ width, height }))).toEqual([SIZE]);
+  });
+
+  test("a spec file that sets video itself keeps its own setting", () => {
+    const { ok, videos } = outcome("a spec file's own video setting wins", recorded);
+    expect(ok).toBe(true);
+    expect(videos).toEqual([]);
+  });
+
+  test("without the switch, a config that asks for video records", () => {
+    expect(outcome("a plain page", configured).videos).toHaveLength(1);
+  });
+
+  test("without the switch, a config that says nothing records nothing", () => {
+    expect(outcome("a page that breaks nothing passes").videos).toEqual([]);
+  });
+
+  test("a blank switch is no switch", () => {
+    const { ok, videos } = outcome("a plain page", blank);
+    expect(ok).toBe(true);
+    expect(videos).toEqual([]);
+  });
+
+  // A value read as off is a run that was asked for a recording and left none,
+  // and went green doing it. `off` among them: the switch has one value.
+  test.each(["true", "off"])("E2E_VIDEO=%s refuses the run and names the one value", (value) => {
+    const refused = refusals.get(value) ?? "";
+    expect(refused).toContain(`E2E_VIDEO is "${value}"`);
+    expect(refused).toContain('the one value it takes is "on"');
   });
 });
 
