@@ -114,14 +114,15 @@ a change to a rule usually lands here too.
   reason: what it grades is only visible from inside the repo. `route-log.ts` is
   the protocol between an app and the two floors over its route table;
   `invariant-sweep.ts` replaces Playwright's browser context with one that
-  watches every page it opens, popups included, and trusts a page for one
-  sanitised sentence and nothing else; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
+  watches every page it opens, popups included, trusts a page for one
+  sanitised sentence and nothing else, and turns Playwright's own `video` on
+  when the run sets `E2E_VIDEO=on`; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
   block a repo's limiter has to pass; `response-schema.ts` grades an Elysia
   app's own route table; `characterization-net.ts` is the harness under a golden
   suite; `property.ts` is `fc.assert` with the run's budget applied — the one
   call every property test goes through, so a nightly can multiply how far each
-  of them searches with no test changing, and the one root module that reads the
-  environment for a value. Their pages are `docs/exports/`.
+  of them searches with no test changing. It and `invariant-sweep.ts` are the
+  two exports that read the environment for a value. Their pages are `docs/exports/`.
   Two of them register tests rather than answering with problems, and the split
   is by subject rather than by taste: a route table is a value one call can
   grade, and a limiter is a sequence of attempts against a live Redis that only

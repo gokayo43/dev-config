@@ -15,8 +15,8 @@
  * Beside them sits this package itself, copied rather than linked, which is what
  * `install` below is about.
  */
-import { cp, mkdir, readdir, symlink } from "node:fs/promises";
-import { join } from "node:path";
+import { cp, mkdir, readdir, stat, symlink } from "node:fs/promises";
+import { join, relative } from "node:path";
 
 import { type ConfigObject, isList, plainly, record } from "../.github/actions/_lib/gate.ts";
 import { ENDPOINT } from "../route-log.ts";
@@ -143,6 +143,12 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       },
       // Overflow that arrives with the bytes of a subresource, well after load.
       "/late-image": { type: "text/html", body: html(`<img id="slow" src="/slow.svg" alt="">`) },
+      // A popup onto a page that breaks nothing, so a run that records it is
+      // graded on its videos and not on a violation.
+      "/opens-clean": {
+        type: "text/html",
+        body: html(`<a id="open" href="/clean" target="_blank">open</a>`),
+      },
       // Opened in a tab of its own, which is a page no `page` fixture ever sees.
       "/popup": {
         type: "text/html",
@@ -280,6 +286,8 @@ export interface Outcome {
   readonly said: string;
   /** How long the case took, in ms, which is the only place a drain's cost is visible. */
   readonly took: number;
+  /** The size in bytes of every video the case left under the run's output directory. */
+  readonly videos: readonly number[];
 }
 
 /**
@@ -312,6 +320,22 @@ function saidBy(spec: ConfigObject): string {
     .join("\n");
 }
 
+/**
+ * The videos one spec's report names, as the bytes each file on disk holds.
+ * Only a file under the run's output directory counts, since that is where the
+ * switch says a recording lands, and a file the report names that is not there
+ * throws.
+ */
+async function videosOf(spec: ConfigObject, output: string): Promise<number[]> {
+  const named = resultsOf(spec)
+    .flatMap((result) => listAt(result, "attachments"))
+    .filter((attachment) => attachment["contentType"] === "video/webm")
+    .map((attachment) => attachment["path"])
+    .filter((path) => typeof path === "string")
+    .filter((path) => !relative(output, path).startsWith(".."));
+  return await Promise.all(named.map(async (path) => (await stat(path)).size));
+}
+
 /** What one spec spent, in ms: the longest result, since a retry runs the case again. */
 function tookBy(spec: ConfigObject): number {
   const spent = resultsOf(spec).map((result) =>
@@ -320,7 +344,9 @@ function tookBy(spec: ConfigObject): number {
   return Math.max(0, ...spent);
 }
 
-const CONFIG = `import { defineConfig } from "@playwright/test";
+/** The fixture's config, with whatever a case adds to its `use` block. */
+function configWith(use: string): string {
+  return `import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: ".",
@@ -328,10 +354,17 @@ export default defineConfig({
   workers: 4,
   use: {
     baseURL: process.env.SWEEP_ORIGIN,
-    viewport: { width: ${VIEWPORT.width}, height: ${VIEWPORT.height} },
+    viewport: { width: ${VIEWPORT.width}, height: ${VIEWPORT.height} },${use}
   },
 });
 `;
+}
+
+/** What a run sets beyond the specs: variables for its environment, and lines for the config's `use`. */
+interface Run {
+  readonly env?: Readonly<Record<string, string>>;
+  readonly use?: string;
+}
 
 /**
  * The fixture's `node_modules`, holding this repo's own installs and this
@@ -383,19 +416,32 @@ async function install(root: string): Promise<void> {
  * Runs every spec given, and reports how each came out by its title. One
  * Playwright process for all of them: starting the runner costs more than the
  * cases do, and nothing here depends on a case running alone.
+ *
+ * The video switch is taken out of the environment the suite was started with,
+ * so a developer who left it on in their shell does not record every run; a run
+ * that wants it says so in `env`.
  */
 export async function sweeping(
   origin: string,
   specs: Readonly<Record<string, string>>,
+  run: Run = {},
 ): Promise<Map<string, Outcome>> {
-  const root = await materialise({ "playwright.config.ts": CONFIG, ...specs });
+  const root = await materialise({ "playwright.config.ts": configWith(run.use ?? ""), ...specs });
   await install(root);
+  const output = join(root, "results");
+  const { E2E_VIDEO: _left, ...inherited } = plainly(Bun.env);
 
   const proc = Bun.spawn(
-    [join(root, "node_modules", ".bin", "playwright"), "test", "--reporter=json"],
+    [
+      join(root, "node_modules", ".bin", "playwright"),
+      "test",
+      "--reporter=json",
+      "--output",
+      output,
+    ],
     {
       cwd: root,
-      env: { ...plainly(Bun.env), SWEEP_ORIGIN: origin },
+      env: { ...inherited, SWEEP_ORIGIN: origin, ...run.env },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -420,6 +466,7 @@ export async function sweeping(
       ok: spec["ok"] === true,
       said: saidBy(spec),
       took: tookBy(spec),
+      videos: await videosOf(spec, output),
     });
   }
   // A run that collected no spec at all is the fixture having failed, not a case

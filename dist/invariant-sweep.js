@@ -98,6 +98,29 @@ const DETAIL_LIMIT = 300;
 const GONE = ["Execution context was destroyed", "Target page, context or browser has been closed"];
 /** The resource kinds whose URLs a violation may be attributed to. */
 const ADDRESSABLE = /* @__PURE__ */ new Set(["document", "script"]);
+/** The variable that switches recording on. */
+const RECORD = "E2E_VIDEO";
+/**
+* Whether this run records a video of every page, read once from the
+* environment. Unset leaves `video` to the config; anything but `on` throws,
+* because a misspelt switch read as off is a run that was asked for a recording,
+* went green, and left nothing to watch.
+*/
+function recordingAsked() {
+	const written = process.env[RECORD];
+	if (written === void 0) return false;
+	if (written === "on") return true;
+	throw new Error(`${RECORD} is ${JSON.stringify(written)}, and the one value it takes is "on", which records a video of every page each test opens; unset it to leave \`video\` to the Playwright config`);
+}
+const RECORDING = recordingAsked();
+/** The config's `video`, switched on when the run asked for a recording, and the rest of it kept. */
+function recorded(video) {
+	if (!RECORDING) return video;
+	return typeof video === "string" ? "on" : {
+		...video,
+		mode: "on"
+	};
+}
 /**
 * Asking the document to drain, as an expression rather than a function for the
 * same reason `WATCH` is one: there is no DOM lib here to type it with.
@@ -267,6 +290,7 @@ async function drain(page) {
 */
 const test = test$1.extend({
 	sweepAllowlist: [{}, { option: true }],
+	video: [async ({ video }, provide) => await provide(recorded(video)), { scope: "worker" }],
 	context: async ({ context, sweepAllowlist }, provide) => {
 		const allowed = Object.keys(sweepAllowlist).map((pattern) => {
 			try {

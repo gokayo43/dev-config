@@ -9,6 +9,9 @@
  * the end, would pass the first two and a sweep that measured on `load` would
  * pass the third — and all three would keep claiming the same sentence.
  *
+ * Recording is a subject of its own too, with runs of its own, because the
+ * switch is read from the environment a whole Playwright process starts with.
+ *
  * The last block is a different subject, run on its own: the two exports a spec
  * imports, reached through a `node_modules` of the fixture's own under the
  * runner Playwright actually brings. Every case above imports the sweep by path,
@@ -230,13 +233,60 @@ test("a consumer's spec runs", async ({ page }) => {
 });
 `;
 
+/**
+ * The specs a recorded run is graded on, by title: one page, two pages, and a
+ * page that breaks an invariant, since recording must not cost the sweep.
+ */
+const RECORDED = {
+  "one page leaves one video": spec(
+    "one page leaves one video",
+    `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+  ),
+  "a popup leaves a video of its own": spec(
+    "a popup leaves a video of its own",
+    `  await page.goto("/opens-clean");\n  const [popup] = await Promise.all([context.waitForEvent("page"), page.click("#open")]);\n  await expect(popup.locator("p")).toHaveText("nothing wrong here");`,
+  ),
+  "a console error still fails while recording": spec(
+    "a console error still fails while recording",
+    `  await page.goto("/console");`,
+  ),
+};
+
+/** One page that breaks nothing, for the runs that grade what decides recording rather than what is recorded. */
+const PLAIN = {
+  "plain.spec.ts": spec(
+    "a plain page",
+    `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+  ),
+};
+
 let outcomes = new Map<string, Outcome>();
 let installed = new Map<string, Outcome>();
+let recorded = new Map<string, Outcome>();
+let configured = new Map<string, Outcome>();
+let refused = "";
 let stop = async (): Promise<void> => {};
 
 beforeAll(async () => {
   const server = serving();
   stop = server.stop;
+  // The config switches video off outright, which is what a default the config
+  // replaces would lose to: the switch has to win over the config, not over
+  // Playwright's own default.
+  recorded = await sweeping(
+    server.origin,
+    Object.fromEntries(
+      Object.values(RECORDED).map((written, index) => [`recorded-${index}.spec.ts`, written]),
+    ),
+    { env: { E2E_VIDEO: "on" }, use: `\n    video: "off",` },
+  );
+  // No switch, and a config that asks for video itself: what decides is the
+  // config, as it did before the switch existed.
+  configured = await sweeping(server.origin, PLAIN, { use: `\n    video: "on",` });
+  refused = await sweeping(server.origin, PLAIN, { env: { E2E_VIDEO: "true" } }).then(
+    () => "",
+    (error: Error) => error.message,
+  );
   outcomes = await sweeping(
     server.origin,
     Object.fromEntries(
@@ -244,17 +294,17 @@ beforeAll(async () => {
     ),
   );
   installed = await sweeping(server.origin, { "consumer.spec.ts": INSTALLED });
-}, 180_000);
+}, 300_000);
 
 afterAll(async () => {
   await stop();
 });
 
-function outcome(title: string): Outcome {
-  const found = outcomes.get(title);
+function outcome(title: string, run = outcomes): Outcome {
+  const found = run.get(title);
   if (found === undefined) {
     throw new Error(
-      `the Playwright run reported nothing for ${title}; it reported ${[...outcomes.keys()].join(", ")}`,
+      `the Playwright run reported nothing for ${title}; it reported ${[...run.keys()].join(", ")}`,
     );
   }
   return found;
@@ -414,6 +464,40 @@ describe("what leaving a page costs", () => {
     const { ok, took } = outcome("a same-document navigation does not stall the next one");
     expect(ok).toBe(true);
     expect(took).toBeLessThan(A_DEPARTURE);
+  });
+});
+
+describe("recording a video of every page", () => {
+  test.each([
+    ["one page leaves one video", 1],
+    ["a popup leaves a video of its own", 2],
+  ])("%s, under a config that switched video off", (title, pages) => {
+    const { ok, videos } = outcome(title, recorded);
+    expect(ok).toBe(true);
+    expect(videos).toHaveLength(pages);
+    for (const bytes of videos) expect(bytes).toBeGreaterThan(0);
+  });
+
+  test("a recorded page is still swept", () => {
+    const { ok, said, videos } = outcome("a console error still fails while recording", recorded);
+    expect(ok).toBe(false);
+    expect(said).toContain("a request this page depends on failed");
+    expect(videos).toHaveLength(1);
+  });
+
+  test("without the switch, a config that asks for video records", () => {
+    expect(outcome("a plain page", configured).videos).toHaveLength(1);
+  });
+
+  test("without the switch, a config that says nothing records nothing", () => {
+    expect(outcome("a page that breaks nothing passes").videos).toEqual([]);
+  });
+
+  // A value read as off is a run that was asked for a recording and left none,
+  // and went green doing it.
+  test("any other value refuses the run and names the one it takes", () => {
+    expect(refused).toContain('E2E_VIDEO is "true"');
+    expect(refused).toContain('the one value it takes is "on"');
   });
 });
 

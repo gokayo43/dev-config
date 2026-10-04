@@ -121,6 +121,32 @@ const GONE = [
 /** The resource kinds whose URLs a violation may be attributed to. */
 const ADDRESSABLE = new Set(["document", "script"]);
 
+/** The variable that switches recording on. */
+const RECORD = "E2E_VIDEO";
+
+/**
+ * Whether this run records a video of every page, read once from the
+ * environment. Unset leaves `video` to the config; anything but `on` throws,
+ * because a misspelt switch read as off is a run that was asked for a recording,
+ * went green, and left nothing to watch.
+ */
+function recordingAsked(): boolean {
+  const written = process.env[RECORD];
+  if (written === undefined) return false;
+  if (written === "on") return true;
+  throw new Error(
+    `${RECORD} is ${JSON.stringify(written)}, and the one value it takes is "on", which records a video of every page each test opens; unset it to leave \`video\` to the Playwright config`,
+  );
+}
+
+const RECORDING = recordingAsked();
+
+/** The config's `video`, switched on when the run asked for a recording, and the rest of it kept. */
+function recorded(video: PlaywrightWorkerOptions["video"]): PlaywrightWorkerOptions["video"] {
+  if (!RECORDING) return video;
+  return typeof video === "string" ? "on" : { ...video, mode: "on" };
+}
+
 /** One invariant, broken once. */
 interface Violation {
   readonly kind: "console.error" | "pageerror" | "overflow";
@@ -328,6 +354,12 @@ export const test: TestType<
   PlaywrightWorkerArgs & PlaywrightWorkerOptions
 > = base.extend<InvariantSweep>({
   sweepAllowlist: [{}, { option: true }],
+
+  // Playwright's own option, wrapped rather than given a new default: a default
+  // is what a config's `use.video` replaces, and the switch has to win over the
+  // config. The `context` below is the one Playwright built from this value, so
+  // Playwright's own recording and saving are what run.
+  video: [async ({ video }, provide) => await provide(recorded(video)), { scope: "worker" }],
 
   context: async ({ context, sweepAllowlist }, provide) => {
     const allowed = Object.keys(sweepAllowlist).map((pattern) => {

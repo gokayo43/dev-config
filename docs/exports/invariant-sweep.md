@@ -157,6 +157,43 @@ per test run, and a run that did not visit the page carrying the embed did not
 use its entry — which is normal, not rot. Failing on it would mean every spec
 had to visit every allowlisted page.
 
+## Recording a video
+
+Set `E2E_VIDEO=on` for the `playwright test` process and every test records a
+video of each page it opens, popups included, whatever the config's `use.video`
+says. No config or spec changes:
+
+```sh
+E2E_VIDEO=on bunx playwright test --output /path/to/recordings
+```
+
+Each test gets a directory of its own under the output directory, named from its
+spec file and title, holding `video.webm` for the first page it opened and
+`video-1.webm`, `video-2.webm` for the next ones. `--output` defaults to
+`test-results`, and Playwright **deletes** the directory it names before the run
+starts, so give a recording a directory of its own. A test that fails still
+leaves its video, and the sweep fails it exactly as it would without one.
+
+The recording is Playwright's own: the switch turns the config's `video` to `on`
+and keeps the rest of it, `size` included, and the context this fixture watches
+is the one Playwright built from that value. Playwright's encoder targets 1
+Mbit/s, so a minute of a page that keeps moving is about 7.5 MB, and a still page
+costs far less.
+
+Unset, nothing changes: the config's `use.video`, or Playwright's default of
+none, decides. Any other value, `off` included, fails the run before a test
+starts, with a message naming `on` as the one value the switch takes. A switch
+that misread a typo as off would leave a run that was asked for a recording
+green and empty.
+
+One setting does win over the switch: a spec file that calls
+`test.use({ video })` itself keeps its own value, since Playwright applies a
+spec's `test.use` after every fixture this package defines.
+
+The main agent's use of it, taking a recording of a job walk to show in a
+request's result, is in `~/claude-shared/references/landing.md`, section
+Recording.
+
 ## What it does not see
 
 - **An iframe's own overflow.** The check runs in the top frame only: an embed
