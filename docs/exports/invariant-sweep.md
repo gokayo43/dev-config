@@ -19,7 +19,7 @@ resolve to built JavaScript under `dist/`, because the runner that imports them
 is node — `tsdown.config.ts` in the package carries why, and STACK.md's shared
 UI library carries the bargain a committed `dist/` is.
 
-Three invariants, on every page the test visits:
+Three invariants, on every page the test visits in its context:
 
 - no `console.error`,
 - no uncaught error in the page,
@@ -44,28 +44,30 @@ document — which is what covers a client-rendered route change that fires no
 
 That covers four cases a simpler design would quietly miss:
 
-| The page                                       | A check after each `goto` | A check at the end of the test | This |
-| ---------------------------------------------- | ------------------------- | ------------------------------ | ---- |
-| navigated to by clicking a link                | missed                    | seen if it is the last one     | seen |
-| the test navigated away from                   | seen                      | missed                         | seen |
-| that only overflows after it finished loading  | missed                    | seen if it is the last one     | seen |
-| that overflows shortly after `load`, then left | missed                    | missed                         | seen |
+| The page                                       | A check after each `goto` | A check at the end of the test | This                            |
+| ---------------------------------------------- | ------------------------- | ------------------------------ | ------------------------------- |
+| navigated to by clicking a link                | missed                    | seen if it is the last one     | seen                            |
+| the test navigated away from                   | seen                      | missed                         | seen                            |
+| that only overflows after it finished loading  | missed                    | seen if it is the last one     | seen                            |
+| that overflows shortly after `load`, then left | missed                    | missed                         | seen, if left by a wrapped call |
 
-There is also nothing to race. A check run from the test process is a
-`page.evaluate`, and a spec that navigates again immediately destroys the
-execution context mid-measurement — the honest handling of which is to swallow
-the rejection, turning "every page" into "every page the spec was slow enough to
-let us look at", silently.
+Measuring in the page also leaves the measurement nothing to race. A check run
+from the test process is a `page.evaluate`, and a spec that navigates again
+immediately destroys the execution context mid-measurement — the honest handling
+of which is to swallow the rejection, turning "every page" into "every page the
+spec was slow enough to let us look at", silently. What still races a navigation
+is the drain before a page goes, which the next section covers.
 
-The fixture is the **context** and not the page for the last row: a popup is a
-page the context opened and the spec may never name, so a `page` fixture cannot
-reach it at all.
+The fixture is the **context** and not the page for one more case, a popup: it
+is a page the context opened and the spec may never name, so a `page` fixture
+cannot reach it at all. A context the spec builds itself through `browser` is
+another matter, under "What it does not see".
 
 ## The horizon a document is measured to
 
 A document is drained before it goes: at the end of the test, and before any
-call that replaces it — `goto`, `reload`, `goBack`, `goForward`, all wrapped for
-this. Draining is two waits, because a document can be behind in two ways.
+call that replaces it — `goto`, `reload`, `goBack`, `goForward` and
+`setContent`, all wrapped for this. Draining is two waits, because a document can be behind in two ways.
 
 It may not have **measured** yet. A page that lays its overflow out on a timer
 after `load` has nothing to say when `goto` resolves, and a spec that navigates
@@ -84,14 +86,18 @@ that flush runs in; that one rejection is caught, and the verdict is given on
 what was collected — letting it through would replace the list the sweep spent
 the whole test building with a message about the flush.
 
-The wait for quiet is capped at 5s. A document that changes more often than the
-quiet window never goes quiet — an animation is one — and it has been measured
-on every one of those changes anyway, so the cap costs it nothing but time.
+The wait for quiet has two caps. A document that changes more often than the
+quiet window never goes quiet — an animation is one — so once it has loaded and
+its fonts have settled, the wait ends at most twice the quiet window, 1s, after
+that: it has been measured on every one of those changes anyway. A document whose
+`load` or fonts never arrive is waited on for 5s from when it started, and then
+let go.
 
 ## What a page is allowed to say about itself
 
-A page is not a trusted narrator, and two of these invariants are reported _by_
-the page.
+A page is not a trusted narrator, and every one of these invariants reaches the
+sweep through something the page says: its own script reports overflow, and its
+console and its stack name where an error came from.
 
 The bridge takes **one string** and nothing else. The `kind` is always
 `overflow`, the URL is the one Playwright says that frame is at, and a report
@@ -127,10 +133,16 @@ export default defineConfig({
 ```
 
 The key is a **regular expression** tested against the URL the violation came
-_from_ — the script's URL for a console error, the page's for everything else.
-The source rather than the page is what lets one entry cover a third-party embed
-wherever it is carried, instead of one entry per page carrying it. A literal URL
-works as a pattern; `.*` is there when a pattern is wanted.
+_from_ — the script's URL for a console error or a thrown error, the page's for
+overflow. The source rather than the page is what lets one entry cover a
+third-party embed wherever it is carried, instead of one entry per page carrying
+it.
+
+A key is a pattern, not a URL. A metacharacter in a URL needs its backslash:
+`"https://cdn.vendor.example/embed.js?v=3"` as written does not match that
+address, since `?` makes the `s` before it optional. And a key is **unanchored**:
+`"/checkout"` also matches `/checkout-v2`, so write `"/checkout$"` when one page
+is meant.
 
 The value is the reason, and it is the half a reviewer reads. It is required by
 the type, so an entry can be wrong but never unexplained.
@@ -160,8 +172,8 @@ had to visit every allowlisted page.
 ## Recording a video
 
 Set `E2E_VIDEO=on` for the `playwright test` process and every test records a
-video of each page it opens, popups included, whatever the config's `use.video`
-says. No config or spec changes:
+video of each page its context opens, popups included, whatever the config's
+`use.video` says. No config or spec changes:
 
 ```sh
 E2E_VIDEO=on bunx playwright test --output /path/to/recordings
@@ -176,31 +188,39 @@ leaves its video, and the sweep fails it exactly as it would without one.
 
 The recording is Playwright's own: the switch turns the config's `video` to `on`
 and keeps the rest of it, `size` included, and the context this fixture watches
-is the one Playwright built from that value. Playwright's encoder targets 1
-Mbit/s, so a minute of a page that keeps moving is about 7.5 MB, and a still page
-costs far less.
+is the one Playwright built from that value. Playwright's encoder caps a
+recording at 1 Mbit/s, so a minute of a page that keeps moving takes at most
+about 7.5 MB, and a still page far less.
 
-Unset, nothing changes: the config's `use.video`, or Playwright's default of
-none, decides. Any other value, `off` included, fails the run before a test
-starts, with a message naming `on` as the one value the switch takes. A switch
-that misread a typo as off would leave a run that was asked for a recording
+Unset or blank, nothing changes: the config's `use.video`, or Playwright's
+default of none, decides. Any other value, `off` included, fails the run before
+a test starts, with a message naming `on` as the one value the switch takes. A
+switch that read a typo as off would leave a run that was asked for a recording
 green and empty.
 
-One setting does win over the switch: a spec file that calls
-`test.use({ video })` itself keeps its own value, since Playwright applies a
-spec's `test.use` after every fixture this package defines.
+Two things the switch does not reach:
 
-The main agent's use of it, taking a recording of a job walk to show in a
-request's result, is in `~/claude-shared/references/landing.md`, section
-Recording.
+- A spec file that calls `test.use({ video })` itself keeps its own value, since
+  Playwright applies a spec's `test.use` after every fixture this package
+  defines.
+- A page in a context the spec builds itself through `browser` is not recorded,
+  as it is not swept (dev-config#136).
+
+A repo that declares `video` as an option again on top of this `test`, with
+`test.extend({ video: [..., { option: true }] })`, fails to load: this package
+already declares it as a fixture that is not an option.
 
 ## What it does not see
 
+- **A context the spec builds itself.** A page opened through
+  `browser.newPage()` or `browser.newContext()` is outside the context this
+  fixture watches, so it is neither swept nor recorded (dev-config#136).
 - **An iframe's own overflow.** The check runs in the top frame only: an embed
   scrolling sideways inside its own box is the embed's business, and its
   `documentElement` is not the page.
 - **`console.warn`, and any other level.** Errors only.
-- **Graceful empty states**, which testing.md names alongside the other two.
+- **Graceful empty states**, which testing.md names alongside zero console
+  errors and no layout overflow.
   They are not expressible here: what a page should show when it has no data is
   a per-page contract — a heading, a call to action, the absence of a spinner —
   and there is no property of _any_ page that says it. A repo asserts it in the

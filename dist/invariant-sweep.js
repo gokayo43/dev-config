@@ -60,6 +60,12 @@ import { expect, test as test$1 } from "@playwright/test";
 * therefore honoured only when a document or script **actually loaded** from it
 * in this page, which is a fact about responses the browser received and not
 * one any page can write.
+*
+* ## Recording
+*
+* `E2E_VIDEO=on` turns Playwright's own `video` option on for the run, over
+* whatever the config says. The export's page, `docs/exports/invariant-sweep.md`,
+* has the switch under "Recording a video".
 */
 /** The name the page-side script calls, and the name the fixture exposes. One constant, two ends. */
 const REPORTER = "__invariantSweep";
@@ -101,16 +107,17 @@ const ADDRESSABLE = /* @__PURE__ */ new Set(["document", "script"]);
 /** The variable that switches recording on. */
 const RECORD = "E2E_VIDEO";
 /**
-* Whether this run records a video of every page, read once from the
-* environment. Unset leaves `video` to the config; anything but `on` throws,
-* because a misspelt switch read as off is a run that was asked for a recording,
-* went green, and left nothing to watch.
+* Whether this run records a video of every page in the context, read once
+* from the environment. Unset or blank leaves `video` to the config, as a blank
+* budget does in `property.ts`; anything but `on` throws, because a misspelt
+* switch read as off is a run that was asked for a recording, went green, and
+* left nothing to watch.
 */
 function recordingAsked() {
-	const written = process.env[RECORD];
-	if (written === void 0) return false;
+	const written = (process.env[RECORD] ?? "").trim();
+	if (written === "") return false;
 	if (written === "on") return true;
-	throw new Error(`${RECORD} is ${JSON.stringify(written)}, and the one value it takes is "on", which records a video of every page each test opens; unset it to leave \`video\` to the Playwright config`);
+	throw new Error(`${RECORD} is ${JSON.stringify(written)}, and the one value it takes is "on", which records a video of every page in the test's own context; unset it, or leave it blank, to leave \`video\` to the Playwright config`);
 }
 const RECORDING = recordingAsked();
 /** The config's `video`, switched on when the run asked for a recording, and the rest of it kept. */
@@ -290,13 +297,16 @@ async function drain(page) {
 */
 const test = test$1.extend({
 	sweepAllowlist: [{}, { option: true }],
-	video: [async ({ video }, provide) => await provide(recorded(video)), { scope: "worker" }],
+	video: [async ({ video }, provide) => await provide(recorded(video)), {
+		scope: "worker",
+		box: true
+	}],
 	context: async ({ context, sweepAllowlist }, provide) => {
 		const allowed = Object.keys(sweepAllowlist).map((pattern) => {
 			try {
 				return new RegExp(pattern);
 			} catch (cause) {
-				throw new Error(`sweepAllowlist key ${JSON.stringify(pattern)} is not a regular expression — the keys are patterns tested against the URL a violation came from, so a literal URL works as one and an unbalanced \`(\` does not`, { cause });
+				throw new Error(`sweepAllowlist key ${JSON.stringify(pattern)} is not a regular expression — the keys are patterns tested against the URL a violation came from, so a metacharacter such as \`(\`, \`?\` or \`.\` in a URL needs its backslash`, { cause });
 			}
 		});
 		const violations = [];

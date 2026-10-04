@@ -58,6 +58,12 @@
  * therefore honoured only when a document or script **actually loaded** from it
  * in this page, which is a fact about responses the browser received and not
  * one any page can write.
+ *
+ * ## Recording
+ *
+ * `E2E_VIDEO=on` turns Playwright's own `video` option on for the run, over
+ * whatever the config says. The export's page, `docs/exports/invariant-sweep.md`,
+ * has the switch under "Recording a video".
  */
 import {
   expect,
@@ -125,17 +131,18 @@ const ADDRESSABLE = new Set(["document", "script"]);
 const RECORD = "E2E_VIDEO";
 
 /**
- * Whether this run records a video of every page, read once from the
- * environment. Unset leaves `video` to the config; anything but `on` throws,
- * because a misspelt switch read as off is a run that was asked for a recording,
- * went green, and left nothing to watch.
+ * Whether this run records a video of every page in the context, read once
+ * from the environment. Unset or blank leaves `video` to the config, as a blank
+ * budget does in `property.ts`; anything but `on` throws, because a misspelt
+ * switch read as off is a run that was asked for a recording, went green, and
+ * left nothing to watch.
  */
 function recordingAsked(): boolean {
-  const written = process.env[RECORD];
-  if (written === undefined) return false;
+  const written = (process.env[RECORD] ?? "").trim();
+  if (written === "") return false;
   if (written === "on") return true;
   throw new Error(
-    `${RECORD} is ${JSON.stringify(written)}, and the one value it takes is "on", which records a video of every page each test opens; unset it to leave \`video\` to the Playwright config`,
+    `${RECORD} is ${JSON.stringify(written)}, and the one value it takes is "on", which records a video of every page in the test's own context; unset it, or leave it blank, to leave \`video\` to the Playwright config`,
   );
 }
 
@@ -151,10 +158,10 @@ function recorded(video: PlaywrightWorkerOptions["video"]): PlaywrightWorkerOpti
 interface Violation {
   readonly kind: "console.error" | "pageerror" | "overflow";
   /**
-   * Where it came *from*: the script's URL for a console error, the frame's for
-   * everything else — and only ever a URL the browser reported loading. The
-   * source rather than the page, because the case the allowlist exists for is a
-   * third-party embed on a page of ours.
+   * Where it came *from*: the script's URL for a console error or a thrown
+   * error, the frame's for overflow — and only ever a URL the browser reported
+   * loading. The source rather than the page, because the case the allowlist
+   * exists for is a third-party embed on a page of ours.
    */
   readonly at: string;
   readonly detail: string;
@@ -359,7 +366,10 @@ export const test: TestType<
   // is what a config's `use.video` replaces, and the switch has to win over the
   // config. The `context` below is the one Playwright built from this value, so
   // Playwright's own recording and saving are what run.
-  video: [async ({ video }, provide) => await provide(recorded(video)), { scope: "worker" }],
+  video: [
+    async ({ video }, provide) => await provide(recorded(video)),
+    { scope: "worker", box: true },
+  ],
 
   context: async ({ context, sweepAllowlist }, provide) => {
     const allowed = Object.keys(sweepAllowlist).map((pattern) => {
@@ -370,7 +380,7 @@ export const test: TestType<
         // otherwise surface as a bare SyntaxError from a fixture nobody knew
         // was compiling a pattern.
         throw new Error(
-          `sweepAllowlist key ${JSON.stringify(pattern)} is not a regular expression — the keys are patterns tested against the URL a violation came from, so a literal URL works as one and an unbalanced \`(\` does not`,
+          `sweepAllowlist key ${JSON.stringify(pattern)} is not a regular expression — the keys are patterns tested against the URL a violation came from, so a metacharacter such as \`(\`, \`?\` or \`.\` in a URL needs its backslash`,
           { cause },
         );
       }

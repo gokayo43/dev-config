@@ -15,8 +15,12 @@
  * Beside them sits this package itself, copied rather than linked, which is what
  * `install` below is about.
  */
-import { cp, mkdir, readdir, stat, symlink } from "node:fs/promises";
+import { cp, mkdir, readdir, symlink } from "node:fs/promises";
 import { join, relative } from "node:path";
+
+import type { PlaywrightTestOptions, PlaywrightWorkerOptions } from "@playwright/test";
+
+import type { InvariantSweep } from "../invariant-sweep.ts";
 
 import { type ConfigObject, isList, plainly, record } from "../.github/actions/_lib/gate.ts";
 import { ENDPOINT } from "../route-log.ts";
@@ -286,8 +290,38 @@ export interface Outcome {
   readonly said: string;
   /** How long the case took, in ms, which is the only place a drain's cost is visible. */
   readonly took: number;
-  /** The size in bytes of every video the case left under the run's output directory. */
-  readonly videos: readonly number[];
+  /** Every video the case left under the run's output directory. */
+  readonly videos: readonly Video[];
+}
+
+/** One recording: how many bytes the file holds, and the size of the frames encoded into it. */
+export interface Video {
+  readonly bytes: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The start code every VP8 key frame carries, followed by its width and its
+ * height as two little-endian 16-bit fields whose low 14 bits are the pixels
+ * (RFC 6386, section 9.1). Playwright encodes its recordings as VP8.
+ */
+const KEY_FRAME = [0x9d, 0x01, 0x2a] as const;
+
+/** What a recording holds, read out of its first key frame; a file with none throws. */
+async function videoAt(path: string): Promise<Video> {
+  const held = await Bun.file(path).bytes();
+  const at = held.findIndex(
+    (_, index) =>
+      index + 7 <= held.length && KEY_FRAME.every((byte, k) => held[index + k] === byte),
+  );
+  if (at === -1) throw new Error(`${path} holds no VP8 key frame, so it is not a recording`);
+  const view = new DataView(held.buffer, held.byteOffset + at + KEY_FRAME.length, 4);
+  return {
+    bytes: held.length,
+    width: view.getUint16(0, true) & 0x3f_ff,
+    height: view.getUint16(2, true) & 0x3f_ff,
+  };
 }
 
 /**
@@ -321,19 +355,21 @@ function saidBy(spec: ConfigObject): string {
 }
 
 /**
- * The videos one spec's report names, as the bytes each file on disk holds.
- * Only a file under the run's output directory counts, since that is where the
- * switch says a recording lands, and a file the report names that is not there
- * throws.
+ * The videos one spec's report names, read off the disk. The switch says a
+ * recording lands under the run's output directory, so one the report places
+ * anywhere else throws with its path, and so does one that is not there.
  */
-async function videosOf(spec: ConfigObject, output: string): Promise<number[]> {
+async function videosOf(spec: ConfigObject, output: string): Promise<Video[]> {
   const named = resultsOf(spec)
     .flatMap((result) => listAt(result, "attachments"))
     .filter((attachment) => attachment["contentType"] === "video/webm")
-    .map((attachment) => attachment["path"])
-    .filter((path) => typeof path === "string")
-    .filter((path) => !relative(output, path).startsWith(".."));
-  return await Promise.all(named.map(async (path) => (await stat(path)).size));
+    .map((attachment) => String(attachment["path"]));
+  for (const path of named) {
+    if (relative(output, path).startsWith("..")) {
+      throw new Error(`a video landed at ${path}, outside the run's output directory ${output}`);
+    }
+  }
+  return await Promise.all(named.map(videoAt));
 }
 
 /** What one spec spent, in ms: the longest result, since a retry runs the case again. */
@@ -344,8 +380,11 @@ function tookBy(spec: ConfigObject): number {
   return Math.max(0, ...spent);
 }
 
+/** The options a config's `use` block or a spec's `test.use` may set. */
+export type Use = Partial<PlaywrightTestOptions & PlaywrightWorkerOptions & InvariantSweep>;
+
 /** The fixture's config, with whatever a case adds to its `use` block. */
-function configWith(use: string): string {
+function configWith(use: Use): string {
   return `import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
@@ -354,16 +393,17 @@ export default defineConfig({
   workers: 4,
   use: {
     baseURL: process.env.SWEEP_ORIGIN,
-    viewport: { width: ${VIEWPORT.width}, height: ${VIEWPORT.height} },${use}
+    viewport: { width: ${VIEWPORT.width}, height: ${VIEWPORT.height} },
+    ...${JSON.stringify(use)},
   },
 });
 `;
 }
 
-/** What a run sets beyond the specs: variables for its environment, and lines for the config's `use`. */
+/** What a run sets beyond the specs: variables for its environment, and options for the config's `use`. */
 interface Run {
   readonly env?: Readonly<Record<string, string>>;
-  readonly use?: string;
+  readonly use?: Use;
 }
 
 /**
@@ -426,7 +466,7 @@ export async function sweeping(
   specs: Readonly<Record<string, string>>,
   run: Run = {},
 ): Promise<Map<string, Outcome>> {
-  const root = await materialise({ "playwright.config.ts": configWith(run.use ?? ""), ...specs });
+  const root = await materialise({ "playwright.config.ts": configWith(run.use ?? {}), ...specs });
   await install(root);
   const output = join(root, "results");
   const { E2E_VIDEO: _left, ...inherited } = plainly(Bun.env);
