@@ -26,6 +26,7 @@
       "files": [
         "dev-server.ts",
         "property.ts",
+        "invariant-sweep.ts",
         ".github/actions/_lib/gate.ts",
         ".github/actions/db-gate/database.ts",
         ".github/actions/db-gate/probe.ts",
@@ -42,14 +43,17 @@
         // the rule points at is that repo's and cannot be reached from here:
         // the run's property budget arrives as two variables because a workflow
         // step has no other way to reach a `bun test`, and this is the one call
-        // every property goes through to read them.
+        // every property goes through to read them. `invariant-sweep.ts` is the
+        // same case for the video switch: the run that wants a recording is a
+        // `playwright test` someone starts by hand, and the fixture every spec
+        // imports is the one place it is read.
         //
         // `gate.ts` is this repo's `env.ts` under another name: `inputs()` and
-        // `required()` are the choke point the rule asks for. All three throw
-        // on a value they cannot read rather than defaulting. The other three
-        // files forward the environment they were started with to a child
-        // process — `{ ...process.env, DATABASE_URL }` — which reads no variable
-        // and has none to validate. Named one file at a time so a seventh
+        // `required()` are the choke point the rule asks for. Each of those
+        // readers throws on a value it cannot read rather than defaulting. The
+        // rest of the files forward the environment they were started with to a
+        // child process — `{ ...process.env, DATABASE_URL }` — which reads no
+        // variable and has none to validate. Named one file at a time so a new
         // reader fails rather than joining a glob.
         "anti-slop/no-env-access": "off"
       }

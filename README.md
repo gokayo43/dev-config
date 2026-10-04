@@ -60,7 +60,7 @@ through `files` and `exports`, and each has a page of its own:
 | Export                                                         | Imported by                    | What it holds                                                            |
 | -------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
 | [`route-log`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the two floors over its route table      |
-| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | zero console errors and no sideways scroll, on every page a test opens   |
+| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error or sideways scroll, on every page of the test's context |
 | [`limiter-conformance`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                      |
 | [`property`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further |
 | [`response-schema`](docs/exports/response-schema.md)           | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip      |
@@ -367,7 +367,7 @@ standing:
 | ------------------------------------------------------ | ----------------------- | --------------------- | ------------------------------------------------------------------- | ------------------------------ |
 | `useMemo`, `useCallback`                               | `react`                 | everywhere            | the React Compiler inserts the memo; delete the wrapper             | `no-restricted-imports`        |
 | `beforeEach`, `afterEach`                              | `bun:test`              | everywhere            | a call the case makes itself, and `await using`                     | `no-restricted-imports`        |
-| `test`                                                 | `@playwright/test`      | everywhere            | the invariant sweep's `test`, which watches every page a spec opens | `no-restricted-imports`        |
+| `test`                                                 | `@playwright/test`      | everywhere            | the invariant sweep's `test`, which sweeps each page in its context | `no-restricted-imports`        |
 | `assert`, the default export                           | `fast-check`            | everywhere            | the property budget's `check`, which the run can turn up            | `no-restricted-imports`        |
 | `useEffect`, `useLayoutEffect`, `useSyncExternalStore` | `react`                 | outside `**/hooks/**` | a named hook whose name says what it subscribes to                  | `anti-slop/no-unnamed-effects` |
 | `useQuery`, `useInfiniteQuery`                         | `@tanstack/react-query` | under `**/routes/**`  | the loader's `ensureQueryData` and `useSuspenseQuery`               | `anti-slop/no-raw-query-hooks` |

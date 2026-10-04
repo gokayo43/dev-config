@@ -16,7 +16,11 @@
  * `install` below is about.
  */
 import { cp, mkdir, readdir, symlink } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+
+import type { PlaywrightTestOptions, PlaywrightWorkerOptions } from "@playwright/test";
+
+import type { InvariantSweep } from "../invariant-sweep.ts";
 
 import { type ConfigObject, isList, plainly, record } from "../.github/actions/_lib/gate.ts";
 import { ENDPOINT } from "../route-log.ts";
@@ -143,6 +147,12 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       },
       // Overflow that arrives with the bytes of a subresource, well after load.
       "/late-image": { type: "text/html", body: html(`<img id="slow" src="/slow.svg" alt="">`) },
+      // A popup onto a page that breaks nothing, so a run that records it is
+      // graded on its videos and not on a violation.
+      "/opens-clean": {
+        type: "text/html",
+        body: html(`<a id="open" href="/clean" target="_blank">open</a>`),
+      },
       // Opened in a tab of its own, which is a page no `page` fixture ever sees.
       "/popup": {
         type: "text/html",
@@ -280,6 +290,38 @@ export interface Outcome {
   readonly said: string;
   /** How long the case took, in ms, which is the only place a drain's cost is visible. */
   readonly took: number;
+  /** Every video the case left under the run's output directory. */
+  readonly videos: readonly Video[];
+}
+
+/** One recording: how many bytes the file holds, and the size of the frames encoded into it. */
+export interface Video {
+  readonly bytes: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The start code every VP8 key frame carries, followed by its width and its
+ * height as two little-endian 16-bit fields whose low 14 bits are the pixels
+ * (RFC 6386, section 9.1). Playwright encodes its recordings as VP8.
+ */
+const KEY_FRAME = [0x9d, 0x01, 0x2a] as const;
+
+/** What a recording holds, read out of its first key frame; a file with none throws. */
+async function videoAt(path: string): Promise<Video> {
+  const held = await Bun.file(path).bytes();
+  const at = held.findIndex(
+    (_, index) =>
+      index + 7 <= held.length && KEY_FRAME.every((byte, k) => held[index + k] === byte),
+  );
+  if (at === -1) throw new Error(`${path} holds no VP8 key frame, so it is not a recording`);
+  const view = new DataView(held.buffer, held.byteOffset + at + KEY_FRAME.length, 4);
+  return {
+    bytes: held.length,
+    width: view.getUint16(0, true) & 0x3f_ff,
+    height: view.getUint16(2, true) & 0x3f_ff,
+  };
 }
 
 /**
@@ -312,6 +354,24 @@ function saidBy(spec: ConfigObject): string {
     .join("\n");
 }
 
+/**
+ * The videos one spec's report names, read off the disk. The switch says a
+ * recording lands under the run's output directory, so one the report places
+ * anywhere else throws with its path, and so does one that is not there.
+ */
+async function videosOf(spec: ConfigObject, output: string): Promise<Video[]> {
+  const named = resultsOf(spec)
+    .flatMap((result) => listAt(result, "attachments"))
+    .filter((attachment) => attachment["contentType"] === "video/webm")
+    .map((attachment) => String(attachment["path"]));
+  for (const path of named) {
+    if (relative(output, path).startsWith("..")) {
+      throw new Error(`a video landed at ${path}, outside the run's output directory ${output}`);
+    }
+  }
+  return await Promise.all(named.map(videoAt));
+}
+
 /** What one spec spent, in ms: the longest result, since a retry runs the case again. */
 function tookBy(spec: ConfigObject): number {
   const spent = resultsOf(spec).map((result) =>
@@ -320,7 +380,12 @@ function tookBy(spec: ConfigObject): number {
   return Math.max(0, ...spent);
 }
 
-const CONFIG = `import { defineConfig } from "@playwright/test";
+/** The options a config's `use` block or a spec's `test.use` may set. */
+export type Use = Partial<PlaywrightTestOptions & PlaywrightWorkerOptions & InvariantSweep>;
+
+/** The fixture's config, with whatever a case adds to its `use` block. */
+function configWith(use: Use): string {
+  return `import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: ".",
@@ -329,9 +394,17 @@ export default defineConfig({
   use: {
     baseURL: process.env.SWEEP_ORIGIN,
     viewport: { width: ${VIEWPORT.width}, height: ${VIEWPORT.height} },
+    ...${JSON.stringify(use)},
   },
 });
 `;
+}
+
+/** What a run sets beyond the specs: variables for its environment, and options for the config's `use`. */
+interface Run {
+  readonly env?: Readonly<Record<string, string>>;
+  readonly use?: Use;
+}
 
 /**
  * The fixture's `node_modules`, holding this repo's own installs and this
@@ -383,19 +456,32 @@ async function install(root: string): Promise<void> {
  * Runs every spec given, and reports how each came out by its title. One
  * Playwright process for all of them: starting the runner costs more than the
  * cases do, and nothing here depends on a case running alone.
+ *
+ * The video switch is taken out of the environment the suite was started with,
+ * so a developer who left it on in their shell does not record every run; a run
+ * that wants it says so in `env`.
  */
 export async function sweeping(
   origin: string,
   specs: Readonly<Record<string, string>>,
+  run: Run = {},
 ): Promise<Map<string, Outcome>> {
-  const root = await materialise({ "playwright.config.ts": CONFIG, ...specs });
+  const root = await materialise({ "playwright.config.ts": configWith(run.use ?? {}), ...specs });
   await install(root);
+  const output = join(root, "results");
+  const { E2E_VIDEO: _left, ...inherited } = plainly(Bun.env);
 
   const proc = Bun.spawn(
-    [join(root, "node_modules", ".bin", "playwright"), "test", "--reporter=json"],
+    [
+      join(root, "node_modules", ".bin", "playwright"),
+      "test",
+      "--reporter=json",
+      "--output",
+      output,
+    ],
     {
       cwd: root,
-      env: { ...plainly(Bun.env), SWEEP_ORIGIN: origin },
+      env: { ...inherited, SWEEP_ORIGIN: origin, ...run.env },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -420,6 +506,7 @@ export async function sweeping(
       ok: spec["ok"] === true,
       said: saidBy(spec),
       took: tookBy(spec),
+      videos: await videosOf(spec, output),
     });
   }
   // A run that collected no spec at all is the fixture having failed, not a case
