@@ -121,7 +121,8 @@ a change to a rule usually lands here too.
   and calls; the two `dev-server*` files below are a bin it runs and the module
   that bin imports. Each is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
-  reason: what it grades is only visible from inside the repo. `route-log.ts` is
+  reason: it runs inside the repo's own suite or app, on what only that process
+  can reach. `route-log.ts` is
   the protocol between an app and the two floors over its route table;
   `invariant-sweep.ts` replaces Playwright's browser context with one that
   watches every page it opens, popups included, trusts a page for one
@@ -234,9 +235,11 @@ a change to a rule usually lands here too.
   bigger number and the only thing that says whether it worked is how many times
   the predicate ran; the default it multiplies is graded as a difference against
   `fc.assert` rather than against the literal 100, which is fast-check's to
-  change. `interleaving.test.ts` searches its racy fixtures on fresh seeds, over
-  a run count measured from their kill rates, the way the export's page tells a
-  consumer to. `fuzz.test.ts` drives the fuzzer against a real server on a real
+  change. `interleaving.test.ts` searches the racy fixtures in
+  `interleaving-fixtures.ts` on fresh seeds, sized and counted by the rules on
+  the export's page, and holds the page's regression recipe on the booking;
+  the fixtures are a module of their own so that measuring them runs the code
+  the suite runs. `fuzz.test.ts` drives the fuzzer against a real server on a real
   port, since each of its four invariants is a statement about a response — and the
   route that never answers is why that fixture disposes without awaiting
   `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:

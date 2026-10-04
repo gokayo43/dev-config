@@ -4,6 +4,7 @@ import { check as explore, property } from "fast-check";
 
 import { type Interleaving, interleavings, simulate } from "../interleaving.ts";
 import { check } from "../property.ts";
+import { booking, counter } from "./interleaving-fixtures.ts";
 
 /**
  * Every program here builds its state inside the effect, so each `simulate`
@@ -13,14 +14,27 @@ import { check } from "../property.ts";
 const note = (log: string[], step: string) => Effect.sync(() => void log.push(step));
 
 /** The run's exit value, failing the case when the run did not finish with one. */
-function finished<A, E>(program: Effect.Effect<A, E>, interleaving: Interleaving): A {
-  const run = simulate(program, interleaving);
+function finished<A, E>(
+  program: Effect.Effect<A, E>,
+  interleaving: Interleaving,
+  maxOps?: number,
+): A {
+  const run =
+    maxOps === undefined
+      ? simulate(program, interleaving)
+      : simulate(program, interleaving, { maxOps });
   if (run.parked) throw new Error(`the run parked: ${JSON.stringify(interleaving)}`);
   if (Exit.isFailure(run.exit)) throw new Error(`the run failed: ${String(run.exit.cause)}`);
   return run.exit.value;
 }
 
 const fifo: Interleaving = { strategy: "walk", preemptAt: [], picks: [] };
+
+/** The page's sizing rule: the run's length under the interleaving that preempts nothing. */
+const sized = <A, E>(program: Effect.Effect<A, E>) => interleavings(simulate(program, fifo).ops);
+
+/** How many fibers Effect holds as roots, which is everything a finished run must not add to. */
+const roots = () => Effect.runSync(Fiber.roots).length;
 
 describe("the order comes from the interleaving and nothing else", () => {
   /**
@@ -128,14 +142,75 @@ describe("the order comes from the interleaving and nothing else", () => {
     );
     expect(orders.toSorted()).toEqual(everyOrder);
   });
+
+  // Kills a priority strategy that preempts only at its change points: a
+  // higher-priority fiber made runnable has to run before the next op of a
+  // lower one.
+  test("a fiber made runnable with a higher priority runs before the running fiber's next op", () => {
+    const forkBetween = Effect.suspend(() => {
+      const log: string[] = [];
+      return Effect.gen(function* () {
+        yield* note(log, "r1");
+        const fiber = yield* Effect.fork(note(log, "a"));
+        yield* note(log, "r2");
+        yield* Fiber.join(fiber);
+        return log.join(" ");
+      });
+    });
+    const under = (priorities: number[]) =>
+      finished(forkBetween, { strategy: "priority", priorities, changeAt: [] });
+    expect(under([10, 99])).toBe("r1 a r2");
+    expect(under([99, 10])).toBe("r1 r2 a");
+  });
+
+  // Kills a pick of the last of the highest rather than the first.
+  test("fibers of equal priority run first in first out", () => {
+    for (const priorities of [[], [5, 5, 5, 5]])
+      expect(finished(forkThree, { strategy: "priority", priorities, changeAt: [] })).toBe("xyz");
+  });
+
+  /**
+   * x and y each yield and so drop below every other fiber, x first. x then
+   * hands z a deferred, z outranks x and preempts it, and x goes back on the
+   * queue behind y. Dropped later, y sits below x, so x runs first although
+   * it is queued second.
+   */
+  // Kills a drop that puts every dropped fiber at one level, which runs them
+  // first in first out, and a priority strategy that ignores a voluntary yield.
+  test("a fiber that yields drops below every other, including one that yielded before it", () => {
+    const dropped = Effect.suspend(() => {
+      const log: string[] = [];
+      return Effect.gen(function* () {
+        const handed = yield* Deferred.make<void>();
+        const x = yield* Effect.fork(
+          note(log, "x1").pipe(
+            Effect.zipRight(Effect.yieldNow()),
+            Effect.zipRight(Deferred.succeed(handed, undefined)),
+            Effect.zipRight(note(log, "x2")),
+          ),
+        );
+        const y = yield* Effect.fork(
+          note(log, "y1").pipe(
+            Effect.zipRight(Effect.yieldNow()),
+            Effect.zipRight(note(log, "y2")),
+          ),
+        );
+        const z = yield* Effect.fork(Deferred.await(handed).pipe(Effect.zipRight(note(log, "z1"))));
+        yield* Fiber.joinAll([x, y, z]);
+        return log.join(" ");
+      });
+    });
+    expect(
+      finished(dropped, { strategy: "priority", priorities: [99, 50, 40, 30], changeAt: [] }),
+    ).toBe("x1 y1 z1 x2 y2");
+  });
 });
 
 describe("a preemption can fall between any two ops", () => {
   /**
-   * The canary for an Effect upgrade. Everything this module finds rests on the
-   * runtime asking the scheduler before every op, which Effect 3.22 does from
-   * its run loop. If a release stops asking, or asks only at yields and forks,
-   * no interleaving can land `b` inside `a`'s run of synchronous steps.
+   * The canary for an Effect upgrade, over the version this repo pins: unless
+   * the runtime asks the scheduler before every op, no interleaving can land
+   * `b` inside `a`'s run of synchronous steps.
    */
   const steps = ["a1", "a2", "a3", "a4"];
   const between = (region: "plain" | "uninterruptible") =>
@@ -182,6 +257,38 @@ describe("a preemption can fall between any two ops", () => {
   );
 });
 
+describe("ops", () => {
+  const chain = (steps: number) =>
+    Array.from({ length: steps }, () => Effect.sync(() => undefined)).reduce(
+      (left, right) => Effect.zipRight(left, right),
+      Effect.void,
+    );
+
+  // Kills an `ops` that counts slices or fibers rather than ops, and one that
+  // answers a constant.
+  test("every synchronous step a program adds adds the same number of ops", () => {
+    const lengths = [1, 2, 3, 4, 5, 6].map((steps) => simulate(chain(steps), fifo).ops);
+    const added = lengths.slice(1).map((length, at) => length - (lengths[at] ?? 0));
+    expect(added[0]).toBeGreaterThan(0);
+    expect(new Set(added).size).toBe(1);
+  });
+
+  // Kills an `ops` shorter or longer than the run the op indices count: every
+  // index below it is reached, and none at or past it.
+  test("a preemption below a run's ops lengthens it, and one at or past them never happens", () => {
+    const program = chain(6);
+    const unpreempted = simulate(program, fifo);
+    for (let op = 0; op < unpreempted.ops; op++)
+      expect(
+        simulate(program, { strategy: "walk", preemptAt: [op], picks: [] }).ops,
+      ).toBeGreaterThan(unpreempted.ops);
+    for (let op = unpreempted.ops; op < unpreempted.ops + 5; op++)
+      expect(simulate(program, { strategy: "walk", preemptAt: [op], picks: [] })).toEqual(
+        unpreempted,
+      );
+  });
+});
+
 describe("how a run ends", () => {
   /** Two fibers taking two locks in opposite orders: whether they deadlock is the interleaving's call. */
   const inversion = Effect.gen(function* () {
@@ -203,7 +310,7 @@ describe("how a run ends", () => {
   test("a lock-order inversion parks under some interleavings and finishes under others, and says which", () => {
     const parked = new Set<boolean>();
     check(
-      property(interleavings(128), (interleaving) => {
+      property(sized(inversion), (interleaving) => {
         const run = simulate(inversion, interleaving);
         parked.add(run.parked);
         if (!run.parked) expect(run.exit).toEqual(Exit.succeed("done"));
@@ -215,11 +322,13 @@ describe("how a run ends", () => {
   test("a program waiting on a deferred nobody completes is parked under every interleaving", () => {
     const stuck = Deferred.make<void>().pipe(Effect.flatMap(Deferred.await));
     check(
-      property(interleavings(32), (interleaving) => {
+      property(sized(stuck), (interleaving) => {
         expect(simulate(stuck, interleaving).parked).toBe(true);
       }),
     );
   });
+
+  const priority: Interleaving = { strategy: "priority", priorities: [], changeAt: [] };
 
   test.each([
     ["a fiber that loops forever", Effect.forever(Effect.void)],
@@ -231,104 +340,161 @@ describe("how a run ends", () => {
       }),
     ],
   ] as const)("%s throws rather than hang", (_name, program) => {
-    for (const interleaving of [
-      fifo,
-      { strategy: "priority", priorities: [], changeAt: [] } as const,
-    ])
-      expect(() => simulate(program, interleaving)).toThrow("100000 ops without finishing");
+    for (const interleaving of [fifo, priority])
+      expect(() => simulate(program, interleaving, { maxOps: 20_000 })).toThrow(
+        "the run did not finish within 20000 ops",
+      );
   });
 
-  // Kills a simulator that hands a late wake-up to some other scheduler, which
-  // would run the rest of the program after `simulate` had already answered.
-  test.each([
-    ["parked", true],
-    ["finished", false],
-  ] as const)(
-    "a %s run's fiber woken afterwards throws, and nothing of the program runs again",
-    (_ending, parked) => {
-      const log: string[] = [];
-      let wake: (effect: Effect.Effect<void>) => void = () => {
-        throw new Error("the program never reached its wait");
-      };
-      const wait = Effect.async<void>((resume) => {
-        wake = resume;
-      }).pipe(Effect.zipRight(note(log, "woke")));
-      const program = parked ? wait : Effect.forkDaemon(wait);
-      expect(simulate(program, fifo).parked).toBe(parked);
-      expect(() => wake(Effect.void)).toThrow("woke after simulate returned");
-      expect(log).toEqual([]);
+  /** A program that finishes, and needs more ops than the default limit to. */
+  const long = Effect.gen(function* () {
+    let count = 0;
+    for (let step = 0; step < 120_000; step++)
+      yield* Effect.sync(() => {
+        count += 1;
+      });
+    return count;
+  });
+
+  // Regression: a fixed limit reported a program that finishes as one that
+  // loops forever.
+  test("a program longer than the default limit finishes under a limit raised to fit it", () => {
+    expect(() => simulate(long, fifo)).toThrow("the run did not finish within 100000 ops");
+    expect(finished(long, fifo, 1_000_000)).toBe(120_000);
+  });
+
+  /** A fiber waiting for another to set a flag, polling it with `poll` between reads. */
+  const waiting = (poll: "yield" | "busy") =>
+    Effect.gen(function* () {
+      const flag = yield* Ref.make(false);
+      const read =
+        poll === "yield" ? Effect.yieldNow().pipe(Effect.zipRight(Ref.get(flag))) : Ref.get(flag);
+      const waiter = yield* Effect.fork(read.pipe(Effect.repeat({ until: (set) => set })));
+      const setter = yield* Effect.fork(Ref.set(flag, true));
+      yield* Fiber.join(waiter);
+      yield* Fiber.join(setter);
+      return "done";
+    });
+
+  // Regression: the priority strategy ran a yielding waiter above the fiber it
+  // waited for, forever; and a fiber that polls without yielding, which
+  // Effect's own scheduler yields after a long slice, ran forever under every
+  // strategy.
+  test.each(["yield", "busy"] as const)(
+    "a fiber polling for another (%s) finishes under every interleaving",
+    (poll) => {
+      const program = waiting(poll);
+      for (const interleaving of [
+        fifo,
+        { strategy: "priority", priorities: [50, 99, 10], changeAt: [] } as const,
+      ])
+        expect(finished(program, interleaving)).toBe("done");
+      check(
+        property(sized(program), (interleaving) => {
+          expect(finished(program, interleaving)).toBe("done");
+        }),
+      );
     },
   );
+
+  // Regression: a parked run's fibers stayed among Effect's roots for the life
+  // of the process, with everything they held, and their finalizers never ran.
+  test.each([
+    [
+      "parked",
+      (log: string[]) =>
+        Effect.scoped(
+          Effect.addFinalizer(() => note(log, "released")).pipe(
+            Effect.zipRight(Deferred.make<void>()),
+            Effect.flatMap(Deferred.await),
+          ),
+        ),
+    ],
+    [
+      "finished, leaving a daemon waiting",
+      (log: string[]) =>
+        Deferred.make<void>().pipe(
+          Effect.flatMap(Deferred.await),
+          Effect.onInterrupt(() => note(log, "released")),
+          Effect.forkDaemon,
+        ),
+    ],
+    [
+      "stopped at the limit",
+      (log: string[]) =>
+        Effect.forever(Effect.void).pipe(Effect.onInterrupt(() => note(log, "released"))),
+    ],
+  ] as const)(
+    "a run %s leaves nothing behind: its fibers are interrupted and released",
+    (_ending, program) => {
+      const before = roots();
+      for (let run = 0; run < 10; run++) {
+        const log: string[] = [];
+        try {
+          simulate(program(log), fifo, { maxOps: 20_000 });
+        } catch (error) {
+          expect(String(error)).toContain("did not finish within 20000 ops");
+        }
+        expect(log).toEqual(["released"]);
+      }
+      expect(roots()).toBe(before);
+    },
+  );
+
+  test("a fiber that cannot be interrupted out of its wait fails the run loudly", () => {
+    const stuck = Deferred.make<void>().pipe(
+      Effect.flatMap(Deferred.await),
+      Effect.uninterruptible,
+    );
+    expect(() => simulate(stuck, fifo)).toThrow("did not finish when interrupted");
+  });
+
+  // Regression: a resolved promise settles on a microtask, after the run; the
+  // wake-up it then delivered threw into whatever ran next.
+  test("a run parked on a promise ends there: the promise settling afterwards runs nothing", async () => {
+    const log: string[] = [];
+    const before = roots();
+    const run = simulate(
+      Effect.promise(() => Promise.resolve(1)).pipe(Effect.zipRight(note(log, "settled"))),
+      fifo,
+    );
+    expect(run.parked).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(log).toEqual([]);
+    expect(roots()).toBe(before);
+  });
+
+  test("a callback fired after the run wakes nothing", () => {
+    const log: string[] = [];
+    let wake: (effect: Effect.Effect<void>) => void = () => {
+      throw new Error("the program never reached its wait");
+    };
+    const wait = Effect.async<void>((resume) => {
+      wake = resume;
+    }).pipe(Effect.zipRight(note(log, "woke")));
+    expect(simulate(wait, fifo).parked).toBe(true);
+    wake(Effect.void);
+    expect(log).toEqual([]);
+  });
 });
 
 describe("finding races", () => {
-  /**
-   * How many generated interleavings each fixture is searched over, on a fresh
-   * seed every run. Measured with `interleavings(64)` on 2026-10-04: the
-   * counter's race fails 1.8% of runs, the booking's 14%, so 1 000 runs miss
-   * the counter's with probability 0.982^1000, about 1e-8.
-   */
+  /** At least the page's run count for the counter, whose share of failing runs is the lower: docs/exports/interleaving.md. */
   const RUNS = 1_000;
-
-  /**
-   * A check-then-act across a yield: two bookings of the last seat, the second
-   * arriving two scheduling steps after the first. Run first in first out,
-   * the first has written before the second reads.
-   */
-  const booking = (locked: boolean) =>
-    Effect.gen(function* () {
-      const seats = yield* Ref.make(1);
-      const lock = yield* Effect.makeSemaphore(1);
-      const attempt = Effect.gen(function* () {
-        const left = yield* Ref.get(seats);
-        if (left === 0) return 0;
-        yield* Effect.yieldNow();
-        yield* Ref.set(seats, left - 1);
-        return 1;
-      });
-      const book = locked ? lock.withPermits(1)(attempt) : attempt;
-      const early = yield* Effect.fork(book);
-      const late = yield* Effect.fork(
-        Effect.yieldNow().pipe(Effect.zipRight(Effect.yieldNow()), Effect.zipRight(book)),
-      );
-      return (yield* Fiber.join(early)) + (yield* Fiber.join(late));
-    });
-
-  /**
-   * A read and a write of one counter as two synchronous steps, with nothing
-   * between them a test could wrap: only a preemption at the op boundary
-   * reaches it.
-   */
-  const counter = (atomic: boolean) =>
-    Effect.suspend(() => {
-      let hits = 0;
-      const bump = atomic
-        ? Effect.sync(() => {
-            hits += 1;
-          })
-        : Effect.sync(() => hits).pipe(
-            Effect.flatMap((seen) =>
-              Effect.sync(() => {
-                hits = seen + 1;
-              }),
-            ),
-          );
-      return Effect.gen(function* () {
-        yield* Fiber.joinAll([yield* Effect.fork(bump), yield* Effect.fork(bump)]);
-        return hits;
-      });
-    });
 
   const fixtures = [
     {
       name: "a check-then-act across a yield",
-      program: booking,
-      holds: (booked: number) => expect(booked).toBe(1),
+      program: (fixed: boolean): Effect.Effect<unknown> => booking(fixed),
+      holds: (fixed: boolean, interleaving: Interleaving) =>
+        expect(finished(booking(fixed), interleaving).sold).toBe(1),
     },
     {
       name: "a lost update between two synchronous ops",
       program: counter,
-      holds: (hits: number) => expect(hits).toBe(2),
+      holds: (fixed: boolean, interleaving: Interleaving) =>
+        expect(finished(counter(fixed), interleaving)).toBe(2),
     },
   ];
 
@@ -337,23 +503,57 @@ describe("finding races", () => {
   test.each(fixtures)(
     "$name: found, and its counterexample replays the race",
     ({ program, holds }) => {
-      expect(() => holds(finished(program(false), fifo))).not.toThrow();
+      expect(() => holds(false, fifo)).not.toThrow();
       const details = explore(
-        property(interleavings(64), (interleaving) =>
-          holds(finished(program(false), interleaving)),
-        ),
+        property(sized(program(false)), (interleaving) => holds(false, interleaving)),
         { numRuns: RUNS },
       );
       if (details.counterexample === null) throw new Error(`no race in ${RUNS} runs`);
-      const raced = finished(program(false), details.counterexample[0]);
-      expect(() => holds(raced)).toThrow();
+      const [raced] = details.counterexample;
+      expect(() => holds(false, raced)).toThrow("toBe");
     },
   );
 
   test.each(fixtures)("$name: the fixed version holds over as many runs", ({ program, holds }) => {
     check(
-      property(interleavings(64), (interleaving) => holds(finished(program(true), interleaving))),
+      property(sized(program(true)), (interleaving) => holds(true, interleaving)),
       { numRuns: RUNS },
     );
   });
+
+  /**
+   * The page's regression case for a race the search found, run over the
+   * booking: one preemption at every op of the unpreempted run, in order, with
+   * the seat sold once in each and both bookings in flight at once in at least
+   * one. Answers which preemption points broke the invariant.
+   */
+  function swept(locked: boolean, padding: number): number[] {
+    const program = booking(locked, padding);
+    const broken: number[] = [];
+    let overlapped = 0;
+    for (let op = 0; op < simulate(program, fifo).ops; op++) {
+      const run = finished(program, { strategy: "walk", preemptAt: [op], picks: [] });
+      if (run.sold !== 1) broken.push(op);
+      if (run.overlapped) overlapped += 1;
+    }
+    expect(overlapped).toBeGreaterThan(0);
+    return broken;
+  }
+
+  const shapes = [
+    ["as written", 1],
+    ["with one more op", 2],
+    ["with one fewer op", 0],
+  ] as const;
+
+  test.each(shapes)("the sweep over a racy booking %s finds the race", (_shape, padding) => {
+    expect(swept(false, padding)).not.toEqual([]);
+  });
+
+  test.each(shapes)(
+    "the sweep over a locked booking %s holds, with both bookings in flight at once",
+    (_shape, padding) => {
+      expect(swept(true, padding)).toEqual([]);
+    },
+  );
 });
