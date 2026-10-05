@@ -15,7 +15,7 @@ test("the tier list sorts", async ({ page, budget }) => {
 });
 ```
 
-The gate counts and never times. A stopwatch on a shared CI box measures the
+It counts and never times. A stopwatch on a shared CI box measures the
 box. A count of the work the page did is the same on every run of the same page,
 and it moves when the page does more work. The five counts were chosen because a
 measurement on the fleet's serving box (dev-config#142) found them identical over
@@ -185,8 +185,8 @@ test, recording nothing, when one of these preconditions does not hold.
 - **Iframes.** Their requests count, and their DOM and React do not.
 - **Work on a timer slower than two idle rounds.** A page that mutates the DOM a
   second after it went still has gone still in between, and the mutation lands in
-  whatever phase is running then, or nowhere. The count then differs from run to
-  run, which fails the test.
+  whatever phase is running then, or in none, depending on how long the phases
+  around it took. Such a count can differ from one run to the next.
 - **Time.** A change that makes the same work slower moves no count.
 - **Other browsers' counts.** The measurement behind this ran on Chromium 151
   only. That the counts hold over a longer horizon against a live API, and on
