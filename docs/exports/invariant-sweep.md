@@ -19,11 +19,13 @@ resolve to built JavaScript under `dist/`, because the runner that imports them
 is node — `tsdown.config.ts` in the package carries why, and STACK.md's shared
 UI library carries the bargain a committed `dist/` is.
 
-Three invariants, on every page the test visits in its context:
+Four invariants, on every page the test visits in its context:
 
 - no `console.error`,
 - no uncaught error in the page,
-- `documentElement.scrollWidth` no wider than its `clientWidth`.
+- `documentElement.scrollWidth` no wider than its `clientWidth`,
+- nothing moves once the page has settled, unless the user has just acted
+  (under "Movement after the page settled" below).
 
 They are invariants and not assertions because no single spec owns them. A flow
 test knows what it came to click; nobody's job is to notice that the checkout
@@ -93,15 +95,74 @@ that: it has been measured on every one of those changes anyway. A document whos
 `load` or fonts never arrive is waited on for 5s from when it started, and then
 let go.
 
+## Movement after the page settled
+
+The browser reports every movement of a page's content through the Layout
+Instability API: a `layout-shift` entry, with the elements that moved as its
+`sources`. The fourth invariant is that none arrives once the page has settled,
+unless the user has just acted. It is measured in the page, by the same script,
+and reported as it happens: a page the spec leaves by clicking a link, which
+nothing drains, has already said what moved on it.
+
+A page has **settled** the first time it goes quiet, as the horizon above means
+it: loaded, its fonts swapped in, and then 500ms without a load, a mutation or a
+font settling. That moment is latched, and every shift after it counts. A shift
+before it never does, which is what keeps the verdict steady: a page's early
+shifts — a font arriving, a bar growing before the app hydrates — land at a
+different moment on every load, and on some loads not at all. On the fleet's
+stats site the top bar moved in 16 loads of 20, anywhere from 200ms to 415ms in
+(dev-config#141), so a verdict on the whole load would have passed and failed
+that page by turns. On this sweep's own
+fixtures, over 20 runs on a quiet box and 20 against four busy loops competing
+for the same CPU, an early shift like that one landed 109ms to 349ms before the
+page settled and a shift 1.5s after `load` landed a second after it, and each
+gave the same verdict every time.
+
+The user has **just acted** when the browser marks the shift `hadRecentInput`
+(a click, a key, a tap in the 500ms before), or when an `input` or `change`
+event fired in the 500ms before. The second half is for Playwright's `fill` and
+`selectOption`, which change a field directly and dispatch those events, but
+send nothing the browser counts as input: without it, a form whose field grows a
+line under `fill` would fail. A click whose panel arrives after that half-second
+is the page moving on its own, and fails. So does a shift that `hover`,
+`focus()` or a `dispatchEvent` of any other event causes: none of them is input
+to the browser.
+
+The violation names the page, and what moved and how far as the browser's
+`sources` give it, up to three of them:
+
+```text
+layout-shift at https://app.example/pricing — main#content moved 60px down, after the page had settled and with no input in the 500ms before (layout-shift score 0.0045); reserve the space for whatever arrived late, or move it with a transform
+```
+
+The fix is almost always room reserved before the content arrives: a
+`min-height` on the slot a banner or an embed fills, `width` and `height` on an
+image, a skeleton the size of what replaces it. An animation that moves an
+element through `top`, `margin` or the size of a neighbour is a shift to the
+browser on every frame, where `transform` is not.
+
+Two pages it holds to nothing:
+
+- **A page that never goes quiet.** One that changes its DOM more often than
+  every 500ms for as long as it is open never settles, so nothing that moves on
+  it is counted. Ending the wait at the drain's own cutoff instead would put the
+  boundary at a fixed time after `load`, which a shift can land either side of
+  from one run to the next. A CSS animation is not a change to the DOM, so an
+  infinite spinner does not keep a page from settling.
+- **A page whose `load` never fires.** Not loaded, not settled.
+
+And it is Chromium's: Firefox and WebKit have no Layout Instability API, and on
+them this invariant sees nothing.
+
 ## What a page is allowed to say about itself
 
 A page is not a trusted narrator, and every one of these invariants reaches the
-sweep through something the page says: its own script reports overflow, and its
-console and its stack name where an error came from.
+sweep through something the page says: its own script reports overflow and
+layout shifts, and its console and its stack name where an error came from.
 
-The bridge takes **one string** and nothing else. The `kind` is always
-`overflow`, the URL is the one Playwright says that frame is at, and a report
-from anything but the top frame is dropped — so a cross-origin iframe cannot
+The bridge takes **one string**, and a `kind` it accepts only from the two the
+page measures, `overflow` and `layout-shift`. The URL is the one Playwright says
+that frame is at, and a report from anything but the top frame is dropped — so a cross-origin iframe cannot
 invent a violation for the page carrying it, nor choose which allowlist bucket
 one lands in. The string is stripped of every control character, which is what
 makes an ANSI escape inert (it needs its `ESC`) and a `::error::` workflow
@@ -134,9 +195,22 @@ export default defineConfig({
 
 The key is a **regular expression** tested against the URL the violation came
 _from_ — the script's URL for a console error or a thrown error, the page's for
-overflow. The source rather than the page is what lets one entry cover a
-third-party embed wherever it is carried, instead of one entry per page carrying
-it.
+overflow and for a layout shift. The source rather than the page is what lets
+one entry cover a third-party embed's errors wherever it is carried, instead of
+one entry per page carrying it.
+
+A shift is the exception that has no source to name. The browser says what
+moved, never what moved it, so a widget that resizes itself and pushes the page
+down is allowed by naming the pages that carry it:
+
+```ts
+sweepAllowlist: {
+  "/pricing$": "the scheduling widget sizes itself once it has loaded; its height is the vendor's",
+},
+```
+
+That entry tolerates every violation on `/pricing`, its own console errors
+included, as an entry for an overflowing page always has.
 
 A key is a pattern, not a URL. A metacharacter in a URL needs its backslash:
 `"https://cdn.vendor.example/embed.js?v=3"` as written does not match that
@@ -215,9 +289,10 @@ already declares it as a fixture that is not an option.
 - **A context the spec builds itself.** A page opened through
   `browser.newPage()` or `browser.newContext()` is outside the context this
   fixture watches, so it is neither swept nor recorded (dev-config#136).
-- **An iframe's own overflow.** The check runs in the top frame only: an embed
-  scrolling sideways inside its own box is the embed's business, and its
-  `documentElement` is not the page.
+- **An iframe's own overflow, or its own layout shifts.** The checks run in the
+  top frame only: an embed scrolling sideways or rearranging itself inside its
+  own box is the embed's business, and its `documentElement` is not the page.
+  An embed that grows and pushes the page is the page's, and is seen.
 - **`console.warn`, and any other level.** Errors only.
 - **Graceful empty states**, which testing.md names alongside zero console
   errors and no layout overflow.

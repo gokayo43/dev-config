@@ -4,8 +4,9 @@ import { expect, test as test$1 } from "@playwright/test";
 * The E2E invariant sweep testing.md asks of every visited page, as a Playwright
 * fixture a repo imports instead of `@playwright/test`'s own `test`:
 *
-*   no page logged a `console.error`, no page threw, and no page scrolled
-*   sideways.
+*   no page logged a `console.error`, no page threw, no page scrolled
+*   sideways, and nothing on a page moved after it settled without the user
+*   having acted.
 *
 * They are invariants rather than assertions because no single test owns them.
 * A flow test knows what it came to click; nobody's job is to notice that the
@@ -19,7 +20,8 @@ import { expect, test as test$1 } from "@playwright/test";
 *
 * The console and the page's own errors arrive as events, so those are the easy
 * half. Overflow is a measurement, and a measurement has to happen somewhere,
-* at some moment. Two designs that do not work:
+* at some moment; a layout shift is an entry the browser hands only to an
+* observer that was in the page when it happened. Two designs that do not work:
 *
 * - **After each `goto`.** A test that navigates by clicking a link never calls
 *   `goto`, and those pages would go unswept while the fixture claimed to sweep
@@ -45,13 +47,13 @@ import { expect, test as test$1 } from "@playwright/test";
 *
 * ## What the page is allowed to say about itself
 *
-* A page is not a trusted narrator. The bridge takes **one string** from it and
-* nothing else: the `kind` is always `overflow`, and the URL is the one
-* Playwright says that frame is at. Reports from anything but the top frame are
-* dropped, so a cross-origin iframe cannot invent a violation for the page
-* carrying it, and the string itself is stripped of control characters — which
-* is what stops an embed writing ANSI escapes or a `::error::` workflow command
-* into somebody's CI annotation.
+* A page is not a trusted narrator. The bridge takes **one string** from it, and
+* a `kind` it accepts only from the two the page measures, `overflow` and
+* `layout-shift`; the URL is the one Playwright says that frame is at. Reports
+* from anything but the top frame are dropped, so a cross-origin iframe cannot
+* invent a violation for the page carrying it, and the string itself is
+* stripped of control characters — which is what stops an embed writing ANSI
+* escapes or a `::error::` workflow command into somebody's CI annotation.
 *
 * The same reasoning decides which URL a console error is attributed to. The
 * console reports the script's URL, and a script's URL is whatever its
@@ -78,6 +80,13 @@ const DRAINER = "__invariantSweepDrain";
 * applies it to the DOM.
 */
 const QUIET = 500;
+/**
+* How long after the user acts a layout shift is theirs, in ms: the window the
+* Layout Instability spec sets `hadRecentInput` by, applied as well to the
+* `input` and `change` events that Playwright's `fill` and `selectOption`
+* dispatch without anything the browser counts as input.
+*/
+const ACTED = 500;
 /**
 * How long a document that never armed — one whose `load` or whose fonts never
 * arrive — is waited out, in ms: the 5s Playwright's own `expect` gives a page
@@ -128,6 +137,11 @@ function recorded(video) {
 		mode: "on"
 	};
 }
+/** The violations the page measures for itself, which are the only kinds it may name over the bridge. */
+const MEASURED = ["overflow", "layout-shift"];
+function measured(kind) {
+	return MEASURED.some((each) => each === kind);
+}
 /**
 * Asking the document to drain, as an expression rather than a function for the
 * same reason `WATCH` is one: there is no DOM lib here to type it with.
@@ -162,10 +176,25 @@ const DRAIN = `window.${DRAINER}()`;
 * twice that, which is an animation: it is measured on every one of those
 * changes, so waiting for a gap that will not come buys nothing. Or it **never
 * armed** at all, and `CAP` has passed since the script ran.
+*
+* The first of those, and only the first, is also when the document has
+* **settled**, latched the first time it happens: from then on a layout shift the
+* user did not cause is a violation. Not the other two, because neither is a
+* page at rest — one is still loading and the other is still changing — and a
+* shift either would admit is one the next run can land on the other side of.
+* The latch is decided at each moment, before that moment moves the deadline,
+* so the change that causes a shift is never mistaken for the page still
+* settling; and on the browser's own clock, which is the one a shift's
+* `startTime` is stamped on.
 */
 const WATCH = `(() => {
   if (window.top !== window) return;
   const seen = new Set();
+  const say = (kind, key, detail) => {
+    if (seen.has(kind + " " + key)) return;
+    seen.add(kind + " " + key);
+    window.${REPORTER}(kind, detail);
+  };
   const describe = (el) => {
     const id = el.id ? "#" + el.id : "";
     const names = typeof el.className === "string" ? el.className.trim() : "";
@@ -184,16 +213,22 @@ const WATCH = `(() => {
     const named = (innermost.length ? innermost : past).slice(0, ${OFFENDERS}).map(describe).join(", ");
     const detail = root.scrollWidth + "px of content in a " + limit + "px viewport"
       + (named ? ", reaching past the right edge: " + named : "");
-    if (seen.has(detail)) return;
-    seen.add(detail);
-    window.${REPORTER}(detail);
+    say("overflow", detail, detail);
   };
-  const started = Date.now();
+  const started = performance.now();
   let armed = 0;
   let changed = 0;
+  let settled = Infinity;
+  let acted = -Infinity;
   let queued = false;
+  const quietAt = () => armed === 0 ? Infinity : Math.max(changed, armed) + ${QUIET};
+  const settle = (now) => {
+    if (settled === Infinity && now >= quietAt()) settled = quietAt();
+  };
   const soon = () => {
-    changed = Date.now();
+    const now = performance.now();
+    settle(now);
+    changed = now;
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => { queued = false; check(); });
@@ -204,16 +239,59 @@ const WATCH = `(() => {
     : new Promise((done) => window.addEventListener("load", done, { once: true }));
   fonts.then(soon);
   loaded.then(soon);
-  Promise.all([fonts, loaded]).then(() => { armed = Date.now(); soon(); });
+  Promise.all([fonts, loaded]).then(() => { armed = performance.now(); soon(); });
   const until = () => armed === 0
     ? started + ${CAP}
-    : Math.min(Math.max(changed, armed) + ${QUIET}, armed + ${QUIET * 2});
+    : Math.min(quietAt(), armed + ${QUIET * 2});
+  const named = (source) => {
+    const node = source.node && source.node.nodeType !== Node.ELEMENT_NODE
+      ? source.node.parentElement
+      : source.node;
+    return node ? describe(node) : "an element no longer in the page";
+  };
+  const travel = (source) => {
+    const from = source.previousRect;
+    const to = source.currentRect;
+    if (from.width * from.height === 0) return "into view";
+    if (to.width * to.height === 0) return "out of view";
+    const dy = Math.round(to.y - from.y);
+    const dx = Math.round(to.x - from.x);
+    const legs = [];
+    if (dy !== 0) legs.push(Math.abs(dy) + "px " + (dy > 0 ? "down" : "up"));
+    if (dx !== 0) legs.push(Math.abs(dx) + "px " + (dx > 0 ? "right" : "left"));
+    return legs.length ? legs.join(" and ") : "by less than a pixel";
+  };
+  const shifted = (entries) => {
+    settle(performance.now());
+    for (const entry of entries) {
+      if (entry.startTime < settled || entry.hadRecentInput || entry.startTime - acted <= ${ACTED}) continue;
+      const sources = entry.sources.slice(0, ${OFFENDERS});
+      const moved = sources.map((source) => named(source) + " moved " + travel(source)).join(", ");
+      say("layout-shift", sources.map(named).join(", "), moved
+        + ", after the page had settled and with no input in the ${ACTED}ms before (layout-shift score "
+        + entry.value.toFixed(4) + "); reserve the space for whatever arrived late, or move it with a transform");
+    }
+  };
+  // Firefox and WebKit have no Layout Instability API, and observing a type a
+  // browser lacks logs a warning rather than throwing.
+  const shifts = PerformanceObserver.supportedEntryTypes.includes("layout-shift")
+    ? new PerformanceObserver((list) => shifted(list.getEntries()))
+    : undefined;
+  if (shifts) shifts.observe({ type: "layout-shift" });
+  // An observer is called some time after the frame a shift happened in, and a
+  // document on its way out is not called again.
+  const flush = () => { if (shifts) shifted(shifts.takeRecords()); };
+  window.addEventListener("pagehide", flush);
+  for (const type of ["input", "change"]) {
+    window.addEventListener(type, (event) => { acted = event.timeStamp; }, true);
+  }
   window.${DRAINER} = () => new Promise((done) => {
     const wait = () => {
-      const left = until() - Date.now();
+      const left = until() - performance.now();
       // Capped, so that a document arming mid-wait is noticed rather than slept
       // through: once armed, the deadline is never further off than this.
       if (left > 0) return void setTimeout(wait, Math.min(left, ${QUIET}));
+      flush();
       requestAnimationFrame(() => requestAnimationFrame(done));
     };
     wait();
@@ -333,29 +411,33 @@ const test = test$1.extend({
 			page.goBack = draining(page.goBack.bind(page));
 			page.goForward = draining(page.goForward.bind(page));
 			page.setContent = draining(page.setContent.bind(page));
-			page.on("response", (response) => {
-				if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
-			});
-			page.on("console", (message) => {
-				if (message.type() !== "error") return;
-				record({
-					kind: "console.error",
-					at: from(message.location().url, page),
-					detail: sanitized(message.text())
-				});
-			});
-			page.on("pageerror", (error) => {
-				record({
-					kind: "pageerror",
-					at: from(scriptIn(error.stack), page),
-					detail: sanitized(error.message)
-				});
-			});
 		};
-		await context.exposeBinding(REPORTER, ({ frame, page }, detail) => {
-			if (frame !== page.mainFrame()) return;
+		context.on("response", (response) => {
+			if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
+		});
+		context.on("console", (message) => {
+			const page = message.page();
+			if (page === null || message.type() !== "error") return;
 			record({
-				kind: "overflow",
+				kind: "console.error",
+				at: from(message.location().url, page),
+				detail: sanitized(message.text())
+			});
+		});
+		context.on("weberror", (thrown) => {
+			const page = thrown.page();
+			if (page === null) return;
+			const error = thrown.error();
+			record({
+				kind: "pageerror",
+				at: from(scriptIn(error.stack), page),
+				detail: sanitized(error.message)
+			});
+		});
+		await context.exposeBinding(REPORTER, ({ frame, page }, kind, detail) => {
+			if (frame !== page.mainFrame() || !measured(kind)) return;
+			record({
+				kind,
 				at: frame.url(),
 				detail: sanitized(detail)
 			});

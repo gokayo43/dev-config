@@ -126,7 +126,8 @@ a change to a rule usually lands here too.
   the protocol between an app and the two floors over its route table;
   `invariant-sweep.ts` replaces Playwright's browser context with one that
   watches every page it opens, popups included, trusts a page for one
-  sanitised sentence and nothing else, and turns Playwright's own `video` on
+  sanitised sentence and a kind it measures and nothing else, and turns
+  Playwright's own `video` on
   when the run sets `E2E_VIDEO=on`; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
   block a repo's limiter has to pass; `response-schema.ts` grades an Elysia
   app's own route table; `characterization-net.ts` is the harness under a golden

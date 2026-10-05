@@ -64,6 +64,38 @@ const EVERY = 100;
 const BEFORE_QUIET = 200;
 
 /**
+ * When the early page's bar grows, in ms after navigation starts, and how often
+ * it does: the window and the rate the stats site's top bar was measured at
+ * (dev-config#141), 16 loads in 20 between 200ms and 415ms. Before the page has
+ * settled, so no verdict may turn on it.
+ */
+const EARLY = { from: 200, to: 415, rate: 16 / 20 } as const;
+
+/**
+ * How long after its own `load` event the late page moves, in ms: three quiet
+ * windows past the moment a page that does nothing else settles.
+ */
+const LATE_SHIFT = 1_500;
+
+/**
+ * How long the slow panel takes to arrive after the click that asked for it, in
+ * ms: past the 500ms in which a shift is still the user's.
+ */
+const SLOW_PANEL = 900;
+
+/** How many popups the opener writes an error into, each before Playwright has reported it. */
+export const WRITTEN = 16;
+
+/** One block of the height a shift is measured in, so a diagnostic's distance is a number known here. */
+const BLOCK = 60;
+
+/** A block of content below whatever moves, which is what a shift's sources name. */
+const CONTENT = `<main id="content">the content</main>`;
+
+/** A script that adds a `BLOCK`-high element above the content. */
+const PUSH = `const b = document.createElement("div"); b.id = "banner"; b.style.height = "${BLOCK}px"; document.body.prepend(b);`;
+
+/**
  * What the fixture server answers, by path. Each page is one invariant broken
  * one way, or a page that breaks none. `embed` is the *other* origin's, which
  * is what makes a cross-origin frame cross-origin.
@@ -203,6 +235,68 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
         type: "text/html",
         body: html(`<script>console.error("the almost-clean page is unhappy")</script>`),
       },
+      // Each popup has its error written into it by its opener before Playwright
+      // has finished reporting the popup, which is the moment a listener on the
+      // page is too late for (dev-config#144).
+      "/opens-written-errors": {
+        type: "text/html",
+        body: html(
+          `<button id="open">open</button><script>document.getElementById("open").addEventListener("click", () => { for (let n = 0; n < ${WRITTEN}; n++) window.open().console.error("written popup " + n + " is unhappy"); })</script>`,
+        ),
+      },
+      // The bar grows before the page has settled, at a moment and on a share of
+      // loads drawn the way the stats site's was measured; `?at=` pins the
+      // moment, and the shift, for a case that must see it every time.
+      "/early-shift": {
+        type: "text/html",
+        body: html(
+          `<header id="bar" style="height:40px"></header>${CONTENT}<script>const pinned = new URLSearchParams(location.search).get("at"); const at = pinned !== null ? Number(pinned) : Math.random() < ${EARLY.rate} ? ${EARLY.from} + Math.random() * ${EARLY.to - EARLY.from} : null; if (at !== null) setTimeout(() => { document.getElementById("bar").style.height = "48px"; }, at - performance.now());</script>`,
+        ),
+      },
+      // A banner that arrives long after the page settled, pushing the content
+      // down: a header arriving late.
+      "/late-shift": {
+        type: "text/html",
+        body: html(
+          `${CONTENT}<a href="/clean">on</a><script>addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
+        ),
+      },
+      // Everything here moves the content because the user did something: a
+      // click opens a panel, typing grows a textarea, and a field that is filled
+      // or a select that is chosen shows a line above it — the last two through
+      // Playwright calls that dispatch `input` and `change` and nothing the
+      // browser counts as input.
+      "/acted": {
+        type: "text/html",
+        body: html(
+          `<div id="panel"></div><button id="open">open</button><input id="field" aria-label="field"><select id="pick" aria-label="pick"><option>a</option><option>b</option></select><textarea id="grow" aria-label="grow" rows="1"></textarea>${CONTENT}<script>const line = (text) => { const d = document.createElement("p"); d.textContent = text; document.getElementById("panel").append(d); }; document.getElementById("open").addEventListener("click", () => line("opened")); document.getElementById("field").addEventListener("input", () => line("filled")); document.getElementById("pick").addEventListener("change", () => line("picked")); document.getElementById("grow").addEventListener("input", (e) => { e.target.style.height = e.target.scrollHeight + "px"; });</script>`,
+        ),
+      },
+      // The click asks for a panel that arrives after the user's half-second is
+      // over, which is the page moving on its own.
+      "/slow-panel": {
+        type: "text/html",
+        body: html(
+          `<button id="open">open</button>${CONTENT}<script>document.getElementById("open").addEventListener("click", () => setTimeout(() => { ${PUSH} }, ${SLOW_PANEL}))</script>`,
+        ),
+      },
+      // Writes a style faster than the quiet window for as long as it is open,
+      // so it never settles, and moves its content late all the same.
+      "/restless-shift": {
+        type: "text/html",
+        body: html(
+          `<div id="spinner" style="height:10px"></div>${CONTENT}<script>let n = 0; setInterval(() => { document.getElementById("spinner").style.width = ((++n % 40) + 1) + "px"; }, ${EVERY}); addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
+        ),
+      },
+      // A third-party embed that asks its host for more room once it has loaded
+      // what it shows, the way an oEmbed widget does, and pushes the host's
+      // content down when it gets it.
+      "/shifting-embed": {
+        type: "text/html",
+        body: html(
+          `<iframe id="widget" src="${embed}/resizing.html" style="display:block;border:0;width:300px;height:20px"></iframe>${CONTENT}<script>addEventListener("message", (event) => { if (event.origin === ${JSON.stringify(embed)}) document.getElementById("widget").style.height = event.data + "px"; })</script>`,
+        ),
+      },
     }),
   );
 }
@@ -230,6 +324,14 @@ function embedding(): { origin: string; stop: () => Promise<void> } {
         return new Response(html(`<script>${forged}</script>`), {
           headers: { "content-type": "text/html" },
         });
+      }
+      if (path === "/resizing.html") {
+        return new Response(
+          html(
+            `<script>addEventListener("load", () => setTimeout(() => parent.postMessage(${20 + BLOCK}, "*"), ${LATE_SHIFT}))</script>`,
+          ),
+          { headers: { "content-type": "text/html" } },
+        );
       }
       if (path === "/throws.html") {
         return new Response(html(`<script>window.nothing.atAll()</script>`), {

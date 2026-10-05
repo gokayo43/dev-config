@@ -60,7 +60,7 @@ through `files` and `exports`, and each has a page of its own:
 | Export                                                         | Imported by                    | What it holds                                                             |
 | -------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------- |
 | [`route-log`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the two floors over its route table       |
-| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error or sideways scroll, on every page of the test's context  |
+| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error, sideways scroll or unprompted shift on the test's pages |
 | [`limiter-conformance`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                       |
 | [`property`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further  |
 | [`interleaving`](docs/exports/interleaving.md)                 | a property over Effect fibers  | the order overlapping fibers run in, generated and replayable from a seed |

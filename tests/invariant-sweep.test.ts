@@ -19,7 +19,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { type Outcome, serving, sweeping, type Use } from "./sweep-fixture.ts";
+import { type Outcome, serving, sweeping, type Use, WRITTEN } from "./sweep-fixture.ts";
 
 const SWEEP = JSON.stringify(`${import.meta.dir}/../invariant-sweep.ts`);
 
@@ -55,6 +55,13 @@ const A_DEPARTURE = 2_000;
 
 /** How many times the animated case leaves the page, which is what its budget multiplies. */
 const DEPARTURES = 5;
+
+/**
+ * How long a spec stays on a page that does nothing before acting on it, in ms:
+ * twice the quiet window, so whatever the spec does next happens on a page that
+ * has settled, and a sweep that counted it would have to say so.
+ */
+const SETTLED = 1_000;
 
 /** Every case's spec; the reporter's outcome for each is found by its title. */
 const CASES = [
@@ -187,6 +194,82 @@ const CASES = [
   // ...and an allowlist that names something else does not quietly cover it.
   spec("an allowlist that matches nothing tolerates nothing", `  await page.goto("/embedded");`, {
     sweepAllowlist: { "/analytics\\.js$": "a pattern for an embed this page does not carry" },
+  }),
+  // Every popup's error is written before Playwright has reported the popup, so
+  // a sweep listening on each page as it arrives hears some of them and not
+  // others (dev-config#144). One case, many popups: each is a fresh chance for
+  // that race to drop one.
+  spec(
+    "an error a popup logs before it is reported is swept",
+    `  await page.goto("/opens-written-errors");\n  await page.click("#open");\n  await expect.poll(() => context.pages().length).toBe(${WRITTEN + 1});`,
+  ),
+  // The bar grows before the page settles, every time and at the latest moment
+  // it was measured at on the stats site. A sweep that counted the whole load
+  // fails this.
+  spec(
+    "a shift before the page settled is not counted",
+    `  await page.goto("/early-shift?at=415");\n  await expect(page.locator("#bar")).toHaveCSS("height", "48px");`,
+  ),
+  // The page as it was measured: whether the bar grows, and when, is drawn on
+  // every load, and the verdict may not depend on the draw.
+  spec(
+    "a page whose early shift comes and goes passes",
+    `  await page.goto("/early-shift");\n  await page.waitForTimeout(${SETTLED});`,
+  ),
+  spec(
+    "a shift after the page settled fails",
+    `  await page.goto("/late-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
+  ),
+  // Left by a click, so nothing drains the page: what it saw has to have
+  // crossed as it happened. A sweep that read the page's shifts once, at the
+  // end, reads the clean page this spec ends on.
+  spec(
+    "a page the test left by a link still reports its shift",
+    `  await page.goto("/late-shift");\n  await expect(page.locator("#banner")).toBeAttached();\n  await page.getByRole("link").click();\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+  ),
+  // Input the browser counts: a click and keys. A sweep that took every shift
+  // without asking whether the user had just acted fails this.
+  spec(
+    "a page that moves because the user clicked or typed passes",
+    `  await page.goto("/acted");\n  await page.waitForTimeout(${SETTLED});\n  await page.click("#open");\n  await page.locator("#grow").pressSequentially("a\\nb\\nc");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  // Input the browser does not count, because Playwright changes the field
+  // directly and dispatches the events a person's typing would have: `fill`
+  // and `selectOption`. A sweep that asked only the browser fails this.
+  spec(
+    "a page that moves because the spec filled a field or chose an option passes",
+    `  await page.goto("/acted");\n  await page.waitForTimeout(${SETTLED});\n  await page.fill("#field", "x");\n  await page.selectOption("#pick", "b");\n  await expect(page.locator("#panel p")).toHaveCount(2);`,
+  ),
+  // The click is the user's, and the panel it asked for arrives after their
+  // half-second is up. A sweep that stopped counting once the user had acted at
+  // all passes this.
+  spec(
+    "a shift that arrives long after the click fails",
+    `  await page.goto("/slow-panel");\n  await page.waitForTimeout(${SETTLED});\n  await page.click("#open");\n  await expect(page.locator("#banner")).toBeAttached();`,
+  ),
+  // Never quiet, so never settled, so its late shift is never counted: pinned,
+  // because counting from the cutoff a restless page is drained at instead is a
+  // boundary a shift lands either side of from one run to the next.
+  spec(
+    "a page that never goes quiet is not held to the shift invariant",
+    `  await page.goto("/restless-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
+  ),
+  spec(
+    "an embed that shifts its host fails the host",
+    `  await page.goto("/shifting-embed");\n  await expect(page.locator("#widget")).toHaveCSS("height", "80px");`,
+  ),
+  spec(
+    "an allowlisted page's embed may shift it",
+    `  await page.goto("/shifting-embed");\n  await expect(page.locator("#widget")).toHaveCSS("height", "80px");`,
+    { sweepAllowlist: { "/shifting-embed$": "the widget sizes itself once it has loaded" } },
+  ),
+  spec(
+    "an entry for a shifting embed covers no other page",
+    `  await page.goto("/late-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
+    { sweepAllowlist: { "/shifting-embed$": "the widget sizes itself once it has loaded" } },
+  ),
+  spec("an entry no test reaches costs nothing", `  await page.goto("/clean");`, {
+    sweepAllowlist: { "/shifting-embed$": "the widget sizes itself once it has loaded" },
   }),
 ];
 
@@ -332,6 +415,20 @@ describe("what the sweep lets through", () => {
   test("an embed's thrown error is attributed to the embed", () => {
     expect(outcome("an embed's thrown error is attributed to the embed").ok).toBe(true);
   });
+
+  test.each([
+    "a shift before the page settled is not counted",
+    "a page whose early shift comes and goes passes",
+    "a page that moves because the user clicked or typed passes",
+    "a page that moves because the spec filled a field or chose an option passes",
+    "a page that never goes quiet is not held to the shift invariant",
+    "an allowlisted page's embed may shift it",
+    "an entry no test reaches costs nothing",
+  ])("%s", (title) => {
+    const { ok, said } = outcome(title);
+    expect(said).toBe("");
+    expect(ok).toBe(true);
+  });
 });
 
 describe("what the sweep catches", () => {
@@ -370,6 +467,11 @@ describe("what the sweep catches", () => {
       "a request this page depends on failed",
     ],
     ["overflow that arrives with a subresource is swept", "overflow", "img#slow"],
+    ["a shift after the page settled fails", "layout-shift", "/late-shift"],
+    ["a page the test left by a link still reports its shift", "layout-shift", "/late-shift"],
+    ["a shift that arrives long after the click fails", "layout-shift", "/slow-panel"],
+    ["an embed that shifts its host fails the host", "layout-shift", "/shifting-embed"],
+    ["an entry for a shifting embed covers no other page", "layout-shift", "/late-shift"],
     [
       "an allowlist key that is not a pattern says so",
       'sweepAllowlist key "(unclosed"',
@@ -444,6 +546,22 @@ describe("what the sweep catches", () => {
   // a page nobody can fix and `div#wide` is one somebody can.
   test("an overflow diagnostic names what is sticking out", () => {
     expect(outcome("a page wider than its viewport fails").said).toContain("div#wide");
+  });
+
+  // Every one of them, which is what says no popup's first word was lost.
+  test("an error a popup logs before it is reported is swept", () => {
+    const { ok, said } = outcome("an error a popup logs before it is reported is swept");
+    expect(ok).toBe(false);
+    for (let n = 0; n < WRITTEN; n++) expect(said).toContain(`written popup ${n} is unhappy`);
+  });
+
+  // A stranger reads this in a repo they did not write: what moved, how far, and
+  // what to do about it, on the page it moved on.
+  test("a shift diagnostic names what moved, how far, and what to do", () => {
+    const { said } = outcome("a shift after the page settled fails");
+    expect(said).toContain("main#content moved 60px down");
+    expect(said).toContain("with no input in the 500ms before");
+    expect(said).toContain("reserve the space for whatever arrived late");
   });
 
   // What to do, not what went wrong: the allowlist is the other half of the fix.
