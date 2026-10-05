@@ -419,7 +419,7 @@ interface Run {
  * What is copied is what the manifest ships, so the fixture installs the package
  * as published rather than a list kept in step with `files` by hand.
  */
-async function install(root: string): Promise<void> {
+export async function install(root: string): Promise<void> {
   const modules = join(root, "node_modules");
   const installed = join(HERE, "node_modules");
   const manifest = record(await Bun.file(join(HERE, "package.json")).json());

@@ -41,6 +41,10 @@
       "types": "./dist/invariant-sweep.d.ts",
       "default": "./dist/invariant-sweep.js"
     },
+    "./count-budget": {
+      "types": "./dist/count-budget.d.ts",
+      "default": "./dist/count-budget.js"
+    },
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
     "./interleaving": "./interleaving.ts",
@@ -75,6 +79,8 @@
     "oxfmt": "0.63.0",
     "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2001",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "tailwindcss": "4.3.3",
     "tsdown": "0.23.0",
     "typescript": "7.0.2"

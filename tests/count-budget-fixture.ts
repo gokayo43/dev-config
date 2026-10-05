@@ -1,0 +1,383 @@
+/**
+ * The pages the count budget is driven over, the React app among them, and the
+ * Playwright runs that drive it.
+ *
+ * The app is built once per suite, in memory, for production: React calls the
+ * DevTools hook on a production build too, and a development build commits and
+ * mutates differently enough that counts read from it would grade nothing a
+ * consumer ships.
+ */
+import { join } from "node:path";
+
+import { type ConfigObject, isList, plainly, record } from "../.github/actions/_lib/gate.ts";
+import { install } from "./sweep-fixture.ts";
+import { materialise } from "./tree.ts";
+
+const HERE = join(import.meta.dir, "..");
+
+/** How many rows one page of the list holds. */
+export const ROWS = 20;
+
+/** How many characters of unrendered detail each row carries under the heavy plant. */
+const DETAIL = 2_000;
+
+/** How long the tail page's late work runs past `load`: this many 10ms tasks, past the 500ms Playwright calls network idle. */
+const TAIL_TASKS = 100;
+
+/**
+ * The list, and the three regressions planted in it, chosen by `?plant=`:
+ * `rerender` lifts the hover highlight into the list's state, so one hover
+ * re-renders every row; `request` has every row fetch its own detail on mount;
+ * `heavy` asks the API for a detail field per row that nothing renders.
+ */
+const APP = `import { createElement as h, useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+const plant = new URLSearchParams(location.search).get("plant") ?? "none";
+
+function Probe({ id }) {
+  useEffect(() => {
+    fetch("/api/row/" + id);
+  }, [id]);
+  return null;
+}
+
+function App() {
+  const [rows, setRows] = useState([]);
+  const [hovered, setHovered] = useState(null);
+  const [footer, setFooter] = useState(null);
+  useEffect(() => {
+    fetch("/api/rows?page=1" + (plant === "heavy" ? "&detail=full" : ""))
+      .then((response) => response.json())
+      .then(setRows);
+  }, []);
+  const more = () =>
+    Promise.all([import("./count-budget-footer.js"), fetch("/api/rows?page=2").then((response) => response.json())]).then(
+      ([{ Footer }, next]) => {
+        setRows((held) => [...held, ...next]);
+        setFooter(() => Footer);
+      },
+    );
+  return h(
+    "main",
+    null,
+    h(
+      "ul",
+      null,
+      rows.map((row) =>
+        h(
+          "li",
+          {
+            key: row.id,
+            className: plant === "rerender" && hovered === row.id ? "row hovered" : "row",
+            onMouseEnter: plant === "rerender" ? () => setHovered(row.id) : undefined,
+          },
+          row.name,
+          plant === "request" ? h(Probe, { id: row.id }) : null,
+        ),
+      ),
+    ),
+    h("button", { onClick: more }, "more"),
+    footer === null ? null : h(footer),
+  );
+}
+
+createRoot(document.getElementById("root")).render(h(App));
+`;
+
+const FOOTER = `import { createElement as h } from "react";
+
+export function Footer() {
+  return h("footer", null, "the end of the list");
+}
+`;
+
+/** The built app, by the path it is served at. */
+async function built(): Promise<Map<string, string>> {
+  const entry = join(import.meta.dir, "count-budget-app.js");
+  const build = await Bun.build({
+    entrypoints: [entry],
+    files: { [entry]: APP, [join(import.meta.dir, "count-budget-footer.js")]: FOOTER },
+    splitting: true,
+    minify: true,
+    define: { "process.env.NODE_ENV": JSON.stringify("production") },
+  });
+  if (!build.success) {
+    throw new Error(
+      `the fixture app did not build:\n${build.logs.map((log) => log.message).join("\n")}`,
+    );
+  }
+  const served = new Map<string, string>();
+  for (const output of build.outputs) {
+    served.set(`/assets/${output.path.replace(/^\.\//, "")}`, await output.text());
+  }
+  return served;
+}
+
+function html(head: string, body: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>fixture</title>${head}</head><body>${body}</body></html>`;
+}
+
+function rows(page: number, detail: boolean): string {
+  return JSON.stringify(
+    Array.from({ length: ROWS }, (_, index) => {
+      const id = (page - 1) * ROWS + index + 1;
+      return { id, name: `row ${id}`, ...(detail ? { detail: "d".repeat(DETAIL) } : {}) };
+    }),
+  );
+}
+
+/** Appends one empty element to the body: one mutation record. */
+const ADD = `const add = () => document.body.append(document.createElement("div"));`;
+
+/**
+ * The plain pages, none of them React. `other` is an origin the test does not
+ * serve, which is what the origin rule is about.
+ */
+function pagesFor(other: string, entry: string): Map<string, string> {
+  return new Map(
+    Object.entries({
+      "/app": html(
+        `<style>.row:hover,.row.hovered{background:#eee}</style>`,
+        `<div id="root"></div><script type="module" src="${entry}"></script>`,
+      ),
+      // Work that runs on past `load` in back-to-back tasks. Asked for a tail,
+      // it then appends four elements and a button, which appends one more
+      // when clicked: a spec that clicks it waits for the tail to land.
+      "/tail": html(
+        "",
+        `<script>${ADD}
+addEventListener("load", () => {
+  const channel = new MessageChannel();
+  let left = ${TAIL_TASKS};
+  channel.port1.onmessage = () => {
+    const until = performance.now() + 10;
+    while (performance.now() < until);
+    if (--left > 0) return channel.port2.postMessage(null);
+    if (!location.search.includes("tail")) return;
+    for (let i = 0; i < 4; i++) add();
+    const late = document.createElement("button");
+    late.id = "late";
+    late.textContent = "add";
+    late.addEventListener("click", add);
+    document.body.append(late);
+  };
+  channel.port2.postMessage(null);
+});</script>`,
+      ),
+      // A click that mutates the document it is about to leave.
+      "/leaving": html(
+        "",
+        `<a id="go" href="/landing">go</a><script>${ADD}
+document.getElementById("go").addEventListener("click", add);</script>`,
+      ),
+      "/landing": html("", `<p>landed</p>`),
+      // Appends `?mutations=` elements, fetches `/bytes` `?requests=` times, and
+      // loads a script, so a test chooses its own counts.
+      "/counted": html(
+        "",
+        `<script src="/counted.js"></script><script>${ADD}
+const asked = new URLSearchParams(location.search);
+for (let i = 0; i < Number(asked.get("mutations")); i++) add();
+for (let i = 0; i < Number(asked.get("requests")); i++) fetch("/bytes");</script>`,
+      ),
+      "/external": html(
+        "",
+        `<script>fetch("${other}/data").then((response) => response.text()).then((text) => document.body.append(text), () => document.body.append("failed"))</script>`,
+      ),
+      // Moves every frame whatever the user's motion preference.
+      "/restless": html(
+        "",
+        `<div id="spin" style="height:4px;background:#333"></div><script>let n = 0;
+const step = () => { document.getElementById("spin").style.width = (++n % 50) + "px"; requestAnimationFrame(step); };
+requestAnimationFrame(step);</script>`,
+      ),
+      // Moves every frame unless the user asked for reduced motion.
+      "/motion": html(
+        "",
+        `<div id="spin" style="height:4px;background:#333"></div><script>let n = 0;
+const step = () => { document.getElementById("spin").style.width = (++n % 50) + "px"; requestAnimationFrame(step); };
+if (!matchMedia("(prefers-reduced-motion: reduce)").matches) requestAnimationFrame(step);</script>`,
+      ),
+      "/hanging": html("", `<script>fetch("/never")</script>`),
+      "/blob": html(
+        "",
+        `<script>fetch(URL.createObjectURL(new Blob(["made here"]))).then((response) => response.text()).then((text) => document.body.append(text))</script>`,
+      ),
+    }),
+  );
+}
+
+export interface Serving {
+  readonly origin: string;
+  /** The origin no test serves. */
+  readonly other: string;
+  readonly stop: () => Promise<void>;
+}
+
+/** The fixture pages, and the other origin, on ports nobody chose. */
+export async function serving(): Promise<Serving> {
+  const assets = await built();
+  const entry = [...assets.keys()].find((path) => path.endsWith("/count-budget-app.js"));
+  if (entry === undefined)
+    throw new Error(`the fixture app's build has no entry: ${[...assets.keys()].join(", ")}`);
+  const other = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: () =>
+      new Response("from the other origin", { headers: { "access-control-allow-origin": "*" } }),
+  });
+  const pages = pagesFor(other.url.origin, entry);
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      const url = new URL(request.url);
+      const path = url.pathname;
+      const json = { headers: { "content-type": "application/json" } };
+      if (path === "/never") return await new Promise<Response>(() => {});
+      if (path === "/api/rows") {
+        return new Response(
+          rows(Number(url.searchParams.get("page")), url.searchParams.has("detail")),
+          json,
+        );
+      }
+      if (path.startsWith("/api/row/"))
+        return new Response(JSON.stringify({ id: path.slice(9) }), json);
+      if (path === "/bytes") return new Response("b".repeat(100));
+      if (path === "/counted.js") {
+        return new Response(`window.counted = true;`, {
+          headers: { "content-type": "text/javascript" },
+        });
+      }
+      const asset = assets.get(path);
+      if (asset !== undefined)
+        return new Response(asset, { headers: { "content-type": "text/javascript" } });
+      const page = pages.get(path);
+      if (page === undefined) return new Response("no such fixture page", { status: 404 });
+      return new Response(page, { headers: { "content-type": "text/html" } });
+    },
+  });
+  return {
+    origin: server.url.origin,
+    other: other.url.origin,
+    stop: async () => {
+      await server.stop(true);
+      await other.stop(true);
+    },
+  };
+}
+
+/** One phase's counts, as the fixture attached them. */
+export type Counts = Record<string, number>;
+
+/** How one run of one test came out. */
+export interface Outcome {
+  readonly ok: boolean;
+  readonly said: string;
+  /** What the fixture measured, by phase; absent when it measured nothing. */
+  readonly counts?: Record<string, Counts>;
+}
+
+function listAt(node: ConfigObject, name: string): ConfigObject[] {
+  const held = node[name];
+  return isList(held) ? held.map(record) : [];
+}
+
+function specsIn(node: ConfigObject): ConfigObject[] {
+  return [...listAt(node, "specs"), ...listAt(node, "suites").flatMap((suite) => specsIn(suite))];
+}
+
+/** The counts a run attached, by phase: the fixture's own JSON, read back through the reporter's. */
+function countsIn(attached: string): Record<string, Counts> {
+  const phases = record(JSON.parse(Buffer.from(attached, "base64").toString("utf8")));
+  return Object.fromEntries(
+    Object.entries(phases).map(([phase, counts]) => [
+      phase,
+      Object.fromEntries(
+        Object.entries(record(counts)).map(([count, value]) => [count, Number(value)]),
+      ),
+    ]),
+  );
+}
+
+function outcomeOf(result: ConfigObject): Outcome {
+  const said = listAt(result, "errors")
+    .map((error) => (typeof error["message"] === "string" ? error["message"] : ""))
+    .join("\n");
+  const attached = listAt(result, "attachments").find(
+    (attachment) => attachment["name"] === "count-budget",
+  )?.["body"];
+  const ok = result["status"] === "passed";
+  return typeof attached === "string" ? { ok, said, counts: countsIn(attached) } : { ok, said };
+}
+
+/** A fixture tree: the config, the specs, and this package installed beside them. */
+export async function fixture(
+  origin: string,
+  files: Readonly<Record<string, string>>,
+  workers: number,
+): Promise<string> {
+  const root = await materialise({
+    "playwright.config.ts": `import { defineConfig } from "@playwright/test";
+
+export default defineConfig({
+  testDir: ".",
+  testMatch: "*.spec.ts",
+  workers: ${workers},
+  use: { baseURL: ${JSON.stringify(origin)}, viewport: { width: 800, height: 600 } },
+});
+`,
+    ...files,
+  });
+  await install(root);
+  return root;
+}
+
+/**
+ * Runs the fixture's specs, and reports every run of every test by its title,
+ * in the order they ran — more than one where `--repeat-each` asked.
+ */
+export async function playwright(
+  root: string,
+  env: Readonly<Record<string, string>>,
+  args: readonly string[] = [],
+): Promise<Map<string, Outcome[]>> {
+  const { COUNT_BUDGET: _mode, ...inherited } = plainly(Bun.env);
+  const proc = Bun.spawn(
+    [join(root, "node_modules", ".bin", "playwright"), "test", "--reporter=json", ...args],
+    {
+      cwd: root,
+      env: { ...inherited, ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const [out, err] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  await proc.exited;
+  let report: unknown;
+  try {
+    report = JSON.parse(out);
+  } catch {
+    throw new Error(`the Playwright run wrote no report:\n${out}\n${err}`);
+  }
+  const outcomes = new Map<string, Outcome[]>();
+  for (const spec of specsIn(record(report))) {
+    const title = String(spec["title"]);
+    const results = listAt(spec, "tests").flatMap((each) => listAt(each, "results"));
+    outcomes.set(title, [...(outcomes.get(title) ?? []), ...results.map(outcomeOf)]);
+  }
+  if (outcomes.size === 0) {
+    const refused = listAt(record(report), "errors")
+      .map((error) => (typeof error["message"] === "string" ? error["message"] : ""))
+      .join("\n");
+    throw new Error(`the Playwright run collected no spec:\n${refused}`);
+  }
+  return outcomes;
+}
+
+/** The checkout, for a spec that imports the export by path. */
+export const SOURCE = JSON.stringify(join(HERE, "count-budget.ts"));
