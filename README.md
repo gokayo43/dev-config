@@ -57,19 +57,20 @@ shape a rule takes when what it grades is only visible from inside the repo — 
 app's own route table, its own limiter, its own browser. Each is reachable
 through `files` and `exports`, and each has a page of its own:
 
-| Export                                                         | Imported by                    | What it holds                                                            |
-| -------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------ |
-| [`route-log`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the two floors over its route table      |
-| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error or sideways scroll, on every page of the test's context |
-| [`limiter-conformance`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                      |
-| [`property`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further |
-| [`response-schema`](docs/exports/response-schema.md)           | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip      |
-| [`characterization-net`](docs/exports/characterization-net.md) | a golden suite and its updater | the harness rules that keep a large golden net honest                    |
+| Export                                                         | Imported by                    | What it holds                                                             |
+| -------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------- |
+| [`route-log`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the two floors over its route table       |
+| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error or sideways scroll, on every page of the test's context  |
+| [`limiter-conformance`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                       |
+| [`property`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further  |
+| [`interleaving`](docs/exports/interleaving.md)                 | a property over Effect fibers  | the order overlapping fibers run in, generated and replayable from a seed |
+| [`response-schema`](docs/exports/response-schema.md)           | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip       |
+| [`characterization-net`](docs/exports/characterization-net.md) | a golden suite and its updater | the harness rules that keep a large golden net honest                     |
 
 No specifier carries an extension, and what one resolves to is this package's
 business: the first two are **built** — `bun run build` writes them to `dist/`,
 which is committed and held equal to a fresh build by `tests/dist.test.ts` — and
-the other four ship their source. `tsdown.config.ts` has why those two and no
+the other five ship their source. `tsdown.config.ts` has why those two and no
 others. Either way the `.ts` files stay the sources.
 
 Gate code is deliberately **not** importable by the repos it gates — a gate in
