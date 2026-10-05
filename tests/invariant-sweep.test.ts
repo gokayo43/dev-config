@@ -19,7 +19,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { type Outcome, serving, sweeping, type Use } from "./sweep-fixture.ts";
+import { type Outcome, serving, sweeping, type Use, WRITTEN } from "./sweep-fixture.ts";
 
 const SWEEP = JSON.stringify(`${import.meta.dir}/../invariant-sweep.ts`);
 
@@ -188,6 +188,14 @@ const CASES = [
   spec("an allowlist that matches nothing tolerates nothing", `  await page.goto("/embedded");`, {
     sweepAllowlist: { "/analytics\\.js$": "a pattern for an embed this page does not carry" },
   }),
+  // Every popup's error is written before Playwright has reported the popup, so
+  // a sweep listening on each page as it arrives hears some of them and not
+  // others (dev-config#144). One case, many popups: each is a fresh chance for
+  // that race to drop one.
+  spec(
+    "an error a popup logs before it is reported is swept",
+    `  await page.goto("/opens-written-errors");\n  await page.click("#open");\n  await expect.poll(() => context.pages().length).toBe(${WRITTEN + 1});`,
+  ),
 ];
 
 /**
@@ -444,6 +452,20 @@ describe("what the sweep catches", () => {
   // a page nobody can fix and `div#wide` is one somebody can.
   test("an overflow diagnostic names what is sticking out", () => {
     expect(outcome("a page wider than its viewport fails").said).toContain("div#wide");
+  });
+
+  // Each of them exactly once. A sweep that lost one dropped a popup's first
+  // word, and one that heard one twice would be listening on the page and the
+  // context both, or counting Playwright's replay of what a popup said before it
+  // was reported as a second message.
+  test("an error a popup logs before it is reported is swept, once", () => {
+    const { ok, said } = outcome("an error a popup logs before it is reported is swept");
+    expect(ok).toBe(false);
+    const heard = Array.from(
+      { length: WRITTEN },
+      (_, n) => said.split(`written popup ${n} is unhappy`).length - 1,
+    );
+    expect(heard).toEqual(Array.from({ length: WRITTEN }, () => 1));
   });
 
   // What to do, not what went wrong: the allowlist is the other half of the fix.

@@ -60,7 +60,10 @@ is the drain before a page goes, which the next section covers.
 
 The fixture is the **context** and not the page for one more case, a popup: it
 is a page the context opened and the spec may never name, so a `page` fixture
-cannot reach it at all. A context the spec builds itself through `browser` is
+cannot reach it at all. The console and thrown errors are listened for on the
+context too, for the same case: Playwright sends a page's events only once a
+listener on that page asks for them, and a popup can log before any listener
+attached as it opens has asked. A context the spec builds itself through `browser` is
 another matter, under "What it does not see".
 
 ## The horizon a document is measured to
@@ -219,6 +222,9 @@ already declares it as a fixture that is not an option.
   scrolling sideways inside its own box is the embed's business, and its
   `documentElement` is not the page.
 - **`console.warn`, and any other level.** Errors only.
+- **A service worker's console errors and thrown errors.** A service worker
+  belongs to no page: Playwright reports its console messages with no page
+  attached, and the sweep, whose verdict is about pages, passes over them.
 - **Graceful empty states**, which testing.md names alongside zero console
   errors and no layout overflow.
   They are not expressible here: what a page should show when it has no data is
