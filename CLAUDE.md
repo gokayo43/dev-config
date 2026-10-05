@@ -119,7 +119,11 @@ a change to a rule usually lands here too.
 - The `*.ts` at the root are what a consuming repo reaches directly, as against
   the gates, which run over it from CI. Eight of them are **exports** it imports
   and calls; the two `dev-server*` files below are a bin it runs and the module
-  that bin imports. Each is reachable through
+  that bin imports; and `count-ceilings.ts` is the count budget's ceiling rule —
+  the file's shape, the seal, and the one function both the check and the write
+  command decide by — which `count-budget.ts` imports and the build bundles into
+  it, a module of its own so `tests/count-ceilings.test.ts` can search it with
+  properties instead of browser runs. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is
@@ -239,7 +243,10 @@ a change to a rule usually lands here too.
   production — `react` and `react-dom` are devDependencies nothing imports for
   that reason — and its suite runs Playwright several times over one tree,
   because what one run writes into a ceilings file is what the next is checked
-  against. `property.test.ts` is the limiter's argument once more — a
+  against. That suite also spins a process on every core for the length of 20
+  runs of one page, since a count read under load is half of what it grades, and
+  it is the longest browser suite here, at about three and a half minutes.
+  `property.test.ts` is the limiter's argument once more — a
   `bun test` spawned per case, because what `check` does is hand fast-check a
   bigger number and the only thing that says whether it worked is how many times
   the predicate ran; the default it multiplies is graded as a difference against

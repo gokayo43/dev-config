@@ -8,6 +8,7 @@
  * they left in the ceilings files.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { readdir } from "node:fs/promises";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 
@@ -125,6 +126,67 @@ test("no phase marked", async ({ page, budget }) => {
   await page.goto("/landing");
 });
 
+test("an unstubbed WebSocket", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/socket"));
+});
+
+test("a stubbed WebSocket", async ({ page, budget }) => {
+  await page.routeWebSocket(other.replace(/^http/, "ws") + "/", (socket) => socket.send("stubbed"));
+  await budget.phase("load", () => page.goto("/socket"));
+});
+
+test("a service worker that reaches out", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/worker"));
+});
+
+test("a page that turns React's hook off", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/hardened"));
+});
+
+test("a click that sends a beacon as it leaves", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/beacon"));
+  await budget.phase("go", () => page.click("#go"));
+});
+
+test.describe(() => {
+  test.use({ servedOrigins: [other + "/"] });
+  test("an origin the test serves, written as a URL", async ({ page, budget }) => {
+    await budget.phase("load", () => page.goto("/external"));
+  });
+});
+
+test("a test skipped after a phase", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/landing"));
+  test.skip(true, "skipped at run time");
+});
+
+test("a phase whose failure the test caught", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/landing"));
+  await budget.phase("boom", async () => { throw new Error("boom"); }).catch(() => {});
+});
+
+test("a refusal the test caught", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/restless")).catch(() => {});
+});
+
+test("phases named after what every object has", async ({ page, budget }) => {
+  for (const phase of ["constructor", "__proto__", "toString"]) {
+    await budget.phase(phase, () => page.goto("/landing"));
+  }
+});
+
+test("toString", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/landing"));
+});
+
+test("zeal", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/landing"));
+});
+
+test("ärlig", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/landing"));
+});
+
 test.describe(() => {
   test.describe.configure({ retries: 1 });
   test("a retried test", async ({ page, budget }, testInfo) => {
@@ -140,6 +202,14 @@ test.describe(() => {
  * Between the stages the suite edits the file the first stage wrote, as the
  * test's name says.
  */
+interface Stage {
+  readonly before?: [string, string][];
+  readonly after: [string, string][];
+}
+
+/** A stage typed where it is written, for the one key `Object.prototype` also has. */
+const staged = (stage: Stage): Stage => stage;
+
 const STAGES = {
   unchanged: {
     before: [["load", "mutations=3&requests=2"]],
@@ -192,7 +262,31 @@ const STAGES = {
     after: [["load", "mutations=3&requests=2"]],
   },
   "not in the file": { after: [["load", "mutations=3&requests=2"]] },
-} satisfies Record<string, { before?: [string, string][]; after: [string, string][] }>;
+  "raised by hand, then the page drops": {
+    before: [["load", "mutations=3&requests=2"]],
+    after: [["load", "mutations=4&requests=2"]],
+  },
+  "skipped after a phase": {
+    before: [
+      ["load", "mutations=3&requests=2"],
+      ["again", "mutations=1&requests=0"],
+    ],
+    after: [
+      ["load", "mutations=3&requests=2"],
+      ["skip", ""],
+    ],
+  },
+  toString: staged({
+    before: [
+      ["constructor", "mutations=3&requests=2"],
+      ["__proto__", "mutations=1&requests=0"],
+    ],
+    after: [
+      ["constructor", "mutations=3&requests=2"],
+      ["__proto__", "mutations=1&requests=0"],
+    ],
+  }),
+} satisfies Record<string, Stage>;
 
 const RATCHET = `import { test } from ${SOURCE};
 
@@ -203,8 +297,19 @@ for (const [title, phases] of Object.entries(stages)) {
   test(title, async ({ page, budget }) => {
     test.skip(phases[stage] === undefined, "not marked at this stage");
     for (const [phase, asked] of phases[stage]) {
+      if (phase === "skip") test.skip(true, "skipped at run time");
       await budget.phase(phase, () => page.goto(asked === "app" ? "/app" : "/counted?" + asked));
     }
+  });
+}
+`;
+
+/** Sixteen tests of one file, which a fully parallel config spreads over four workers writing one ceilings file. */
+const PARALLEL = `import { test } from ${SOURCE};
+
+for (let each = 0; each < 16; each++) {
+  test("writer " + each, async ({ page, budget }) => {
+    await budget.phase("load", () => page.goto("/landing"));
   });
 }
 `;
@@ -229,6 +334,11 @@ let quiet: Runs = new Map();
 let loaded: Runs = new Map();
 let consumer: Runs = new Map();
 let wrongMode = "";
+let inCi = "";
+let rechecked: Runs = new Map();
+let parallel: Runs = new Map();
+/** What the parallel tree held beside its spec after the run that found a dead worker's lock. */
+let leftBeside: string[] = [];
 /** How many cores' worth of CPU the spinning processes took while the loaded runs ran. */
 let cores = 0;
 /** The ceilings files, by spec and by the moment they were read. */
@@ -304,6 +414,8 @@ function edited(file: ConfigObject, browser: string): void {
   raise("raised with no reason", 2, " ");
   raise("raised above what the page does", 4, "headroom nobody should have asked for");
   load("raised by hand")["mutationRecords"] = plain("raised by hand") + 2;
+  load("raised by hand, then the page drops")["mutationRecords"] =
+    plain("raised by hand, then the page drops") + 2;
   record(file["a new browser"])["browser"] = `${browser.split(" ")[0]} 1.0.0.0`;
 }
 
@@ -320,7 +432,7 @@ beforeAll(async () => {
       "refusals.spec.ts": REFUSALS,
       "ratchet.spec.ts": RATCHET,
     },
-    2,
+    { workers: 2 },
   );
   const at = (name: string): string => join(root, `${name}.spec.counts.json`);
   // The planted lists are left out: the unplanted one writes the ceilings
@@ -350,6 +462,24 @@ beforeAll(async () => {
   lowered = await playwright(root, { ...WRITE, ...env, STAGE: "after" }, ["ratchet.spec.ts"]);
   files.set("ratchet lowered", await json(at("ratchet")));
 
+  // The raise the command just kept, raised again in place under its old reason.
+  const kept = await json(at("ratchet"));
+  const again = record(record(phasesIn(kept, "raised with a reason")["load"])["mutationRecords"]);
+  again["ceiling"] = Number(again["ceiling"]) + 500;
+  await Bun.write(at("ratchet"), JSON.stringify(kept, null, 2));
+  rechecked = await playwright(root, { ...env, STAGE: "after" }, [
+    "ratchet.spec.ts",
+    "--grep",
+    "raised with a reason",
+  ]);
+
+  inCi = await playwright(root, { ...WRITE, CI: "true", ...env, STAGE: "after" }, [
+    "phases.spec.ts",
+  ]).then(
+    () => "",
+    (error: Error) => error.message,
+  );
+
   wrongMode = await playwright(root, { COUNT_BUDGET: "yes", ...env, STAGE: "after" }, [
     "phases.spec.ts",
   ]).then(
@@ -357,11 +487,28 @@ beforeAll(async () => {
     (error: Error) => error.message,
   );
 
-  const installed = await fixture(server.origin, { "consumer.spec.ts": INSTALLED }, 1);
+  const writers = await fixture(
+    server.origin,
+    { "parallel.spec.ts": PARALLEL },
+    { workers: 4, fullyParallel: true },
+  );
+  const parallelCeilings = join(writers, "parallel.spec.counts.json");
+  const dead = Bun.spawn(["true"]);
+  await dead.exited;
+  await Bun.write(`${parallelCeilings}.lock`, JSON.stringify({ pid: dead.pid }));
+  await Bun.write(`${parallelCeilings}.writing`, "what a writer killed mid-write left");
+  parallel = await playwright(writers, WRITE);
+  files.set(
+    "parallel",
+    (await Bun.file(parallelCeilings).exists()) ? await json(parallelCeilings) : {},
+  );
+  leftBeside = (await readdir(writers)).filter((name) => name.startsWith("parallel.spec.counts"));
+
+  const installed = await fixture(server.origin, { "consumer.spec.ts": INSTALLED }, { workers: 1 });
   consumer = await playwright(installed, WRITE);
   files.set("consumer", await json(join(installed, "consumer.spec.counts.json")));
 
-  const steady = await fixture(server.origin, { "steady.spec.ts": STEADY }, 1);
+  const steady = await fixture(server.origin, { "steady.spec.ts": STEADY }, { workers: 1 });
   const repeated = ["--repeat-each", String(RUNS)];
   quiet = await playwright(steady, WRITE, repeated);
   const underCores = await underLoad(async () => await playwright(steady, WRITE, repeated));
@@ -480,7 +627,12 @@ describe("one page, the same counts on every run", () => {
     for (const run of all) expect(run).toEqual(measured);
   });
 
-  test("the loaded runs ran under load", () => {
+  // The bar is half a core, not every core: a CI runner's cgroup caps the
+  // whole job at two cores, where the spinners compete with the browser and
+  // the runner for the same quota, and half a core is what they can be relied
+  // on to take there. Under the three-core cap of a session on this box they
+  // took 2.46.
+  test("the loaded runs ran with the spinners taking more than half a core", () => {
     expect(cores).toBeGreaterThan(0.5);
   });
 
@@ -539,8 +691,10 @@ describe("the check", () => {
       false,
       "The page does less than its ceiling, so the ceiling comes down to match: run COUNT_BUDGET=write bunx playwright test ratchet.spec.ts",
     ],
-    ["raised with a reason", true, ""],
+    ["raised with a reason", false, "the command has not kept the raise yet"],
     ["raised by hand", false, "were edited by hand"],
+    ["raised by hand, then the page drops", false, "were edited by hand"],
+    ["toString", true, ""],
     ["raised with no reason", false, "with no reason"],
     ["raised above what the page does", false, "The page does less than its ceiling"],
     ["a phase added", false, "«again» has no ceilings"],
@@ -597,18 +751,47 @@ describe("the command", () => {
     },
   );
 
-  test("keeps a raised ceiling the page meets, with its reason", () => {
+  test("keeps a raised ceiling the page meets, with its reason, and seals it", () => {
     expect(only(lowered, "raised with a reason").ok).toBe(true);
-    expect(after("raised with a reason")).toEqual(before("raised with a reason"));
+    expect(after("raised with a reason")["phases"]).toEqual(
+      before("raised with a reason")["phases"],
+    );
+    expect(after("raised with a reason")["seal"]).not.toBe(before("raised with a reason")["seal"]);
   });
 
-  test.each([["raised by hand"], ["raised with no reason"]])(
-    "refuses %s and leaves it",
-    (title) => {
-      expect(only(lowered, title).ok).toBe(false);
-      expect(after(title)).toEqual(before(title));
-    },
-  );
+  test("refuses a kept raise raised again in place", () => {
+    const { ok, said } = only(rechecked, "raised with a reason");
+    expect(ok).toBe(false);
+    expect(said).toContain("were edited by hand");
+  });
+
+  test("leaves a test skipped after a phase as it was, and reports it skipped", () => {
+    expect(only(lowered, "skipped after a phase").status).toBe("skipped");
+    expect(only(checked, "skipped after a phase").status).toBe("skipped");
+    expect(after("skipped after a phase")).toEqual(before("skipped after a phase"));
+  });
+
+  test("reads and writes an entry and phases named after what every object has", () => {
+    expect(only(lowered, "toString").ok).toBe(true);
+    expect(Object.keys(phasesIn(fileOf("ratchet lowered"), "toString"))).toEqual([
+      "constructor",
+      "__proto__",
+    ]);
+  });
+
+  test("refuses to run in CI", () => {
+    expect(inCi).toContain("COUNT_BUDGET=write");
+    expect(inCi).toContain("CI");
+  });
+
+  test.each([
+    ["raised by hand"],
+    ["raised with no reason"],
+    ["raised by hand, then the page drops"],
+  ])("refuses %s and leaves it", (title) => {
+    expect(only(lowered, title).ok).toBe(false);
+    expect(after(title)).toEqual(before(title));
+  });
 
   test("records the browser it ran on, and drops what the test no longer measures", () => {
     const now = fileOf("ratchet lowered");
@@ -661,6 +844,11 @@ describe("a precondition that does not hold refuses the test and records nothing
     ["a phase name used twice", "already marked a phase named «load»"],
     ["no phase marked", "marked no phase"],
     ["a retried test", "on retry 1"],
+    ["an unstubbed WebSocket", "(WebSocket)"],
+    ["a service worker that reaches out", "/data"],
+    ["a page that turns React's hook off", "turned React's DevTools hook off"],
+    ["a phase whose failure the test caught", "«boom» did not finish"],
+    ["a refusal the test caught", "«load» did not finish"],
   ])("%s", (title, said) => {
     const outcome = only(first, title);
     expect(outcome.ok).toBe(false);
@@ -673,6 +861,11 @@ describe("a precondition that does not hold refuses the test and records nothing
     ["an origin the test serves"],
     ["motion that honours reduced motion"],
     ["a blob the page made itself"],
+    ["a stubbed WebSocket"],
+    ["a click that sends a beacon as it leaves"],
+    ["an origin the test serves, written as a URL"],
+    ["phases named after what every object has"],
+    ["toString"],
   ])("%s is counted", (title) => {
     expect(only(first, title)).toMatchObject({ ok: true, said: "" });
     expect(fileOf("refusals first")).toHaveProperty([title]);
@@ -684,5 +877,35 @@ describe("a precondition that does not hold refuses the test and records nothing
 
   test("a page that never goes still says what kept moving", () => {
     expect(only(first, "motion that ignores reduced motion").said).toContain("mutationRecords");
+  });
+});
+
+describe("a test that does not pass records nothing", () => {
+  test("a test skipped at run time is skipped, not failed", () => {
+    expect(only(first, "a test skipped after a phase").status).toBe("skipped");
+    expect(fileOf("refusals first")).not.toHaveProperty(["a test skipped after a phase"]);
+  });
+
+  test("phases named after what every object has are written under their own names", () => {
+    expect(
+      Object.keys(phasesIn(fileOf("refusals first"), "phases named after what every object has")),
+    ).toEqual(["constructor", "__proto__", "toString"]);
+  });
+});
+
+describe("the ceilings file", () => {
+  test("lists its tests in code-point order, whatever the writer's locale", () => {
+    const keys = Object.keys(fileOf("refusals first"));
+    expect(keys).toEqual(keys.toSorted());
+    expect(keys.indexOf("zeal")).toBeLessThan(keys.indexOf("ärlig"));
+  });
+
+  test("takes sixteen writers in four parallel workers without losing one", () => {
+    expect([...parallel.values()].flat().every((run) => run.ok)).toBe(true);
+    expect(Object.keys(fileOf("parallel"))).toHaveLength(16);
+  });
+
+  test("takes over a lock a dead worker left, and the half-written file beside it", () => {
+    expect(leftBeside).toEqual(["parallel.spec.counts.json"]);
   });
 });

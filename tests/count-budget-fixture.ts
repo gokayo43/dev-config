@@ -9,8 +9,8 @@
  */
 import { join } from "node:path";
 
-import { type ConfigObject, isList, plainly, record } from "../.github/actions/_lib/gate.ts";
-import { install } from "./sweep-fixture.ts";
+import { type ConfigObject, plainly, record } from "../.github/actions/_lib/gate.ts";
+import { install, listAt, playwrightRun, resultsOf } from "./sweep-fixture.ts";
 import { materialise } from "./tree.ts";
 
 const HERE = join(import.meta.dir, "..");
@@ -200,6 +200,26 @@ const step = () => { document.getElementById("spin").style.width = (++n % 50) + 
 if (!matchMedia("(prefers-reduced-motion: reduce)").matches) requestAnimationFrame(step);</script>`,
       ),
       "/hanging": html("", `<script>fetch("/never")</script>`),
+      // A socket to the other origin, whose first message lands in the page.
+      "/socket": html(
+        "",
+        `<script>new WebSocket("${other.replace(/^http/, "ws")}/").onmessage = (event) => document.body.append(event.data);</script>`,
+      ),
+      // A service worker whose own fetch reaches the other origin.
+      "/worker": html(
+        "",
+        `<script>navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).then(() => document.body.append("ready"));</script>`,
+      ),
+      // The list behind a page that turns React's DevTools hook off before React loads.
+      "/hardened": html(
+        "",
+        `<script>window.__REACT_DEVTOOLS_GLOBAL_HOOK__.isDisabled = true;</script><div id="root"></div><script type="module" src="${entry}"></script>`,
+      ),
+      // A click that sends analytics as it leaves: a beacon and a keepalive fetch.
+      "/beacon": html(
+        "",
+        `<a id="go" href="/landing">go</a><script>document.getElementById("go").addEventListener("click", () => { navigator.sendBeacon("/ping"); fetch("/keep", { method: "POST", keepalive: true }); });</script>`,
+      ),
       "/blob": html(
         "",
         `<script>fetch(URL.createObjectURL(new Blob(["made here"]))).then((response) => response.text()).then((text) => document.body.append(text))</script>`,
@@ -224,8 +244,18 @@ export async function serving(): Promise<Serving> {
   const other = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    fetch: () =>
-      new Response("from the other origin", { headers: { "access-control-allow-origin": "*" } }),
+    fetch: (request, held) =>
+      held.upgrade(request)
+        ? undefined
+        : new Response("from the other origin", {
+            headers: { "access-control-allow-origin": "*" },
+          }),
+    websocket: {
+      open: (socket) => {
+        socket.send("from the other origin's socket");
+      },
+      message: () => {},
+    },
   });
   const pages = pagesFor(other.url.origin, entry);
   const server = Bun.serve({
@@ -236,6 +266,14 @@ export async function serving(): Promise<Serving> {
       const path = url.pathname;
       const json = { headers: { "content-type": "application/json" } };
       if (path === "/never") return await new Promise<Response>(() => {});
+      if (path === "/ping" || path === "/keep") return new Response(null, { status: 204 });
+      if (path === "/sw.js") {
+        return new Response(
+          `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(fetch("${other.url.origin}/data").then((response) => response.text())));`,
+          { headers: { "content-type": "text/javascript" } },
+        );
+      }
       if (path === "/api/rows") {
         return new Response(
           rows(Number(url.searchParams.get("page")), url.searchParams.has("detail")),
@@ -273,19 +311,12 @@ export type Counts = Record<string, number>;
 
 /** How one run of one test came out. */
 export interface Outcome {
+  /** Playwright's own word for it: `passed`, `failed`, `skipped`, `timedOut`, `interrupted`. */
+  readonly status: string;
   readonly ok: boolean;
   readonly said: string;
   /** What the fixture measured, by phase; absent when it measured nothing. */
   readonly counts?: Record<string, Counts>;
-}
-
-function listAt(node: ConfigObject, name: string): ConfigObject[] {
-  const held = node[name];
-  return isList(held) ? held.map(record) : [];
-}
-
-function specsIn(node: ConfigObject): ConfigObject[] {
-  return [...listAt(node, "specs"), ...listAt(node, "suites").flatMap((suite) => specsIn(suite))];
 }
 
 /** The counts a run attached, by phase: the fixture's own JSON, read back through the reporter's. */
@@ -308,15 +339,25 @@ function outcomeOf(result: ConfigObject): Outcome {
   const attached = listAt(result, "attachments").find(
     (attachment) => attachment["name"] === "count-budget",
   )?.["body"];
-  const ok = result["status"] === "passed";
-  return typeof attached === "string" ? { ok, said, counts: countsIn(attached) } : { ok, said };
+  const status = String(result["status"]);
+  const ok = status === "passed";
+  return typeof attached === "string"
+    ? { status, ok, said, counts: countsIn(attached) }
+    : { status, ok, said };
+}
+
+/** How the fixture's Playwright config runs its tests. */
+export interface Config {
+  readonly workers: number;
+  /** Tests of one file in parallel, which is what puts two writers on one ceilings file. */
+  readonly fullyParallel?: boolean;
 }
 
 /** A fixture tree: the config, the specs, and this package installed beside them. */
 export async function fixture(
   origin: string,
   files: Readonly<Record<string, string>>,
-  workers: number,
+  config: Config,
 ): Promise<string> {
   const root = await materialise({
     "playwright.config.ts": `import { defineConfig } from "@playwright/test";
@@ -324,7 +365,8 @@ export async function fixture(
 export default defineConfig({
   testDir: ".",
   testMatch: "*.spec.ts",
-  workers: ${workers},
+  workers: ${config.workers},
+  fullyParallel: ${config.fullyParallel === true},
   use: { baseURL: ${JSON.stringify(origin)}, viewport: { width: 800, height: 600 } },
 });
 `,
@@ -336,45 +378,20 @@ export default defineConfig({
 
 /**
  * Runs the fixture's specs, and reports every run of every test by its title,
- * in the order they ran — more than one where `--repeat-each` asked.
+ * in the order they ran — more than one where `--repeat-each` asked or a retry
+ * ran. `CI` is taken out of the environment the suite runs in, since write mode
+ * refuses to run under it and CI runs this suite.
  */
 export async function playwright(
   root: string,
   env: Readonly<Record<string, string>>,
   args: readonly string[] = [],
 ): Promise<Map<string, Outcome[]>> {
-  const { COUNT_BUDGET: _mode, ...inherited } = plainly(Bun.env);
-  const proc = Bun.spawn(
-    [join(root, "node_modules", ".bin", "playwright"), "test", "--reporter=json", ...args],
-    {
-      cwd: root,
-      env: { ...inherited, ...env },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  const [out, err] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  await proc.exited;
-  let report: unknown;
-  try {
-    report = JSON.parse(out);
-  } catch {
-    throw new Error(`the Playwright run wrote no report:\n${out}\n${err}`);
-  }
+  const { COUNT_BUDGET: _mode, CI: _ci, ...inherited } = plainly(Bun.env);
   const outcomes = new Map<string, Outcome[]>();
-  for (const spec of specsIn(record(report))) {
+  for (const spec of await playwrightRun(root, args, { ...inherited, ...env })) {
     const title = String(spec["title"]);
-    const results = listAt(spec, "tests").flatMap((each) => listAt(each, "results"));
-    outcomes.set(title, [...(outcomes.get(title) ?? []), ...results.map(outcomeOf)]);
-  }
-  if (outcomes.size === 0) {
-    const refused = listAt(record(report), "errors")
-      .map((error) => (typeof error["message"] === "string" ? error["message"] : ""))
-      .join("\n");
-    throw new Error(`the Playwright run collected no spec:\n${refused}`);
+    outcomes.set(title, [...(outcomes.get(title) ?? []), ...resultsOf(spec).map(outcomeOf)]);
   }
   return outcomes;
 }
