@@ -323,7 +323,7 @@ const test = test$1.extend({
 		* ours land in a vendor's allowlist bucket.
 		*/
 		const from = (claimed, page) => claimed !== void 0 && fetched.has(claimed) ? claimed : page.url();
-		const watch = (page) => {
+		const drainFirst = (page) => {
 			const draining = (replace) => async (...args) => {
 				await drain(page);
 				return await replace(...args);
@@ -333,25 +333,29 @@ const test = test$1.extend({
 			page.goBack = draining(page.goBack.bind(page));
 			page.goForward = draining(page.goForward.bind(page));
 			page.setContent = draining(page.setContent.bind(page));
-			page.on("response", (response) => {
-				if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
-			});
-			page.on("console", (message) => {
-				if (message.type() !== "error") return;
-				record({
-					kind: "console.error",
-					at: from(message.location().url, page),
-					detail: sanitized(message.text())
-				});
-			});
-			page.on("pageerror", (error) => {
-				record({
-					kind: "pageerror",
-					at: from(scriptIn(error.stack), page),
-					detail: sanitized(error.message)
-				});
-			});
 		};
+		context.on("response", (response) => {
+			if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
+		});
+		context.on("console", (message) => {
+			const page = message.page();
+			if (page === null || message.type() !== "error") return;
+			record({
+				kind: "console.error",
+				at: from(message.location().url, page),
+				detail: sanitized(message.text())
+			});
+		});
+		context.on("weberror", (thrown) => {
+			const page = thrown.page();
+			if (page === null) return;
+			const error = thrown.error();
+			record({
+				kind: "pageerror",
+				at: from(scriptIn(error.stack), page),
+				detail: sanitized(error.message)
+			});
+		});
 		await context.exposeBinding(REPORTER, ({ frame, page }, detail) => {
 			if (frame !== page.mainFrame()) return;
 			record({
@@ -361,8 +365,8 @@ const test = test$1.extend({
 			});
 		});
 		await context.addInitScript(WATCH);
-		context.on("page", watch);
-		for (const open of context.pages()) watch(open);
+		context.on("page", drainFirst);
+		for (const open of context.pages()) drainFirst(open);
 		await provide(context);
 		await Promise.all(context.pages().map(async (page) => await drain(page)));
 		expect(violations.map(describe), "pages visited by this test broke an invariant every page holds; fix it, or name the URL in `sweepAllowlist` with the reason it is tolerated").toEqual([]);

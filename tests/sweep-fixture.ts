@@ -63,6 +63,9 @@ const EVERY = 100;
  */
 const BEFORE_QUIET = 200;
 
+/** How many popups the opener writes an error into, each before Playwright has reported it. */
+export const WRITTEN = 16;
+
 /**
  * What the fixture server answers, by path. Each page is one invariant broken
  * one way, or a page that breaks none. `embed` is the *other* origin's, which
@@ -202,6 +205,15 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/cleanish": {
         type: "text/html",
         body: html(`<script>console.error("the almost-clean page is unhappy")</script>`),
+      },
+      // Each popup has its error written into it by its opener before Playwright
+      // has finished reporting the popup, which is the moment a listener on the
+      // page is too late for (dev-config#144).
+      "/opens-written-errors": {
+        type: "text/html",
+        body: html(
+          `<button id="open">open</button><script>document.getElementById("open").addEventListener("click", () => { for (let n = 0; n < ${WRITTEN}; n++) window.open().console.error("written popup " + n + " is unhappy"); })</script>`,
+        ),
       },
     }),
   );
