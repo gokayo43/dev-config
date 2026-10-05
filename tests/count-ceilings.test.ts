@@ -24,7 +24,9 @@ import {
   type Count,
   COUNTS,
   type Counts,
+  described,
   type Entry,
+  entryAt,
   entryIn,
   entryJson,
   isBroken,
@@ -108,26 +110,36 @@ const entryOf = tuple(
   return kept ? lowered(written, meeting(written), BROWSER).entry : written;
 });
 
-/** A measure that shares some phases with an entry, and moves their counts either way. */
+/**
+ * A measure that shares phases with an entry and moves their counts either way:
+ * as they are, with fresh phases beside them, without the first of them, or
+ * with React commits counted where they were not and not where they were.
+ */
 const nextMeasure = (entry: Entry) =>
   tuple(
     measuredOf,
     array(integer({ min: -3, max: 3 }), { maxLength: 30 }),
-    constantFrom(false, true),
-  ).map(([fresh, shifts, keep]) => {
+    constantFrom("shifted", "beside fresh", "one dropped", "react toggled"),
+  ).map(([fresh, shifts, shape]): Measured => {
     let index = 0;
-    const shifted = new Map(
-      [...entry.phases].map(([phase, held]) => [
+    const shifted = [...entry.phases].map(([phase, held]): [string, Counts] => [
+      phase,
+      Object.fromEntries(
+        [...held].map(([count, ceiling]) => [
+          count,
+          Math.max(0, ceilingOf(ceiling) + (shifts[index++] ?? 0)),
+        ]),
+      ),
+    ]);
+    if (shape === "shifted") return new Map(shifted);
+    if (shape === "beside fresh") return new Map([...shifted, ...fresh]);
+    if (shape === "one dropped") return new Map([...shifted.slice(1), ...fresh]);
+    return new Map(
+      shifted.map(([phase, { reactCommits, ...rest }]) => [
         phase,
-        Object.fromEntries(
-          [...held].map(([count, ceiling]) => [
-            count,
-            Math.max(0, ceilingOf(ceiling) + (shifts[index++] ?? 0)),
-          ]),
-        ),
+        reactCommits === undefined ? { reactCommits: 0, ...rest } : rest,
       ]),
     );
-    return keep ? shifted : new Map([...shifted, ...fresh]);
   });
 
 const entryAndMeasure = entryOf.chain((entry) => tuple(constantFrom(entry), nextMeasure(entry)));
@@ -298,6 +310,84 @@ describe("the file", () => {
           expect(Object.keys(file)).toEqual([key]);
           expect(entryIn(Object.fromEntries(Object.entries(file)), key, key)).toEqual(entry);
           expect(entryIn({}, key, key)).toBeUndefined();
+        },
+      ),
+    );
+  });
+});
+
+describe("reading an entry", () => {
+  test("reads back every entry the command writes, raises included", () => {
+    check(
+      property(entryOf, (entry) => {
+        const file: unknown = JSON.parse(JSON.stringify(withEntry({}, "a test", entry)));
+        if (typeof file !== "object" || file === null) throw new Error("the file is not an object");
+        expect(entryIn(Object.fromEntries(Object.entries(file)), "a test", "a test")).toEqual(
+          entry,
+        );
+      }),
+    );
+  });
+
+  const written = (phases: unknown) => ({ browser: BROWSER, phases, seal: "" });
+
+  test.each([
+    ["a fraction", written({ load: { requests: 1.5 } }), "is 1.5, and a ceiling is a whole number"],
+    [
+      "a negative number",
+      written({ load: { requests: -1 } }),
+      "is -1, and a ceiling is a whole number",
+    ],
+    [
+      "a raise with no reason",
+      written({ load: { requests: { ceiling: 5, was: 3, reason: " " } } }),
+      "is raised from 3 to 5 with no reason",
+    ],
+    [
+      "a raise that is not above what it was",
+      written({ load: { requests: { ceiling: 3, was: 3, reason: "why" } } }),
+      "its ceiling 3 is not above the 3 the command accepted",
+    ],
+    [
+      "a raise with no number in it",
+      written({ load: { requests: { ceiling: "5", was: 3, reason: "why" } } }),
+      "is neither a whole number nor a raised ceiling",
+    ],
+    ["a count that is not one", written({ load: { paints: 1 } }), "load.paints is not a count"],
+    ["phases that are not an object", written([]), ".phases is not a JSON object"],
+    ["no browser", { phases: {}, seal: "" }, ".browser is not a string"],
+    ["no seal", { browser: BROWSER, phases: {} }, ".seal is not a string"],
+  ])("refuses %s, naming where it is", (_, value, said) => {
+    expect(() => entryAt(value, "the file › a test")).toThrow(said);
+  });
+});
+
+describe("what a change says", () => {
+  const where = { key: "a test", spec: "e2e/a.spec.ts", ceilings: "e2e/a.spec.counts.json" };
+
+  test("names the file, and the command wherever the command is the remedy", () => {
+    check(
+      property(
+        entryAndMeasure,
+        constantFrom(BROWSER, "chromium 1.0.0.0"),
+        ([entry, measured], browser) => {
+          const changes = [
+            ...lowered(undefined, measured, BROWSER).changes,
+            ...lowered(entry, measured, browser).changes,
+          ];
+          for (const change of changes) {
+            const said = described(change, where);
+            expect(said).toContain(where.ceilings);
+            if (change.kind !== "above")
+              expect(said).toContain("COUNT_BUDGET=write bunx playwright test e2e/a.spec.ts");
+            if ("phase" in change) expect(said).toContain(`«${change.phase}»`);
+            if (change.kind === "above") {
+              expect(said).toContain(
+                `measured ${change.measured}, ceiling ${ceilingOf(change.ceiling)}`,
+              );
+              expect(said).toContain(`{ "ceiling": ${change.measured}, "was": `);
+            }
+          }
         },
       ),
     );
