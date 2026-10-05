@@ -404,7 +404,7 @@ export const test: TestType<
     const from = (claimed: string | undefined, page: Page): string =>
       claimed !== undefined && fetched.has(claimed) ? claimed : page.url();
 
-    const watch = (page: Page): void => {
+    const drainFirst = (page: Page): void => {
       // Every call that replaces this page's document, drained before it does.
       // A navigation the page performs for itself — a redirect, a link the spec
       // clicked — goes through none of these, and is drained by whatever comes
@@ -420,30 +420,39 @@ export const test: TestType<
       page.goBack = draining(page.goBack.bind(page));
       page.goForward = draining(page.goForward.bind(page));
       page.setContent = draining(page.setContent.bind(page));
-
-      page.on("response", (response) => {
-        if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
-      });
-      page.on("console", (message) => {
-        if (message.type() !== "error") return;
-        record({
-          kind: "console.error",
-          at: from(message.location().url, page),
-          detail: sanitized(message.text()),
-        });
-      });
-      page.on("pageerror", (error) => {
-        // Playwright hands a `pageerror` no frame, so where it came from is read
-        // out of the stack — and honoured on the same terms as any other claimed
-        // URL. That is what lets an embed's own thrown error be allowlisted by
-        // the embed's address rather than by the page carrying it.
-        record({
-          kind: "pageerror",
-          at: from(scriptIn(error.stack), page),
-          detail: sanitized(error.message),
-        });
-      });
     };
+
+    // On the context and not on each page: Playwright sends a page's events only
+    // once a listener on that page has asked for them, and a popup's first
+    // messages are sent before a listener attached on its `page` event can ask.
+    // The context's are asked for here, before any page exists. A console
+    // message with no page is a service worker's, which no page listener heard.
+    context.on("response", (response) => {
+      if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
+    });
+    context.on("console", (message) => {
+      const page = message.page();
+      if (page === null || message.type() !== "error") return;
+      record({
+        kind: "console.error",
+        at: from(message.location().url, page),
+        detail: sanitized(message.text()),
+      });
+    });
+    context.on("weberror", (thrown) => {
+      const page = thrown.page();
+      if (page === null) return;
+      // Playwright hands a thrown error no frame, so where it came from is read
+      // out of the stack — and honoured on the same terms as any other claimed
+      // URL. That is what lets an embed's own thrown error be allowlisted by the
+      // embed's address rather than by the page carrying it.
+      const error = thrown.error();
+      record({
+        kind: "pageerror",
+        at: from(scriptIn(error.stack), page),
+        detail: sanitized(error.message),
+      });
+    });
 
     // Exposed before the init script is added, because the script the next
     // navigation runs calls it in its first frame. A *binding* rather than a
@@ -455,8 +464,8 @@ export const test: TestType<
       record({ kind: "overflow", at: frame.url(), detail: sanitized(detail) });
     });
     await context.addInitScript(WATCH);
-    context.on("page", watch);
-    for (const open of context.pages()) watch(open);
+    context.on("page", drainFirst);
+    for (const open of context.pages()) drainFirst(open);
 
     await provide(context);
 
