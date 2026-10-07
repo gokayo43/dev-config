@@ -3,7 +3,7 @@ import { PlaywrightTestArgs, PlaywrightTestOptions, PlaywrightWorkerArgs, Playwr
 /** The option a repo sets, declared so `test.use({ sweepAllowlist })` type-checks. */
 export interface InvariantSweep {
   /**
-   * URLs whose console errors, page errors and overflow this run tolerates,
+   * URLs whose console errors, page errors, overflow and layout shifts this run tolerates,
    * each against the reason it is tolerated. The key is a **regular
    * expression** tested against the URL, and it is **unanchored** — `"/checkout"`
    * also matches `/checkout-v2`, so write `"/checkout$"` when a page name is

@@ -56,12 +56,11 @@ const A_DEPARTURE = 2_000;
 /** How many times the animated case leaves the page, which is what its budget multiplies. */
 const DEPARTURES = 5;
 
-/**
- * How long a spec stays on a page that does nothing before acting on it, in ms:
- * twice the quiet window, so whatever the spec does next happens on a page that
- * has settled, and a sweep that counted it would have to say so.
- */
-const SETTLED = 1_000;
+/** How many times each steady case runs, on a quiet renderer and again on a slowed one. */
+const RUNS = 20;
+
+/** How many times slower the slowed renderer runs, through Chromium's own CPU throttling: DevTools' 6x preset. */
+const SLOWDOWN = 6;
 
 /** Every case's spec; the reporter's outcome for each is found by its title. */
 const CASES = [
@@ -203,21 +202,12 @@ const CASES = [
     "an error a popup logs before it is reported is swept",
     `  await page.goto("/opens-written-errors");\n  await page.click("#open");\n  await expect.poll(() => context.pages().length).toBe(${WRITTEN + 1});`,
   ),
-  // The bar grows before the page settles, every time and at the latest moment
-  // it was measured at on the stats site. A sweep that counted the whole load
-  // fails this.
+  // An image with no size of its own takes its height before `load`, under
+  // the content. A sweep that counted only once the page had gone quiet passes
+  // this.
+  spec("a shift while the page loads fails", `  await page.goto("/image-shift");`),
   spec(
-    "a shift before the page settled is not counted",
-    `  await page.goto("/early-shift?at=415");\n  await expect(page.locator("#bar")).toHaveCSS("height", "48px");`,
-  ),
-  // The page as it was measured: whether the bar grows, and when, is drawn on
-  // every load, and the verdict may not depend on the draw.
-  spec(
-    "a page whose early shift comes and goes passes",
-    `  await page.goto("/early-shift");\n  await page.waitForTimeout(${SETTLED});`,
-  ),
-  spec(
-    "a shift after the page settled fails",
+    "a shift after the page loaded fails",
     `  await page.goto("/late-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
   ),
   // Left by a click, so nothing drains the page: what it saw has to have
@@ -231,28 +221,64 @@ const CASES = [
   // without asking whether the user had just acted fails this.
   spec(
     "a page that moves because the user clicked or typed passes",
-    `  await page.goto("/acted");\n  await page.waitForTimeout(${SETTLED});\n  await page.click("#open");\n  await page.locator("#grow").pressSequentially("a\\nb\\nc");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+    `  await page.goto("/acted");\n  await page.click("#open");\n  await page.locator("#grow").pressSequentially("a\\nb\\nc");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
   ),
-  // Input the browser does not count, because Playwright changes the field
-  // directly and dispatches the events a person's typing would have: `fill`
-  // and `selectOption`. A sweep that asked only the browser fails this.
+  // Each of these sets the field with nothing the browser counts as input, and
+  // each is called on a page and on a locator, in specs of their own: a mark
+  // still open from one would cover the other's shift. A sweep that took the
+  // browser's word alone fails all six.
   spec(
-    "a page that moves because the spec filled a field or chose an option passes",
-    `  await page.goto("/acted");\n  await page.waitForTimeout(${SETTLED});\n  await page.fill("#field", "x");\n  await page.selectOption("#pick", "b");\n  await expect(page.locator("#panel p")).toHaveCount(2);`,
+    "a shift under page.fill passes",
+    `  await page.goto("/acted");\n  await page.fill("#field", "x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  spec(
+    "a shift under a locator's fill passes",
+    `  await page.goto("/acted");\n  await page.locator("#field").fill("x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  spec(
+    "a shift under page.selectOption passes",
+    `  await page.goto("/acted");\n  await page.selectOption("#pick", "b");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  spec(
+    "a shift under a locator's selectOption passes",
+    `  await page.goto("/acted");\n  await page.locator("#pick").selectOption("b");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  spec(
+    "a shift under page.setInputFiles passes",
+    `  await page.goto("/acted");\n  await page.setInputFiles("#file", { name: "a.txt", mimeType: "text/plain", buffer: Buffer.from("a") });\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  spec(
+    "a shift under a locator's setInputFiles passes",
+    `  await page.goto("/acted");\n  await page.locator("#file").setInputFiles({ name: "a.txt", mimeType: "text/plain", buffer: Buffer.from("a") });\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  // The line a filled field asked for lands past the action's half-second. A
+  // sweep that excused every shift once a field had been filled passes this.
+  spec(
+    "a shift 600ms after fill fails",
+    `  await page.goto("/slow-fill");\n  await page.fill("#field", "x");\n  await expect(page.locator("#banner")).toBeAttached();`,
+  ),
+  // A sweep that took an `input` event as the user acting passes this.
+  spec(
+    "a page that dispatches input itself and then shifts fails",
+    `  await page.goto("/self-input");\n  await expect(page.locator("#banner")).toBeAttached();`,
+  ),
+  // A sweep whose mark any caller could make passes this.
+  spec(
+    "a page that marks itself as acted on and then shifts fails",
+    `  await page.goto("/self-marked");\n  await expect(page.locator("#banner")).toBeAttached();`,
   ),
   // The click is the user's, and the panel it asked for arrives after their
   // half-second is up. A sweep that stopped counting once the user had acted at
   // all passes this.
   spec(
     "a shift that arrives long after the click fails",
-    `  await page.goto("/slow-panel");\n  await page.waitForTimeout(${SETTLED});\n  await page.click("#open");\n  await expect(page.locator("#banner")).toBeAttached();`,
+    `  await page.goto("/slow-panel");\n  await page.click("#open");\n  await expect(page.locator("#banner")).toBeAttached();`,
   ),
-  // Never quiet, so never settled, so its late shift is never counted: pinned,
-  // because counting from the cutoff a restless page is drained at instead is a
-  // boundary a shift lands either side of from one run to the next.
+  // Three moved elements whose names fill the page's sentence. A sweep that
+  // wrote its advice into that sentence loses it to the cut.
   spec(
-    "a page that never goes quiet is not held to the shift invariant",
-    `  await page.goto("/restless-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
+    "a shift of long-named elements keeps its score and its advice",
+    `  await page.goto("/long-names-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
   ),
   spec(
     "an embed that shifts its host fails the host",
@@ -320,6 +346,43 @@ const RECORDED = [
   ),
 ];
 
+/**
+ * The pages whose verdict must not move from run to run, each as a spec on a
+ * quiet renderer and as one on a slowed renderer. A shift while the page loads
+ * lands before anything has run in the page. A shift the user caused, and one
+ * under `fill`, are where a slow frame could carry the shift past the
+ * half-second it counts as theirs, and a shift 600ms after `fill` is where a
+ * slow mark could stretch that half-second over it. A page that never shifts is
+ * where a slow load could move something nobody moved.
+ */
+const STEADY = (
+  [
+    ["a shift while the page loads", `  await page.goto("/image-shift");`],
+    [
+      "a shift the user caused",
+      `  await page.goto("/acted");\n  await page.click("#open");\n  await page.locator("#grow").pressSequentially("a\\nb\\nc");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+    ],
+    [
+      "a shift under fill",
+      `  await page.goto("/acted");\n  await page.fill("#field", "x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+    ],
+    [
+      "a shift 600ms after fill",
+      `  await page.goto("/slow-fill");\n  await page.fill("#field", "x");\n  await expect(page.locator("#banner")).toBeAttached();`,
+    ],
+    [
+      "a page that never shifts",
+      `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+    ],
+  ] as const
+).flatMap(([title, body]) => [
+  spec(`${title}, quiet`, body),
+  spec(
+    `${title}, slowed`,
+    `  const cdp = await context.newCDPSession(page);\n  await cdp.send("Emulation.setCPUThrottlingRate", { rate: ${SLOWDOWN} });\n${body}`,
+  ),
+]);
+
 /** One page that breaks nothing, for the runs that grade what decides recording rather than what is recorded. */
 const PLAIN = [
   spec(
@@ -342,6 +405,7 @@ let recorded = new Map<string, Outcome>();
 let sized = new Map<string, Outcome>();
 let configured = new Map<string, Outcome>();
 let blank = new Map<string, Outcome>();
+let steady = new Map<string, Outcome>();
 const refusals = new Map<string, string>();
 let stop = async (): Promise<void> => {};
 
@@ -379,6 +443,7 @@ beforeAll(async () => {
   }
   outcomes = await sweeping(server.origin, files("case", CASES));
   installed = await sweeping(server.origin, { "consumer.spec.ts": INSTALLED });
+  steady = await sweeping(server.origin, files("steady", STEADY), { repeatEach: RUNS });
 }, 300_000);
 
 afterAll(async () => {
@@ -417,11 +482,13 @@ describe("what the sweep lets through", () => {
   });
 
   test.each([
-    "a shift before the page settled is not counted",
-    "a page whose early shift comes and goes passes",
     "a page that moves because the user clicked or typed passes",
-    "a page that moves because the spec filled a field or chose an option passes",
-    "a page that never goes quiet is not held to the shift invariant",
+    "a shift under page.fill passes",
+    "a shift under a locator's fill passes",
+    "a shift under page.selectOption passes",
+    "a shift under a locator's selectOption passes",
+    "a shift under page.setInputFiles passes",
+    "a shift under a locator's setInputFiles passes",
     "an allowlisted page's embed may shift it",
     "an entry no test reaches costs nothing",
   ])("%s", (title) => {
@@ -467,7 +534,11 @@ describe("what the sweep catches", () => {
       "a request this page depends on failed",
     ],
     ["overflow that arrives with a subresource is swept", "overflow", "img#slow"],
-    ["a shift after the page settled fails", "layout-shift", "/late-shift"],
+    ["a shift while the page loads fails", "layout-shift", "/image-shift"],
+    ["a shift after the page loaded fails", "layout-shift", "/late-shift"],
+    ["a shift 600ms after fill fails", "layout-shift", "/slow-fill"],
+    ["a page that dispatches input itself and then shifts fails", "layout-shift", "/self-input"],
+    ["a page that marks itself as acted on and then shifts fails", "layout-shift", "/self-marked"],
     ["a page the test left by a link still reports its shift", "layout-shift", "/late-shift"],
     ["a shift that arrives long after the click fails", "layout-shift", "/slow-panel"],
     ["an embed that shifts its host fails the host", "layout-shift", "/shifting-embed"],
@@ -565,15 +636,46 @@ describe("what the sweep catches", () => {
   // A stranger reads this in a repo they did not write: what moved, how far, and
   // what to do about it, on the page it moved on.
   test("a shift diagnostic names what moved, how far, and what to do", () => {
-    const { said } = outcome("a shift after the page settled fails");
-    expect(said).toContain("main#content moved 60px down");
-    expect(said).toContain("with no input in the 500ms before");
-    expect(said).toContain("reserve the space for whatever arrived late");
+    const { said } = outcome("a shift after the page loaded fails");
+    expect(said).toContain("layout-shift at ");
+    expect(said).toContain("with no input in the 500ms before: main#content moved 60px down");
+    expect(said).toMatch(/score 0\.\d{4}/);
+    expect(said).toContain("reserve the space for whatever arrives late");
+  });
+
+  // The page's sentence is cut at a length, and what to do is not the page's to
+  // say: it reaches the message whatever the page wrote.
+  test("a shift diagnostic keeps its score and its advice past a long description", () => {
+    const { ok, said } = outcome("a shift of long-named elements keeps its score and its advice");
+    expect(ok).toBe(false);
+    expect(said).toContain("…");
+    expect(said).toMatch(/score 0\.\d{4}/);
+    expect(said).toContain("reserve the space for whatever arrives late");
   });
 
   // What to do, not what went wrong: the allowlist is the other half of the fix.
   test("the diagnostic says what to do about it", () => {
     expect(outcome("a page wider than its viewport fails").said).toContain("sweepAllowlist");
+  });
+});
+
+// Every shift counts, however early, so the verdict on a page whose shift is
+// fixed has to come out the same on every run. A page whose shift comes and goes
+// fails on the runs it shifts, which is the trade the export's page names.
+describe("the shift verdict, run after run", () => {
+  test.each([
+    ["a shift while the page loads", false],
+    ["a shift the user caused", true],
+    ["a shift under fill", true],
+    ["a shift 600ms after fill", false],
+    ["a page that never shifts", true],
+  ] as const)("%s comes out the same every run, quiet and slowed", (title, passes) => {
+    for (const renderer of ["quiet", "slowed"]) {
+      expect({ renderer, verdicts: outcome(`${title}, ${renderer}`, steady).verdicts }).toEqual({
+        renderer,
+        verdicts: Array.from({ length: RUNS }, () => passes),
+      });
+    }
   });
 });
 

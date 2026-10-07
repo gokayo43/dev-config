@@ -5,8 +5,7 @@ import { expect, test as test$1 } from "@playwright/test";
 * fixture a repo imports instead of `@playwright/test`'s own `test`:
 *
 *   no page logged a `console.error`, no page threw, no page scrolled
-*   sideways, and nothing on a page moved after it settled without the user
-*   having acted.
+*   sideways, and nothing on a page moved that the user did not move.
 *
 * They are invariants rather than assertions because no single test owns them.
 * A flow test knows what it came to click; nobody's job is to notice that the
@@ -73,6 +72,14 @@ import { expect, test as test$1 } from "@playwright/test";
 const REPORTER = "__invariantSweep";
 /** The name the page-side drain answers to, and the name the fixture calls. One constant, two ends. */
 const DRAINER = "__invariantSweepDrain";
+/** The name the page-side act mark answers to, and the name the fixture calls. One constant, two ends. */
+const ACTOR = "__invariantSweepActed";
+/**
+* How long after the user acts a layout shift is still theirs, in ms: the
+* window the Layout Instability spec sets `hadRecentInput` by, which the
+* fixture applies to the actions it marks as well.
+*/
+const RECENT = 500;
 /**
 * How long a document has to go unchanged before it has nothing further to
 * report, in ms. Playwright calls a page idle after 500ms with no network
@@ -80,13 +87,6 @@ const DRAINER = "__invariantSweepDrain";
 * applies it to the DOM.
 */
 const QUIET = 500;
-/**
-* How long after the user acts a layout shift is theirs, in ms: the window the
-* Layout Instability spec sets `hadRecentInput` by, applied as well to the
-* `input` and `change` events that Playwright's `fill` and `selectOption`
-* dispatch without anything the browser counts as input.
-*/
-const ACTED = 500;
 /**
 * How long a document that never armed — one whose `load` or whose fonts never
 * arrive — is waited out, in ms: the 5s Playwright's own `expect` gives a page
@@ -144,7 +144,17 @@ function measured(kind) {
 }
 /**
 * Asking the document to drain, as an expression rather than a function for the
-* same reason `WATCH` is one: there is no DOM lib here to type it with.
+* same reason `watch` writes source: there is no DOM lib here to type it with.
+*
+* It gives one document its last chance to report before it is replaced or the
+* test ends. A document can be behind in two ways, and one ask covers both. It
+* may not have *measured* yet: a page that lays its overflow out on a timer
+* after `load` has nothing to say when `goto` resolves, and a spec that
+* navigates on that instant destroys the document before the layout it would
+* have failed on. And it may have measured without the report having
+* *crossed*: a report leaves on the frame after the check runs, so two frames
+* follow the wait. `watch` owns what each of those costs and answers when both
+* are spent.
 */
 const DRAIN = `window.${DRAINER}()`;
 /**
@@ -177,17 +187,16 @@ const DRAIN = `window.${DRAINER}()`;
 * changes, so waiting for a gap that will not come buys nothing. Or it **never
 * armed** at all, and `CAP` has passed since the script ran.
 *
-* The first of those, and only the first, is also when the document has
-* **settled**, latched the first time it happens: from then on a layout shift the
-* user did not cause is a violation. Not the other two, because neither is a
-* page at rest — one is still loading and the other is still changing — and a
-* shift either would admit is one the next run can land on the other side of.
-* The latch is decided at each moment, before that moment moves the deadline,
-* so the change that causes a shift is never mistaken for the page still
-* settling; and on the browser's own clock, which is the one a shift's
-* `startTime` is stamped on.
+* Layout shifts are not measured at those moments: the browser hands each one
+* to the observer as an entry, from the first frame the document paints, and
+* every entry is a violation unless the user caused it. The browser says so by
+* marking it `hadRecentInput`; the fixture says so for the actions Playwright
+* performs with nothing the browser counts as input, by marking the document
+* through `ACTOR` while one runs. A mark is honoured only with `secret`, which
+* this context alone knows, so a page cannot mark itself as acted on.
 */
-const WATCH = `(() => {
+function watch(secret) {
+	return `(() => {
   if (window.top !== window) return;
   const seen = new Set();
   const say = (kind, key, detail) => {
@@ -218,17 +227,10 @@ const WATCH = `(() => {
   const started = performance.now();
   let armed = 0;
   let changed = 0;
-  let settled = Infinity;
-  let acted = -Infinity;
   let queued = false;
   const quietAt = () => armed === 0 ? Infinity : Math.max(changed, armed) + ${QUIET};
-  const settle = (now) => {
-    if (settled === Infinity && now >= quietAt()) settled = quietAt();
-  };
   const soon = () => {
-    const now = performance.now();
-    settle(now);
-    changed = now;
+    changed = performance.now();
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => { queued = false; check(); });
@@ -261,15 +263,23 @@ const WATCH = `(() => {
     if (dx !== 0) legs.push(Math.abs(dx) + "px " + (dx > 0 ? "right" : "left"));
     return legs.length ? legs.join(" and ") : "by less than a pixel";
   };
+  const secret = ${JSON.stringify(secret)};
+  const acts = new Map();
+  window.${ACTOR} = (claimed, id, edge) => {
+    if (claimed !== secret) return;
+    const now = performance.now();
+    if (edge === "from") acts.set(id, { from: now, to: Infinity });
+    else if (acts.has(id)) acts.get(id).to = now;
+  };
+  const prompted = (entry) => entry.hadRecentInput || Array.from(acts.values())
+    .some((act) => entry.startTime >= act.from && entry.startTime <= act.to + ${RECENT});
   const shifted = (entries) => {
-    settle(performance.now());
     for (const entry of entries) {
-      if (entry.startTime < settled || entry.hadRecentInput || entry.startTime - acted <= ${ACTED}) continue;
+      if (prompted(entry)) continue;
       const sources = entry.sources.slice(0, ${OFFENDERS});
       const moved = sources.map((source) => named(source) + " moved " + travel(source)).join(", ");
-      say("layout-shift", sources.map(named).join(", "), moved
-        + ", after the page had settled and with no input in the ${ACTED}ms before (layout-shift score "
-        + entry.value.toFixed(4) + "); reserve the space for whatever arrived late, or move it with a transform");
+      say("layout-shift", sources.map(named).join(", "), "score " + entry.value.toFixed(4)
+        + ", with no input in the ${RECENT}ms before: " + moved);
     }
   };
   // Firefox and WebKit have no Layout Instability API, and observing a type a
@@ -277,14 +287,11 @@ const WATCH = `(() => {
   const shifts = PerformanceObserver.supportedEntryTypes.includes("layout-shift")
     ? new PerformanceObserver((list) => shifted(list.getEntries()))
     : undefined;
-  if (shifts) shifts.observe({ type: "layout-shift" });
+  if (shifts) shifts.observe({ type: "layout-shift", buffered: true });
   // An observer is called some time after the frame a shift happened in, and a
   // document on its way out is not called again.
   const flush = () => { if (shifts) shifted(shifts.takeRecords()); };
   window.addEventListener("pagehide", flush);
-  for (const type of ["input", "change"]) {
-    window.addEventListener(type, (event) => { acted = event.timeStamp; }, true);
-  }
   window.${DRAINER} = () => new Promise((done) => {
     const wait = () => {
       const left = until() - performance.now();
@@ -308,6 +315,7 @@ const WATCH = `(() => {
     attributes: true,
   });
 })();`;
+}
 /**
 * The characters a terminal reads as instructions rather than as text: C0 and
 * the newline among them, DEL, and the C1 range some terminals still take as
@@ -329,35 +337,70 @@ function sanitized(detail) {
 function scriptIn(stack) {
 	return /https?:\/\/[^\s)]+?(?=:\d+:\d+|\s|\)|$)/.exec(stack ?? "")?.[0];
 }
+/** What to do about a layout shift, said by the sweep rather than by the page, so no cut a page's sentence takes can lose it. */
+const RESERVE = "reserve the space for whatever arrives late, or move it with a transform";
 function describe({ kind, at, detail }) {
-	return `${kind} at ${at} — ${detail}`;
+	const line = `${kind} at ${at} — ${detail}`;
+	return kind === "layout-shift" ? `${line}; ${RESERVE}` : line;
 }
 /**
-* Gives one document its last chance to report before it is replaced or the test
-* ends, and never costs the assertion.
-*
-* A document can be behind in two ways, and one ask covers both. It may not have
-* *measured* yet: a page that lays its overflow out on a timer after `load` has
-* nothing to say when `goto` resolves, and a spec that navigates on that instant
-* destroys the document before the layout it would have failed on. And it may
-* have measured without the report having *crossed*: a report leaves on the
-* frame after the check runs, so two frames follow the wait. `WATCH` above owns
-* what each of those costs and answers when both are spent.
-*
-* A page that navigates, or that closes itself, while this runs has nothing left
-* to drain — whatever it measured crossed as it was measured — and every way
-* that surfaces is admitted here. Letting one through would replace the sweep's
-* verdict, the list it spent the whole test collecting, with a message about the
-* flush.
+* Runs `expression` in the page's current document, if it still has one, and
+* never costs the assertion. A page that navigates, or that closes itself,
+* while this runs has nothing left to ask — whatever it measured crossed as it
+* was measured — and every way that surfaces is admitted here. Letting one
+* through would replace the sweep's verdict, the list it spent the whole test
+* collecting, with a message about the ask.
 */
-async function drain(page) {
+async function ask(page, expression) {
 	if (page.isClosed()) return;
 	try {
-		await page.evaluate(DRAIN);
+		await page.evaluate(expression);
 	} catch (error) {
 		if (page.isClosed()) return;
 		if (!(error instanceof Error) || !GONE.some((gone) => error.message.includes(gone))) throw error;
 	}
+}
+/** Every page a sweeping context watches, against the secret its documents take an act mark with. */
+const SECRETS = /* @__PURE__ */ new WeakMap();
+/** How many actions this process has marked, which is what tells two overlapping marks apart. */
+let marked = 0;
+/**
+* Runs one of the actions Playwright performs with nothing the browser counts
+* as input, with the page's document marked as acted on from before it starts
+* until it returns.
+*/
+async function acting(page, act) {
+	const secret = SECRETS.get(page);
+	if (secret === void 0) return await act();
+	marked += 1;
+	const mark = (edge) => `window.${ACTOR}(${JSON.stringify(secret)}, ${marked}, "${edge}")`;
+	const from = mark("from");
+	const to = mark("to");
+	await ask(page, from);
+	try {
+		return await act();
+	} finally {
+		await ask(page, to);
+	}
+}
+/** The `Locator` prototypes already marking their actions: one per copy of Playwright the process loaded. */
+const MARKING = /* @__PURE__ */ new WeakSet();
+/**
+* Marks the actions of every locator, through the prototype they share: a
+* locator is made fresh on every `page.locator()` and `getByRole()`, so there is
+* no instance to wrap. A locator on a page no sweeping context watches is
+* left as it was by `acting`.
+*/
+function markLocators(page) {
+	const prototype = Object.getPrototypeOf(page.locator(":root"));
+	if (MARKING.has(prototype)) return;
+	MARKING.add(prototype);
+	const marking = (act) => async function(...args) {
+		return await acting(this.page(), async () => await act.apply(this, args));
+	};
+	prototype.fill = marking(prototype.fill);
+	prototype.selectOption = marking(prototype.selectOption);
+	prototype.setInputFiles = marking(prototype.setInputFiles);
 }
 /**
 * Playwright's `test`, with the browser context replaced by one that watches
@@ -401,9 +444,10 @@ const test = test$1.extend({
 		* ours land in a vendor's allowlist bucket.
 		*/
 		const from = (claimed, page) => claimed !== void 0 && fetched.has(claimed) ? claimed : page.url();
-		const drainFirst = (page) => {
+		const secret = crypto.randomUUID();
+		const adopt = (page) => {
 			const draining = (replace) => async (...args) => {
-				await drain(page);
+				await ask(page, DRAIN);
 				return await replace(...args);
 			};
 			page.goto = draining(page.goto.bind(page));
@@ -411,6 +455,12 @@ const test = test$1.extend({
 			page.goBack = draining(page.goBack.bind(page));
 			page.goForward = draining(page.goForward.bind(page));
 			page.setContent = draining(page.setContent.bind(page));
+			SECRETS.set(page, secret);
+			const marking = (act) => async (...args) => await acting(page, async () => await act(...args));
+			page.fill = marking(page.fill.bind(page));
+			page.selectOption = marking(page.selectOption.bind(page));
+			page.setInputFiles = marking(page.setInputFiles.bind(page));
+			markLocators(page);
 		};
 		context.on("response", (response) => {
 			if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
@@ -442,11 +492,11 @@ const test = test$1.extend({
 				detail: sanitized(detail)
 			});
 		});
-		await context.addInitScript(WATCH);
-		context.on("page", drainFirst);
-		for (const open of context.pages()) drainFirst(open);
+		await context.addInitScript(watch(secret));
+		context.on("page", adopt);
+		for (const open of context.pages()) adopt(open);
 		await provide(context);
-		await Promise.all(context.pages().map(async (page) => await drain(page)));
+		await Promise.all(context.pages().map(async (page) => await ask(page, DRAIN)));
 		expect(violations.map(describe), "pages visited by this test broke an invariant every page holds; fix it, or name the URL in `sweepAllowlist` with the reason it is tolerated").toEqual([]);
 	}
 });

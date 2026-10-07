@@ -39,7 +39,7 @@ function html(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>fixture</title><style>body{margin:0}</style></head><body>${body}</body></html>`;
 }
 
-/** How long the slow subresource takes, in ms — long past `load` and past two frames. */
+/** How long the slow subresources take, in ms — long past first paint and past two frames. */
 const LATE = 400;
 
 /**
@@ -67,24 +67,23 @@ const BEFORE_QUIET = 200;
 export const WRITTEN = 16;
 
 /**
- * When the early page's bar grows, in ms after navigation starts, and how often
- * it does: the window and the rate the stats site's top bar was measured at
- * (dev-config#141), 16 loads in 20 between 200ms and 415ms. Before the page has
- * settled, so no verdict may turn on it.
+ * How long after its own `load` event the late page moves, in ms: well inside
+ * the window a document goes quiet in, so the drain is still waiting when it
+ * lands.
  */
-const EARLY = { from: 200, to: 415, rate: 16 / 20 } as const;
-
-/**
- * How long after its own `load` event the late page moves, in ms: three quiet
- * windows past the moment a page that does nothing else settles.
- */
-const LATE_SHIFT = 1_500;
+const LATE_SHIFT = 300;
 
 /**
  * How long the slow panel takes to arrive after the click that asked for it, in
- * ms: past the 500ms in which a shift is still the user's.
+ * ms: past the 500ms in which the browser still counts a shift as the user's.
  */
 const SLOW_PANEL = 900;
+
+/**
+ * How long after a field is filled the line it asked for arrives, in ms: past
+ * the 500ms in which the fixture counts a shift as the action's.
+ */
+const AFTER_FILL = 600;
 
 /** One block of the height a shift is measured in, so a diagnostic's distance is a number known here. */
 const BLOCK = 60;
@@ -177,7 +176,8 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<div id="wide" style="width:${TOO_WIDE}px;height:10px"></div><script>document.getElementById("wide").className = String.fromCharCode(27) + "[31m" + String.fromCharCode(10) + "::error title=x::y";</script>`,
         ),
       },
-      // Overflow that arrives with the bytes of a subresource, well after load.
+      // Overflow that arrives with the bytes of a subresource, well after first
+      // paint.
       "/late-image": { type: "text/html", body: html(`<img id="slow" src="/slow.svg" alt="">`) },
       // A popup onto a page that breaks nothing, so a run that records it is
       // graded on its videos and not on a violation.
@@ -244,32 +244,50 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<button id="open">open</button><script>document.getElementById("open").addEventListener("click", () => { for (let n = 0; n < ${WRITTEN}; n++) window.open().console.error("written popup " + n + " is unhappy"); })</script>`,
         ),
       },
-      // The bar grows before the page has settled, at a moment and on a share of
-      // loads drawn the way the stats site's was measured; `?at=` pins the
-      // moment, and the shift, for a case that must see it every time.
-      "/early-shift": {
+      // An image with no size of its own above the content: when its bytes
+      // arrive, before the document's `load`, it takes its height and pushes
+      // the content down.
+      "/image-shift": {
         type: "text/html",
-        body: html(
-          `<header id="bar" style="height:40px"></header>${CONTENT}<script>const pinned = new URLSearchParams(location.search).get("at"); const at = pinned !== null ? Number(pinned) : Math.random() < ${EARLY.rate} ? ${EARLY.from} + Math.random() * ${EARLY.to - EARLY.from} : null; if (at !== null) setTimeout(() => { document.getElementById("bar").style.height = "48px"; }, at - performance.now());</script>`,
-        ),
+        body: html(`<img id="hero" src="/slow-block.svg" alt="">${CONTENT}`),
       },
-      // A banner that arrives long after the page settled, pushing the content
-      // down: a header arriving late.
+      // A banner that arrives after the page has loaded, pushing the content
+      // down: data that came back late.
       "/late-shift": {
         type: "text/html",
         body: html(
           `${CONTENT}<a href="/clean">on</a><script>addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
         ),
       },
-      // Everything here moves the content because the user did something: a
-      // click opens a panel, typing grows a textarea, and a field that is filled
-      // or a select that is chosen shows a line above it — the last two through
-      // Playwright calls that dispatch `input` and `change` and nothing the
-      // browser counts as input.
+      // Everything here moves the content when the page is acted on: a click
+      // opens a panel, typing grows a textarea, and a field that is filled or a
+      // select that is chosen shows a line above it.
       "/acted": {
         type: "text/html",
         body: html(
-          `<div id="panel"></div><button id="open">open</button><input id="field" aria-label="field"><select id="pick" aria-label="pick"><option>a</option><option>b</option></select><textarea id="grow" aria-label="grow" rows="1"></textarea>${CONTENT}<script>const line = (text) => { const d = document.createElement("p"); d.textContent = text; document.getElementById("panel").append(d); }; document.getElementById("open").addEventListener("click", () => line("opened")); document.getElementById("field").addEventListener("input", () => line("filled")); document.getElementById("pick").addEventListener("change", () => line("picked")); document.getElementById("grow").addEventListener("input", (e) => { e.target.style.height = e.target.scrollHeight + "px"; });</script>`,
+          `<div id="panel"></div><button id="open">open</button><input id="field" aria-label="field"><select id="pick" aria-label="pick"><option>a</option><option>b</option></select><input id="file" type="file" aria-label="file"><textarea id="grow" aria-label="grow" rows="1"></textarea>${CONTENT}<script>const line = (text) => { const d = document.createElement("p"); d.textContent = text; document.getElementById("panel").append(d); }; document.getElementById("open").addEventListener("click", () => line("opened")); document.getElementById("field").addEventListener("input", () => line("filled")); document.getElementById("pick").addEventListener("change", () => line("picked")); document.getElementById("file").addEventListener("change", () => line("attached")); document.getElementById("grow").addEventListener("input", (e) => { e.target.style.height = e.target.scrollHeight + "px"; });</script>`,
+        ),
+      },
+      // The line a filled field asks for arrives after the action's half-second.
+      "/slow-fill": {
+        type: "text/html",
+        body: html(
+          `<input id="field" aria-label="field">${CONTENT}<script>document.getElementById("field").addEventListener("input", () => setTimeout(() => { ${PUSH} }, ${AFTER_FILL}))</script>`,
+        ),
+      },
+      // The page dispatches the event a filled field would, with nobody acting.
+      "/self-input": {
+        type: "text/html",
+        body: html(
+          `<input id="field" aria-label="field">${CONTENT}<script>const field = document.getElementById("field"); field.addEventListener("input", () => { ${PUSH} }); addEventListener("load", () => setTimeout(() => field.dispatchEvent(new Event("input", { bubbles: true })), ${LATE_SHIFT}))</script>`,
+        ),
+      },
+      // The page marks itself as acted on through the fixture's own name for the
+      // mark, without the secret the fixture marks with, and then moves.
+      "/self-marked": {
+        type: "text/html",
+        body: html(
+          `${CONTENT}<script>addEventListener("load", () => setTimeout(() => { window.__invariantSweepActed("a guess", 1, "from"); ${PUSH} }, ${LATE_SHIFT}))</script>`,
         ),
       },
       // The click asks for a panel that arrives after the user's half-second is
@@ -280,12 +298,12 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<button id="open">open</button>${CONTENT}<script>document.getElementById("open").addEventListener("click", () => setTimeout(() => { ${PUSH} }, ${SLOW_PANEL}))</script>`,
         ),
       },
-      // Writes a style faster than the quiet window for as long as it is open,
-      // so it never settles, and moves its content late all the same.
-      "/restless-shift": {
+      // Three elements below a late banner, each with more class names than a
+      // diagnostic carries and every one of them long.
+      "/long-names-shift": {
         type: "text/html",
         body: html(
-          `<div id="spinner" style="height:10px"></div>${CONTENT}<script>let n = 0; setInterval(() => { document.getElementById("spinner").style.width = ((++n % 40) + 1) + "px"; }, ${EVERY}); addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
+          `${["one", "two", "three"].map((n) => `<div id="moved-${n}" class="${["display", "spacing", "colour", "border"].map((what) => `${what}-utility-class-name-from-a-long-design-system-${n}`).join(" ")}">${n}</div>`).join("")}<script>addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
         ),
       },
       // A third-party embed that asks its host for more room once it has loaded
@@ -363,8 +381,16 @@ export function serving(): Serving {
     hostname: "127.0.0.1",
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (path === "/slow-block.svg") {
+        // An image whose height arrives with its bytes, after first paint.
+        await Bun.sleep(LATE);
+        return new Response(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="${BLOCK}"><rect width="100%" height="100%" fill="#333"/></svg>`,
+          { headers: { "content-type": "image/svg+xml" } },
+        );
+      }
       if (path === "/slow.svg") {
-        // Bytes that arrive long after `load`, carrying the width with them.
+        // Bytes that arrive long after first paint, carrying the width with them.
         await Bun.sleep(LATE);
         return new Response(
           `<svg xmlns="http://www.w3.org/2000/svg" width="${TOO_WIDE}" height="10"><rect width="100%" height="100%" fill="#333"/></svg>`,
@@ -392,6 +418,8 @@ export interface Outcome {
   readonly said: string;
   /** How long the case took, in ms, which is the only place a drain's cost is visible. */
   readonly took: number;
+  /** Whether each run of the case passed, one entry per repetition the run asked for. */
+  readonly verdicts: readonly boolean[];
   /** Every video the case left under the run's output directory. */
   readonly videos: readonly Video[];
 }
@@ -482,17 +510,23 @@ function tookBy(spec: ConfigObject): number {
   return Math.max(0, ...spent);
 }
 
+/** Whether each repetition of one spec came out as expected, which is how the reporter says it passed. */
+function verdictsOf(spec: ConfigObject): boolean[] {
+  return listAt(spec, "tests").map((each) => each["status"] === "expected");
+}
+
 /** The options a config's `use` block or a spec's `test.use` may set. */
 export type Use = Partial<PlaywrightTestOptions & PlaywrightWorkerOptions & InvariantSweep>;
 
-/** The fixture's config, with whatever a case adds to its `use` block. */
-function configWith(use: Use): string {
+/** The fixture's config, with whatever a case adds to its `use` block, run `repeatEach` times. */
+function configWith(use: Use, repeatEach: number): string {
   return `import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: ".",
   testMatch: "*.spec.ts",
   workers: 4,
+  repeatEach: ${repeatEach},
   use: {
     baseURL: process.env.SWEEP_ORIGIN,
     viewport: { width: ${VIEWPORT.width}, height: ${VIEWPORT.height} },
@@ -502,10 +536,14 @@ export default defineConfig({
 `;
 }
 
-/** What a run sets beyond the specs: variables for its environment, and options for the config's `use`. */
+/**
+ * What a run sets beyond the specs: variables for its environment, options for
+ * the config's `use`, and how many times each spec runs.
+ */
 interface Run {
   readonly env?: Readonly<Record<string, string>>;
   readonly use?: Use;
+  readonly repeatEach?: number;
 }
 
 /**
@@ -568,7 +606,10 @@ export async function sweeping(
   specs: Readonly<Record<string, string>>,
   run: Run = {},
 ): Promise<Map<string, Outcome>> {
-  const root = await materialise({ "playwright.config.ts": configWith(run.use ?? {}), ...specs });
+  const root = await materialise({
+    "playwright.config.ts": configWith(run.use ?? {}, run.repeatEach ?? 1),
+    ...specs,
+  });
   await install(root);
   const output = join(root, "results");
   const { E2E_VIDEO: _left, ...inherited } = plainly(Bun.env);
@@ -608,6 +649,7 @@ export async function sweeping(
       ok: spec["ok"] === true,
       said: saidBy(spec),
       took: tookBy(spec),
+      verdicts: verdictsOf(spec),
       videos: await videosOf(spec, output),
     });
   }

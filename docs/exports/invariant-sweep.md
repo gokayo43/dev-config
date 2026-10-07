@@ -24,8 +24,8 @@ Four invariants, on every page the test visits in its context:
 - no `console.error`,
 - no uncaught error in the page,
 - `documentElement.scrollWidth` no wider than its `clientWidth`,
-- nothing moves once the page has settled, unless the user has just acted
-  (under "Movement after the page settled" below).
+- nothing moves that the user did not move, from the first frame the page
+  paints (under "Movement nobody asked for" below).
 
 They are invariants and not assertions because no single spec owns them. A flow
 test knows what it came to click; nobody's job is to notice that the checkout
@@ -98,45 +98,53 @@ that: it has been measured on every one of those changes anyway. A document whos
 `load` or fonts never arrive is waited on for 5s from when it started, and then
 let go.
 
-## Movement after the page settled
+## Movement nobody asked for
 
 The browser reports every movement of a page's content through the Layout
 Instability API: a `layout-shift` entry, with the elements that moved as its
-`sources`. The fourth invariant is that none arrives once the page has settled,
-unless the user has just acted. It is measured in the page, by the same script,
-and reported as it happens: a page the spec leaves by clicking a link, which
-nothing drains, has already said what moved on it.
+`sources`. The fourth invariant is that every entry is one the user caused. One
+entry is enough to fail the test: there is no score threshold and no tolerance
+for a small one. It is measured in the page, by the observer the init script
+installs before anything else in the document runs, so it holds from the first
+frame the page paints. The observer also asks for the entries the browser
+buffered before it was registered. A shift is reported as it happens, so a page
+the spec leaves by clicking a link, which nothing drains, has already said what
+moved on it.
 
-A page has **settled** the first time it goes quiet, as the horizon above means
-it: loaded, its fonts swapped in, and then 500ms without a load, a mutation or a
-font settling. That moment is latched, and every shift after it counts. A shift
-before it never does, which is what keeps the verdict steady: a page's early
-shifts — a font arriving, a bar growing before the app hydrates — land at a
-different moment on every load, and on some loads not at all. On the fleet's
-stats site the top bar moved in 16 loads of 20, anywhere from 200ms to 415ms in
-(dev-config#141), so a verdict on the whole load would have passed and failed
-that page by turns. On this sweep's own
-fixtures, over 20 runs on a quiet box and 20 against four busy loops competing
-for the same CPU, an early shift like that one landed 109ms to 349ms before the
-page settled and a shift 1.5s after `load` landed a second after it, and each
-gave the same verdict every time.
+Most of what this invariant exists for happens while the page is still loading:
+an image with no `width` and `height` taking its size when its bytes arrive,
+data that comes back and pushes a list down, a banner inserted once a request
+answers, a web font swapping in at a different size. All of that counts,
+however early it lands.
 
-The user has **just acted** when the browser marks the shift `hadRecentInput`
-(a click, a key, a tap in the 500ms before), or when an `input` or `change`
-event fired in the 500ms before. The second half is for Playwright's `fill` and
-`selectOption`, which change a field directly and dispatch those events, but
-send nothing the browser counts as input: without it, a form whose field grows a
-line under `fill` would fail. A click whose panel arrives after that half-second
-is the page moving on its own, and fails. So does a shift that `hover`,
-`focus()` or a `dispatchEvent` of any other event causes: none of them is input
-to the browser.
+The user caused a shift when the browser marks it `hadRecentInput`: a click, a
+key or a tap in the 500ms before. Playwright's `fill`, `selectOption` and
+`setInputFiles`, called on a page or a locator, send nothing the browser counts
+as input, so the fixture marks the document as acted on from the moment each
+starts until 500ms after it returns, through a mark the page itself cannot
+make. Three things count as the page moving on its own:
 
-The violation names the page, and what moved and how far as the browser's
-`sources` give it, up to three of them:
+- **Content a click asked for that arrives more than 500ms later.** A panel
+  behind a slow request fails, which is what a person on a slow connection sees
+  too. Show the panel's frame at the click, and fill it when the data arrives.
+- **A shift `hover`, `focus()` or `dispatchEvent` causes,** or an `input` event
+  the page dispatches itself. None of them is input to the browser.
+- **A shift an embed's own late content causes in the page.** An embed that
+  grows when its content loads pushes the page carrying it, and the browser
+  says what moved, never what moved it.
+
+Typing into an embed, a payment field in a cross-origin iframe say, is input
+to the page carrying it too: a shift it causes in that page passes.
+
+The violation names the page, the shift's score, and what moved and how far as
+the browser's `sources` give it, up to three of them:
 
 ```text
-layout-shift at https://app.example/pricing — main#content moved 60px down, after the page had settled and with no input in the 500ms before (layout-shift score 0.0045); reserve the space for whatever arrived late, or move it with a transform
+layout-shift at https://app.example/pricing — score 0.0045, with no input in the 500ms before: main#content moved 60px down; reserve the space for whatever arrives late, or move it with a transform
 ```
+
+The page writes everything up to the advice, and the sweep adds the advice
+itself, so a long list of class names never cuts it off.
 
 The fix is almost always room reserved before the content arrives: a
 `min-height` on the slot a banner or an embed fills, `width` and `height` on an
@@ -144,18 +152,20 @@ image, a skeleton the size of what replaces it. An animation that moves an
 element through `top`, `margin` or the size of a neighbour is a shift to the
 browser on every frame, where `transform` is not.
 
-Two pages it holds to nothing:
+### A page whose shift comes and goes
 
-- **A page that never goes quiet.** One that changes its DOM more often than
-  every 500ms for as long as it is open never settles, so nothing that moves on
-  it is counted. Ending the wait at the drain's own cutoff instead would put the
-  boundary at a fixed time after `load`, which a shift can land either side of
-  from one run to the next. A CSS animation is not a change to the DOM, so an
-  infinite spinner does not keep a page from settling.
-- **A page whose `load` never fires.** Not loaded, not settled.
+A shift the page makes for itself lands at a different moment on every load,
+and on some loads not at all. On the fleet's stats site the top bar moved in 16
+loads of 20, anywhere from 200ms to 415ms in (dev-config#141). A page like that
+fails the sweep on the runs where it shifts and passes on the others, until the
+shift is fixed or the page is allowlisted. That is the price of counting from
+first paint. Counting only once a page has gone quiet would keep such a page
+green, and would never see the late content above either.
 
-And it is Chromium's: Firefox and WebKit have no Layout Instability API, and on
-them this invariant sees nothing.
+What does not come and go is the verdict on a page whose shift does not: on
+this sweep's own fixtures, a shift during load, a shift the user caused and a
+page that never shifts each give the same verdict on 20 runs, on a quiet
+renderer and on a renderer Chromium slows sixfold.
 
 ## What a page is allowed to say about itself
 
@@ -296,6 +306,14 @@ already declares it as a fixture that is not an option.
   top frame only: an embed scrolling sideways or rearranging itself inside its
   own box is the embed's business, and its `documentElement` is not the page.
   An embed that grows and pushes the page is the page's, and is seen.
+- **A shift while `fill`, `selectOption` or `setInputFiles` waits.** The mark
+  covers the whole call, so a shift the page makes on its own while the action
+  is still waiting for its element to become ready is excused with it.
+- **A layout shift on Firefox or WebKit.** Neither has the Layout Instability
+  API.
+- **A second shift of exactly the same elements.** A document names a set of
+  moved elements once, so a later shift that moves the same set again shows on
+  the first run after the earlier one is fixed.
 - **`console.warn`, and any other level.** Errors only.
 - **A service worker's console errors and thrown errors.** A service worker
   belongs to no page: Playwright reports its console messages with no page
