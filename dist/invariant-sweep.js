@@ -401,7 +401,7 @@ const test = test$1.extend({
 		* ours land in a vendor's allowlist bucket.
 		*/
 		const from = (claimed, page) => claimed !== void 0 && fetched.has(claimed) ? claimed : page.url();
-		const watch = (page) => {
+		const drainFirst = (page) => {
 			const draining = (replace) => async (...args) => {
 				await drain(page);
 				return await replace(...args);
@@ -443,8 +443,8 @@ const test = test$1.extend({
 			});
 		});
 		await context.addInitScript(WATCH);
-		context.on("page", watch);
-		for (const open of context.pages()) watch(open);
+		context.on("page", drainFirst);
+		for (const open of context.pages()) drainFirst(open);
 		await provide(context);
 		await Promise.all(context.pages().map(async (page) => await drain(page)));
 		expect(violations.map(describe), "pages visited by this test broke an invariant every page holds; fix it, or name the URL in `sweepAllowlist` with the reason it is tolerated").toEqual([]);

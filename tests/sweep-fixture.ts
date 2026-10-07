@@ -63,6 +63,9 @@ const EVERY = 100;
  */
 const BEFORE_QUIET = 200;
 
+/** How many popups the opener writes an error into, each before Playwright has reported it. */
+export const WRITTEN = 16;
+
 /**
  * When the early page's bar grows, in ms after navigation starts, and how often
  * it does: the window and the rate the stats site's top bar was measured at
@@ -82,9 +85,6 @@ const LATE_SHIFT = 1_500;
  * ms: past the 500ms in which a shift is still the user's.
  */
 const SLOW_PANEL = 900;
-
-/** How many popups the opener writes an error into, each before Playwright has reported it. */
-export const WRITTEN = 16;
 
 /** One block of the height a shift is measured in, so a diagnostic's distance is a number known here. */
 const BLOCK = 60;

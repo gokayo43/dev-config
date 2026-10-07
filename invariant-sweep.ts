@@ -487,7 +487,7 @@ export const test: TestType<
     const from = (claimed: string | undefined, page: Page): string =>
       claimed !== undefined && fetched.has(claimed) ? claimed : page.url();
 
-    const watch = (page: Page): void => {
+    const drainFirst = (page: Page): void => {
       // Every call that replaces this page's document, drained before it does.
       // A navigation the page performs for itself — a redirect, a link the spec
       // clicked — goes through none of these, and is drained by whatever comes
@@ -505,10 +505,11 @@ export const test: TestType<
       page.setContent = draining(page.setContent.bind(page));
     };
 
-    // On the context and not on each page: Playwright asks for a page's events
-    // only once a listener is attached to it, which for a popup is after its
-    // first messages have been sent and dropped. The context's are asked for
-    // here, before any page exists.
+    // On the context and not on each page: Playwright sends a page's events only
+    // once a listener on that page has asked for them, and a popup's first
+    // messages are sent before a listener attached on its `page` event can ask.
+    // The context's are asked for here, before any page exists. A console
+    // message with no page is a service worker's, which no page listener heard.
     context.on("response", (response) => {
       if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
     });
@@ -546,8 +547,8 @@ export const test: TestType<
       record({ kind, at: frame.url(), detail: sanitized(detail) });
     });
     await context.addInitScript(WATCH);
-    context.on("page", watch);
-    for (const open of context.pages()) watch(open);
+    context.on("page", drainFirst);
+    for (const open of context.pages()) drainFirst(open);
 
     await provide(context);
 

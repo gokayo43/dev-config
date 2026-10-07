@@ -548,11 +548,18 @@ describe("what the sweep catches", () => {
     expect(outcome("a page wider than its viewport fails").said).toContain("div#wide");
   });
 
-  // Every one of them, which is what says no popup's first word was lost.
-  test("an error a popup logs before it is reported is swept", () => {
+  // Each of them exactly once. A sweep that lost one dropped a popup's first
+  // word, and one that heard one twice would be listening on the page and the
+  // context both, or counting Playwright's replay of what a popup said before it
+  // was reported as a second message.
+  test("an error a popup logs before it is reported is swept, once", () => {
     const { ok, said } = outcome("an error a popup logs before it is reported is swept");
     expect(ok).toBe(false);
-    for (let n = 0; n < WRITTEN; n++) expect(said).toContain(`written popup ${n} is unhappy`);
+    const heard = Array.from(
+      { length: WRITTEN },
+      (_, n) => said.split(`written popup ${n} is unhappy`).length - 1,
+    );
+    expect(heard).toEqual(Array.from({ length: WRITTEN }, () => 1));
   });
 
   // A stranger reads this in a repo they did not write: what moved, how far, and
