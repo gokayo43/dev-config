@@ -1,14 +1,27 @@
 import { InvariantSweep } from "./invariant-sweep.js";
 import { PlaywrightTestArgs, PlaywrightTestOptions, PlaywrightWorkerArgs, PlaywrightWorkerOptions, TestType } from "@playwright/test";
 //#region count-ceilings.d.ts
-declare const COUNTS: readonly ["reactCommits", "mutationRecords", "requests", "bodyBytes", "scriptBytes"];
-type Count = (typeof COUNTS)[number];
+/** One value for each of the four counts every phase has. */
+interface Steady<Value> {
+  readonly mutationRecords: Value;
+  readonly requests: Value;
+  readonly bodyBytes: Value;
+  readonly scriptBytes: Value;
+}
+/** One value per count: the four every phase has, and React's commits where there are any. */
+interface PerCount<Value> extends Steady<Value> {
+  /**
+   * Present exactly when the phase ran in a document holding a React renderer:
+   * the one current when it began, the one current when it ended, or one that
+   * attached a renderer while it ran. Absent, never zero, otherwise.
+   */
+  readonly reactCommits?: Value;
+}
 /**
  * One phase's counts, which is also the shape of the `count-budget` attachment
- * each budgeted test carries, by phase. `reactCommits` is absent, never zero, on
- * a phase no React renderer ran in.
+ * each budgeted test carries, by phase.
  */
-type Counts = Partial<Record<Count, number>>;
+type Counts = PerCount<number>;
 //#endregion
 //#region count-budget.d.ts
 export interface Budget {

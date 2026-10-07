@@ -19,6 +19,7 @@
     "dist",
     "dev-server.ts",
     "dev-server-derive.ts",
+    "file-lock.ts",
     "limiter-conformance.ts",
     "property.ts",
     "interleaving.ts",

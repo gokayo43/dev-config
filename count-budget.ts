@@ -1,4 +1,4 @@
-import { link, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative } from "node:path";
 
 import type {
@@ -14,20 +14,22 @@ import type {
 } from "@playwright/test";
 
 import {
+  always,
   command,
   COUNTS,
   type Count,
   type Counts,
   described,
   entryIn,
-  isBroken,
-  isJson,
+  fileIn,
+  isWhole,
   type Json,
   lowered,
   MODE,
   type Where,
   withEntry,
 } from "./count-ceilings.ts";
+import { lock } from "./file-lock.ts";
 import { type InvariantSweep, test as swept } from "./invariant-sweep.ts";
 
 export type { Counts } from "./count-ceilings.ts";
@@ -53,9 +55,9 @@ const REPLACED = "Execution context was destroyed";
  * React calls `onCommitFiberRoot` on the DevTools global hook once per commit,
  * production builds included, provided the hook exists before React loads and
  * answers `supportsFiber`; the no-op methods are the rest of what React calls on
- * it. React skips a hook whose `isDisabled` is true, so turning it off, or
- * putting another object in its place, is recorded and refused rather than
- * read as a page with no React.
+ * it. React skips a hook whose `isDisabled` is true or that lacks
+ * `supportsFiber`, so any write to the hook, or another object put in its
+ * place, is recorded and refused rather than read as a page with no React.
  *
  * A document also reports itself after every task that changed it, because the
  * one it replaces is gone before the test can ask: a binding called from
@@ -79,11 +81,10 @@ const INSTRUMENT = `(() => {
   Object.defineProperty(window, "${PAGE_STATE}", { value: read });
   const renderers = new Map();
   const off = () => { state.hookOff = true; changed(); };
-  const hook = {
+  const hook = new Proxy({
     renderers,
     supportsFiber: true,
-    get isDisabled() { return state.hookOff; },
-    set isDisabled(value) { if (value) off(); },
+    isDisabled: false,
     inject(renderer) {
       state.react = true;
       renderers.set(renderers.size + 1, renderer);
@@ -96,7 +97,11 @@ const INSTRUMENT = `(() => {
     onScheduleFiberRoot() {},
     setStrictMode() {},
     checkDCE() {},
-  };
+  }, {
+    set() { off(); return true; },
+    defineProperty() { off(); return true; },
+    deleteProperty() { off(); return true; },
+  });
   Object.defineProperty(window, "__REACT_DEVTOOLS_GLOBAL_HOOK__", { get: () => hook, set: off });
 })();`;
 
@@ -110,24 +115,26 @@ interface DocumentState {
   readonly mutationRecords: number;
 }
 
-function whole(found: unknown): found is number {
-  return typeof found === "number" && Number.isInteger(found) && found >= 0;
-}
-
 /** What the instrument says about a document; anything else is refused loudly. */
 function documentState(value: unknown): DocumentState {
-  if (!isJson(value)) throw new Error(`the page reported ${JSON.stringify(value)} as its counts`);
-  const { document, react, hookOff, reactCommits, mutationRecords } = value;
   if (
-    typeof document !== "string" ||
-    typeof react !== "boolean" ||
-    typeof hookOff !== "boolean" ||
-    !whole(reactCommits) ||
-    !whole(mutationRecords)
+    typeof value === "object" &&
+    value !== null &&
+    "document" in value &&
+    typeof value.document === "string" &&
+    "react" in value &&
+    typeof value.react === "boolean" &&
+    "hookOff" in value &&
+    typeof value.hookOff === "boolean" &&
+    "reactCommits" in value &&
+    isWhole(value.reactCommits) &&
+    "mutationRecords" in value &&
+    isWhole(value.mutationRecords)
   ) {
-    throw new Error(`the page reported ${JSON.stringify(value)} as its counts`);
+    const { document, react, hookOff, reactCommits, mutationRecords } = value;
+    return { document, react, hookOff, reactCommits, mutationRecords };
   }
-  return { document, react, hookOff, reactCommits, mutationRecords };
+  throw new Error(`the page reported ${JSON.stringify(value)} as its counts`);
 }
 
 interface Snapshot {
@@ -188,8 +195,25 @@ function originsOf(servedOrigins: readonly string[], baseURL: string | undefined
 
 interface Pending {
   readonly label: string;
-  /** How many main-frame navigations had started when it was sent. */
-  readonly epoch: number;
+  /**
+   * How many main-frame navigations had started when a document sent it; none
+   * for a service worker's own, which belongs to no document and no
+   * navigation leaves behind.
+   */
+  readonly epoch?: number;
+}
+
+/**
+ * Whether a request comes from the page's main frame. That frame is attached to
+ * the page from the start, and `frame()` throws only for the navigation of a
+ * frame not attached yet, which is therefore never it.
+ */
+function fromMainFrame(page: Page, request: Request): boolean {
+  try {
+    return request.frame() === page.mainFrame();
+  } catch {
+    return false;
+  }
 }
 
 type Round =
@@ -206,6 +230,7 @@ class Meter {
   #epoch = 0;
   #lastDocument: string | undefined;
   readonly #unserved: string[] = [];
+  readonly #unanswered: string[] = [];
   readonly #failures: string[] = [];
 
   private constructor(page: Page, origins: ReadonlySet<string>) {
@@ -222,7 +247,7 @@ class Meter {
     await page.addInitScript(INSTRUMENT);
     await page.emulateMedia({ reducedMotion: "reduce" });
     page.on("request", (request) => {
-      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) meter.#epoch += 1;
+      if (request.isNavigationRequest() && fromMainFrame(page, request)) meter.#epoch += 1;
       meter.#network.requests += 1;
       meter.#pending.set(request, {
         label: `${request.method()} ${request.url()}`,
@@ -246,16 +271,26 @@ class Meter {
 
   /** A service worker's own fetches are reported on the context, never on the page. */
   #watchServiceWorkers(context: BrowserContext): void {
-    context.on("requestfinished", (request) => {
+    context.on("request", (request) => {
       if (request.serviceWorker() === null) return;
-      this.#reachedOut(request).catch((error: unknown) => {
-        this.#failures.push(
-          `${request.url()}: ${error instanceof Error ? error.message : String(error)}`,
-        );
+      this.#pending.set(request, {
+        label: `${request.method()} ${request.url()} (service worker)`,
       });
     });
+    context.on("requestfinished", (request) => {
+      if (request.serviceWorker() === null) return;
+      this.#reachedOut(request)
+        .catch((error: unknown) => {
+          this.#failures.push(
+            `${request.url()}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        })
+        .finally(() => this.#pending.delete(request));
+    });
     context.on("requestfailed", (request) => {
-      if (request.serviceWorker() !== null) this.#failed(request);
+      if (request.serviceWorker() === null) return;
+      this.#failed(request);
+      this.#pending.delete(request);
     });
   }
 
@@ -273,7 +308,7 @@ class Meter {
 
   #failed(request: Request): void {
     if (!servedBy(this.#origins, request.url())) {
-      this.#unserved.push(`${request.url()} (failed: ${request.failure()?.errorText})`);
+      this.#unanswered.push(`${request.url()} (${request.failure()?.errorText})`);
     }
   }
 
@@ -297,8 +332,13 @@ class Meter {
     try {
       const response = await request.response();
       if (response === null) throw new Error("a finished request has no response");
-      const redirect = response.status() >= 300 && response.status() < 400;
-      const bytes = redirect ? 0 : (await response.body()).byteLength;
+      const status = response.status();
+      const bodiless =
+        (status >= 300 && status < 400) ||
+        status === 204 ||
+        status === 205 ||
+        request.method() === "HEAD";
+      const bytes = bodiless ? 0 : (await response.body()).byteLength;
       this.#network.bodyBytes += bytes;
       if (request.resourceType() === "script") this.#network.scriptBytes += bytes;
       await this.#reachedOut(request);
@@ -332,9 +372,16 @@ class Meter {
       if (error instanceof Error && error.message.includes(REPLACED)) return { kind: "replaced" };
       throw error;
     }
-    if (!isJson(answer)) throw new Error(`an idle round answered ${JSON.stringify(answer)}`);
-    if (answer["busy"] === true) return { kind: "busy" };
-    const state = answer["state"] === null ? null : documentState(answer["state"]);
+    if (
+      typeof answer !== "object" ||
+      answer === null ||
+      !("busy" in answer) ||
+      !("state" in answer)
+    ) {
+      throw new Error(`an idle round answered ${JSON.stringify(answer)}`);
+    }
+    if (answer.busy === true) return { kind: "busy" };
+    const state = answer.state === null ? null : documentState(answer.state);
     return { kind: "read", snapshot: this.#snapshot(state) };
   }
 
@@ -347,7 +394,7 @@ class Meter {
     if (current === this.#lastDocument) return;
     this.#lastDocument = current;
     for (const [request, { epoch }] of this.#pending) {
-      if (epoch < this.#epoch) this.#pending.delete(request);
+      if (epoch !== undefined && epoch < this.#epoch) this.#pending.delete(request);
     }
   }
 
@@ -362,6 +409,15 @@ class Meter {
         ].join("\n"),
       );
     }
+    if (this.#unanswered.length > 0) {
+      throw new Error(
+        [
+          `count budget refused: a request to an origin the test does not serve ended before any answer reached the page:`,
+          ...[...new Set(this.#unanswered)].map((url) => `  ${url}`),
+          `The page aborted it, a route aborted it, or the connection failed, and each of those changes what the page does next. Answer it with page.route(…, (route) => route.fulfill(…)) and a captured payload, soon enough that the answer arrives before the page gives up on it; or change the page so it does not issue the request.`,
+        ].join("\n"),
+      );
+    }
     if (this.#failures.length > 0) {
       throw new Error(
         [
@@ -372,7 +428,7 @@ class Meter {
     }
     if ([...this.#documents.values()].some((state) => state.hookOff)) {
       throw new Error(
-        `count budget refused: the page turned React's DevTools hook off (it set \`__REACT_DEVTOOLS_GLOBAL_HOOK__.isDisabled\`, or replaced the hook), and React does not report a single commit to a hook that is off, so the page would read as one with no React. Leave the hook alone in the build the test serves.`,
+        `count budget refused: the page turned React's DevTools hook off: it wrote to \`__REACT_DEVTOOLS_GLOBAL_HOOK__\`, by setting \`isDisabled\`, overwriting its properties as a "disable React DevTools" snippet does, or putting another object in its place. React reports no commit to a hook it cannot use, so the page would read as one with no React. Leave the hook alone in the build the test serves.`,
       );
     }
   }
@@ -413,17 +469,16 @@ class Meter {
   }
 }
 
+/** What the page did between two snapshots, by the rule `Counts` states for `reactCommits`. */
 function phaseCounts(start: Snapshot, end: Snapshot): Counts {
+  const counts = always((count) => end.totals[count] - start.totals[count]);
   const react =
     start.current?.react === true ||
     end.current?.react === true ||
     end.reactDocuments > start.reactDocuments;
-  const counts: Counts = {};
-  for (const count of COUNTS) {
-    if (count === "reactCommits" && !react) continue;
-    counts[count] = end.totals[count] - start.totals[count];
-  }
-  return counts;
+  return react
+    ? { ...counts, reactCommits: end.totals.reactCommits - start.totals.reactCommits }
+    : counts;
 }
 
 export interface Budget {
@@ -464,98 +519,29 @@ async function ceilingsAt(path: string): Promise<Json> {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
     throw error;
   }
-  const parsed: unknown = JSON.parse(text);
-  if (!isJson(parsed)) throw new Error(`${path} is not a JSON object`);
-  return parsed;
+  return fileIn(text, path);
 }
 
 function handEdited(where: Where): string {
   return `count budget refused «${where.key}»: its ceilings in ${where.ceilings} were edited by hand, because their seal no longer matches the ceilings the command accepted. The command lowers a ceiling; a person raises one only as { "ceiling": <new>, "was": <the ceiling the command accepted>, "reason": "<why the page does more>" }, and then runs ${command(where)} to seal it. Put the numbers back as git has them and make the change in that form.`;
 }
 
-function otherBrowser(measuredOn: string, running: string, where: Where): string {
-  return `count budget refused «${where.key}»: its ceilings in ${where.ceilings} were measured on ${measuredOn}, and this run is ${running}. A count is only comparable on the browser build it was measured on. Re-measure with ${command(where)}, which records this browser and lowers what dropped; a count that rose keeps its ceiling and fails until it is raised by hand with a reason.`;
-}
-
 const LOCK_PATIENCE_MS = 10_000;
-const LOCK_POLL_MS = 25;
-
-/** When a process started, in clock ticks since boot, where `/proc` says; a reused pid starts later. */
-async function startOf(pid: number): Promise<string | null> {
-  try {
-    return (await readFile(`/proc/${pid}/stat`, "utf8")).split(") ")[1]?.split(" ")[19] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
-}
-
-/** Whether the process a lock names is gone, so a run killed while writing costs the next one nothing. */
-async function abandoned(lock: string): Promise<boolean> {
-  let holder: unknown;
-  try {
-    holder = JSON.parse(await readFile(lock, "utf8"));
-  } catch {
-    // Released between the failed link and this read, or never whole; a lock
-    // that names nobody can never be released by anybody.
-    return true;
-  }
-  if (!isJson(holder) || typeof holder["pid"] !== "number") return true;
-  if (!alive(holder["pid"])) return true;
-  return holder["start"] !== (await startOf(holder["pid"]));
-}
 
 /**
- * Runs `write` holding the file's lock, so workers running tests of one spec in
- * parallel each lower their own entry rather than the last writer's view of the
- * file winning. The holder is written whole and then linked into place, so a
- * lock is never seen half written; one whose holder is gone is taken over, with
- * the half-written file it may have left beside it.
+ * Writes the file whole, then moves it into place. Only the lock's holder
+ * writes, so another process's staging file beside it was left by a writer
+ * killed mid-write.
  */
-async function locked<Answer>(
-  path: string,
-  write: (staged: string) => Promise<Answer>,
-): Promise<Answer> {
-  const lock = `${path}.lock`;
-  const staged = `${path}.writing`;
-  const mine = `${lock}.${process.pid}`;
-  await writeFile(mine, JSON.stringify({ pid: process.pid, start: await startOf(process.pid) }));
-  try {
-    for (let waited = 0; ; waited += LOCK_POLL_MS) {
-      try {
-        await link(mine, lock);
-        break;
-      } catch (error) {
-        if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-      }
-      if (await abandoned(lock)) {
-        await rm(staged, { force: true });
-        await rm(lock, { force: true });
-        continue;
-      }
-      if (waited >= LOCK_PATIENCE_MS) {
-        throw new Error(
-          `count budget could not write ${path}: another worker has held ${lock} for ${LOCK_PATIENCE_MS / 1000}s and is still running. If no run is writing ceilings, remove the file.`,
-        );
-      }
-      await new Promise((done) => setTimeout(done, LOCK_POLL_MS));
-    }
-  } finally {
-    await rm(mine, { force: true });
-  }
-  try {
-    return await write(staged);
-  } finally {
-    await rm(lock, { force: true });
-  }
+async function rewrite(path: string, file: Json): Promise<void> {
+  const prefix = `${basename(path)}.`;
+  const left = (await readdir(dirname(path))).filter(
+    (name) => name.startsWith(prefix) && name.endsWith(".writing"),
+  );
+  await Promise.all(left.map(async (name) => await rm(join(dirname(path), name), { force: true })));
+  const staged = `${path}.${process.pid}.writing`;
+  await writeFile(staged, `${JSON.stringify(file, null, 2)}\n`);
+  await rename(staged, path);
 }
 
 function writing(): boolean {
@@ -583,29 +569,21 @@ async function verdict(
   path: string,
   where: Where,
 ): Promise<string[]> {
-  const shown = `${where.ceilings} › ${JSON.stringify(where.key)}`;
-  if (WRITING) {
-    return await locked(path, async (staged) => {
-      const file = await ceilingsAt(path);
-      const entry = entryIn(file, where.key, shown);
-      if (entry !== undefined && isBroken(entry)) return [handEdited(where)];
-      const next = lowered(entry, measured, running);
-      await writeFile(
-        staged,
-        `${JSON.stringify(withEntry(file, where.key, next.entry), null, 2)}\n`,
-      );
-      await rename(staged, path);
-      return next.changes
-        .filter((change) => change.kind === "above")
-        .map((change) => described(change, where));
-    });
+  await using held = WRITING ? await lock(`${path}.lock`, LOCK_PATIENCE_MS) : null;
+  void held;
+  const file = await ceilingsAt(path);
+  const stored = entryIn(file, where.key, `${where.ceilings} › ${JSON.stringify(where.key)}`);
+  if (stored?.kind === "hand edited") return [handEdited(where)];
+  const { entry, changes } = lowered(stored, measured, running);
+  if (!WRITING) {
+    // Counts measured on another browser build say nothing about this one.
+    const browser = changes.filter((change) => change.kind === "browser");
+    return (browser.length > 0 ? browser : changes).map((change) => described(change, where));
   }
-  const entry = entryIn(await ceilingsAt(path), where.key, shown);
-  if (entry !== undefined && isBroken(entry)) return [handEdited(where)];
-  if (entry !== undefined && entry.browser !== running) {
-    return [otherBrowser(entry.browser, running, where)];
-  }
-  return lowered(entry, measured, running).changes.map((change) => described(change, where));
+  await rewrite(path, withEntry(file, where.key, entry));
+  return changes
+    .filter((change) => change.kind === "above")
+    .map((change) => described(change, where));
 }
 
 /**

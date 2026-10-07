@@ -6,16 +6,46 @@ export const COUNTS = [
   "requests",
   "bodyBytes",
   "scriptBytes",
-] as const;
+] as const satisfies readonly (keyof PerCount<unknown>)[];
 
 export type Count = (typeof COUNTS)[number];
 
+/** The counts every phase has, whatever ran in it. */
+type Always = keyof Steady<unknown>;
+
+/** One value for each of the four counts every phase has. */
+interface Steady<Value> {
+  readonly mutationRecords: Value;
+  readonly requests: Value;
+  readonly bodyBytes: Value;
+  readonly scriptBytes: Value;
+}
+
+/** One value per count: the four every phase has, and React's commits where there are any. */
+interface PerCount<Value> extends Steady<Value> {
+  /**
+   * Present exactly when the phase ran in a document holding a React renderer:
+   * the one current when it began, the one current when it ended, or one that
+   * attached a renderer while it ran. Absent, never zero, otherwise.
+   */
+  readonly reactCommits?: Value;
+}
+
 /**
  * One phase's counts, which is also the shape of the `count-budget` attachment
- * each budgeted test carries, by phase. `reactCommits` is absent, never zero, on
- * a phase no React renderer ran in.
+ * each budgeted test carries, by phase.
  */
-export type Counts = Partial<Record<Count, number>>;
+export type Counts = PerCount<number>;
+
+/** The four counts every phase has, each made by `make`. */
+export function always<Value>(make: (count: Always) => Value): Steady<Value> {
+  return {
+    mutationRecords: make("mutationRecords"),
+    requests: make("requests"),
+    bodyBytes: make("bodyBytes"),
+    scriptBytes: make("scriptBytes"),
+  };
+}
 
 /** What a test measured: its phases in the order it marked them. */
 export type Measured = ReadonlyMap<string, Counts>;
@@ -29,7 +59,10 @@ export interface Raised {
 
 export type Ceiling = number | Raised;
 
-export type Phases = ReadonlyMap<string, ReadonlyMap<Count, Ceiling>>;
+/** One phase's ceilings: a ceiling per count it measures. */
+export type Ceilings = PerCount<Ceiling>;
+
+export type Phases = ReadonlyMap<string, Ceilings>;
 
 export interface Entry {
   readonly browser: string;
@@ -57,13 +90,18 @@ export const command = (where: Where): string => `${MODE}=write bunx playwright 
 // oxlint-disable-next-line typescript/no-restricted-types, anti-slop/no-unsafe-dictionary-type -- the one boundary alias this module reads through: what a person wrote in a ceilings file
 export type Json = Record<string, unknown>;
 
-export function isJson(value: unknown): value is Json {
+function isJson(value: unknown): value is Json {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function asJson(value: unknown, where: string): Json {
   if (!isJson(value)) throw new Error(`${where} is not a JSON object`);
   return value;
+}
+
+/** A ceilings file's text, read as the object it has to be. */
+export function fileIn(text: string, path: string): Json {
+  return asJson(JSON.parse(text), path);
 }
 
 export function isRaised(ceiling: Ceiling): ceiling is Raised {
@@ -88,11 +126,23 @@ function digest(phase: string, count: Count, accepted: number): string {
     .slice(0, DIGEST);
 }
 
+/** A phase's ceilings that are there, in the order `COUNTS` lists them. */
+function present(ceilings: Ceilings): [Count, Ceiling][] {
+  return COUNTS.flatMap((count): [Count, Ceiling][] => {
+    const ceiling = ceilings[count];
+    return ceiling === undefined ? [] : [[count, ceiling]];
+  });
+}
+
 /** Every count of an entry, in the one order its seal lists them. */
 function slots(phases: Phases): [string, Count, Ceiling][] {
   return [...phases]
-    .flatMap(([phase, counts]) =>
-      [...counts].map(([count, ceiling]): [string, Count, Ceiling] => [phase, count, ceiling]),
+    .flatMap(([phase, ceilings]) =>
+      present(ceilings).map(([count, ceiling]): [string, Count, Ceiling] => [
+        phase,
+        count,
+        ceiling,
+      ]),
     )
     .toSorted(([a, x], [b, y]) => byCodePoint(`${a}\u0000${x}`, `${b}\u0000${y}`));
 }
@@ -127,15 +177,11 @@ function freshRaises(entry: Entry): ReadonlySet<string> | undefined {
   return fresh;
 }
 
-export function isBroken(entry: Entry): boolean {
-  return freshRaises(entry) === undefined;
-}
-
 function isCount(name: string): name is Count {
   return COUNTS.some((count) => count === name);
 }
 
-function isWhole(value: unknown): value is number {
+export function isWhole(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
@@ -163,24 +209,34 @@ function ceilingAt(value: unknown, where: string): Ceiling {
   return { ceiling, was, reason };
 }
 
+/** One phase's ceilings, read from a file a person may have edited. */
+function phaseAt(value: unknown, where: string): Ceilings {
+  const written = asJson(value, where);
+  for (const count of Object.keys(written)) {
+    if (!isCount(count)) {
+      throw new Error(`${where}.${count} is not a count; the counts are ${COUNTS.join(", ")}`);
+    }
+  }
+  const ceilings = always((count) => {
+    if (!Object.hasOwn(written, count)) {
+      throw new Error(`${where} has no ${count}, which every phase measures`);
+    }
+    return ceilingAt(written[count], `${where}.${count}`);
+  });
+  return Object.hasOwn(written, "reactCommits")
+    ? { ...ceilings, reactCommits: ceilingAt(written["reactCommits"], `${where}.reactCommits`) }
+    : ceilings;
+}
+
 /** One test's entry, read from a file a person may have edited. */
 export function entryAt(value: unknown, where: string): Entry {
-  const held = asJson(value, where);
-  const { browser, seal } = held;
+  const written = asJson(value, where);
+  const { browser, seal } = written;
   if (typeof browser !== "string") throw new Error(`${where}.browser is not a string`);
   if (typeof seal !== "string") throw new Error(`${where}.seal is not a string`);
-  const phases = new Map<string, Map<Count, Ceiling>>();
-  for (const [phase, counts] of Object.entries(asJson(held["phases"], `${where}.phases`))) {
-    const ceilings = new Map<Count, Ceiling>();
-    for (const [count, ceiling] of Object.entries(asJson(counts, `${where}.phases.${phase}`))) {
-      if (!isCount(count)) {
-        throw new Error(
-          `${where}.phases.${phase}.${count} is not a count; the counts are ${COUNTS.join(", ")}`,
-        );
-      }
-      ceilings.set(count, ceilingAt(ceiling, `${where}.phases.${phase}.${count}`));
-    }
-    phases.set(phase, ceilings);
+  const phases = new Map<string, Ceilings>();
+  for (const [phase, ceilings] of Object.entries(asJson(written["phases"], `${where}.phases`))) {
+    phases.set(phase, phaseAt(ceilings, `${where}.phases.${phase}`));
   }
   return { browser, phases, seal };
 }
@@ -190,7 +246,7 @@ export function entryJson(entry: Entry): Json {
   return {
     browser: entry.browser,
     phases: Object.fromEntries(
-      [...entry.phases].map(([phase, counts]) => [phase, Object.fromEntries(counts)]),
+      [...entry.phases].map(([phase, ceilings]) => [phase, Object.fromEntries(present(ceilings))]),
     ),
     seal: entry.seal,
   };
@@ -204,8 +260,24 @@ export function withEntry(file: Json, key: string, entry: Entry): Json {
   );
 }
 
-export function entryIn(file: Json, key: string, where: string): Entry | undefined {
-  return Object.hasOwn(file, key) ? entryAt(file[key], where) : undefined;
+/** An entry whose every ceiling the command accepted, or raised since in the form, with the raises it has not kept yet. */
+export interface Sealed {
+  readonly kind: "sealed";
+  readonly entry: Entry;
+  readonly raises: ReadonlySet<string>;
+}
+
+/** An entry that differs from its seal other than by a fresh raise: edited by hand, and refused. */
+export interface HandEdited {
+  readonly kind: "hand edited";
+}
+
+/** A test's entry as the file holds it, judged against its seal; nothing when the file has none. */
+export function entryIn(file: Json, key: string, where: string): Sealed | HandEdited | undefined {
+  if (!Object.hasOwn(file, key)) return undefined;
+  const entry = entryAt(file[key], where);
+  const raises = freshRaises(entry);
+  return raises === undefined ? { kind: "hand edited" } : { kind: "sealed", entry, raises };
 }
 
 /** One way the entry the command would write differs from the one stored. */
@@ -217,13 +289,13 @@ export type Change =
   | {
       readonly kind: "count added";
       readonly phase: string;
-      readonly count: Count;
+      readonly count: "reactCommits";
       readonly measured: number;
     }
   | {
       readonly kind: "count dropped";
       readonly phase: string;
-      readonly count: Count;
+      readonly count: "reactCommits";
       readonly ceiling: Ceiling;
     }
   | {
@@ -247,31 +319,43 @@ export type Change =
       readonly ceiling: Raised;
     };
 
+/** A measured count against its ceiling: the lower of the two, and a change wherever they differ. */
+function against(
+  phase: string,
+  count: Count,
+  measured: number,
+  ceiling: Ceiling,
+  changes: Change[],
+): Ceiling {
+  if (measured < ceilingOf(ceiling)) {
+    changes.push({ kind: "lowered", phase, count, measured, ceiling });
+    return measured;
+  }
+  if (measured > ceilingOf(ceiling))
+    changes.push({ kind: "above", phase, count, measured, ceiling });
+  return ceiling;
+}
+
 function lowerPhase(
   phase: string,
   counts: Counts,
-  held: ReadonlyMap<Count, Ceiling>,
-): { next: Map<Count, Ceiling>; changes: Change[] } {
-  const next = new Map<Count, Ceiling>();
+  stored: Ceilings,
+): { next: Ceilings; changes: Change[] } {
   const changes: Change[] = [];
-  for (const count of COUNTS) {
-    const measured = counts[count];
-    const ceiling = held.get(count);
-    if (measured === undefined) {
-      if (ceiling !== undefined) changes.push({ kind: "count dropped", phase, count, ceiling });
-    } else if (ceiling === undefined) {
-      next.set(count, measured);
-      changes.push({ kind: "count added", phase, count, measured });
-    } else if (measured < ceilingOf(ceiling)) {
-      next.set(count, measured);
-      changes.push({ kind: "lowered", phase, count, measured, ceiling });
-    } else {
-      next.set(count, ceiling);
-      if (measured > ceilingOf(ceiling))
-        changes.push({ kind: "above", phase, count, measured, ceiling });
-    }
+  const measured = counts.reactCommits;
+  const ceiling = stored.reactCommits;
+  let reactCommits: Ceiling | undefined = undefined;
+  if (measured === undefined) {
+    if (ceiling !== undefined)
+      changes.push({ kind: "count dropped", phase, count: "reactCommits", ceiling });
+  } else if (ceiling === undefined) {
+    reactCommits = measured;
+    changes.push({ kind: "count added", phase, count: "reactCommits", measured });
+  } else {
+    reactCommits = against(phase, "reactCommits", measured, ceiling, changes);
   }
-  return { next, changes };
+  const next = always((count) => against(phase, count, counts[count], stored[count], changes));
+  return { next: reactCommits === undefined ? next : { ...next, reactCommits }, changes };
 }
 
 /**
@@ -280,20 +364,17 @@ function lowerPhase(
  * measure; a count with no ceiling is written as measured; one no longer
  * measured is dropped; none is raised, so a count above its ceiling keeps the
  * ceiling. A check fails exactly when this lists a change.
- *
- * The entry handed in is not `isBroken`.
  */
 export function lowered(
-  entry: Entry | undefined,
+  stored: Sealed | undefined,
   measured: Measured,
   browser: string,
 ): { entry: Entry; changes: Change[] } {
-  const phases = new Map<string, Map<Count, Ceiling>>();
-  if (entry === undefined) {
-    for (const [phase, counts] of measured)
-      phases.set(phase, lowerPhase(phase, counts, new Map()).next);
+  const phases = new Map<string, Ceilings>(measured);
+  if (stored === undefined) {
     return { entry: { browser, phases, seal: sealOf(phases) }, changes: [{ kind: "new" }] };
   }
+  const { entry, raises } = stored;
   const changes: Change[] = [];
   if (entry.browser !== browser)
     changes.push({ kind: "browser", from: entry.browser, to: browser });
@@ -302,19 +383,20 @@ export function lowered(
   }
   for (const [phase, counts] of measured) {
     const held = entry.phases.get(phase);
-    if (held === undefined) changes.push({ kind: "phase added", phase });
-    const lower = lowerPhase(phase, counts, held ?? new Map());
+    if (held === undefined) {
+      changes.push({ kind: "phase added", phase });
+      continue;
+    }
+    const lower = lowerPhase(phase, counts, held);
     phases.set(phase, lower.next);
-    if (held !== undefined) changes.push(...lower.changes);
+    changes.push(...lower.changes);
   }
-  const seal = sealOf(phases);
-  const fresh = freshRaises(entry) ?? new Set<string>();
   for (const [phase, count, ceiling] of slots(phases)) {
-    if (isRaised(ceiling) && fresh.has(slotKey(phase, count))) {
+    if (isRaised(ceiling) && raises.has(slotKey(phase, count))) {
       changes.push({ kind: "raise kept", phase, count, ceiling });
     }
   }
-  return { entry: { browser, phases, seal }, changes };
+  return { entry: { browser, phases, seal: sealOf(phases) }, changes };
 }
 
 function raiseOf(
@@ -339,7 +421,7 @@ export function described(change: Change, where: Where): string {
       said = `no ceilings for this test in ${where.ceilings}: ${run}.`;
       break;
     case "browser":
-      said = `the ceilings were measured on ${change.from}, and this run is ${change.to}: ${run}.`;
+      said = `the ceilings were measured on ${change.from}, and this run is ${change.to}. A count is only comparable on the browser build it was measured on. The command records this browser and lowers what dropped, and a count that rose keeps its ceiling and fails until it is raised by hand with a reason: ${run}.`;
       break;
     case "phase added":
       said = `«${change.phase}» has no ceilings: ${run}.`;

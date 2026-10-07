@@ -29,14 +29,24 @@ refuses it except the next run failing. Style recalculations, layout count,
 layout shifts, long tasks, transferred bytes and heap size varied between
 identical runs in the measurement, so they are not offered.
 
+The measurement also found four more counts steady that are not offered. DOM
+nodes, layout objects and event listeners after a forced garbage collection
+were read through Chromium's DevTools protocol (`Performance.getMetrics` after
+`HeapProfiler.collectGarbage`), and this export opens no DevTools session: it
+reads the page through a script of its own and Playwright's events. Offering
+them would take a session on Chromium alone. Document bytes are already inside
+`bodyBytes`, since a document is a response like any other.
+
 ## Marking phases
 
 `budget.phase(name, action)` waits for the page to go still, runs `action`, waits
 for the page to go still again, and records what the page did between the two.
-It answers whatever `action` answered. A phase's counts are that phase's alone:
-whatever the load was still doing when `goto` resolved finishes inside the load,
-and none of it reaches the first interaction. A phase that navigates is charged
-with what the page it left did, as well as with the page it arrived on.
+It answers whatever `action` answered. Whatever the load was still doing when
+`goto` resolved finishes inside the load, because the phase ends only once the
+page is still, so it does not reach the first interaction. Work on a timer
+slower than that is the exception, under "What it does not see". A phase that
+navigates is charged with what the page it left did, as well as with the page
+it arrived on.
 
 Anything a test does outside a phase is not counted, and the wait at the start of
 the next phase keeps its tail out of that phase too.
@@ -49,9 +59,10 @@ that did not happen. A test that asks for `budget` and marks no phase fails.
 **Still** means two idle rounds in a row in which nothing moved. A round is one
 `requestIdleCallback` followed by an animation frame. Nothing moved means no
 React commit, no mutation record and no request started or finished, with no
-request in flight. A round whose idle callback had to be forced after 100ms
-found the page busy, and counts as one in which it moved. Network idle is not
-still: under load, a page's hydration can run on well past the last response.
+request in flight, a service worker's own fetches included. A round whose idle
+callback had to be forced after 100ms found the page busy, and counts as one in
+which it moved. Network idle is not still: under load, a page's hydration can
+run on well past the last response.
 
 The fixture emulates `prefers-reduced-motion: reduce` on the test's page, because
 an animation driven from script that runs forever never lets a page go still. A
@@ -66,24 +77,27 @@ how busy the box was.
 | ----------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `reactCommits`    | commits React made, through the DevTools global hook's `onCommitFiberRoot`         | how many components a commit rendered; work outside React; React in an iframe                                                                                                                                   |
 | `mutationRecords` | records a `MutationObserver` on the document delivered: nodes, attributes and text | how much one record changed (one `append` of a fragment of a thousand rows is one record); work that changes no DOM, such as layout, canvas or computation; anything inside a shadow root; an iframe's document |
-| `requests`        | requests the page made, its iframes' included, and stubbed ones                    | their size, their timing and what they were for; a service worker's own fetches; a WebSocket; a beacon sent from `pagehide`                                                                                     |
-| `bodyBytes`       | decoded body bytes of every response, stubbed ones included                        | compression, since the bytes are counted after decoding; headers; a WebSocket's messages                                                                                                                        |
+| `requests`        | requests the page made, its iframes' included, and stubbed ones                    | their size, their timing and what they were for; a service worker's own fetches, which are waited for but not counted; a WebSocket; a beacon sent from `pagehide`                                               |
+| `bodyBytes`       | decoded body bytes of every response, stubbed ones included                        | compression, since the bytes are counted after decoding; headers; a WebSocket's messages; a service worker's own fetches                                                                                        |
 | `scriptBytes`     | the share of `bodyBytes` whose request was a script                                | inline scripts, which are part of their document's bytes                                                                                                                                                        |
 
 `reactCommits` is read from the DevTools hook the fixture installs before any
 page script runs. A development build of React reports its commits to the hook
 too, but they are not the production build's commits, so budget the build you
-ship. A phase during which no document of the page ever loaded React reports
-**no** commit count rather than zero, so a ceiling of zero commits is always a
-measurement of a React page and never the absence of one. A page that turns the
-hook off, by setting its `isDisabled` or putting another object in its place,
-is refused, since React reports nothing to a hook that is off and the page would
-read as one with no React.
+ship. The `Counts` type states when the count is there, and this is its rule:
+present exactly when the phase ran in a document holding a React renderer, the
+one current when it began, the one current when it ended, or one that attached
+a renderer while it ran; absent, never zero, otherwise. A ceiling of zero
+commits is therefore always a measurement of a React page and never the absence
+of one. A page that writes to the hook is refused: setting its `isDisabled`,
+overwriting its properties as the common "disable React DevTools" snippet does,
+or putting another object in its place. React reports nothing to a hook it
+cannot use, and the page would read as one with no React.
 
 Body bytes are read from the body itself. Chromium's own encoded size counts a
 chunked response's framing, which follows how the server happened to split its
-writes, and it misreports a body a route fulfilled. A redirect has no body and
-counts none.
+writes, and it misreports a body a route fulfilled. A redirect, a `204`, a
+`205` and the answer to a `HEAD` have no body and count none.
 
 A request a page sends as it leaves, a `keepalive` fetch or a `sendBeacon` from
 the click that navigates, is counted when it is sent and not waited for once the
@@ -148,9 +162,14 @@ the file and every difference, in each of these cases:
   is meant;
 - **a count below its ceiling**: run the command, which lowers it, so a ceiling
   never drifts above what the page does;
-- **`reactCommits` on one side only**: a ceiling for commits on a phase in which
-  no React ran, or commits in a phase whose entry has none; the command drops or
-  adds it;
+- **`reactCommits` on one side only**: a ceiling for commits on a phase that by
+  the rule under "The counts" has no commit count, or commits in a phase whose
+  entry has none; the command drops or adds it;
+- **the entry was measured on another browser build**: each entry records the
+  browser that measured it, and a count is only comparable on that build, so
+  this is the one difference the check names, whatever the counts did. After a
+  Playwright upgrade every budgeted test fails this way until the command is
+  run on a person's machine;
 - **a raise the command has not kept yet**, under "Raising a ceiling".
 
 A count passes only when it equals its ceiling. Nothing is averaged, retried or
@@ -167,10 +186,17 @@ COUNT_BUDGET=write bunx playwright test e2e/tier-list.spec.ts
 It runs the tests and writes each passing test's entry instead of failing it on
 a difference. A test with no entry, and a phase or a count with no ceiling, is
 written as measured. Every count below its ceiling is lowered to the measure. A
-phase the test no longer marks, and a commit count on a phase with no React,
-are dropped. A count **above** its ceiling keeps the ceiling, and the test still
-fails, because the command never raises a number. The entry records the browser
-it ran on and a fresh seal. Commit the file.
+phase the test no longer marks, and a commit count on a phase that no longer
+has one, are dropped. A count **above** its ceiling keeps the ceiling, and the
+test still fails, because the command never raises a number; a person raises
+one, under "Raising a ceiling". The entry records the browser it ran on and a
+fresh seal. Commit the file.
+
+The browser is recorded as Playwright's browser name and version, such as
+`chromium 151.0.7922.34`. It does not tell Chromium's headless shell from a
+headed Chromium of the same version, and it does not record the operating
+system the command ran on, so a file written on one and checked on the other
+compares counts across a difference the key does not show.
 
 The command is for a person's machine. It refuses to run when `CI` is set: a CI
 workspace throws the file away, and a write skips the two things a CI check is
@@ -179,16 +205,21 @@ value of `COUNT_BUDGET` other than `write` stops the run before a test starts.
 Unset or blank means check.
 
 Workers running tests of one spec in parallel take turns at the file through a
-lock, `<spec>.counts.json.lock`, which names the process holding it. A lock whose
-process is gone, left by a worker that was killed while writing, is taken over
-along with the half-written `<spec>.counts.json.writing` beside it. A lock held
-by a live process for 10 seconds fails the test with a message naming the file.
+lock, `<spec>.counts.json.lock`, which names the process holding it, and each
+writes the file whole as `<spec>.counts.json.<pid>.writing` before moving it
+into place. A lock whose process is gone, left by a worker that was killed
+while writing, is taken over. Whoever next takes the lock removes what killed
+workers left beside it: a staging file, and the files under
+`<spec>.counts.json.lock.` that name a process that is gone. A lock held by a
+live process for 10 seconds fails the test with a message naming the lock and
+the process. The lock proves a holder alive from `/proc`, so the command runs
+on Linux only.
 
 ## Raising a ceiling
 
-Raising is a hand edit, with a reason, and then the command. Replace the number
-with what the page now does, keep the number that was there as `was`, and say
-why:
+The command never raises a ceiling. Raising is a hand edit, with a reason, and
+then the command, which keeps the raise. Replace the number with what the page
+now does, keep the number that was there as `was`, and say why:
 
 ```json
 "mutationRecords": { "ceiling": 40, "was": 32, "reason": "the sort now shows a count per column" }
@@ -210,7 +241,9 @@ above:
 - a number edited in place, up or down;
 - a kept raise whose `ceiling` was moved again in place, which has to be a new
   raise with the kept ceiling as its `was`;
-- a count or a phase removed from the entry, or added to it by hand.
+- a count or a phase removed from the entry, or added to it by hand. A phase
+  missing one of the four counts every phase has is refused before the seal is
+  read, naming the count.
 
 The seal does **not** guard:
 
@@ -226,9 +259,10 @@ The seal does **not** guard:
 
 ## When a test is refused
 
-A count is only worth comparing when it is repeatable, so the fixture refuses a
-test when one of these does not hold. A refused test **fails**, with a message
-saying what to do, and nothing is recorded for it, in check and command alike.
+A count is only worth comparing when it is repeatable and the entry is one the
+command accepted, so the fixture refuses a test in each case below. A refused
+test **fails**, with a message saying what to do, and nothing is recorded for
+it, in check and command alike.
 
 - **A request reached an origin the test neither serves nor stubs.** Responses
   from somewhere the test does not control land when they land, and React
@@ -244,23 +278,27 @@ saying what to do, and nothing is recorded for it, in check and command alike.
 
   Every other request has to be answered by `route.fulfill`, and every other
   WebSocket by `page.routeWebSocket`, each with a captured payload. A service
-  worker's own fetches are held to the same rule. An aborted request is refused
-  too, since it changes what the page does. A `data:` or `blob:` URL is the
-  page's own and needs nothing.
+  worker's own fetches are held to the same rule, and the phase waits for them.
+  A `data:` or `blob:` URL is the page's own and needs nothing.
+
+- **A request to an origin the test does not serve ended with no answer.** The
+  page aborted it, a route aborted it, or the connection failed, and nothing
+  observable tells those apart; each changes what the page does next. A stub
+  that answers only after the page gave up is this case too. Answer it with a
+  stub that arrives before the page gives up, or change the page so it does not
+  issue the request.
+
+- **A response's body could not be read**, so its bytes cannot be counted. The
+  message names the request and what Playwright said.
 
 - **The page never went still** in 100 idle rounds. The refusal names what kept
   moving and any request still in flight. A script animation that runs forever
   and ignores reduced motion, a timer that keeps mutating the DOM and a request
   that never finishes are the usual causes.
 
-- **The ceilings were measured on another browser build.** Each entry records
-  the browser that measured it, and a count is only comparable on that build.
-  After a Playwright upgrade, every budgeted test **fails** this way until the
-  command is run on a person's machine, which records the new build and lowers
-  what dropped. A count that rose on the new build keeps its ceiling and fails
-  until it is raised by hand with a reason.
+- **React's DevTools hook was written to**, as under "The counts".
 
-- **React's DevTools hook was turned off**, as under "The counts".
+- **The entry was edited by hand**, as under "What the seal guards".
 
 - **The test is a retry.** A retry would pass a count that differs from one run
   to the next, which is what a budget exists to catch, so a budgeted test fails
@@ -278,11 +316,20 @@ saying what to do, and nothing is recorded for it, in check and command alike.
 - **A socket a route connected through.** A WebSocket that `page.routeWebSocket`
   hands to `connectToServer` reaches its server without the page raising the
   event the origin rule reads.
+- **A route that fetches the real response.** `route.fulfill({ response: await
+route.fetch() })` answers the page with live data, and the page sees a
+  fulfilled response, which is what a stub is. Playwright's own request to the
+  origin is not one the page made.
 - **Work on a timer slower than two idle rounds.** A page that mutates the DOM a
   second after it went still has gone still in between, and the mutation lands
   in whatever phase is running then, or in none, depending on how long the
   phases around it took.
 - **Time.** A change that makes the same work slower moves no count.
-- **Other browsers' counts.** The measurement behind this ran on Chromium 151
-  only. That the counts hold over a longer horizon against a live API, and on
-  another engine, is not shown.
+- **Whether counts hold on another engine, or over time.** The measurement
+  behind this ran on Chromium 151 only. Nothing here checks the engine: on
+  Firefox or WebKit the fixture runs, records that browser in the entry, and
+  holds the counts to ceilings measured on it, but nobody has shown those counts
+  steady there. Playwright reports which service worker made a request on
+  Chromium only, so on another engine a service worker's own fetches are not
+  seen at all. That the counts hold over a longer horizon against a live API is
+  not shown either.

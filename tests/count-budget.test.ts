@@ -13,8 +13,9 @@ import { availableParallelism } from "node:os";
 import { join } from "node:path";
 
 import { type ConfigObject, record } from "../.github/actions/_lib/gate.ts";
+import { bootId } from "../file-lock.ts";
+import { type Count, COUNTS, type Counts } from "../count-ceilings.ts";
 import {
-  type Counts,
   fixture,
   type Outcome,
   playwright,
@@ -25,7 +26,7 @@ import {
 
 const WRITE = { COUNT_BUDGET: "write" };
 
-/** How many runs of one page item 5 of the brief grades as identical, quiet and loaded. */
+/** How many runs of one page are graded as identical, quiet and with every core loaded: dev-config#142 measured 20 to 25. */
 const RUNS = 20;
 
 const LIST = `async ({ page, budget }) => {
@@ -143,6 +144,26 @@ test("a page that turns React's hook off", async ({ page, budget }) => {
   await budget.phase("load", () => page.goto("/hardened"));
 });
 
+test("a page that overwrites React's hook", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/neutered"));
+});
+
+test("a service worker's fetch that outlives the load", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/slow-worker"));
+});
+
+test("a stub the page gave up on", async ({ page, budget }) => {
+  await page.route(other + "/data", async (route) => {
+    await new Promise((done) => setTimeout(done, 100));
+    await route.fulfill({ body: "stubbed", headers: { "access-control-allow-origin": "*" } });
+  });
+  await budget.phase("load", () => page.goto("/impatient"));
+});
+
+test("frames the page did not start with", async ({ page, budget }) => {
+  await budget.phase("load", () => page.goto("/framed"));
+});
+
 test("a click that sends a beacon as it leaves", async ({ page, budget }) => {
   await budget.phase("load", () => page.goto("/beacon"));
   await budget.phase("go", () => page.click("#go"));
@@ -255,7 +276,7 @@ const STAGES = {
   },
   "a new browser": {
     before: [["load", "mutations=3&requests=2"]],
-    after: [["load", "mutations=3&requests=2"]],
+    after: [["load", "mutations=4&requests=2"]],
   },
   "a page that stopped being React": {
     before: [["load", "app"]],
@@ -276,7 +297,7 @@ const STAGES = {
       ["skip", ""],
     ],
   },
-  toString: staged({
+  valueOf: staged({
     before: [
       ["constructor", "mutations=3&requests=2"],
       ["__proto__", "mutations=1&requests=0"],
@@ -327,23 +348,44 @@ test("a consumer's spec runs", async ({ page, budget }) => {
 
 type Runs = Map<string, Outcome[]>;
 
-let first: Runs = new Map();
-let checked: Runs = new Map();
-let lowered: Runs = new Map();
-let quiet: Runs = new Map();
-let loaded: Runs = new Map();
-let consumer: Runs = new Map();
-let wrongMode = "";
-let inCi = "";
-let rechecked: Runs = new Map();
-let parallel: Runs = new Map();
-/** What the parallel tree held beside its spec after the run that found a dead worker's lock. */
-let leftBeside: string[] = [];
-/** How many cores' worth of CPU the spinning processes took while the loaded runs ran. */
-let cores = 0;
-/** The ceilings files, by spec and by the moment they were read. */
-const files = new Map<string, ConfigObject>();
+/** The moments a ceilings file is read at, by spec and by stage. */
+type Moment =
+  | "planted first"
+  | "phases first"
+  | "refusals first"
+  | "ratchet first"
+  | "ratchet edited"
+  | "ratchet lowered"
+  | "parallel"
+  | "consumer";
+
+/** Everything the runs up front reported and left behind, which the cases below read. */
+interface Ran {
+  readonly first: Runs;
+  readonly checked: Runs;
+  readonly lowered: Runs;
+  readonly rechecked: Runs;
+  readonly quiet: Runs;
+  readonly loaded: Runs;
+  readonly consumer: Runs;
+  readonly parallel: Runs;
+  /** What the write command said under `CI`, and under a mode it does not take. */
+  readonly inCi: string;
+  readonly wrongMode: string;
+  /** What the parallel tree held beside its spec after the run that found a dead worker's lock. */
+  readonly leftBeside: readonly string[];
+  /** How many cores' worth of CPU the spinning processes took while the loaded runs ran. */
+  readonly cores: number;
+  readonly files: Readonly<Record<Moment, ConfigObject>>;
+}
+
+let ran: Ran | undefined;
 let stop = async (): Promise<void> => {};
+
+function results(): Ran {
+  if (ran === undefined) throw new Error("the runs up front did not finish");
+  return ran;
+}
 
 async function json(path: string): Promise<ConfigObject> {
   const parsed: unknown = await Bun.file(path).json();
@@ -437,13 +479,14 @@ beforeAll(async () => {
   const at = (name: string): string => join(root, `${name}.spec.counts.json`);
   // The planted lists are left out: the unplanted one writes the ceilings
   // every one of them is checked against.
-  first = await playwright(root, { ...WRITE, ...env, STAGE: "before" }, [
+  const first = await playwright(root, { ...WRITE, ...env, STAGE: "before" }, [
     "--grep-invert",
     "planted (rerender|request|heavy)",
   ]);
-  for (const name of ["planted", "phases", "refusals", "ratchet"]) {
-    files.set(`${name} first`, await json(at(name)));
-  }
+  const plantedFirst = await json(at("planted"));
+  const phasesFirst = await json(at("phases"));
+  const refusalsFirst = await json(at("refusals"));
+  const ratchetFirst = await json(at("ratchet"));
 
   const planted = await json(at("planted"));
   const none = record(planted["the list, planted none"]);
@@ -453,34 +496,34 @@ beforeAll(async () => {
   const ratchet = await json(at("ratchet"));
   edited(ratchet, String(none["browser"]));
   await Bun.write(at("ratchet"), JSON.stringify(ratchet, null, 2));
-  files.set("ratchet edited", await json(at("ratchet")));
+  const ratchetEdited = await json(at("ratchet"));
 
-  checked = await playwright(root, { ...env, STAGE: "after" }, [
+  const checked = await playwright(root, { ...env, STAGE: "after" }, [
     "planted.spec.ts",
     "ratchet.spec.ts",
   ]);
-  lowered = await playwright(root, { ...WRITE, ...env, STAGE: "after" }, ["ratchet.spec.ts"]);
-  files.set("ratchet lowered", await json(at("ratchet")));
+  const lowered = await playwright(root, { ...WRITE, ...env, STAGE: "after" }, ["ratchet.spec.ts"]);
+  const ratchetLowered = await json(at("ratchet"));
 
   // The raise the command just kept, raised again in place under its old reason.
   const kept = await json(at("ratchet"));
   const again = record(record(phasesIn(kept, "raised with a reason")["load"])["mutationRecords"]);
   again["ceiling"] = Number(again["ceiling"]) + 500;
   await Bun.write(at("ratchet"), JSON.stringify(kept, null, 2));
-  rechecked = await playwright(root, { ...env, STAGE: "after" }, [
+  const rechecked = await playwright(root, { ...env, STAGE: "after" }, [
     "ratchet.spec.ts",
     "--grep",
     "raised with a reason",
   ]);
 
-  inCi = await playwright(root, { ...WRITE, CI: "true", ...env, STAGE: "after" }, [
+  const inCi = await playwright(root, { ...WRITE, CI: "true", ...env, STAGE: "after" }, [
     "phases.spec.ts",
   ]).then(
     () => "",
     (error: Error) => error.message,
   );
 
-  wrongMode = await playwright(root, { COUNT_BUDGET: "yes", ...env, STAGE: "after" }, [
+  const wrongMode = await playwright(root, { COUNT_BUDGET: "yes", ...env, STAGE: "after" }, [
     "phases.spec.ts",
   ]).then(
     () => "",
@@ -495,25 +538,53 @@ beforeAll(async () => {
   const parallelCeilings = join(writers, "parallel.spec.counts.json");
   const dead = Bun.spawn(["true"]);
   await dead.exited;
-  await Bun.write(`${parallelCeilings}.lock`, JSON.stringify({ pid: dead.pid }));
-  await Bun.write(`${parallelCeilings}.writing`, "what a writer killed mid-write left");
-  parallel = await playwright(writers, WRITE);
-  files.set(
-    "parallel",
-    (await Bun.file(parallelCeilings).exists()) ? await json(parallelCeilings) : {},
+  const gone = JSON.stringify({ pid: dead.pid, bootId: await bootId(), startTicks: 0 });
+  // A worker killed while writing: its lock, the file it was staging, and the
+  // file another worker killed while waiting for that lock wrote its holder to.
+  await Bun.write(`${parallelCeilings}.lock`, gone);
+  await Bun.write(`${parallelCeilings}.${dead.pid}.writing`, "what a writer killed mid-write left");
+  await Bun.write(`${parallelCeilings}.lock.${dead.pid}-0a0a0a0a`, gone);
+  const parallel = await playwright(writers, WRITE);
+  const parallelFile = (await Bun.file(parallelCeilings).exists())
+    ? await json(parallelCeilings)
+    : {};
+  const leftBeside = (await readdir(writers)).filter((name) =>
+    name.startsWith("parallel.spec.counts"),
   );
-  leftBeside = (await readdir(writers)).filter((name) => name.startsWith("parallel.spec.counts"));
 
   const installed = await fixture(server.origin, { "consumer.spec.ts": INSTALLED }, { workers: 1 });
-  consumer = await playwright(installed, WRITE);
-  files.set("consumer", await json(join(installed, "consumer.spec.counts.json")));
+  const consumer = await playwright(installed, WRITE);
+  const consumerFile = await json(join(installed, "consumer.spec.counts.json"));
 
   const steady = await fixture(server.origin, { "steady.spec.ts": STEADY }, { workers: 1 });
   const repeated = ["--repeat-each", String(RUNS)];
-  quiet = await playwright(steady, WRITE, repeated);
+  const quiet = await playwright(steady, WRITE, repeated);
   const underCores = await underLoad(async () => await playwright(steady, WRITE, repeated));
-  loaded = underCores.answer;
-  cores = underCores.cores;
+
+  ran = {
+    first,
+    checked,
+    lowered,
+    rechecked,
+    quiet,
+    loaded: underCores.answer,
+    consumer,
+    parallel,
+    inCi,
+    wrongMode,
+    leftBeside,
+    cores: underCores.cores,
+    files: {
+      "planted first": plantedFirst,
+      "phases first": phasesFirst,
+      "refusals first": refusalsFirst,
+      "ratchet first": ratchetFirst,
+      "ratchet edited": ratchetEdited,
+      "ratchet lowered": ratchetLowered,
+      parallel: parallelFile,
+      consumer: consumerFile,
+    },
+  };
 }, 600_000);
 
 afterAll(async () => {
@@ -545,31 +616,29 @@ function phaseOf(runs: Runs, title: string, phase: string): Counts {
   return found;
 }
 
-function countOf(counts: Counts, count: string): number {
+function countOf(counts: Counts, count: Count): number {
   const found = counts[count];
   if (found === undefined) throw new Error(`no ${count} in ${JSON.stringify(counts)}`);
   return found;
 }
 
-function fileOf(name: string): ConfigObject {
-  const found = files.get(name);
-  if (found === undefined) throw new Error(`no ceilings file was read as ${name}`);
-  return found;
+function fileOf(moment: Moment): ConfigObject {
+  return results().files[moment];
 }
 
 describe("the counts a phase reports", () => {
   // The tail lands after `load` and after Playwright's network idle, in tasks
   // that never leave the page idle; a phase that ended at either misses it.
   test("a phase is charged with the work that finished after its action returned", () => {
-    const tail = phaseOf(first, "work that runs on past load", "load");
-    const none = phaseOf(first, "no work past load", "load");
+    const tail = phaseOf(results().first, "work that runs on past load", "load");
+    const none = phaseOf(results().first, "no work past load", "load");
     expect(countOf(tail, "mutationRecords") - countOf(none, "mutationRecords")).toBe(5);
   });
 
   // The click waits for the tail's button, so a boundary that did not wait for
   // the tail charges its five elements here.
   test("a phase is charged with nothing the phase before it did", () => {
-    expect(phaseOf(first, "work that runs on past load", "add")).toEqual({
+    expect(phaseOf(results().first, "work that runs on past load", "add")).toEqual({
       mutationRecords: 1,
       requests: 0,
       bodyBytes: 0,
@@ -578,8 +647,8 @@ describe("the counts a phase reports", () => {
   });
 
   test("a phase that leaves the page is charged with what the page it left did", () => {
-    const go = phaseOf(first, "a click that leaves the page", "go");
-    const landing = phaseOf(first, "the page it lands on", "load");
+    const go = phaseOf(results().first, "a click that leaves the page", "go");
+    const landing = phaseOf(results().first, "the page it lands on", "load");
     expect(go).toEqual({ ...landing, mutationRecords: countOf(landing, "mutationRecords") + 1 });
   });
 
@@ -589,26 +658,23 @@ describe("the counts a phase reports", () => {
       "no work past load",
       "the page it lands on",
     ]) {
-      for (const counts of Object.values(only(first, title).counts ?? {})) {
+      for (const counts of Object.values(only(results().first, title).counts ?? {})) {
         expect(counts).not.toHaveProperty("reactCommits");
       }
     }
   });
 
   test("a React phase in which nothing committed reports zero commits", () => {
-    expect(phaseOf(first, "the list, planted none", "hover")).toHaveProperty("reactCommits", 0);
+    expect(phaseOf(results().first, "the list, planted none", "hover")).toHaveProperty(
+      "reactCommits",
+      0,
+    );
   });
 
   test("every count of the list's load and of its interaction is above zero", () => {
     for (const phase of ["load", "more"]) {
-      const counts = phaseOf(first, "the list, planted none", phase);
-      for (const count of [
-        "reactCommits",
-        "mutationRecords",
-        "requests",
-        "bodyBytes",
-        "scriptBytes",
-      ]) {
+      const counts = phaseOf(results().first, "the list, planted none", phase);
+      for (const count of COUNTS) {
         expect(countOf(counts, count), `${phase} ${count}`).toBeGreaterThan(0);
       }
     }
@@ -617,8 +683,8 @@ describe("the counts a phase reports", () => {
 
 describe("one page, the same counts on every run", () => {
   test.each([
-    ["quiet", (): Runs => quiet],
-    ["with every core loaded", (): Runs => loaded],
+    ["quiet", (): Runs => results().quiet],
+    ["with every core loaded", (): Runs => results().loaded],
   ])("%s", (_, runs) => {
     const all = runsOf(runs(), "the list");
     const measured = only(runs(), "the list");
@@ -633,29 +699,31 @@ describe("one page, the same counts on every run", () => {
   // on to take there. Under the three-core cap of a session on this box they
   // took 2.46.
   test("the loaded runs ran with the spinners taking more than half a core", () => {
-    expect(cores).toBeGreaterThan(0.5);
+    expect(results().cores).toBeGreaterThan(0.5);
   });
 
   test("quiet and loaded runs agree", () => {
-    expect(only(loaded, "the list").counts).toEqual(only(quiet, "the list").counts);
+    expect(only(results().loaded, "the list").counts).toEqual(
+      only(results().quiet, "the list").counts,
+    );
   });
 });
 
 describe("a planted regression fails the ceiling the unplanted list wrote", () => {
-  const none = (phase: string, count: string): number =>
-    countOf(phaseOf(checked, "the list, planted none", phase), count);
+  const none = (phase: string, count: Count): number =>
+    countOf(phaseOf(results().checked, "the list, planted none", phase), count);
 
   test("the unplanted list passes its own ceilings", () => {
-    expect(only(checked, "the list, planted none")).toMatchObject({ ok: true, said: "" });
+    expect(only(results().checked, "the list, planted none")).toMatchObject({ ok: true, said: "" });
   });
 
   test("a hover that re-renders every row raises commits and mutation records", () => {
-    const { ok, said } = only(checked, "the list, planted rerender");
-    const hover = phaseOf(checked, "the list, planted rerender", "hover");
+    const { ok, said } = only(results().checked, "the list, planted rerender");
+    const hover = phaseOf(results().checked, "the list, planted rerender", "hover");
     expect(ok).toBe(false);
     expect(countOf(hover, "reactCommits")).toBeGreaterThan(none("hover", "reactCommits"));
     expect(said).toContain("«the list, planted rerender»");
-    for (const count of ["reactCommits", "mutationRecords"]) {
+    for (const count of ["reactCommits", "mutationRecords"] as const) {
       expect(said).toContain(
         `«hover» ${count}: measured ${countOf(hover, count)}, ceiling ${none("hover", count)}`,
       );
@@ -663,7 +731,7 @@ describe("a planted regression fails the ceiling the unplanted list wrote", () =
   });
 
   test("a request per row raises the request count", () => {
-    const { ok, said } = only(checked, "the list, planted request");
+    const { ok, said } = only(results().checked, "the list, planted request");
     expect(ok).toBe(false);
     for (const phase of ["load", "more"]) {
       const ceiling = none(phase, "requests");
@@ -672,8 +740,11 @@ describe("a planted regression fails the ceiling the unplanted list wrote", () =
   });
 
   test("a heavier payload raises body bytes", () => {
-    const { ok, said } = only(checked, "the list, planted heavy");
-    const heavy = countOf(phaseOf(checked, "the list, planted heavy", "load"), "bodyBytes");
+    const { ok, said } = only(results().checked, "the list, planted heavy");
+    const heavy = countOf(
+      phaseOf(results().checked, "the list, planted heavy", "load"),
+      "bodyBytes",
+    );
     expect(ok).toBe(false);
     expect(heavy).toBeGreaterThan(none("load", "bodyBytes"));
     expect(said).toContain(
@@ -694,7 +765,7 @@ describe("the check", () => {
     ["raised with a reason", false, "the command has not kept the raise yet"],
     ["raised by hand", false, "were edited by hand"],
     ["raised by hand, then the page drops", false, "were edited by hand"],
-    ["toString", true, ""],
+    ["valueOf", true, ""],
     ["raised with no reason", false, "with no reason"],
     ["raised above what the page does", false, "The page does less than its ceiling"],
     ["a phase added", false, "«again» has no ceilings"],
@@ -707,14 +778,18 @@ describe("the check", () => {
     ["a page that stopped being React", false, "no React renderer ran in this phase"],
     ["not in the file", false, "no ceilings for this test in ratchet.spec.counts.json"],
   ])("%s", (title, ok, said) => {
-    const outcome = only(checked, title);
+    const outcome = only(results().checked, title);
     expect(outcome.ok).toBe(ok);
     expect(outcome.said).toContain(said);
   });
 
+  test("a new browser build is all a check says, since counts measured on another build compare with nothing", () => {
+    expect(only(results().checked, "a new browser").said).not.toContain("«load» mutationRecords");
+  });
+
   test("a count above its ceiling names the test, the phase, the count, the ceiling and the measure", () => {
     const ceiling = ceilingOf(heldIn(fileOf("ratchet first"), "rose", "load", "mutationRecords"));
-    const { said } = only(checked, "rose");
+    const { said } = only(results().checked, "rose");
     expect(said).toContain("«rose»");
     expect(said).toContain(`«load» mutationRecords: measured ${ceiling + 2}, ceiling ${ceiling}`);
     expect(said).toContain(
@@ -727,24 +802,24 @@ describe("the command", () => {
   const before = (title: string): ConfigObject => record(fileOf("ratchet edited")[title]);
   const after = (title: string): ConfigObject => record(fileOf("ratchet lowered")[title]);
   const lowest = (title: string): number =>
-    countOf(phaseOf(lowered, title, "load"), "mutationRecords");
+    countOf(phaseOf(results().lowered, title, "load"), "mutationRecords");
 
   test("writes a test it has no ceilings for", () => {
-    expect(only(lowered, "not in the file").ok).toBe(true);
+    expect(only(results().lowered, "not in the file").ok).toBe(true);
     expect(record(phasesIn(fileOf("ratchet lowered"), "not in the file"))["load"]).toEqual(
-      phaseOf(lowered, "not in the file", "load"),
+      phaseOf(results().lowered, "not in the file", "load"),
     );
   });
 
   test("never raises a ceiling the page rose above, and fails", () => {
-    expect(only(lowered, "rose").ok).toBe(false);
+    expect(only(results().lowered, "rose").ok).toBe(false);
     expect(after("rose")).toEqual(before("rose"));
   });
 
   test.each([["dropped"], ["raised above what the page does"]])(
     "lowers %s to what the page does, as a plain number",
     (title) => {
-      expect(only(lowered, title).ok).toBe(true);
+      expect(only(results().lowered, title).ok).toBe(true);
       expect(heldIn(fileOf("ratchet lowered"), title, "load", "mutationRecords")).toBe(
         lowest(title),
       );
@@ -752,7 +827,7 @@ describe("the command", () => {
   );
 
   test("keeps a raised ceiling the page meets, with its reason, and seals it", () => {
-    expect(only(lowered, "raised with a reason").ok).toBe(true);
+    expect(only(results().lowered, "raised with a reason").ok).toBe(true);
     expect(after("raised with a reason")["phases"]).toEqual(
       before("raised with a reason")["phases"],
     );
@@ -760,28 +835,28 @@ describe("the command", () => {
   });
 
   test("refuses a kept raise raised again in place", () => {
-    const { ok, said } = only(rechecked, "raised with a reason");
+    const { ok, said } = only(results().rechecked, "raised with a reason");
     expect(ok).toBe(false);
     expect(said).toContain("were edited by hand");
   });
 
   test("leaves a test skipped after a phase as it was, and reports it skipped", () => {
-    expect(only(lowered, "skipped after a phase").status).toBe("skipped");
-    expect(only(checked, "skipped after a phase").status).toBe("skipped");
+    expect(only(results().lowered, "skipped after a phase").status).toBe("skipped");
+    expect(only(results().checked, "skipped after a phase").status).toBe("skipped");
     expect(after("skipped after a phase")).toEqual(before("skipped after a phase"));
   });
 
   test("reads and writes an entry and phases named after what every object has", () => {
-    expect(only(lowered, "toString").ok).toBe(true);
-    expect(Object.keys(phasesIn(fileOf("ratchet lowered"), "toString"))).toEqual([
+    expect(only(results().lowered, "valueOf").ok).toBe(true);
+    expect(Object.keys(phasesIn(fileOf("ratchet lowered"), "valueOf"))).toEqual([
       "constructor",
       "__proto__",
     ]);
   });
 
   test("refuses to run in CI", () => {
-    expect(inCi).toContain("COUNT_BUDGET=write");
-    expect(inCi).toContain("CI");
+    expect(results().inCi).toContain("COUNT_BUDGET=write");
+    expect(results().inCi).toContain("CI");
   });
 
   test.each([
@@ -789,7 +864,7 @@ describe("the command", () => {
     ["raised with no reason"],
     ["raised by hand, then the page drops"],
   ])("refuses %s and leaves it", (title) => {
-    expect(only(lowered, title).ok).toBe(false);
+    expect(only(results().lowered, title).ok).toBe(false);
     expect(after(title)).toEqual(before(title));
   });
 
@@ -821,11 +896,16 @@ describe("the command", () => {
   });
 
   test("an unknown mode refuses the run", () => {
-    expect(wrongMode).toContain('COUNT_BUDGET is "yes", and the one value it takes is "write"');
+    expect(results().wrongMode).toContain(
+      'COUNT_BUDGET is "yes", and the one value it takes is "write"',
+    );
   });
 
   test("runs from the package as a consumer installs it", () => {
-    expect(only(consumer, "a consumer's spec runs")).toMatchObject({ ok: true, said: "" });
+    expect(only(results().consumer, "a consumer's spec runs")).toMatchObject({
+      ok: true,
+      said: "",
+    });
     expect(record(phasesIn(fileOf("consumer"), "a consumer's spec runs")["add"])).toEqual({
       mutationRecords: 1,
       requests: 0,
@@ -838,7 +918,8 @@ describe("the command", () => {
 describe("a precondition that does not hold refuses the test and records nothing", () => {
   test.each([
     ["an unstubbed origin", "the page reached an origin the test neither serves nor stubs"],
-    ["an aborted origin", "(failed: net::ERR_FAILED)"],
+    ["an aborted origin", "ended before any answer reached the page:\n  http"],
+    ["an aborted origin", "(net::ERR_FAILED)"],
     ["motion that ignores reduced motion", "the page did not go still in 100 idle rounds"],
     ["a request that never finishes", "Still in flight: GET "],
     ["a phase name used twice", "already marked a phase named «load»"],
@@ -847,10 +928,13 @@ describe("a precondition that does not hold refuses the test and records nothing
     ["an unstubbed WebSocket", "(WebSocket)"],
     ["a service worker that reaches out", "/data"],
     ["a page that turns React's hook off", "turned React's DevTools hook off"],
+    ["a page that overwrites React's hook", "React's DevTools hook"],
+    ["a service worker's fetch that outlives the load", "/slow"],
+    ["a stub the page gave up on", "before any answer reached the page"],
     ["a phase whose failure the test caught", "«boom» did not finish"],
     ["a refusal the test caught", "«load» did not finish"],
   ])("%s", (title, said) => {
-    const outcome = only(first, title);
+    const outcome = only(results().first, title);
     expect(outcome.ok).toBe(false);
     expect(outcome.said).toContain(said);
     expect(fileOf("refusals first")).not.toHaveProperty([title]);
@@ -863,26 +947,31 @@ describe("a precondition that does not hold refuses the test and records nothing
     ["a blob the page made itself"],
     ["a stubbed WebSocket"],
     ["a click that sends a beacon as it leaves"],
+    ["frames the page did not start with"],
     ["an origin the test serves, written as a URL"],
     ["phases named after what every object has"],
     ["toString"],
   ])("%s is counted", (title) => {
-    expect(only(first, title)).toMatchObject({ ok: true, said: "" });
+    expect(only(results().first, title)).toMatchObject({ ok: true, said: "" });
     expect(fileOf("refusals first")).toHaveProperty([title]);
   });
 
   test("the refused origin is named", () => {
-    expect(only(first, "an unstubbed origin").said).toMatch(/http:\/\/127\.0\.0\.1:\d+\/data/);
+    expect(only(results().first, "an unstubbed origin").said).toMatch(
+      /http:\/\/127\.0\.0\.1:\d+\/data/,
+    );
   });
 
   test("a page that never goes still says what kept moving", () => {
-    expect(only(first, "motion that ignores reduced motion").said).toContain("mutationRecords");
+    expect(only(results().first, "motion that ignores reduced motion").said).toContain(
+      "mutationRecords",
+    );
   });
 });
 
 describe("a test that does not pass records nothing", () => {
   test("a test skipped at run time is skipped, not failed", () => {
-    expect(only(first, "a test skipped after a phase").status).toBe("skipped");
+    expect(only(results().first, "a test skipped after a phase").status).toBe("skipped");
     expect(fileOf("refusals first")).not.toHaveProperty(["a test skipped after a phase"]);
   });
 
@@ -901,11 +990,11 @@ describe("the ceilings file", () => {
   });
 
   test("takes sixteen writers in four parallel workers without losing one", () => {
-    expect([...parallel.values()].flat().every((run) => run.ok)).toBe(true);
+    expect([...results().parallel.values()].flat().every((run) => run.ok)).toBe(true);
     expect(Object.keys(fileOf("parallel"))).toHaveLength(16);
   });
 
-  test("takes over a lock a dead worker left, and the half-written file beside it", () => {
-    expect(leftBeside).toEqual(["parallel.spec.counts.json"]);
+  test("takes over a lock a dead worker left, and clears the files dead workers left beside it", () => {
+    expect(results().leftBeside).toEqual(["parallel.spec.counts.json"]);
   });
 });

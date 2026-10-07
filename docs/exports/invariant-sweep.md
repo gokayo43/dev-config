@@ -1,8 +1,9 @@
 # The invariant sweep
 
-`@gokayo43/dev-config/invariant-sweep` exports one thing: `test`, which is
+`@gokayo43/dev-config/invariant-sweep` exports `test`, which is
 `@playwright/test`'s own `test` with the **browser context** replaced by one
-that watches every page it opens. A repo swaps its import and every spec it already has is swept:
+that watches every page it opens, and the `InvariantSweep` type that declares
+its `sweepAllowlist` option. A repo swaps its import and every spec it already has is swept:
 
 ```ts
 import { test } from "@gokayo43/dev-config/invariant-sweep";
@@ -14,8 +15,8 @@ test("the pricing page loads", async ({ page }) => {
 });
 ```
 
-No export here carries an extension. This one and [the route log](route-log.md)
-resolve to built JavaScript under `dist/`, because the runner that imports them
+No export here carries an extension. This one, [the route log](route-log.md) and
+[the count budget](count-budget.md) resolve to built JavaScript under `dist/`, because the runner that imports them
 is node — `tsdown.config.ts` in the package carries why, and STACK.md's shared
 UI library carries the bargain a committed `dist/` is.
 

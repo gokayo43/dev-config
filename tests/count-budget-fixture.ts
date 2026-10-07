@@ -10,6 +10,7 @@
 import { join } from "node:path";
 
 import { type ConfigObject, plainly, record } from "../.github/actions/_lib/gate.ts";
+import { always, type Count, type Counts, isWhole } from "../count-ceilings.ts";
 import { install, listAt, playwrightRun, resultsOf } from "./sweep-fixture.ts";
 import { materialise } from "./tree.ts";
 
@@ -23,6 +24,9 @@ const DETAIL = 2_000;
 
 /** How long the tail page's late work runs past `load`: this many 10ms tasks, past the 500ms Playwright calls network idle. */
 const TAIL_TASKS = 100;
+
+/** How long the other origin takes to answer `/slow`: longer than a page takes to go still. */
+const SLOW_MS = 1_000;
 
 /**
  * The list, and the three regressions planted in it, chosen by `?plant=`:
@@ -215,6 +219,37 @@ if (!matchMedia("(prefers-reduced-motion: reduce)").matches) requestAnimationFra
         "",
         `<script>window.__REACT_DEVTOOLS_GLOBAL_HOOK__.isDisabled = true;</script><div id="root"></div><script type="module" src="${entry}"></script>`,
       ),
+      // The list behind the body of `@fvilers/disable-react-devtools`, which
+      // overwrites every property of the hook rather than setting `isDisabled`.
+      "/neutered": html(
+        "",
+        `<script>const hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+if (typeof hook === "object") {
+  for (const prop in hook) {
+    if (prop === "renderers") { hook[prop] = new Map(); continue; }
+    hook[prop] = typeof hook[prop] === "function" ? Function.prototype : null;
+  }
+}</script><div id="root"></div><script type="module" src="${entry}"></script>`,
+      ),
+      // A service worker whose own fetch to the other origin outlives the load.
+      "/slow-worker": html(
+        "",
+        `<script>navigator.serviceWorker.register("/slow-sw.js").then(() => navigator.serviceWorker.ready).then(() => document.body.append("ready"));</script>`,
+      ),
+      // A fetch to the other origin the page gives up on after 20ms.
+      "/impatient": html(
+        "",
+        `<script>const gaveUp = new AbortController();
+fetch("${other}/data", { signal: gaveUp.signal }).then((response) => response.text()).then((text) => document.body.append(text), () => document.body.append("gave up"));
+setTimeout(() => gaveUp.abort(), 20);</script>`,
+      ),
+      // An iframe in the markup and one added by script, each a navigation of a frame that did not exist yet.
+      "/framed": html(
+        "",
+        `<iframe src="/landing"></iframe><script>const late = document.createElement("iframe");
+late.src = "/landing";
+document.body.append(late);</script>`,
+      ),
       // A click that sends analytics as it leaves: a beacon and a keepalive fetch.
       "/beacon": html(
         "",
@@ -244,12 +279,13 @@ export async function serving(): Promise<Serving> {
   const other = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
-    fetch: (request, held) =>
-      held.upgrade(request)
-        ? undefined
-        : new Response("from the other origin", {
-            headers: { "access-control-allow-origin": "*" },
-          }),
+    async fetch(request, held) {
+      if (held.upgrade(request)) return undefined;
+      if (new URL(request.url).pathname === "/slow") await Bun.sleep(SLOW_MS);
+      return new Response("from the other origin", {
+        headers: { "access-control-allow-origin": "*" },
+      });
+    },
     websocket: {
       open: (socket) => {
         socket.send("from the other origin's socket");
@@ -271,6 +307,13 @@ export async function serving(): Promise<Serving> {
         return new Response(
           `self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(fetch("${other.url.origin}/data").then((response) => response.text())));`,
+          { headers: { "content-type": "text/javascript" } },
+        );
+      }
+      if (path === "/slow-sw.js") {
+        return new Response(
+          `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(fetch("${other.url.origin}/slow").then((response) => response.text())));`,
           { headers: { "content-type": "text/javascript" } },
         );
       }
@@ -306,9 +349,6 @@ self.addEventListener("activate", (event) => event.waitUntil(fetch("${other.url.
   };
 }
 
-/** One phase's counts, as the fixture attached them. */
-export type Counts = Record<string, number>;
-
 /** How one run of one test came out. */
 export interface Outcome {
   /** Playwright's own word for it: `passed`, `failed`, `skipped`, `timedOut`, `interrupted`. */
@@ -319,16 +359,25 @@ export interface Outcome {
   readonly counts?: Record<string, Counts>;
 }
 
+/** One phase's counts as attached, refused where a count is missing or not a whole number. */
+function countsOf(attached: unknown, where: string): Counts {
+  const written = record(attached);
+  const count = (name: Count): number => {
+    const value = written[name];
+    if (!isWhole(value)) throw new Error(`${where}.${name} is ${JSON.stringify(value)}`);
+    return value;
+  };
+  const counts = always(count);
+  return Object.hasOwn(written, "reactCommits")
+    ? { ...counts, reactCommits: count("reactCommits") }
+    : counts;
+}
+
 /** The counts a run attached, by phase: the fixture's own JSON, read back through the reporter's. */
 function countsIn(attached: string): Record<string, Counts> {
   const phases = record(JSON.parse(Buffer.from(attached, "base64").toString("utf8")));
   return Object.fromEntries(
-    Object.entries(phases).map(([phase, counts]) => [
-      phase,
-      Object.fromEntries(
-        Object.entries(record(counts)).map(([count, value]) => [count, Number(value)]),
-      ),
-    ]),
+    Object.entries(phases).map(([phase, counts]) => [phase, countsOf(counts, phase)]),
   );
 }
 
@@ -379,8 +428,10 @@ export default defineConfig({
 /**
  * Runs the fixture's specs, and reports every run of every test by its title,
  * in the order they ran — more than one where `--repeat-each` asked or a retry
- * ran. `CI` is taken out of the environment the suite runs in, since write mode
- * refuses to run under it and CI runs this suite.
+ * ran. A title two spec files share is refused, since a case reading it by
+ * title would read whichever the reporter listed last. `CI` is taken out of the
+ * environment the suite runs in, since write mode refuses to run under it and
+ * CI runs this suite.
  */
 export async function playwright(
   root: string,
@@ -389,8 +440,13 @@ export async function playwright(
 ): Promise<Map<string, Outcome[]>> {
   const { COUNT_BUDGET: _mode, CI: _ci, ...inherited } = plainly(Bun.env);
   const outcomes = new Map<string, Outcome[]>();
+  const fileOf = new Map<string, string>();
   for (const spec of await playwrightRun(root, args, { ...inherited, ...env })) {
     const title = String(spec["title"]);
+    const file = String(spec["file"]);
+    const seen = fileOf.get(title) ?? file;
+    if (seen !== file) throw new Error(`${seen} and ${file} each have a test titled ${title}`);
+    fileOf.set(title, file);
     outcomes.set(title, [...(outcomes.get(title) ?? []), ...resultsOf(spec).map(outcomeOf)]);
   }
   return outcomes;
