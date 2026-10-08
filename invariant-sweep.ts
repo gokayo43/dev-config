@@ -42,23 +42,10 @@
  * like any other. A `page` fixture cannot see those at all: they are pages the
  * context opened and the spec may never name.
  *
- * ## What the page is allowed to say about itself
+ * ## What a page can do to the verdict
  *
- * A page is not a trusted narrator. The bridge takes **one string** from it, and
- * a `kind` it accepts only from the two the page measures, `overflow` and
- * `layout-shift`; the URL is the one Playwright says that frame is at. Reports
- * from anything but the top frame are dropped, so a cross-origin iframe cannot
- * invent a violation for the page carrying it, and the string itself is
- * stripped of control characters — which is what stops an embed writing ANSI
- * escapes or a `::error::` workflow command into somebody's CI annotation.
- *
- * The same reasoning decides which URL a console error is attributed to. The
- * console reports the script's URL, and a script's URL is whatever its
- * `//# sourceURL=` comment claims — so an inline script of ours can wear a
- * vendor's name and land in the vendor's allowlist bucket. A claimed URL is
- * therefore honoured only when a document or script **actually loaded** from it
- * in this page, which is a fact about responses the browser received and not
- * one any page can write.
+ * The export's page, `docs/exports/invariant-sweep.md`, says it under "What a
+ * page is allowed to say about itself", and that is the one place it is said.
  *
  * ## Recording
  *
@@ -67,6 +54,8 @@
  * has the switch under "Recording a video".
  */
 import {
+  type Browser,
+  type ElementHandle,
   expect,
   type Locator,
   type Page,
@@ -86,14 +75,20 @@ const REPORTER = "__invariantSweep";
 const DRAINER = "__invariantSweepDrain";
 
 /** The name the page-side act mark answers to, and the name the fixture calls. One constant, two ends. */
-const ACTOR = "__invariantSweepActed";
+const ACTOR = "__invariantSweepActing";
 
 /**
  * How long after the user acts a layout shift is still theirs, in ms: the
  * window the Layout Instability spec sets `hadRecentInput` by, which the
- * fixture applies to the actions it marks as well.
+ * fixture applies after each action it marks as well.
  */
 const RECENT = 500;
+
+/** The calls that replace a page's document, each drained first. */
+const REPLACING = ["goto", "reload", "goBack", "goForward", "setContent"] as const;
+
+/** The actions Playwright performs with nothing the browser counts as input, each marked as the user acting. */
+const UNPROMPTED = ["fill", "selectOption", "setInputFiles"] as const;
 
 /**
  * How long a document has to go unchanged before it has nothing further to
@@ -237,19 +232,27 @@ const DRAIN = `window.${DRAINER}()`;
  * Layout shifts are not measured at those moments: the browser hands each one
  * to the observer as an entry, from the first frame the document paints, and
  * every entry is a violation unless the user caused it. The browser says so by
- * marking it `hadRecentInput`; the fixture says so for the actions Playwright
- * performs with nothing the browser counts as input, by marking the document
- * through `ACTOR` while one runs. A mark is honoured only with `secret`, which
- * this context alone knows, so a page cannot mark itself as acted on.
+ * marking it `hadRecentInput`; the fixture says so for an `UNPROMPTED` action
+ * by calling `ACTOR` as the action starts and as it returns. An entry is the
+ * action's when it starts between the first `input` or `change` event the
+ * action set off, or its return if it set off none, and `RECENT` after the
+ * return; what the page moved while the action was still waiting for its
+ * element is not. Those events count only while an action runs, so a page that
+ * dispatches one itself excuses nothing. An entry observed while an action runs
+ * is held until it returns, because its window is not known before then; any
+ * other is judged as it is observed.
+ *
+ * The reporter is read once, here, so a page that later replaces the global
+ * does not replace where its reports go.
  */
-function watch(secret: string): string {
-  return `(() => {
+const WATCH = `(() => {
   if (window.top !== window) return;
+  const report = window.${REPORTER};
   const seen = new Set();
   const say = (kind, key, detail) => {
     if (seen.has(kind + " " + key)) return;
     seen.add(kind + " " + key);
-    window.${REPORTER}(kind, detail);
+    report(kind, detail);
   };
   const describe = (el) => {
     const id = el.id ? "#" + el.id : "";
@@ -275,7 +278,6 @@ function watch(secret: string): string {
   let armed = 0;
   let changed = 0;
   let queued = false;
-  const quietAt = () => armed === 0 ? Infinity : Math.max(changed, armed) + ${QUIET};
   const soon = () => {
     changed = performance.now();
     if (queued) return;
@@ -291,7 +293,7 @@ function watch(secret: string): string {
   Promise.all([fonts, loaded]).then(() => { armed = performance.now(); soon(); });
   const until = () => armed === 0
     ? started + ${CAP}
-    : Math.min(quietAt(), armed + ${QUIET * 2});
+    : Math.min(Math.max(changed, armed) + ${QUIET}, armed + ${QUIET * 2});
   const named = (source) => {
     const node = source.node && source.node.nodeType !== Node.ELEMENT_NODE
       ? source.node.parentElement
@@ -310,23 +312,40 @@ function watch(secret: string): string {
     if (dx !== 0) legs.push(Math.abs(dx) + "px " + (dx > 0 ? "right" : "left"));
     return legs.length ? legs.join(" and ") : "by less than a pixel";
   };
-  const secret = ${JSON.stringify(secret)};
-  const acts = new Map();
-  window.${ACTOR} = (claimed, id, edge) => {
-    if (claimed !== secret) return;
-    const now = performance.now();
-    if (edge === "from") acts.set(id, { from: now, to: Infinity });
-    else if (acts.has(id)) acts.get(id).to = now;
+  const marks = [];
+  const held = [];
+  let acting = 0;
+  let touched = Infinity;
+  const judge = (entry) => {
+    if (marks.some(({ from, to }) => entry.startTime >= from && entry.startTime <= to + ${RECENT})) return;
+    const sources = entry.sources.slice(0, ${OFFENDERS});
+    const score = "score " + entry.value.toFixed(4);
+    const moved = sources.length
+      ? sources.map((source) => named(source) + " moved " + travel(source)).join(", ")
+      : "something moved";
+    say("layout-shift", sources.length ? sources.map(named).join(", ") : score,
+      score + ", with no input in the ${RECENT}ms before: " + moved);
   };
-  const prompted = (entry) => entry.hadRecentInput || Array.from(acts.values())
-    .some((act) => entry.startTime >= act.from && entry.startTime <= act.to + ${RECENT});
+  window.${ACTOR} = (edge) => {
+    if (edge === "start") return void (acting += 1);
+    const now = performance.now();
+    marks.push({ from: Math.min(touched, now), to: now });
+    // An action that replaced the document ends in a document it never started in.
+    acting = Math.max(0, acting - 1);
+    if (acting > 0) return;
+    touched = Infinity;
+    held.splice(0).forEach(judge);
+  };
+  for (const type of ["input", "change"]) {
+    window.addEventListener(type, (event) => {
+      if (acting > 0) touched = Math.min(touched, event.timeStamp);
+    }, true);
+  }
   const shifted = (entries) => {
     for (const entry of entries) {
-      if (prompted(entry)) continue;
-      const sources = entry.sources.slice(0, ${OFFENDERS});
-      const moved = sources.map((source) => named(source) + " moved " + travel(source)).join(", ");
-      say("layout-shift", sources.map(named).join(", "), "score " + entry.value.toFixed(4)
-        + ", with no input in the ${RECENT}ms before: " + moved);
+      if (entry.hadRecentInput) continue;
+      if (acting > 0) held.push(entry);
+      else judge(entry);
     }
   };
   // Firefox and WebKit have no Layout Instability API, and observing a type a
@@ -337,7 +356,10 @@ function watch(secret: string): string {
   if (shifts) shifts.observe({ type: "layout-shift", buffered: true });
   // An observer is called some time after the frame a shift happened in, and a
   // document on its way out is not called again.
-  const flush = () => { if (shifts) shifted(shifts.takeRecords()); };
+  const flush = () => {
+    if (shifts) shifted(shifts.takeRecords());
+    held.splice(0).forEach(judge);
+  };
   window.addEventListener("pagehide", flush);
   window.${DRAINER} = () => new Promise((done) => {
     const wait = () => {
@@ -362,16 +384,16 @@ function watch(secret: string): string {
     attributes: true,
   });
 })();`;
-}
 
 /** The option a repo sets, declared so `test.use({ sweepAllowlist })` type-checks. */
 export interface InvariantSweep {
   /**
-   * URLs whose console errors, page errors, overflow and layout shifts this run tolerates,
-   * each against the reason it is tolerated. The key is a **regular
-   * expression** tested against the URL, and it is **unanchored** — `"/checkout"`
-   * also matches `/checkout-v2`, so write `"/checkout$"` when a page name is
-   * meant. The value is why, which is the half a reviewer reads.
+   * Violations this run tolerates, keyed on the URL each came from: the
+   * script's for a console error or a thrown error, the page's for overflow and
+   * a layout shift. Each key is against the reason it is tolerated. The key is
+   * a **regular expression** tested against that URL, and it is **unanchored**
+   * — `"/checkout"` also matches `/checkout-v2`, so write `"/checkout$"` when a
+   * page name is meant. The value is why, which is the half a reviewer reads.
    */
   sweepAllowlist: Record<string, string>;
 }
@@ -402,24 +424,34 @@ function scriptIn(stack: string | undefined): string | undefined {
   return /https?:\/\/[^\s)]+?(?=:\d+:\d+|\s|\)|$)/.exec(stack ?? "")?.[0];
 }
 
-/** What to do about a layout shift, said by the sweep rather than by the page, so no cut a page's sentence takes can lose it. */
-const RESERVE = "reserve the space for whatever arrives late, or move it with a transform";
+/** What to do about each kind, said by the sweep rather than by the page, so no cut a page's sentence takes can lose it. */
+const ADVICE = {
+  "console.error": "fix what it reports, or stop reporting it as an error",
+  pageerror: "fix what threw, or catch it where it can be handled",
+  overflow: "make what reaches past the edge fit the viewport",
+  "layout-shift": "reserve the space for whatever arrives late, or move it with a transform",
+} as const satisfies Record<Violation["kind"], string>;
 
 function describe({ kind, at, detail }: Violation): string {
-  const line = `${kind} at ${at} — ${detail}`;
-  return kind === "layout-shift" ? `${line}; ${RESERVE}` : line;
+  return `${kind} at ${at} — ${detail}; ${ADVICE[kind]}`;
 }
 
 /**
- * Runs `expression` in the page's current document, if it still has one, and
- * never costs the assertion. A page that navigates, or that closes itself,
- * while this runs has nothing left to ask — whatever it measured crossed as it
- * was measured — and every way that surfaces is admitted here. Letting one
- * through would replace the sweep's verdict, the list it spent the whole test
- * collecting, with a message about the ask.
+ * Every page a sweeping context watches with JavaScript on. The wrapped calls
+ * below are wrapped on Playwright's prototypes, so they run for every page in
+ * the process, and this is what they ask before touching one.
+ */
+const WATCHED = new WeakSet<Page>();
+
+/**
+ * Runs `expression` in a watched page's current document, if it still has one,
+ * and never costs the assertion. A page that navigates, or that closes itself,
+ * while this runs has nothing left to ask, and every way that surfaces is
+ * admitted here. Letting one through would replace the sweep's verdict, the
+ * list it spent the whole test collecting, with a message about the ask.
  */
 async function ask(page: Page, expression: string): Promise<void> {
-  if (page.isClosed()) return;
+  if (!WATCHED.has(page) || page.isClosed()) return;
   try {
     await page.evaluate(expression);
   } catch (error) {
@@ -429,61 +461,125 @@ async function ask(page: Page, expression: string): Promise<void> {
   }
 }
 
-/** Every page a sweeping context watches, against the secret its documents take an act mark with. */
-const SECRETS = new WeakMap<Page, string>();
+/** Telling a document an action has started, and that it has returned, which is the mark. */
+const ACTION = {
+  start: `window.${ACTOR}("start")`,
+  end: `window.${ACTOR}("end")`,
+} as const;
 
-/** How many actions this process has marked, which is what tells two overlapping marks apart. */
-let marked = 0;
+type Replacing = (typeof REPLACING)[number];
+
+type Unprompted = (typeof UNPROMPTED)[number];
+
+/** The classes whose prototypes the sweep wraps. */
+type Wrapped = Page | Locator | ElementHandle;
+
+/** Every method the sweep wraps, as Playwright types it. */
+type Called = Page[Replacing | Unprompted] | Locator[Unprompted] | ElementHandle[Unprompted];
+
+/** What a wrapped method is called with. */
+type Passed = Parameters<Called>[number];
+
+/** What a wrapped method answers. */
+type Answer = Awaited<ReturnType<Called>>;
+
+/** One wrapped method as its prototype holds it, called on `Self`. */
+type Method<Self extends Wrapped> = (this: Self, ...args: Passed[]) => Promise<Answer>;
+
+/** The methods of `Self`'s prototype the sweep wraps: the replacing calls are a page's alone. */
+type Methods<Self extends Wrapped> = Record<
+  Self extends Page ? Replacing | Unprompted : Unprompted,
+  Method<Self>
+>;
 
 /**
- * Runs one of the actions Playwright performs with nothing the browser counts
- * as input, with the page's document marked as acted on from before it starts
- * until it returns.
+ * The prototype `instance` shares with every other of its class. Playwright
+ * exports its classes as types only, so an instance is the one way to reach
+ * one.
  */
-async function acting<Answer>(page: Page, act: () => Promise<Answer>): Promise<Answer> {
-  const secret = SECRETS.get(page);
-  // A page in a context the spec built itself through `browser`, which is not swept.
-  if (secret === undefined) return await act();
-  marked += 1;
-  const mark = (edge: "from" | "to"): string =>
-    `window.${ACTOR}(${JSON.stringify(secret)}, ${marked}, "${edge}")`;
-  const from = mark("from");
-  const to = mark("to");
-  await ask(page, from);
-  try {
-    return await act();
-  } finally {
-    await ask(page, to);
+function prototypeOf<Self extends Wrapped>(instance: Self): Methods<Self> {
+  // oxlint-disable-next-line typescript/no-unsafe-return -- Playwright exports its classes as types only, so a prototype is reachable only through an instance, and typed only by the methods the sweep wraps
+  return Object.getPrototypeOf(instance);
+}
+
+/**
+ * `original`, reachable as `name` on an object that inherits everything else
+ * from `self`. Playwright names a call after the method its innermost frame of
+ * Playwright's own was reached through, and under its test runner a method
+ * reached through `apply` or `call` is named `apply` or `call`: a failing
+ * `page.fill` would read `page.apply`. Reached as `name`, it reads `page.fill`.
+ * Every wrapped method only reads its receiver, so an object inheriting all of
+ * `self` stands in for it.
+ */
+function callable<Self extends Wrapped, Name extends string>(
+  self: Self,
+  name: Name,
+  original: Method<Self>,
+): Record<Name, (...args: Passed[]) => Promise<Answer>> {
+  // oxlint-disable-next-line typescript/no-unsafe-return -- `Object.create` is typed to answer `any`; the object it answers holds `original` under `name` and inherits the rest from `self`
+  return Object.create(self, { [name]: { value: original } });
+}
+
+/** Wraps each named method of `prototype` in `around`, which decides when the original runs. */
+function wrap<Self extends Wrapped, Name extends string>(
+  prototype: Record<Name, Method<Self>>,
+  names: readonly Name[],
+  around: (self: Self, call: () => Promise<Answer>) => Promise<Answer>,
+): void {
+  for (const name of names) {
+    const original = prototype[name];
+    prototype[name] = async function (this: Self, ...args: Passed[]): Promise<Answer> {
+      return await around(this, async () => await callable(this, name, original)[name](...args));
+    };
   }
 }
 
-/** The actions Playwright performs with nothing the browser counts as input, as each page and locator names them. */
-type Unprompted = "fill" | "selectOption" | "setInputFiles";
-
-/** The `Locator` prototypes already marking their actions: one per copy of Playwright the process loaded. */
-const MARKING = new WeakSet<object>();
+/** Runs an `UNPROMPTED` action, and marks the user as having acted when it returns. */
+async function marked(page: Page | undefined, call: () => Promise<Answer>): Promise<Answer> {
+  if (page === undefined) return await call();
+  await ask(page, ACTION.start);
+  try {
+    return await call();
+  } finally {
+    await ask(page, ACTION.end);
+  }
+}
 
 /**
- * Marks the actions of every locator, through the prototype they share: a
- * locator is made fresh on every `page.locator()` and `getByRole()`, so there is
- * no instance to wrap. A locator on a page no sweeping context watches is
- * left as it was by `acting`.
+ * Wraps the calls the sweep needs on the prototypes they live on, once per
+ * process: on a page, the `REPLACING` calls and the `UNPROMPTED` actions, and
+ * the `UNPROMPTED` actions on a locator and an element handle. Not on a frame,
+ * though a page's and a locator's actions run through one: a wrapper there
+ * would be the innermost frame of every call and rename it `frame.fill`. The
+ * prototypes are reached through a page of the browser's own made for it,
+ * since an element handle is only had by asking a page for one.
  */
-function markLocators(page: Page): void {
-  // oxlint-disable-next-line typescript/no-unsafe-assignment -- Playwright exports `Locator` as a type only, so the prototype every locator shares is reachable only through an instance, and typed only by the methods it is known to carry
-  const prototype: Pick<Locator, Unprompted> = Object.getPrototypeOf(page.locator(":root"));
-  if (MARKING.has(prototype)) return;
-  MARKING.add(prototype);
-  const marking = <Args extends unknown[], Answer>(
-    act: (this: Locator, ...args: Args) => Promise<Answer>,
-  ) =>
-    async function (this: Locator, ...args: Args): Promise<Answer> {
-      return await acting(this.page(), async () => await act.apply(this, args));
-    };
-  prototype.fill = marking(prototype.fill);
-  prototype.selectOption = marking(prototype.selectOption);
-  prototype.setInputFiles = marking(prototype.setInputFiles);
+async function wrapOnce(browser: Browser): Promise<void> {
+  const scratch = await browser.newPage();
+  try {
+    const handle = await scratch.locator(":root").elementHandle();
+    const pages = prototypeOf(scratch);
+    wrap(pages, REPLACING, async (page, call) => {
+      await ask(page, DRAIN);
+      return await call();
+    });
+    wrap(pages, UNPROMPTED, async (page, call) => await marked(page, call));
+    wrap(
+      prototypeOf(scratch.locator(":root")),
+      UNPROMPTED,
+      async (locator, call) => await marked(locator.page(), call),
+    );
+    wrap(prototypeOf(handle), UNPROMPTED, async (element, call) => {
+      const frame = await element.ownerFrame();
+      return await marked(frame?.page(), call);
+    });
+  } finally {
+    await scratch.close();
+  }
 }
+
+/** The one `wrapOnce` this process runs, whichever test reaches it first. */
+let wrapped: Promise<void> | undefined;
 
 /**
  * Playwright's `test`, with the browser context replaced by one that watches
@@ -514,7 +610,10 @@ export const test: TestType<
     { scope: "worker", box: true },
   ],
 
-  context: async ({ context, sweepAllowlist }, provide) => {
+  context: async ({ browser, context, javaScriptEnabled, sweepAllowlist }, provide) => {
+    wrapped ??= wrapOnce(browser);
+    await wrapped;
+
     const allowed = Object.keys(sweepAllowlist).map((pattern) => {
       try {
         return new RegExp(pattern);
@@ -547,34 +646,10 @@ export const test: TestType<
     const from = (claimed: string | undefined, page: Page): string =>
       claimed !== undefined && fetched.has(claimed) ? claimed : page.url();
 
-    const secret = crypto.randomUUID();
-
+    // A page without JavaScript runs no script of the sweep's, and would
+    // never answer a drain or a mark.
     const adopt = (page: Page): void => {
-      // Every call that replaces this page's document, drained before it does.
-      // A navigation the page performs for itself — a redirect, a link the spec
-      // clicked — goes through none of these, and is drained by whatever comes
-      // next instead.
-      const draining =
-        <Args extends unknown[], Answer>(replace: (...args: Args) => Promise<Answer>) =>
-        async (...args: Args): Promise<Answer> => {
-          await ask(page, DRAIN);
-          return await replace(...args);
-        };
-      page.goto = draining(page.goto.bind(page));
-      page.reload = draining(page.reload.bind(page));
-      page.goBack = draining(page.goBack.bind(page));
-      page.goForward = draining(page.goForward.bind(page));
-      page.setContent = draining(page.setContent.bind(page));
-
-      SECRETS.set(page, secret);
-      const marking =
-        <Args extends unknown[], Answer>(act: (...args: Args) => Promise<Answer>) =>
-        async (...args: Args): Promise<Answer> =>
-          await acting(page, async () => await act(...args));
-      page.fill = marking(page.fill.bind(page));
-      page.selectOption = marking(page.selectOption.bind(page));
-      page.setInputFiles = marking(page.setInputFiles.bind(page));
-      markLocators(page);
+      if (javaScriptEnabled) WATCHED.add(page);
     };
 
     // On the context and not on each page: Playwright sends a page's events only
@@ -610,15 +685,14 @@ export const test: TestType<
     });
 
     // Exposed before the init script is added, because the script the next
-    // navigation runs calls it in its first frame. A *binding* rather than a
-    // plain exposed function: a binding is told which frame called it, and a
-    // page is not a trusted narrator — the frame's own URL is the harness's, the
-    // kind has to be one the page measures, and only the sentence is the page's.
+    // navigation runs reads it in its first frame. A *binding* rather than a
+    // plain exposed function: a binding is told which frame called it, so the
+    // URL is the frame's own and a report from any but the top frame is dropped.
     await context.exposeBinding(REPORTER, ({ frame, page }, kind: unknown, detail: unknown) => {
       if (frame !== page.mainFrame() || !measured(kind)) return;
       record({ kind, at: frame.url(), detail: sanitized(detail) });
     });
-    await context.addInitScript(watch(secret));
+    await context.addInitScript(WATCH);
     context.on("page", adopt);
     for (const open of context.pages()) adopt(open);
 

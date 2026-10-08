@@ -74,16 +74,18 @@ export const WRITTEN = 16;
 const LATE_SHIFT = 300;
 
 /**
- * How long the slow panel takes to arrive after the click that asked for it, in
- * ms: past the 500ms in which the browser still counts a shift as the user's.
+ * How long after the user acts the slow pages move, in ms: past the 500ms in
+ * which a shift is still theirs, with room for the runner's own delay in
+ * telling the page an action has returned.
  */
-const SLOW_PANEL = 900;
+export const LONG_AFTER = 900;
 
 /**
- * How long after a field is filled the line it asked for arrives, in ms: past
- * the 500ms in which the fixture counts a shift as the action's.
+ * How long after its own `load` event the late form's field arrives, in ms:
+ * long after its banner has moved the content, so an action waiting for the
+ * field is waiting while the page moves.
  */
-const AFTER_FILL = 600;
+const LATE_FIELD = 1_200;
 
 /** One block of the height a shift is measured in, so a diagnostic's distance is a number known here. */
 const BLOCK = 60;
@@ -272,7 +274,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/slow-fill": {
         type: "text/html",
         body: html(
-          `<input id="field" aria-label="field">${CONTENT}<script>document.getElementById("field").addEventListener("input", () => setTimeout(() => { ${PUSH} }, ${AFTER_FILL}))</script>`,
+          `<input id="field" aria-label="field">${CONTENT}<script>document.getElementById("field").addEventListener("input", () => setTimeout(() => { ${PUSH} }, ${LONG_AFTER}))</script>`,
         ),
       },
       // The page dispatches the event a filled field would, with nobody acting.
@@ -282,12 +284,20 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<input id="field" aria-label="field">${CONTENT}<script>const field = document.getElementById("field"); field.addEventListener("input", () => { ${PUSH} }); addEventListener("load", () => setTimeout(() => field.dispatchEvent(new Event("input", { bubbles: true })), ${LATE_SHIFT}))</script>`,
         ),
       },
-      // The page marks itself as acted on through the fixture's own name for the
-      // mark, without the secret the fixture marks with, and then moves.
-      "/self-marked": {
+      // Replaces the sweep's reporter with one that drops everything, then
+      // overflows.
+      "/rebinds": {
         type: "text/html",
         body: html(
-          `${CONTENT}<script>addEventListener("load", () => setTimeout(() => { window.__invariantSweepActed("a guess", 1, "from"); ${PUSH} }, ${LATE_SHIFT}))</script>`,
+          `<script>window.__invariantSweep = () => {};</script><div id="wide" style="width:${TOO_WIDE}px;height:10px"></div>`,
+        ),
+      },
+      // A banner that moves the content soon after load, and the field a spec
+      // fills arriving long after it.
+      "/late-form": {
+        type: "text/html",
+        body: html(
+          `${CONTENT}<script>addEventListener("load", () => { setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}); setTimeout(() => { const f = document.createElement("input"); f.id = "field"; f.setAttribute("aria-label", "field"); document.body.append(f); }, ${LATE_FIELD}); })</script>`,
         ),
       },
       // The click asks for a panel that arrives after the user's half-second is
@@ -295,7 +305,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/slow-panel": {
         type: "text/html",
         body: html(
-          `<button id="open">open</button>${CONTENT}<script>document.getElementById("open").addEventListener("click", () => setTimeout(() => { ${PUSH} }, ${SLOW_PANEL}))</script>`,
+          `<button id="open">open</button>${CONTENT}<script>document.getElementById("open").addEventListener("click", () => setTimeout(() => { ${PUSH} }, ${LONG_AFTER}))</script>`,
         ),
       },
       // Three elements below a late banner, each with more class names than a

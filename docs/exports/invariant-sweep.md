@@ -1,8 +1,9 @@
 # The invariant sweep
 
-`@gokayo43/dev-config/invariant-sweep` exports one thing: `test`, which is
+`@gokayo43/dev-config/invariant-sweep` exports `test`, which is
 `@playwright/test`'s own `test` with the **browser context** replaced by one
-that watches every page it opens. A repo swaps its import and every spec it already has is swept:
+that watches every page it opens, and `InvariantSweep`, the type of the option
+it adds. A repo swaps its import and every spec it already has is swept:
 
 ```ts
 import { test } from "@gokayo43/dev-config/invariant-sweep";
@@ -98,6 +99,20 @@ that: it has been measured on every one of those changes anyway. A document whos
 `load` or fonts never arrive is waited on for 5s from when it started, and then
 let go.
 
+### When a report reaches the verdict
+
+A report leaves the page as the page makes it: overflow on the frame after the
+check that found it, and a shift as the browser hands it to the observer,
+except that a shift observed while a `fill`, `selectOption` or `setInputFiles`
+is running leaves when that action returns. The drain hands over whatever is
+still held, before a wrapped call replaces the document and at the end of the
+test. A document replaced by a navigation it performs for itself, a redirect or
+a link the spec clicked, is never drained. Its `pagehide` handler hands over
+what the observer had not yet delivered, and a report sent that late can be
+lost: a page that left in the frame after a shift lost its report in one run of
+ten. What that document would have measured after it left is
+not measured at all.
+
 ## Movement nobody asked for
 
 The browser reports every movement of a page's content through the Layout
@@ -107,9 +122,8 @@ entry is enough to fail the test: there is no score threshold and no tolerance
 for a small one. It is measured in the page, by the observer the init script
 installs before anything else in the document runs, so it holds from the first
 frame the page paints. The observer also asks for the entries the browser
-buffered before it was registered. A shift is reported as it happens, so a page
-the spec leaves by clicking a link, which nothing drains, has already said what
-moved on it.
+buffered before it was registered. When each report reaches the verdict is
+under "When a report reaches the verdict" above.
 
 Most of what this invariant exists for happens while the page is still loading:
 an image with no `width` and `height` taking its size when its bytes arrive,
@@ -119,16 +133,24 @@ however early it lands.
 
 The user caused a shift when the browser marks it `hadRecentInput`: a click, a
 key or a tap in the 500ms before. Playwright's `fill`, `selectOption` and
-`setInputFiles`, called on a page or a locator, send nothing the browser counts
-as input, so the fixture marks the document as acted on from the moment each
-starts until 500ms after it returns, through a mark the page itself cannot
-make. Three things count as the page moving on its own:
+`setInputFiles` send nothing the browser counts as input, so a shift is theirs
+when it starts between the first `input` or `change` event the action sets off
+and 500ms after the action returns. Importing the sweep wraps those three on
+Playwright's page, locator and element-handle prototypes, and the five calls
+that replace a document on its page prototype, for every page in the process;
+a page no sweeping context watches goes straight through. Four things count as
+the page moving on its own:
 
 - **Content a click asked for that arrives more than 500ms later.** A panel
   behind a slow request fails, which is what a person on a slow connection sees
   too. Show the panel's frame at the click, and fill it when the data arrives.
 - **A shift `hover`, `focus()` or `dispatchEvent` causes,** or an `input` event
   the page dispatches itself. None of them is input to the browser.
+- **A shift a frame's own `fill`, `selectOption` or `setInputFiles` causes,**
+  called as `frame.fill()` rather than through `frame.locator()`. Every page's
+  and locator's action runs through the frame's, so a wrapper there would be the
+  frame Playwright names each of them after, and every failing `page.fill`
+  would read `frame.fill`.
 - **A shift an embed's own late content causes in the page.** An embed that
   grows when its content loads pushes the page carrying it, and the browser
   says what moved, never what moved it.
@@ -163,15 +185,23 @@ first paint. Counting only once a page has gone quiet would keep such a page
 green, and would never see the late content above either.
 
 What does not come and go is the verdict on a page whose shift does not: on
-this sweep's own fixtures, a shift during load, a shift the user caused and a
-page that never shifts each give the same verdict on 20 runs, on a quiet
-renderer and on a renderer Chromium slows sixfold.
+this sweep's own fixtures, a shift during load, a shift after it, a shift the
+user caused, a shift under `fill`, a shift 900ms after `fill`, an allowlisted
+shift and a page that never shifts each give the same verdict on 20 runs, on a
+quiet renderer and on a renderer Chromium slows sixfold.
 
 ## What a page is allowed to say about itself
 
-A page is not a trusted narrator, and every one of these invariants reaches the
-sweep through something the page says: its own script reports overflow and
-layout shifts, and its console and its stack name where an error came from.
+Every one of these invariants reaches the sweep through something the page
+says: its own script reports overflow and layout shifts, and its console and
+its stack name where an error came from. The sweep defends against what an
+embed can do, because a cross-origin frame cannot reach the top window, so all
+it can do is call the bridge and write to the console, on the terms below. A
+first-party page is the repo's own code, and it can defeat the sweep the way it
+can defeat any test: by replacing the globals the sweep's script installs, or
+the observers it reads. The script reads its reporter once, as the document
+starts, so a page that later assigns over that global by accident still
+reports.
 
 The bridge takes **one string**, and a `kind` it accepts only from the two the
 page measures, `overflow` and `layout-shift`. The URL is the one Playwright says
@@ -222,8 +252,10 @@ sweepAllowlist: {
 },
 ```
 
-That entry tolerates every violation on `/pricing`, its own console errors
-included, as an entry for an overflowing page always has.
+That entry tolerates the overflow and the shifts on `/pricing`, and the console
+errors and thrown errors its own inline scripts make. One that comes out of a
+script file the page loads is keyed on that file's URL, which the entry does
+not match.
 
 A key is a pattern, not a URL. A metacharacter in a URL needs its backslash:
 `"https://cdn.vendor.example/embed.js?v=3"` as written does not match that
@@ -238,20 +270,20 @@ A key that is not a valid pattern fails the test naming the key and the option,
 rather than surfacing as a bare `SyntaxError` out of a fixture nobody knew was
 compiling one.
 
-Being a Playwright option, it can be set once in the config, narrowed per file or
-per test with `test.use({ sweepAllowlist })`, and read back out of the trace.
+Being a Playwright option, it can be set once in the config, replaced per file
+or per test with `test.use({ sweepAllowlist })`, and read back out of the trace.
+A replacement is whole: a file that sets its own allowlist keeps none of the
+config's entries unless it repeats them.
 
 ## Why a stale entry does not fail
 
-Everywhere else in this repo a table of exceptions drains itself: an entry that
-no longer excuses anything is a failure — that is what
-[the response-schema gate](response-schema.md) does, and what CONTEXT.md calls a
-ratchet.
+[The response-schema gate](response-schema.md) fails a skip that no longer
+matches a route: a stale entry in its table is a failure.
 
 Not here, and the difference is worth naming rather than being an oversight. A
-ratchet can drain itself only when its whole population is in front of it at
-once: the response-schema gate sees every route the app serves in one call, so
-"this skip matches nothing" is a fact about the app. The allowlist is consulted
+table can fail its stale entries only when its whole population is in front of
+it at once: the response-schema gate sees every route the app serves in one
+call, so "this skip matches nothing" is a fact about the app. The allowlist is consulted
 per test run, and a run that did not visit the page carrying the embed did not
 use its entry — which is normal, not rot. Failing on it would mean every spec
 had to visit every allowlisted page.
@@ -306,14 +338,18 @@ already declares it as a fixture that is not an option.
   top frame only: an embed scrolling sideways or rearranging itself inside its
   own box is the embed's business, and its `documentElement` is not the page.
   An embed that grows and pushes the page is the page's, and is seen.
-- **A shift while `fill`, `selectOption` or `setInputFiles` waits.** The mark
-  covers the whole call, so a shift the page makes on its own while the action
-  is still waiting for its element to become ready is excused with it.
+- **A shift the page makes on its own just after `fill`, `selectOption` or
+  `setInputFiles`.** From the first `input` or `change` event the action sets
+  off to 500ms after it returns, every shift counts as the action's.
+- **A page without JavaScript.** With `javaScriptEnabled: false`, none of the
+  sweep's script runs, so nothing on the page is measured, drained or marked.
 - **A layout shift on Firefox or WebKit.** Neither has the Layout Instability
   API.
-- **A second shift of exactly the same elements.** A document names a set of
-  moved elements once, so a later shift that moves the same set again shows on
-  the first run after the earlier one is fixed.
+- **A later shift that reads like an earlier one.** A document names each
+  description of the up to three elements a shift moved once, each element as
+  its tag, id and first three class names, so a later shift whose elements
+  describe the same way, the same elements or others named alike, shows only
+  once the earlier one is fixed.
 - **`console.warn`, and any other level.** Errors only.
 - **A service worker's console errors and thrown errors.** A service worker
   belongs to no page: Playwright reports its console messages with no page
@@ -338,8 +374,5 @@ already declares it as a fixture that is not an option.
   the document, and the observer installed before it does not survive that: the
   written markup itself is measured, and nothing appended afterwards is
   (dev-config#118).
-- **What a page laid out after a navigation it performed for itself.** A
-  redirect, or a link the spec clicked, replaces the document without going
-  through a call the fixture can wrap, so that document is never asked to drain:
-  everything it had already measured has crossed and is in the verdict, and only
-  what it would have measured in its last moments is lost.
+- **The last moments of a page that leaves by itself.** Under "When a report
+  reaches the verdict" above.

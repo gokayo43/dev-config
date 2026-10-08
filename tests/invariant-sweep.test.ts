@@ -19,7 +19,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { type Outcome, serving, sweeping, type Use, WRITTEN } from "./sweep-fixture.ts";
+import { LONG_AFTER, type Outcome, serving, sweeping, type Use, WRITTEN } from "./sweep-fixture.ts";
 
 const SWEEP = JSON.stringify(`${import.meta.dir}/../invariant-sweep.ts`);
 
@@ -62,12 +62,57 @@ const RUNS = 20;
 /** How many times slower the slowed renderer runs, through Chromium's own CPU throttling: DevTools' 6x preset. */
 const SLOWDOWN = 6;
 
+/** The bodies a case and a steady run both drive, so the two never drift apart. */
+const BODY = {
+  imageShift: `  await page.goto("/image-shift");`,
+  lateShift: `  await page.goto("/late-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
+  acted: `  await page.goto("/acted");\n  await page.click("#open");\n  await page.locator("#grow").pressSequentially("a\\nb\\nc");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  filled: `  await page.goto("/acted");\n  await page.fill("#field", "x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  slowFill: `  await page.goto("/slow-fill");\n  await page.fill("#field", "x");\n  await expect(page.locator("#banner")).toBeAttached();`,
+  embedShift: `  await page.goto("/shifting-embed");\n  await expect(page.locator("#widget")).toHaveCSS("height", "80px");`,
+  clean: `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+} as const;
+
+/** The allowlist entry that covers the shifting embed's page. */
+const EMBED_ALLOWED: Use = {
+  sweepAllowlist: { "/shifting-embed$": "the widget sizes itself once it has loaded" },
+};
+
+/**
+ * One call per wrapped method kind, each made to fail at once: Playwright names
+ * a call after its own innermost frame, so a wrapper in the wrong place renames
+ * every failure a consumer reads.
+ */
+const NAMED = [
+  ["page.goto", `  await page.goto("http://127.0.0.1:1/");`],
+  [
+    "page.fill",
+    `  await page.goto("/clean");\n  await page.fill("#nowhere", "x", { timeout: 200 });`,
+  ],
+  [
+    "locator.fill",
+    `  await page.goto("/clean");\n  await page.locator("#nowhere").fill("x", { timeout: 200 });`,
+  ],
+  [
+    "elementHandle.fill",
+    `  await page.goto("/clean");\n  await (await page.locator("p").elementHandle()).fill("x");`,
+  ],
+  [
+    "locator.selectOption",
+    `  await page.goto("/clean");\n  await page.locator("#nowhere").selectOption("a", { timeout: 200 });`,
+  ],
+  [
+    "page.setInputFiles",
+    `  await page.goto("/clean");\n  await page.setInputFiles("#nowhere", [], { timeout: 200 });`,
+  ],
+] as const;
+
+/** A case whose shift lands past the half-second a marked action excuses. */
+const SLOW_FILL = `a shift ${LONG_AFTER}ms after fill fails`;
+
 /** Every case's spec; the reporter's outcome for each is found by its title. */
 const CASES = [
-  spec(
-    "a page that breaks nothing passes",
-    `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
-  ),
+  spec("a page that breaks nothing passes", BODY.clean),
   spec("a console error fails the test that visited it", `  await page.goto("/console");`),
   spec("a page that throws fails the test that visited it", `  await page.goto("/throws");`),
   spec("a page wider than its viewport fails", `  await page.goto("/overflow");`),
@@ -205,35 +250,30 @@ const CASES = [
   // An image with no size of its own takes its height before `load`, under
   // the content. A sweep that counted only once the page had gone quiet passes
   // this.
-  spec("a shift while the page loads fails", `  await page.goto("/image-shift");`),
-  spec(
-    "a shift after the page loaded fails",
-    `  await page.goto("/late-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
-  ),
+  spec("a shift while the page loads fails", BODY.imageShift),
+  spec("a shift after the page loaded fails", BODY.lateShift),
   // Left by a click, so nothing drains the page: what it saw has to have
   // crossed as it happened. A sweep that read the page's shifts once, at the
   // end, reads the clean page this spec ends on.
   spec(
     "a page the test left by a link still reports its shift",
-    `  await page.goto("/late-shift");\n  await expect(page.locator("#banner")).toBeAttached();\n  await page.getByRole("link").click();\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
+    `${BODY.lateShift}\n  await page.getByRole("link").click();\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
   ),
   // Input the browser counts: a click and keys. A sweep that took every shift
   // without asking whether the user had just acted fails this.
-  spec(
-    "a page that moves because the user clicked or typed passes",
-    `  await page.goto("/acted");\n  await page.click("#open");\n  await page.locator("#grow").pressSequentially("a\\nb\\nc");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
-  ),
+  spec("a page that moves because the user clicked or typed passes", BODY.acted),
   // Each of these sets the field with nothing the browser counts as input, and
-  // each is called on a page and on a locator, in specs of their own: a mark
-  // still open from one would cover the other's shift. A sweep that took the
-  // browser's word alone fails all six.
-  spec(
-    "a shift under page.fill passes",
-    `  await page.goto("/acted");\n  await page.fill("#field", "x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
-  ),
+  // each is called on a page, on a locator and on an element handle, in specs
+  // of their own: a mark from one would cover the other's shift. A sweep that
+  // took the browser's word alone fails every one.
+  spec("a shift under page.fill passes", BODY.filled),
   spec(
     "a shift under a locator's fill passes",
     `  await page.goto("/acted");\n  await page.locator("#field").fill("x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  spec(
+    "a shift under an element handle's fill passes",
+    `  await page.goto("/acted");\n  await (await page.locator("#field").elementHandle()).fill("x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
   ),
   spec(
     "a shift under page.selectOption passes",
@@ -251,21 +291,31 @@ const CASES = [
     "a shift under a locator's setInputFiles passes",
     `  await page.goto("/acted");\n  await page.locator("#file").setInputFiles({ name: "a.txt", mimeType: "text/plain", buffer: Buffer.from("a") });\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
   ),
+  // A frame's own actions are not marked, as the page says: a frame sits
+  // under every page's and locator's action, and a wrapper there renames them.
+  spec(
+    "a shift under a frame's own fill fails",
+    `  await page.goto("/acted");\n  await page.mainFrame().fill("#field", "x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
+  ),
+  // The banner moves the content while `fill` is still waiting for its
+  // field. A sweep that excused the whole of a marked call passes both.
+  spec(
+    "a shift while page.fill waits for its field fails",
+    `  await page.goto("/late-form");\n  await page.fill("#field", "x");`,
+  ),
+  spec(
+    "a shift while a locator's fill waits for its field fails",
+    `  await page.goto("/late-form");\n  await page.locator("#field").fill("x");`,
+  ),
   // The line a filled field asked for lands past the action's half-second. A
   // sweep that excused every shift once a field had been filled passes this.
-  spec(
-    "a shift 600ms after fill fails",
-    `  await page.goto("/slow-fill");\n  await page.fill("#field", "x");\n  await expect(page.locator("#banner")).toBeAttached();`,
-  ),
+  spec(SLOW_FILL, BODY.slowFill),
+  // A sweep that looked its reporter up by name on every report passes this.
+  spec("a page that replaces the reporter is still swept", `  await page.goto("/rebinds");`),
   // A sweep that took an `input` event as the user acting passes this.
   spec(
     "a page that dispatches input itself and then shifts fails",
     `  await page.goto("/self-input");\n  await expect(page.locator("#banner")).toBeAttached();`,
-  ),
-  // A sweep whose mark any caller could make passes this.
-  spec(
-    "a page that marks itself as acted on and then shifts fails",
-    `  await page.goto("/self-marked");\n  await expect(page.locator("#banner")).toBeAttached();`,
   ),
   // The click is the user's, and the panel it asked for arrives after their
   // half-second is up. A sweep that stopped counting once the user had acted at
@@ -280,23 +330,20 @@ const CASES = [
     "a shift of long-named elements keeps its score and its advice",
     `  await page.goto("/long-names-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
   ),
+  spec("an embed that shifts its host fails the host", BODY.embedShift),
+  spec("an allowlisted page's embed may shift it", BODY.embedShift, EMBED_ALLOWED),
+  spec("an entry for a shifting embed covers no other page", BODY.lateShift, EMBED_ALLOWED),
+  spec("an entry no test reaches costs nothing", `  await page.goto("/clean");`, EMBED_ALLOWED),
+  // Nothing of the sweep's runs in a page without JavaScript, so nothing may
+  // wait on it to answer: each of these would wait out the test's timeout.
   spec(
-    "an embed that shifts its host fails the host",
-    `  await page.goto("/shifting-embed");\n  await expect(page.locator("#widget")).toHaveCSS("height", "80px");`,
+    "a page without JavaScript is left alone",
+    `  test.setTimeout(5_000);\n  await page.goto("/acted");\n  await page.fill("#field", "x");\n  await page.goto("/clean");`,
+    { javaScriptEnabled: false },
   ),
-  spec(
-    "an allowlisted page's embed may shift it",
-    `  await page.goto("/shifting-embed");\n  await expect(page.locator("#widget")).toHaveCSS("height", "80px");`,
-    { sweepAllowlist: { "/shifting-embed$": "the widget sizes itself once it has loaded" } },
-  ),
-  spec(
-    "an entry for a shifting embed covers no other page",
-    `  await page.goto("/late-shift");\n  await expect(page.locator("#banner")).toBeAttached();`,
-    { sweepAllowlist: { "/shifting-embed$": "the widget sizes itself once it has loaded" } },
-  ),
-  spec("an entry no test reaches costs nothing", `  await page.goto("/clean");`, {
-    sweepAllowlist: { "/shifting-embed$": "the widget sizes itself once it has loaded" },
-  }),
+  // Each fails at once, so that what the run reports is the name Playwright
+  // gave the call.
+  ...NAMED.map(([name, body]) => spec(`a failing ${name} is named ${name}`, body)),
 ];
 
 /**
@@ -347,41 +394,25 @@ const RECORDED = [
 ];
 
 /**
- * The pages whose verdict must not move from run to run, each as a spec on a
- * quiet renderer and as one on a slowed renderer. A shift while the page loads
- * lands before anything has run in the page. A shift the user caused, and one
- * under `fill`, are where a slow frame could carry the shift past the
- * half-second it counts as theirs, and a shift 600ms after `fill` is where a
- * slow mark could stretch that half-second over it. A page that never shifts is
- * where a slow load could move something nobody moved.
+ * The pages whose verdict must not move from run to run, each run as a spec on
+ * a quiet renderer and as one on a slowed renderer. A shift while the page
+ * loads lands before anything has run in the page, and one after it lands
+ * while the drain waits. A shift the user caused, and one under `fill`, are
+ * where a slow frame could carry the shift past the half-second it counts as
+ * theirs, and a shift long after `fill` is where a slow mark could stretch that
+ * half-second over it. An allowlisted shift is where the verdict rests on the
+ * entry, and a page that never shifts is where a slow load could move something
+ * nobody moved.
  */
-const STEADY = (
-  [
-    ["a shift while the page loads", `  await page.goto("/image-shift");`],
-    [
-      "a shift the user caused",
-      `  await page.goto("/acted");\n  await page.click("#open");\n  await page.locator("#grow").pressSequentially("a\\nb\\nc");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
-    ],
-    [
-      "a shift under fill",
-      `  await page.goto("/acted");\n  await page.fill("#field", "x");\n  await expect(page.locator("#panel p")).toHaveCount(1);`,
-    ],
-    [
-      "a shift 600ms after fill",
-      `  await page.goto("/slow-fill");\n  await page.fill("#field", "x");\n  await expect(page.locator("#banner")).toBeAttached();`,
-    ],
-    [
-      "a page that never shifts",
-      `  await page.goto("/clean");\n  await expect(page.locator("p")).toHaveText("nothing wrong here");`,
-    ],
-  ] as const
-).flatMap(([title, body]) => [
-  spec(`${title}, quiet`, body),
-  spec(
-    `${title}, slowed`,
-    `  const cdp = await context.newCDPSession(page);\n  await cdp.send("Emulation.setCPUThrottlingRate", { rate: ${SLOWDOWN} });\n${body}`,
-  ),
-]);
+const STEADY = [
+  { title: "a shift while the page loads", body: BODY.imageShift, passes: false },
+  { title: "a shift after the page loaded", body: BODY.lateShift, passes: false },
+  { title: "a shift the user caused", body: BODY.acted, passes: true },
+  { title: "a shift under fill", body: BODY.filled, passes: true },
+  { title: SLOW_FILL, body: BODY.slowFill, passes: false },
+  { title: "an allowlisted shift", body: BODY.embedShift, use: EMBED_ALLOWED, passes: true },
+  { title: "a page that never shifts", body: BODY.clean, passes: true },
+] as const satisfies readonly { title: string; body: string; use?: Use; passes: boolean }[];
 
 /** One page that breaks nothing, for the runs that grade what decides recording rather than what is recorded. */
 const PLAIN = [
@@ -443,7 +474,21 @@ beforeAll(async () => {
   }
   outcomes = await sweeping(server.origin, files("case", CASES));
   installed = await sweeping(server.origin, { "consumer.spec.ts": INSTALLED });
-  steady = await sweeping(server.origin, files("steady", STEADY), { repeatEach: RUNS });
+  steady = await sweeping(
+    server.origin,
+    files(
+      "steady",
+      STEADY.flatMap(({ title, body, ...rest }) => [
+        spec(`${title}, quiet`, body, "use" in rest ? rest.use : undefined),
+        spec(
+          `${title}, slowed`,
+          `  const cdp = await context.newCDPSession(page);\n  await cdp.send("Emulation.setCPUThrottlingRate", { rate: ${SLOWDOWN} });\n${body}`,
+          "use" in rest ? rest.use : undefined,
+        ),
+      ]),
+    ),
+    { repeatEach: RUNS },
+  );
 }, 300_000);
 
 afterAll(async () => {
@@ -485,12 +530,14 @@ describe("what the sweep lets through", () => {
     "a page that moves because the user clicked or typed passes",
     "a shift under page.fill passes",
     "a shift under a locator's fill passes",
+    "a shift under an element handle's fill passes",
     "a shift under page.selectOption passes",
     "a shift under a locator's selectOption passes",
     "a shift under page.setInputFiles passes",
     "a shift under a locator's setInputFiles passes",
     "an allowlisted page's embed may shift it",
     "an entry no test reaches costs nothing",
+    "a page without JavaScript is left alone",
   ])("%s", (title) => {
     const { ok, said } = outcome(title);
     expect(said).toBe("");
@@ -536,9 +583,12 @@ describe("what the sweep catches", () => {
     ["overflow that arrives with a subresource is swept", "overflow", "img#slow"],
     ["a shift while the page loads fails", "layout-shift", "/image-shift"],
     ["a shift after the page loaded fails", "layout-shift", "/late-shift"],
-    ["a shift 600ms after fill fails", "layout-shift", "/slow-fill"],
+    [SLOW_FILL, "layout-shift", "/slow-fill"],
+    ["a page that replaces the reporter is still swept", "overflow", "/rebinds"],
+    ["a shift under a frame's own fill fails", "layout-shift", "/acted"],
+    ["a shift while page.fill waits for its field fails", "layout-shift", "/late-form"],
+    ["a shift while a locator's fill waits for its field fails", "layout-shift", "/late-form"],
     ["a page that dispatches input itself and then shifts fails", "layout-shift", "/self-input"],
-    ["a page that marks itself as acted on and then shifts fails", "layout-shift", "/self-marked"],
     ["a page the test left by a link still reports its shift", "layout-shift", "/late-shift"],
     ["a shift that arrives long after the click fails", "layout-shift", "/slow-panel"],
     ["an embed that shifts its host fails the host", "layout-shift", "/shifting-embed"],
@@ -653,6 +703,14 @@ describe("what the sweep catches", () => {
     expect(said).toContain("reserve the space for whatever arrives late");
   });
 
+  // The name Playwright gives a call is the first thing a consumer reads of a
+  // failing one, and a wrapper is where it can go wrong.
+  test.each(NAMED.map(([name]) => name))("a failing %s keeps its name", (name) => {
+    const { ok, said } = outcome(`a failing ${name} is named ${name}`);
+    expect(ok).toBe(false);
+    expect(said).toContain(`${name}: `);
+  });
+
   // What to do, not what went wrong: the allowlist is the other half of the fix.
   test("the diagnostic says what to do about it", () => {
     expect(outcome("a page wider than its viewport fails").said).toContain("sweepAllowlist");
@@ -663,20 +721,17 @@ describe("what the sweep catches", () => {
 // fixed has to come out the same on every run. A page whose shift comes and goes
 // fails on the runs it shifts, which is the trade the export's page names.
 describe("the shift verdict, run after run", () => {
-  test.each([
-    ["a shift while the page loads", false],
-    ["a shift the user caused", true],
-    ["a shift under fill", true],
-    ["a shift 600ms after fill", false],
-    ["a page that never shifts", true],
-  ] as const)("%s comes out the same every run, quiet and slowed", (title, passes) => {
-    for (const renderer of ["quiet", "slowed"]) {
-      expect({ renderer, verdicts: outcome(`${title}, ${renderer}`, steady).verdicts }).toEqual({
-        renderer,
-        verdicts: Array.from({ length: RUNS }, () => passes),
-      });
-    }
-  });
+  test.each(STEADY.map(({ title, passes }) => [title, passes] as const))(
+    "%s comes out the same every run, quiet and slowed",
+    (title, passes) => {
+      for (const renderer of ["quiet", "slowed"]) {
+        expect({ renderer, verdicts: outcome(`${title}, ${renderer}`, steady).verdicts }).toEqual({
+          renderer,
+          verdicts: Array.from({ length: RUNS }, () => passes),
+        });
+      }
+    },
+  );
 });
 
 // Draining is a wait, and a wait nobody bounds is a suite nobody runs. Both
