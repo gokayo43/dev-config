@@ -29,7 +29,9 @@ const TAIL_TASKS = 100;
 const SLOW_MS = 1_000;
 
 /**
- * The list, and the three regressions planted in it, chosen by `?plant=`:
+ * The list, its button above the rows so that rows arriving move nothing the
+ * invariant sweep would call a layout shift, and the three regressions planted
+ * in it, chosen by `?plant=`:
  * `rerender` lifts the hover highlight into the list's state, so one hover
  * re-renders every row; `request` has every row fetch its own detail on mount;
  * `heavy` asks the API for a detail field per row that nothing renders.
@@ -65,6 +67,7 @@ function App() {
   return h(
     "main",
     null,
+    h("button", { onClick: more }, "more"),
     h(
       "ul",
       null,
@@ -81,7 +84,6 @@ function App() {
         ),
       ),
     ),
-    h("button", { onClick: more }, "more"),
     footer === null ? null : h(footer),
   );
 }
