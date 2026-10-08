@@ -93,6 +93,9 @@ const BLOCK = 60;
 /** A block of content below whatever moves, which is what a shift's sources name. */
 const CONTENT = `<main id="content">the content</main>`;
 
+/** A script that appends a field and a select at the foot of the page, where they move nothing. */
+const LATE_CONTROLS = `for (const [tag, id] of [["input", "field"], ["select", "pick"]]) { const c = document.createElement(tag); c.id = id; c.setAttribute("aria-label", id); if (tag === "select") c.innerHTML = "<option>a</option><option>b</option>"; document.body.append(c); }`;
+
 /** A script that adds a `BLOCK`-high element above the content. */
 const PUSH = `const b = document.createElement("div"); b.id = "banner"; b.style.height = "${BLOCK}px"; document.body.prepend(b);`;
 
@@ -263,11 +266,12 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       },
       // Everything here moves the content when the page is acted on: a click
       // opens a panel, typing grows a textarea, and a field that is filled or a
-      // select that is chosen shows a line above it.
+      // select that is chosen shows a line above it. Each control on a line of
+      // its own: side by side, a slow renderer settling one moves the others.
       "/acted": {
         type: "text/html",
         body: html(
-          `<div id="panel"></div><button id="open">open</button><input id="field" aria-label="field"><select id="pick" aria-label="pick"><option>a</option><option>b</option></select><input id="file" type="file" aria-label="file"><textarea id="grow" aria-label="grow" rows="1"></textarea>${CONTENT}<script>const line = (text) => { const d = document.createElement("p"); d.textContent = text; document.getElementById("panel").append(d); }; document.getElementById("open").addEventListener("click", () => line("opened")); document.getElementById("field").addEventListener("input", () => line("filled")); document.getElementById("pick").addEventListener("change", () => line("picked")); document.getElementById("file").addEventListener("change", () => line("attached")); document.getElementById("grow").addEventListener("input", (e) => { e.target.style.height = e.target.scrollHeight + "px"; });</script>`,
+          `<style>button, input, select, textarea { display: block }</style><div id="panel"></div><button id="open">open</button><input id="field" aria-label="field"><select id="pick" aria-label="pick"><option>a</option><option>b</option></select><input id="file" type="file" aria-label="file"><textarea id="grow" aria-label="grow" rows="1"></textarea>${CONTENT}<script>const line = (text) => { const d = document.createElement("p"); d.textContent = text; document.getElementById("panel").append(d); }; document.getElementById("open").addEventListener("click", () => line("opened")); document.getElementById("field").addEventListener("input", () => line("filled")); document.getElementById("pick").addEventListener("change", () => line("picked")); document.getElementById("file").addEventListener("change", () => line("attached")); document.getElementById("grow").addEventListener("input", (e) => { e.target.style.height = e.target.scrollHeight + "px"; });</script>`,
         ),
       },
       // The line a filled field asks for arrives after the action's half-second.
@@ -292,12 +296,21 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<script>window.__invariantSweep = () => {};</script><div id="wide" style="width:${TOO_WIDE}px;height:10px"></div>`,
         ),
       },
-      // A banner that moves the content soon after load, and the field a spec
-      // fills arriving long after it.
+      // A field there from the start, a banner that moves the content well
+      // after a fill of that field has returned, and a second field arriving
+      // after the banner.
       "/late-form": {
         type: "text/html",
         body: html(
-          `${CONTENT}<script>addEventListener("load", () => { setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}); setTimeout(() => { const f = document.createElement("input"); f.id = "field"; f.setAttribute("aria-label", "field"); document.body.append(f); }, ${LATE_FIELD}); })</script>`,
+          `<input id="now" aria-label="now">${CONTENT}<script>addEventListener("load", () => { setTimeout(() => { ${PUSH} }, ${LONG_AFTER}); setTimeout(() => { ${LATE_CONTROLS} }, ${LATE_FIELD}); })</script>`,
+        ),
+      },
+      // The page dispatches an `input` event of its own and moves its content,
+      // and the field and the select a spec acts on arrive long after.
+      "/self-input-wait": {
+        type: "text/html",
+        body: html(
+          `<input id="other" aria-label="other">${CONTENT}<script>addEventListener("load", () => { setTimeout(() => { document.getElementById("other").dispatchEvent(new Event("input", { bubbles: true })); ${PUSH} }, ${LATE_SHIFT}); setTimeout(() => { ${LATE_CONTROLS} }, ${LATE_FIELD}); })</script>`,
         ),
       },
       // The click asks for a panel that arrives after the user's half-second is
@@ -391,6 +404,12 @@ export function serving(): Serving {
     hostname: "127.0.0.1",
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (path === "/sandboxed") {
+        // A policy that sandboxes the document without allowing scripts.
+        return new Response(html(`<p>nothing runs here</p>`), {
+          headers: { "content-type": "text/html", "content-security-policy": "sandbox" },
+        });
+      }
       if (path === "/slow-block.svg") {
         // An image whose height arrives with its bytes, after first paint.
         await Bun.sleep(LATE);

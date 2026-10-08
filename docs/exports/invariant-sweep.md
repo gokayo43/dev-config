@@ -134,8 +134,15 @@ however early it lands.
 The user caused a shift when the browser marks it `hadRecentInput`: a click, a
 key or a tap in the 500ms before. Playwright's `fill`, `selectOption` and
 `setInputFiles` send nothing the browser counts as input, so a shift is theirs
-when it starts between the first `input` or `change` event the action sets off
-and 500ms after the action returns. Importing the sweep wraps those three on
+when it starts between the action's own input and 500ms after the action
+returns. Its own input is the last `input` or `change` event before it returns:
+the last trusted one for `fill`, whose event comes from the browser's own input
+path, and the last of any kind for `selectOption` and `setInputFiles`, whose
+events are dispatched from script. An event that lands after the action's own
+and before it returns moves the window later: one the page dispatches itself
+while `selectOption` or `setInputFiles` runs, or one from a second action run
+at the same time. A shift the action caused before that event then fails, so
+run two actions one after the other. Importing the sweep wraps those three on
 Playwright's page, locator and element-handle prototypes, and the five calls
 that replace a document on its page prototype, for every page in the process;
 a page no sweeping context watches goes straight through. Four things count as
@@ -339,8 +346,11 @@ already declares it as a fixture that is not an option.
   own box is the embed's business, and its `documentElement` is not the page.
   An embed that grows and pushes the page is the page's, and is seen.
 - **A shift the page makes on its own just after `fill`, `selectOption` or
-  `setInputFiles`.** From the first `input` or `change` event the action sets
-  off to 500ms after it returns, every shift counts as the action's.
+  `setInputFiles`.** From the action's own input to 500ms after it returns,
+  every shift counts as the action's.
+- **A document whose scripting is disabled,** one served with a `sandbox`
+  policy that does not allow scripts. The sweep's script sees that as the
+  document starts and does nothing in it.
 - **A page without JavaScript.** With `javaScriptEnabled: false`, none of the
   sweep's script runs, so nothing on the page is measured, drained or marked.
 - **A layout shift on Firefox or WebKit.** Neither has the Layout Instability

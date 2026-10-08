@@ -192,20 +192,34 @@ const DRAIN = `window.${DRAINER}()`;
 * to the observer as an entry, from the first frame the document paints, and
 * every entry is a violation unless the user caused it. The browser says so by
 * marking it `hadRecentInput`; the fixture says so for an `UNPROMPTED` action
-* by calling `ACTOR` as the action starts and as it returns. An entry is the
-* action's when it starts between the first `input` or `change` event the
-* action set off, or its return if it set off none, and `RECENT` after the
-* return; what the page moved while the action was still waiting for its
-* element is not. Those events count only while an action runs, so a page that
-* dispatches one itself excuses nothing. An entry observed while an action runs
-* is held until it returns, because its window is not known before then; any
-* other is judged as it is observed.
+* by calling `ACTOR` with the action's own id as it starts and as it returns.
+* An entry is the action's when it starts between the action's own input and
+* `RECENT` after its return. Its own input is the last `input` or `change`
+* event of its run: the last trusted one, which only the browser's own input
+* path makes and `fill` takes, or failing one the last of any kind, since
+* `selectOption` and `setInputFiles` dispatch theirs from script; or its return
+* if it set off none. The last rather than the first, because what comes before
+* an action's own input, a page's own dispatch while the action waits for its
+* element or another action's input, is not this action's. An entry observed
+* while any action runs is held until they all return, because its windows are
+* not known before then; any other is judged as it is observed.
 *
 * The reporter is read once, here, so a page that later replaces the global
 * does not replace where its reports go.
 */
 const WATCH = `(() => {
   if (window.top !== window) return;
+  // A <noscript> parses its content as text only where scripting is enabled
+  // for the document. Where it is not, a document sandboxed without scripts,
+  // the browser calls back nothing this script schedules and logs an error for
+  // each attempt, so the script answers at once and does nothing else.
+  const probe = document.createElement("noscript");
+  probe.innerHTML = "<i></i>";
+  if (probe.firstChild.nodeType !== Node.TEXT_NODE) {
+    window.${DRAINER} = () => undefined;
+    window.${ACTOR} = () => undefined;
+    return;
+  }
   const report = window.${REPORTER};
   const seen = new Set();
   const say = (kind, key, detail) => {
@@ -273,8 +287,7 @@ const WATCH = `(() => {
   };
   const marks = [];
   const held = [];
-  let acting = 0;
-  let touched = Infinity;
+  const running = new Map();
   const judge = (entry) => {
     if (marks.some(({ from, to }) => entry.startTime >= from && entry.startTime <= to + ${RECENT})) return;
     const sources = entry.sources.slice(0, ${OFFENDERS});
@@ -285,25 +298,27 @@ const WATCH = `(() => {
     say("layout-shift", sources.length ? sources.map(named).join(", ") : score,
       score + ", with no input in the ${RECENT}ms before: " + moved);
   };
-  window.${ACTOR} = (edge) => {
-    if (edge === "start") return void (acting += 1);
+  window.${ACTOR} = (edge, id) => {
+    if (edge === "start") return void running.set(id, { trusted: undefined, any: undefined });
     const now = performance.now();
-    marks.push({ from: Math.min(touched, now), to: now });
-    // An action that replaced the document ends in a document it never started in.
-    acting = Math.max(0, acting - 1);
-    if (acting > 0) return;
-    touched = Infinity;
-    held.splice(0).forEach(judge);
+    // Undefined for an action that replaced the document: it ends in one it never started in.
+    const action = running.get(id);
+    running.delete(id);
+    marks.push({ from: (action && (action.trusted ?? action.any)) ?? now, to: now });
+    if (running.size === 0) held.splice(0).forEach(judge);
   };
   for (const type of ["input", "change"]) {
     window.addEventListener(type, (event) => {
-      if (acting > 0) touched = Math.min(touched, event.timeStamp);
+      for (const action of running.values()) {
+        action.any = event.timeStamp;
+        if (event.isTrusted) action.trusted = event.timeStamp;
+      }
     }, true);
   }
   const shifted = (entries) => {
     for (const entry of entries) {
       if (entry.hadRecentInput) continue;
-      if (acting > 0) held.push(entry);
+      if (running.size > 0) held.push(entry);
       else judge(entry);
     }
   };
@@ -396,11 +411,12 @@ async function ask(page, expression) {
 		if (!(error instanceof Error) || !GONE.some((gone) => error.message.includes(gone))) throw error;
 	}
 }
-/** Telling a document an action has started, and that it has returned, which is the mark. */
-const ACTION = {
-	start: `window.${ACTOR}("start")`,
-	end: `window.${ACTOR}("end")`
-};
+/** Telling a document the action numbered `id` has reached `edge`: started, or returned, which is its mark. */
+function acted(edge, id) {
+	return `window.${ACTOR}(${JSON.stringify(edge)}, ${id})`;
+}
+/** How many actions this process has marked, which is what tells two running at once apart. */
+let actions = 0;
 /**
 * The prototype `instance` shares with every other of its class. Playwright
 * exports its classes as types only, so an instance is the one way to reach
@@ -433,11 +449,13 @@ function wrap(prototype, names, around) {
 /** Runs an `UNPROMPTED` action, and marks the user as having acted when it returns. */
 async function marked(page, call) {
 	if (page === void 0) return await call();
-	await ask(page, ACTION.start);
+	actions += 1;
+	const id = actions;
+	await ask(page, acted("start", id));
 	try {
 		return await call();
 	} finally {
-		await ask(page, ACTION.end);
+		await ask(page, acted("end", id));
 	}
 }
 /**

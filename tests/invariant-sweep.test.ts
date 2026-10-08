@@ -307,6 +307,25 @@ const CASES = [
     "a shift while a locator's fill waits for its field fails",
     `  await page.goto("/late-form");\n  await page.locator("#field").fill("x");`,
   ),
+  // Two fills at once: the one for a field already there returns at once, and
+  // the banner lands while the other still waits. A sweep whose actions shared
+  // one opening moment passes this.
+  spec(
+    "a shift while one of two fills waits for its field fails",
+    `  await page.goto("/late-form");\n  await Promise.all([page.fill("#field", "x"), page.fill("#now", "y")]);`,
+  ),
+  // The page's own event, on another field, while the fill waits for its own.
+  // A sweep that opened the window at the first event of the run passes this.
+  spec(
+    "a page's own input event while page.fill waits excuses nothing",
+    `  await page.goto("/self-input-wait");\n  await page.fill("#field", "x");`,
+  ),
+  // The same through `selectOption`, whose own events are no more trusted than
+  // the page's.
+  spec(
+    "a page's own input event while selectOption waits excuses nothing",
+    `  await page.goto("/self-input-wait");\n  await page.selectOption("#pick", "b");`,
+  ),
   // The line a filled field asked for lands past the action's half-second. A
   // sweep that excused every shift once a field had been filled passes this.
   spec(SLOW_FILL, BODY.slowFill),
@@ -340,6 +359,14 @@ const CASES = [
     "a page without JavaScript is left alone",
     `  test.setTimeout(5_000);\n  await page.goto("/acted");\n  await page.fill("#field", "x");\n  await page.goto("/clean");`,
     { javaScriptEnabled: false },
+  ),
+  // Scripting is disabled for it, so nothing the sweep's script schedules is
+  // ever called back. A sweep that waited on its drain runs out the test's
+  // timeout, and one whose script scheduled anything fails it on the error the
+  // browser logs for each blocked callback.
+  spec(
+    "a sandboxed page without scripts is left alone",
+    `  test.setTimeout(15_000);\n  await page.goto("/sandboxed");\n  await page.goto("/clean");`,
   ),
   // Each fails at once, so that what the run reports is the name Playwright
   // gave the call.
@@ -538,6 +565,7 @@ describe("what the sweep lets through", () => {
     "an allowlisted page's embed may shift it",
     "an entry no test reaches costs nothing",
     "a page without JavaScript is left alone",
+    "a sandboxed page without scripts is left alone",
   ])("%s", (title) => {
     const { ok, said } = outcome(title);
     expect(said).toBe("");
@@ -588,6 +616,17 @@ describe("what the sweep catches", () => {
     ["a shift under a frame's own fill fails", "layout-shift", "/acted"],
     ["a shift while page.fill waits for its field fails", "layout-shift", "/late-form"],
     ["a shift while a locator's fill waits for its field fails", "layout-shift", "/late-form"],
+    ["a shift while one of two fills waits for its field fails", "layout-shift", "/late-form"],
+    [
+      "a page's own input event while page.fill waits excuses nothing",
+      "layout-shift",
+      "/self-input-wait",
+    ],
+    [
+      "a page's own input event while selectOption waits excuses nothing",
+      "layout-shift",
+      "/self-input-wait",
+    ],
     ["a page that dispatches input itself and then shifts fails", "layout-shift", "/self-input"],
     ["a page the test left by a link still reports its shift", "layout-shift", "/late-shift"],
     ["a shift that arrives long after the click fails", "layout-shift", "/slow-panel"],
