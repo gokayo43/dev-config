@@ -6,7 +6,7 @@
  * holder text naming another boot, or this pid with another start tick.
  */
 import { describe, expect, test } from "bun:test";
-import { link, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -155,6 +155,21 @@ async function finish(ground: Awaited<ReturnType<typeof arena>>): Promise<void> 
     if (turn > STEPS) throw new Error("the workers did not finish: a livelock");
     const next = stopped[turn % stopped.length];
     if (next !== undefined) await ground.step(next);
+  }
+}
+
+/** A process that takes the lock at `path` and is killed before `stop`, or once it holds the lock where that is `held`. */
+async function killedAt(path: string, stop: string): Promise<void> {
+  const child = Bun.spawn([process.execPath, CHILD, path, stop], {
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  try {
+    const { value } = await child.stdout.getReader().read();
+    expect(new TextDecoder().decode(value)).toBe("at\n");
+  } finally {
+    child.kill("SIGKILL");
+    await child.exited;
   }
 }
 
@@ -307,18 +322,7 @@ describe("a worker killed while taking the lock", () => {
       await using ground = await arena();
       const live = before === "alive" ? await lock(ground.lockPath, 1_000) : null;
       if (before === "dead") await writeFile(ground.lockPath, await deadText("another boot"));
-      const child = Bun.spawn([process.execPath, CHILD, ground.lockPath, stop], {
-        stdout: "pipe",
-        stderr: "inherit",
-      });
-      try {
-        const reader = child.stdout.getReader();
-        const { value } = await reader.read();
-        expect(new TextDecoder().decode(value)).toBe("at\n");
-      } finally {
-        child.kill("SIGKILL");
-        await child.exited;
-      }
+      await killedAt(ground.lockPath, stop);
       await live?.[Symbol.asyncDispose]();
 
       const next = await lock(ground.lockPath, 1_000);
@@ -330,10 +334,65 @@ describe("a worker killed while taking the lock", () => {
   );
 });
 
+test("a claim a killed worker held is taken over through the claim, never removed by name", async () => {
+  // The wrong implementation has the new holder's sweep remove a dead claim by
+  // name. A worker dies between moving the dead lock aside and discarding it,
+  // still holding the claim on that dead holder; W1 takes the claim on that
+  // claim and stops before moving it; a new holder links the empty lock and its
+  // sweep removes the dead claim; W4 links a fresh claim and W1 moves W4's live
+  // claim aside; W5 links the empty claim before W1 can put W4's back, and W1
+  // throws that the lock was replaced by hand.
+  await using ground = await arena();
+  await writeFile(ground.lockPath, await deadText("another boot"));
+  const [w1, w4, w5] = [await ground.start(), await ground.start(), await ground.start()];
+  for (const waiter of [w1, w4, w5]) await ground.until(waiter, atMain(ground, "take"));
+  await killedAt(ground.lockPath, "confirm");
+
+  const onClaim = (next: string) => (at: Stop | undefined) =>
+    at?.next === next && at.path !== ground.lockPath;
+  const waiting = (at: Stop | undefined): boolean => at?.next === "wait";
+  await ground.until(w1, onClaim("move"));
+  const holder = await ground.start();
+  await ground.until(holder, (at, worker) => worker.holding || waiting(at));
+  await ground.until(w4, (at) => atMain(ground, "recheck")(at) || waiting(at));
+  await ground.until(w1, (at, worker) => onClaim("confirm")(at) || waiting(at) || worker.holding);
+  await ground.until(w5, (at) => atMain(ground, "recheck")(at) || waiting(at));
+
+  await finish(ground);
+
+  expect(ground.workers.map((worker) => worker.failure)).toEqual([
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ]);
+  expect(ground.overlaps()).toBe(0);
+  expect(await ground.counted()).toBe(4);
+  expect((await readdir(ground.path)).toSorted()).toEqual(["counter"]);
+});
+
+test("a lock it cannot sweep beside is released before the failure reaches the caller", async () => {
+  // The wrong implementation throws from the sweep still holding the lock, so
+  // every later writer in the process waits out its patience on its own pid.
+  await using ground = await arena();
+  await mkdir(`${ground.lockPath}.not-a-file`);
+
+  const failed = await lock(ground.lockPath, 1_000).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  expect(String(failed)).toContain("EISDIR");
+  expect((await readdir(ground.path)).toSorted()).toEqual(["ceilings.lock.not-a-file", "counter"]);
+});
+
 test("no two waiters hold it at once, whatever order their steps run in", async () => {
   // The invariant every interleaving keeps: at most one holder at a time, every
   // waiter told it holds the lock exactly once, each increment kept, and
-  // nothing left beside the lock once all are done.
+  // nothing left beside the lock once all are done. Every waiter here is this
+  // process and alive, so no generated schedule reaches a dead claim or a
+  // sweep during a takeover: the killed-worker cases and the claim case above
+  // drive those.
   await check(
     asyncProperty(
       integer({ min: 2, max: 4 }),

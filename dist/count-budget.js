@@ -346,8 +346,9 @@ async function procStat(pid) {
 	let raw;
 	try {
 		raw = await readFile(`/proc/${pid}/stat`, "utf8");
-	} catch {
-		return null;
+	} catch (error) {
+		if (hasCode(error, "ENOENT")) return null;
+		throw error;
 	}
 	const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
 	const group = Number(fields[2]);
@@ -371,6 +372,8 @@ async function ours(who, boot) {
 	return stat !== null && stat.startTicks === who.startTicks ? stat : null;
 }
 const POLL_MS = 25;
+/** How a claim's file name ends, which is how the sweep tells one from the files it may remove. */
+const CLAIM = ".claim";
 async function paced(next) {
 	if (next === "wait") await setTimeout(POLL_MS);
 }
@@ -428,7 +431,7 @@ async function renamed(from, to) {
 * that at the recheck and moves nothing.
 */
 async function takeOver(path, dead, patienceMs, between, me) {
-	await using held = await acquire(`${path}.${createHash("sha256").update(dead).digest("hex").slice(0, 16)}.claim`, patienceMs, between, me);
+	await using held = await acquire(`${path}.${createHash("sha256").update(dead).digest("hex").slice(0, 16)}${CLAIM}`, patienceMs, between, me);
 	await between("recheck", path);
 	if (await textAt(path) !== dead) return;
 	const aside = `${own(path)}.moved`;
@@ -477,28 +480,30 @@ async function acquire(path, patienceMs, between, me) {
 	}
 }
 /**
-* Removes every file beside the lock that names a process that is gone: the
-* file a waiter killed while waiting wrote its holder to, a dead holder's lock
-* moved aside by a waiter killed before discarding it, and a claim its taker
-* died holding. The lock's own holder is the one caller, and a claim it removes
-* is on a dead holder no longer at `path`, so whoever holds that claim next
-* finds nothing left to take.
+* Clears every file beside the lock that names a process that is gone: the file
+* a waiter killed while waiting wrote its holder to, and a dead holder's lock
+* moved aside by a waiter killed before discarding it, are removed, since only
+* the process that wrote either ever touches it. A claim its taker died holding
+* is taken over through `takeOver` like any dead lock and never removed by
+* name, because another waiter may be taking it over at the same moment.
 */
-async function sweep(path, boot) {
+async function sweep(path, patienceMs, between, me) {
 	const prefix = `${basename(path)}.`;
 	const beside = (await readdir(dirname(path))).filter((name) => name.startsWith(prefix));
-	await Promise.all(beside.map(async (name) => {
+	for (const name of beside) {
 		const file = join(dirname(path), name);
 		const text = await textAt(file);
-		if (text === void 0) return;
+		if (text === void 0) continue;
 		let parsed;
 		try {
 			parsed = JSON.parse(text);
 		} catch {
-			return;
+			continue;
 		}
-		if (isHolder(parsed) && await ours(parsed, boot) === null) await rm(file, { force: true });
-	}));
+		if (!isHolder(parsed) || await ours(parsed, me.boot) !== null) continue;
+		if (name.endsWith(CLAIM)) await takeOver(file, text, patienceMs, between, me);
+		else await rm(file, { force: true });
+	}
 }
 /**
 * Takes the lock at `path`, waiting up to `patienceMs` for a live holder, and
@@ -511,15 +516,21 @@ async function lock(path, patienceMs, between = paced) {
 	const stat = await procStat(process.pid);
 	if (stat === null) throw new Error(`/proc/${process.pid} is not readable — this needs Linux`);
 	const boot = await bootId();
-	const held = await acquire(path, patienceMs, between, {
+	const me = {
 		text: `${JSON.stringify({
 			pid: process.pid,
 			bootId: boot,
 			startTicks: stat.startTicks
 		})}\n`,
 		boot
-	});
-	await sweep(path, boot);
+	};
+	const held = await acquire(path, patienceMs, between, me);
+	try {
+		await sweep(path, patienceMs, between, me);
+	} catch (error) {
+		await held[Symbol.asyncDispose]();
+		throw error;
+	}
 	return held;
 }
 //#endregion
