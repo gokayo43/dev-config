@@ -4,8 +4,8 @@ import { expect, test as test$1 } from "@playwright/test";
 * The E2E invariant sweep testing.md asks of every visited page, as a Playwright
 * fixture a repo imports instead of `@playwright/test`'s own `test`:
 *
-*   no page logged a `console.error`, no page threw, and no page scrolled
-*   sideways.
+*   no page logged a `console.error`, no page threw, no page scrolled
+*   sideways, and nothing on a page moved that the user did not move.
 *
 * They are invariants rather than assertions because no single test owns them.
 * A flow test knows what it came to click; nobody's job is to notice that the
@@ -19,7 +19,8 @@ import { expect, test as test$1 } from "@playwright/test";
 *
 * The console and the page's own errors arrive as events, so those are the easy
 * half. Overflow is a measurement, and a measurement has to happen somewhere,
-* at some moment. Two designs that do not work:
+* at some moment; a layout shift is an entry the browser hands only to an
+* observer that was in the page when it happened. Two designs that do not work:
 *
 * - **After each `goto`.** A test that navigates by clicking a link never calls
 *   `goto`, and those pages would go unswept while the fixture claimed to sweep
@@ -43,23 +44,10 @@ import { expect, test as test$1 } from "@playwright/test";
 * like any other. A `page` fixture cannot see those at all: they are pages the
 * context opened and the spec may never name.
 *
-* ## What the page is allowed to say about itself
+* ## What a page can do to the verdict
 *
-* A page is not a trusted narrator. The bridge takes **one string** from it and
-* nothing else: the `kind` is always `overflow`, and the URL is the one
-* Playwright says that frame is at. Reports from anything but the top frame are
-* dropped, so a cross-origin iframe cannot invent a violation for the page
-* carrying it, and the string itself is stripped of control characters — which
-* is what stops an embed writing ANSI escapes or a `::error::` workflow command
-* into somebody's CI annotation.
-*
-* The same reasoning decides which URL a console error is attributed to. The
-* console reports the script's URL, and a script's URL is whatever its
-* `//# sourceURL=` comment claims — so an inline script of ours can wear a
-* vendor's name and land in the vendor's allowlist bucket. A claimed URL is
-* therefore honoured only when a document or script **actually loaded** from it
-* in this page, which is a fact about responses the browser received and not
-* one any page can write.
+* The export's page, `docs/exports/invariant-sweep.md`, says it under "What a
+* page is allowed to say about itself", and that is the one place it is said.
 *
 * ## Recording
 *
@@ -71,6 +59,28 @@ import { expect, test as test$1 } from "@playwright/test";
 const REPORTER = "__invariantSweep";
 /** The name the page-side drain answers to, and the name the fixture calls. One constant, two ends. */
 const DRAINER = "__invariantSweepDrain";
+/** The name the page-side act mark answers to, and the name the fixture calls. One constant, two ends. */
+const ACTOR = "__invariantSweepActing";
+/**
+* How long after the user acts a layout shift is still theirs, in ms: the
+* window the Layout Instability spec sets `hadRecentInput` by, which the
+* fixture applies after each action it marks as well.
+*/
+const RECENT = 500;
+/** The calls that replace a page's document, each drained first. */
+const REPLACING = [
+	"goto",
+	"reload",
+	"goBack",
+	"goForward",
+	"setContent"
+];
+/** The actions Playwright performs with nothing the browser counts as input, each marked as the user acting. */
+const UNPROMPTED = [
+	"fill",
+	"selectOption",
+	"setInputFiles"
+];
 /**
 * How long a document has to go unchanged before it has nothing further to
 * report, in ms. Playwright calls a page idle after 500ms with no network
@@ -128,9 +138,24 @@ function recorded(video) {
 		mode: "on"
 	};
 }
+/** The violations the page measures for itself, which are the only kinds it may name over the bridge. */
+const MEASURED = ["overflow", "layout-shift"];
+function measured(kind) {
+	return MEASURED.some((each) => each === kind);
+}
 /**
 * Asking the document to drain, as an expression rather than a function for the
-* same reason `WATCH` is one: there is no DOM lib here to type it with.
+* same reason `watch` writes source: there is no DOM lib here to type it with.
+*
+* It gives one document its last chance to report before it is replaced or the
+* test ends. A document can be behind in two ways, and one ask covers both. It
+* may not have *measured* yet: a page that lays its overflow out on a timer
+* after `load` has nothing to say when `goto` resolves, and a spec that
+* navigates on that instant destroys the document before the layout it would
+* have failed on. And it may have measured without the report having
+* *crossed*: a report leaves on the frame after the check runs, so two frames
+* follow the wait. `watch` owns what each of those costs and answers when both
+* are spent.
 */
 const DRAIN = `window.${DRAINER}()`;
 /**
@@ -162,10 +187,46 @@ const DRAIN = `window.${DRAINER}()`;
 * twice that, which is an animation: it is measured on every one of those
 * changes, so waiting for a gap that will not come buys nothing. Or it **never
 * armed** at all, and `CAP` has passed since the script ran.
+*
+* Layout shifts are not measured at those moments: the browser hands each one
+* to the observer as an entry, from the first frame the document paints, and
+* every entry is a violation unless the user caused it. The browser says so by
+* marking it `hadRecentInput`; the fixture says so for an `UNPROMPTED` action
+* by calling `ACTOR` with the action's own id as it starts and as it returns.
+* An entry is the action's when it starts between the action's own input and
+* `RECENT` after its return. Its own input is the last `input` or `change`
+* event of its run: the last trusted one, which only the browser's own input
+* path makes and `fill` takes, or failing one the last of any kind, since
+* `selectOption` and `setInputFiles` dispatch theirs from script; or its return
+* if it set off none. The last rather than the first, because what comes before
+* an action's own input, a page's own dispatch while the action waits for its
+* element or another action's input, is not this action's. An entry observed
+* while any action runs is held until they all return, because its windows are
+* not known before then; any other is judged as it is observed.
+*
+* The reporter is read once, here, so a page that later replaces the global
+* does not replace where its reports go.
 */
 const WATCH = `(() => {
   if (window.top !== window) return;
+  // A <noscript> parses its content as text only where scripting is enabled
+  // for the document. Where it is not, a document sandboxed without scripts,
+  // the browser calls back nothing this script schedules and logs an error for
+  // each attempt, so the script answers at once and does nothing else.
+  const probe = document.createElement("noscript");
+  probe.innerHTML = "<i></i>";
+  if (probe.firstChild.nodeType !== Node.TEXT_NODE) {
+    window.${DRAINER} = () => undefined;
+    window.${ACTOR} = () => undefined;
+    return;
+  }
+  const report = window.${REPORTER};
   const seen = new Set();
+  const say = (kind, key, detail) => {
+    if (seen.has(kind + " " + key)) return;
+    seen.add(kind + " " + key);
+    report(kind, detail);
+  };
   const describe = (el) => {
     const id = el.id ? "#" + el.id : "";
     const names = typeof el.className === "string" ? el.className.trim() : "";
@@ -184,16 +245,14 @@ const WATCH = `(() => {
     const named = (innermost.length ? innermost : past).slice(0, ${OFFENDERS}).map(describe).join(", ");
     const detail = root.scrollWidth + "px of content in a " + limit + "px viewport"
       + (named ? ", reaching past the right edge: " + named : "");
-    if (seen.has(detail)) return;
-    seen.add(detail);
-    window.${REPORTER}(detail);
+    say("overflow", detail, detail);
   };
-  const started = Date.now();
+  const started = performance.now();
   let armed = 0;
   let changed = 0;
   let queued = false;
   const soon = () => {
-    changed = Date.now();
+    changed = performance.now();
     if (queued) return;
     queued = true;
     requestAnimationFrame(() => { queued = false; check(); });
@@ -204,16 +263,85 @@ const WATCH = `(() => {
     : new Promise((done) => window.addEventListener("load", done, { once: true }));
   fonts.then(soon);
   loaded.then(soon);
-  Promise.all([fonts, loaded]).then(() => { armed = Date.now(); soon(); });
+  Promise.all([fonts, loaded]).then(() => { armed = performance.now(); soon(); });
   const until = () => armed === 0
     ? started + ${CAP}
     : Math.min(Math.max(changed, armed) + ${QUIET}, armed + ${QUIET * 2});
+  const named = (source) => {
+    const node = source.node && source.node.nodeType !== Node.ELEMENT_NODE
+      ? source.node.parentElement
+      : source.node;
+    return node ? describe(node) : "an element no longer in the page";
+  };
+  const travel = (source) => {
+    const from = source.previousRect;
+    const to = source.currentRect;
+    if (from.width * from.height === 0) return "into view";
+    if (to.width * to.height === 0) return "out of view";
+    const dy = Math.round(to.y - from.y);
+    const dx = Math.round(to.x - from.x);
+    const legs = [];
+    if (dy !== 0) legs.push(Math.abs(dy) + "px " + (dy > 0 ? "down" : "up"));
+    if (dx !== 0) legs.push(Math.abs(dx) + "px " + (dx > 0 ? "right" : "left"));
+    return legs.length ? legs.join(" and ") : "by less than a pixel";
+  };
+  const marks = [];
+  const held = [];
+  const running = new Map();
+  const judge = (entry) => {
+    if (marks.some(({ from, to }) => entry.startTime >= from && entry.startTime <= to + ${RECENT})) return;
+    const sources = entry.sources.slice(0, ${OFFENDERS});
+    const score = "score " + entry.value.toFixed(4);
+    const moved = sources.length
+      ? sources.map((source) => named(source) + " moved " + travel(source)).join(", ")
+      : "something moved";
+    say("layout-shift", sources.length ? sources.map(named).join(", ") : score,
+      score + ", with no input in the ${RECENT}ms before: " + moved);
+  };
+  window.${ACTOR} = (edge, id) => {
+    if (edge === "start") return void running.set(id, { trusted: undefined, any: undefined });
+    const now = performance.now();
+    // Undefined for an action that replaced the document: it ends in one it never started in.
+    const action = running.get(id);
+    running.delete(id);
+    marks.push({ from: (action && (action.trusted ?? action.any)) ?? now, to: now });
+    if (running.size === 0) held.splice(0).forEach(judge);
+  };
+  for (const type of ["input", "change"]) {
+    window.addEventListener(type, (event) => {
+      for (const action of running.values()) {
+        action.any = event.timeStamp;
+        if (event.isTrusted) action.trusted = event.timeStamp;
+      }
+    }, true);
+  }
+  const shifted = (entries) => {
+    for (const entry of entries) {
+      if (entry.hadRecentInput) continue;
+      if (running.size > 0) held.push(entry);
+      else judge(entry);
+    }
+  };
+  // Firefox and WebKit have no Layout Instability API, and observing a type a
+  // browser lacks logs a warning rather than throwing.
+  const shifts = PerformanceObserver.supportedEntryTypes.includes("layout-shift")
+    ? new PerformanceObserver((list) => shifted(list.getEntries()))
+    : undefined;
+  if (shifts) shifts.observe({ type: "layout-shift", buffered: true });
+  // An observer is called some time after the frame a shift happened in, and a
+  // document on its way out is not called again.
+  const flush = () => {
+    if (shifts) shifted(shifts.takeRecords());
+    held.splice(0).forEach(judge);
+  };
+  window.addEventListener("pagehide", flush);
   window.${DRAINER} = () => new Promise((done) => {
     const wait = () => {
-      const left = until() - Date.now();
+      const left = until() - performance.now();
       // Capped, so that a document arming mid-wait is noticed rather than slept
       // through: once armed, the deadline is never further off than this.
       if (left > 0) return void setTimeout(wait, Math.min(left, ${QUIET}));
+      flush();
       requestAnimationFrame(() => requestAnimationFrame(done));
     };
     wait();
@@ -251,36 +379,114 @@ function sanitized(detail) {
 function scriptIn(stack) {
 	return /https?:\/\/[^\s)]+?(?=:\d+:\d+|\s|\)|$)/.exec(stack ?? "")?.[0];
 }
+/** What to do about each kind, said by the sweep rather than by the page, so no cut a page's sentence takes can lose it. */
+const ADVICE = {
+	"console.error": "fix what it reports, or stop reporting it as an error",
+	pageerror: "fix what threw, or catch it where it can be handled",
+	overflow: "make what reaches past the edge fit the viewport",
+	"layout-shift": "reserve the space for whatever arrives late, or move it with a transform"
+};
 function describe({ kind, at, detail }) {
-	return `${kind} at ${at} — ${detail}`;
+	return `${kind} at ${at} — ${detail}; ${ADVICE[kind]}`;
 }
 /**
-* Gives one document its last chance to report before it is replaced or the test
-* ends, and never costs the assertion.
-*
-* A document can be behind in two ways, and one ask covers both. It may not have
-* *measured* yet: a page that lays its overflow out on a timer after `load` has
-* nothing to say when `goto` resolves, and a spec that navigates on that instant
-* destroys the document before the layout it would have failed on. And it may
-* have measured without the report having *crossed*: a report leaves on the
-* frame after the check runs, so two frames follow the wait. `WATCH` above owns
-* what each of those costs and answers when both are spent.
-*
-* A page that navigates, or that closes itself, while this runs has nothing left
-* to drain — whatever it measured crossed as it was measured — and every way
-* that surfaces is admitted here. Letting one through would replace the sweep's
-* verdict, the list it spent the whole test collecting, with a message about the
-* flush.
+* Every page a sweeping context watches with JavaScript on. The wrapped calls
+* below are wrapped on Playwright's prototypes, so they run for every page in
+* the process, and this is what they ask before touching one.
 */
-async function drain(page) {
-	if (page.isClosed()) return;
+const WATCHED = /* @__PURE__ */ new WeakSet();
+/**
+* Runs `expression` in a watched page's current document, if it still has one,
+* and never costs the assertion. A page that navigates, or that closes itself,
+* while this runs has nothing left to ask, and every way that surfaces is
+* admitted here. Letting one through would replace the sweep's verdict, the
+* list it spent the whole test collecting, with a message about the ask.
+*/
+async function ask(page, expression) {
+	if (!WATCHED.has(page) || page.isClosed()) return;
 	try {
-		await page.evaluate(DRAIN);
+		await page.evaluate(expression);
 	} catch (error) {
 		if (page.isClosed()) return;
 		if (!(error instanceof Error) || !GONE.some((gone) => error.message.includes(gone))) throw error;
 	}
 }
+/** Telling a document the action numbered `id` has reached `edge`: started, or returned, which is its mark. */
+function acted(edge, id) {
+	return `window.${ACTOR}(${JSON.stringify(edge)}, ${id})`;
+}
+/** How many actions this process has marked, which is what tells two running at once apart. */
+let actions = 0;
+/**
+* The prototype `instance` shares with every other of its class. Playwright
+* exports its classes as types only, so an instance is the one way to reach
+* one.
+*/
+function prototypeOf(instance) {
+	return Object.getPrototypeOf(instance);
+}
+/**
+* `original`, reachable as `name` on an object that inherits everything else
+* from `self`. Playwright names a call after the method its innermost frame of
+* Playwright's own was reached through, and under its test runner a method
+* reached through `apply` or `call` is named `apply` or `call`: a failing
+* `page.fill` would read `page.apply`. Reached as `name`, it reads `page.fill`.
+* Every wrapped method only reads its receiver, so an object inheriting all of
+* `self` stands in for it.
+*/
+function callable(self, name, original) {
+	return Object.create(self, { [name]: { value: original } });
+}
+/** Wraps each named method of `prototype` in `around`, which decides when the original runs. */
+function wrap(prototype, names, around) {
+	for (const name of names) {
+		const original = prototype[name];
+		prototype[name] = async function(...args) {
+			return await around(this, async () => await callable(this, name, original)[name](...args));
+		};
+	}
+}
+/** Runs an `UNPROMPTED` action, and marks the user as having acted when it returns. */
+async function marked(page, call) {
+	if (page === void 0) return await call();
+	actions += 1;
+	const id = actions;
+	await ask(page, acted("start", id));
+	try {
+		return await call();
+	} finally {
+		await ask(page, acted("end", id));
+	}
+}
+/**
+* Wraps the calls the sweep needs on the prototypes they live on, once per
+* process: on a page, the `REPLACING` calls and the `UNPROMPTED` actions, and
+* the `UNPROMPTED` actions on a locator and an element handle. Not on a frame,
+* though a page's and a locator's actions run through one: a wrapper there
+* would be the innermost frame of every call and rename it `frame.fill`. The
+* prototypes are reached through a page of the browser's own made for it,
+* since an element handle is only had by asking a page for one.
+*/
+async function wrapOnce(browser) {
+	const scratch = await browser.newPage();
+	try {
+		const handle = await scratch.locator(":root").elementHandle();
+		const pages = prototypeOf(scratch);
+		wrap(pages, REPLACING, async (page, call) => {
+			await ask(page, DRAIN);
+			return await call();
+		});
+		wrap(pages, UNPROMPTED, async (page, call) => await marked(page, call));
+		wrap(prototypeOf(scratch.locator(":root")), UNPROMPTED, async (locator, call) => await marked(locator.page(), call));
+		wrap(prototypeOf(handle), UNPROMPTED, async (element, call) => {
+			return await marked((await element.ownerFrame())?.page(), call);
+		});
+	} finally {
+		await scratch.close();
+	}
+}
+/** The one `wrapOnce` this process runs, whichever test reaches it first. */
+let wrapped;
 /**
 * Playwright's `test`, with the browser context replaced by one that watches
 * every page it opens. A repo swaps its import and every spec it already has is
@@ -301,7 +507,9 @@ const test = test$1.extend({
 		scope: "worker",
 		box: true
 	}],
-	context: async ({ context, sweepAllowlist }, provide) => {
+	context: async ({ browser, context, javaScriptEnabled, sweepAllowlist }, provide) => {
+		wrapped ??= wrapOnce(browser);
+		await wrapped;
 		const allowed = Object.keys(sweepAllowlist).map((pattern) => {
 			try {
 				return new RegExp(pattern);
@@ -323,16 +531,8 @@ const test = test$1.extend({
 		* ours land in a vendor's allowlist bucket.
 		*/
 		const from = (claimed, page) => claimed !== void 0 && fetched.has(claimed) ? claimed : page.url();
-		const drainFirst = (page) => {
-			const draining = (replace) => async (...args) => {
-				await drain(page);
-				return await replace(...args);
-			};
-			page.goto = draining(page.goto.bind(page));
-			page.reload = draining(page.reload.bind(page));
-			page.goBack = draining(page.goBack.bind(page));
-			page.goForward = draining(page.goForward.bind(page));
-			page.setContent = draining(page.setContent.bind(page));
+		const adopt = (page) => {
+			if (javaScriptEnabled) WATCHED.add(page);
 		};
 		context.on("response", (response) => {
 			if (ADDRESSABLE.has(response.request().resourceType())) fetched.add(response.url());
@@ -356,19 +556,19 @@ const test = test$1.extend({
 				detail: sanitized(error.message)
 			});
 		});
-		await context.exposeBinding(REPORTER, ({ frame, page }, detail) => {
-			if (frame !== page.mainFrame()) return;
+		await context.exposeBinding(REPORTER, ({ frame, page }, kind, detail) => {
+			if (frame !== page.mainFrame() || !measured(kind)) return;
 			record({
-				kind: "overflow",
+				kind,
 				at: frame.url(),
 				detail: sanitized(detail)
 			});
 		});
 		await context.addInitScript(WATCH);
-		context.on("page", drainFirst);
-		for (const open of context.pages()) drainFirst(open);
+		context.on("page", adopt);
+		for (const open of context.pages()) adopt(open);
 		await provide(context);
-		await Promise.all(context.pages().map(async (page) => await drain(page)));
+		await Promise.all(context.pages().map(async (page) => await ask(page, DRAIN)));
 		expect(violations.map(describe), "pages visited by this test broke an invariant every page holds; fix it, or name the URL in `sweepAllowlist` with the reason it is tolerated").toEqual([]);
 	}
 });

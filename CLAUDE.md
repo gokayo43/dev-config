@@ -122,12 +122,11 @@ a change to a rule usually lands here too.
   that bin imports. Each is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
-  can reach. `route-log.ts` is
-  the protocol between an app and the two floors over its route table;
-  `invariant-sweep.ts` replaces Playwright's browser context with one that
-  watches every page it opens, popups included, trusts a page for one
-  sanitised sentence and nothing else, and turns Playwright's own `video` on
-  when the run sets `E2E_VIDEO=on`; `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
+  can reach. `route-log.ts` is the protocol between an app and the two floors
+  over its route table; `invariant-sweep.ts` replaces Playwright's browser
+  context with one that watches every page it opens, popups included, and turns
+  Playwright's own `video` on when the run sets `E2E_VIDEO=on`;
+  `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
   block a repo's limiter has to pass; `response-schema.ts` grades an Elysia
   app's own route table; `characterization-net.ts` is the harness under a golden
   suite; `property.ts` is `fc.assert` with the run's budget applied — the one

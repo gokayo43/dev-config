@@ -3,11 +3,12 @@ import { PlaywrightTestArgs, PlaywrightTestOptions, PlaywrightWorkerArgs, Playwr
 /** The option a repo sets, declared so `test.use({ sweepAllowlist })` type-checks. */
 export interface InvariantSweep {
   /**
-   * URLs whose console errors, page errors and overflow this run tolerates,
-   * each against the reason it is tolerated. The key is a **regular
-   * expression** tested against the URL, and it is **unanchored** — `"/checkout"`
-   * also matches `/checkout-v2`, so write `"/checkout$"` when a page name is
-   * meant. The value is why, which is the half a reviewer reads.
+   * Violations this run tolerates, keyed on the URL each came from: the
+   * script's for a console error or a thrown error, the page's for overflow and
+   * a layout shift. Each key is against the reason it is tolerated. The key is
+   * a **regular expression** tested against that URL, and it is **unanchored**
+   * — `"/checkout"` also matches `/checkout-v2`, so write `"/checkout$"` when a
+   * page name is meant. The value is why, which is the half a reviewer reads.
    */
   sweepAllowlist: Record<string, string>;
 }
