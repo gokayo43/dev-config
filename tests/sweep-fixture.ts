@@ -39,7 +39,7 @@ function html(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>fixture</title><style>body{margin:0}</style></head><body>${body}</body></html>`;
 }
 
-/** How long the slow subresource takes, in ms — long past `load` and past two frames. */
+/** How long the slow subresources take, in ms — long past first paint and past two frames. */
 const LATE = 400;
 
 /**
@@ -65,6 +65,39 @@ const BEFORE_QUIET = 200;
 
 /** How many popups the opener writes an error into, each before Playwright has reported it. */
 export const WRITTEN = 16;
+
+/**
+ * How long after its own `load` event the late page moves, in ms: well inside
+ * the window a document goes quiet in, so the drain is still waiting when it
+ * lands.
+ */
+const LATE_SHIFT = 300;
+
+/**
+ * How long after the user acts the slow pages move, in ms: past the 500ms in
+ * which a shift is still theirs, with room for the runner's own delay in
+ * telling the page an action has returned.
+ */
+export const LONG_AFTER = 900;
+
+/**
+ * How long after its own `load` event the late form's field arrives, in ms:
+ * long after its banner has moved the content, so an action waiting for the
+ * field is waiting while the page moves.
+ */
+const LATE_FIELD = 1_200;
+
+/** One block of the height a shift is measured in, so a diagnostic's distance is a number known here. */
+const BLOCK = 60;
+
+/** A block of content below whatever moves, which is what a shift's sources name. */
+const CONTENT = `<main id="content">the content</main>`;
+
+/** A script that appends a field and a select at the foot of the page, where they move nothing. */
+const LATE_CONTROLS = `for (const [tag, id] of [["input", "field"], ["select", "pick"]]) { const c = document.createElement(tag); c.id = id; c.setAttribute("aria-label", id); if (tag === "select") c.innerHTML = "<option>a</option><option>b</option>"; document.body.append(c); }`;
+
+/** A script that adds a `BLOCK`-high element above the content. */
+const PUSH = `const b = document.createElement("div"); b.id = "banner"; b.style.height = "${BLOCK}px"; document.body.prepend(b);`;
 
 /**
  * What the fixture server answers, by path. Each page is one invariant broken
@@ -148,7 +181,8 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<div id="wide" style="width:${TOO_WIDE}px;height:10px"></div><script>document.getElementById("wide").className = String.fromCharCode(27) + "[31m" + String.fromCharCode(10) + "::error title=x::y";</script>`,
         ),
       },
-      // Overflow that arrives with the bytes of a subresource, well after load.
+      // Overflow that arrives with the bytes of a subresource, well after first
+      // paint.
       "/late-image": { type: "text/html", body: html(`<img id="slow" src="/slow.svg" alt="">`) },
       // A popup onto a page that breaks nothing, so a run that records it is
       // graded on its videos and not on a violation.
@@ -215,6 +249,95 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<button id="open">open</button><script>document.getElementById("open").addEventListener("click", () => { for (let n = 0; n < ${WRITTEN}; n++) window.open().console.error("written popup " + n + " is unhappy"); })</script>`,
         ),
       },
+      // An image with no size of its own above the content: when its bytes
+      // arrive, before the document's `load`, it takes its height and pushes
+      // the content down.
+      "/image-shift": {
+        type: "text/html",
+        body: html(`<img id="hero" src="/slow-block.svg" alt="">${CONTENT}`),
+      },
+      // A banner that arrives after the page has loaded, pushing the content
+      // down: data that came back late.
+      "/late-shift": {
+        type: "text/html",
+        body: html(
+          `${CONTENT}<a href="/clean">on</a><script>addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
+        ),
+      },
+      // Everything here moves the content when the page is acted on: a click
+      // opens a panel, typing grows a textarea, and a field that is filled or a
+      // select that is chosen shows a line above it. Each control on a line of
+      // its own: side by side, a slow renderer settling one moves the others.
+      "/acted": {
+        type: "text/html",
+        body: html(
+          `<style>button, input, select, textarea { display: block }</style><div id="panel"></div><button id="open">open</button><input id="field" aria-label="field"><select id="pick" aria-label="pick"><option>a</option><option>b</option></select><input id="file" type="file" aria-label="file"><textarea id="grow" aria-label="grow" rows="1"></textarea>${CONTENT}<script>const line = (text) => { const d = document.createElement("p"); d.textContent = text; document.getElementById("panel").append(d); }; document.getElementById("open").addEventListener("click", () => line("opened")); document.getElementById("field").addEventListener("input", () => line("filled")); document.getElementById("pick").addEventListener("change", () => line("picked")); document.getElementById("file").addEventListener("change", () => line("attached")); document.getElementById("grow").addEventListener("input", (e) => { e.target.style.height = e.target.scrollHeight + "px"; });</script>`,
+        ),
+      },
+      // The line a filled field asks for arrives after the action's half-second.
+      "/slow-fill": {
+        type: "text/html",
+        body: html(
+          `<input id="field" aria-label="field">${CONTENT}<script>document.getElementById("field").addEventListener("input", () => setTimeout(() => { ${PUSH} }, ${LONG_AFTER}))</script>`,
+        ),
+      },
+      // The page dispatches the event a filled field would, with nobody acting.
+      "/self-input": {
+        type: "text/html",
+        body: html(
+          `<input id="field" aria-label="field">${CONTENT}<script>const field = document.getElementById("field"); field.addEventListener("input", () => { ${PUSH} }); addEventListener("load", () => setTimeout(() => field.dispatchEvent(new Event("input", { bubbles: true })), ${LATE_SHIFT}))</script>`,
+        ),
+      },
+      // Replaces the sweep's reporter with one that drops everything, then
+      // overflows.
+      "/rebinds": {
+        type: "text/html",
+        body: html(
+          `<script>window.__invariantSweep = () => {};</script><div id="wide" style="width:${TOO_WIDE}px;height:10px"></div>`,
+        ),
+      },
+      // A field there from the start, a banner that moves the content well
+      // after a fill of that field has returned, and a second field arriving
+      // after the banner.
+      "/late-form": {
+        type: "text/html",
+        body: html(
+          `<input id="now" aria-label="now">${CONTENT}<script>addEventListener("load", () => { setTimeout(() => { ${PUSH} }, ${LONG_AFTER}); setTimeout(() => { ${LATE_CONTROLS} }, ${LATE_FIELD}); })</script>`,
+        ),
+      },
+      // The page dispatches an `input` event of its own and moves its content,
+      // and the field and the select a spec acts on arrive long after.
+      "/self-input-wait": {
+        type: "text/html",
+        body: html(
+          `<input id="other" aria-label="other">${CONTENT}<script>addEventListener("load", () => { setTimeout(() => { document.getElementById("other").dispatchEvent(new Event("input", { bubbles: true })); ${PUSH} }, ${LATE_SHIFT}); setTimeout(() => { ${LATE_CONTROLS} }, ${LATE_FIELD}); })</script>`,
+        ),
+      },
+      // The click asks for a panel that arrives after the user's half-second is
+      // over, which is the page moving on its own.
+      "/slow-panel": {
+        type: "text/html",
+        body: html(
+          `<button id="open">open</button>${CONTENT}<script>document.getElementById("open").addEventListener("click", () => setTimeout(() => { ${PUSH} }, ${LONG_AFTER}))</script>`,
+        ),
+      },
+      // Three elements below a late banner, each with more class names than a
+      // diagnostic carries and every one of them long.
+      "/long-names-shift": {
+        type: "text/html",
+        body: html(
+          `${["one", "two", "three"].map((n) => `<div id="moved-${n}" class="${["display", "spacing", "colour", "border"].map((what) => `${what}-utility-class-name-from-a-long-design-system-${n}`).join(" ")}">${n}</div>`).join("")}<script>addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
+        ),
+      },
+      // A third-party embed that asks its host for more room once it has loaded
+      // what it shows, the way an oEmbed widget does, and pushes the host's
+      // content down when it gets it.
+      "/shifting-embed": {
+        type: "text/html",
+        body: html(
+          `<iframe id="widget" src="${embed}/resizing.html" style="display:block;border:0;width:300px;height:20px"></iframe>${CONTENT}<script>addEventListener("message", (event) => { if (event.origin === ${JSON.stringify(embed)}) document.getElementById("widget").style.height = event.data + "px"; })</script>`,
+        ),
+      },
     }),
   );
 }
@@ -242,6 +365,14 @@ function embedding(): { origin: string; stop: () => Promise<void> } {
         return new Response(html(`<script>${forged}</script>`), {
           headers: { "content-type": "text/html" },
         });
+      }
+      if (path === "/resizing.html") {
+        return new Response(
+          html(
+            `<script>addEventListener("load", () => setTimeout(() => parent.postMessage(${20 + BLOCK}, "*"), ${LATE_SHIFT}))</script>`,
+          ),
+          { headers: { "content-type": "text/html" } },
+        );
       }
       if (path === "/throws.html") {
         return new Response(html(`<script>window.nothing.atAll()</script>`), {
@@ -273,8 +404,22 @@ export function serving(): Serving {
     hostname: "127.0.0.1",
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (path === "/sandboxed") {
+        // A policy that sandboxes the document without allowing scripts.
+        return new Response(html(`<p>nothing runs here</p>`), {
+          headers: { "content-type": "text/html", "content-security-policy": "sandbox" },
+        });
+      }
+      if (path === "/slow-block.svg") {
+        // An image whose height arrives with its bytes, after first paint.
+        await Bun.sleep(LATE);
+        return new Response(
+          `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="${BLOCK}"><rect width="100%" height="100%" fill="#333"/></svg>`,
+          { headers: { "content-type": "image/svg+xml" } },
+        );
+      }
       if (path === "/slow.svg") {
-        // Bytes that arrive long after `load`, carrying the width with them.
+        // Bytes that arrive long after first paint, carrying the width with them.
         await Bun.sleep(LATE);
         return new Response(
           `<svg xmlns="http://www.w3.org/2000/svg" width="${TOO_WIDE}" height="10"><rect width="100%" height="100%" fill="#333"/></svg>`,
@@ -302,6 +447,8 @@ export interface Outcome {
   readonly said: string;
   /** How long the case took, in ms, which is the only place a drain's cost is visible. */
   readonly took: number;
+  /** Whether each run of the case passed, one entry per repetition the run asked for. */
+  readonly verdicts: readonly boolean[];
   /** Every video the case left under the run's output directory. */
   readonly videos: readonly Video[];
 }
@@ -392,17 +539,23 @@ function tookBy(spec: ConfigObject): number {
   return Math.max(0, ...spent);
 }
 
+/** Whether each repetition of one spec came out as expected, which is how the reporter says it passed. */
+function verdictsOf(spec: ConfigObject): boolean[] {
+  return listAt(spec, "tests").map((each) => each["status"] === "expected");
+}
+
 /** The options a config's `use` block or a spec's `test.use` may set. */
 export type Use = Partial<PlaywrightTestOptions & PlaywrightWorkerOptions & InvariantSweep>;
 
-/** The fixture's config, with whatever a case adds to its `use` block. */
-function configWith(use: Use): string {
+/** The fixture's config, with whatever a case adds to its `use` block, run `repeatEach` times. */
+function configWith(use: Use, repeatEach: number): string {
   return `import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: ".",
   testMatch: "*.spec.ts",
   workers: 4,
+  repeatEach: ${repeatEach},
   use: {
     baseURL: process.env.SWEEP_ORIGIN,
     viewport: { width: ${VIEWPORT.width}, height: ${VIEWPORT.height} },
@@ -412,10 +565,14 @@ export default defineConfig({
 `;
 }
 
-/** What a run sets beyond the specs: variables for its environment, and options for the config's `use`. */
+/**
+ * What a run sets beyond the specs: variables for its environment, options for
+ * the config's `use`, and how many times each spec runs.
+ */
 interface Run {
   readonly env?: Readonly<Record<string, string>>;
   readonly use?: Use;
+  readonly repeatEach?: number;
 }
 
 /**
@@ -517,7 +674,10 @@ export async function sweeping(
   specs: Readonly<Record<string, string>>,
   run: Run = {},
 ): Promise<Map<string, Outcome>> {
-  const root = await materialise({ "playwright.config.ts": configWith(run.use ?? {}), ...specs });
+  const root = await materialise({
+    "playwright.config.ts": configWith(run.use ?? {}, run.repeatEach ?? 1),
+    ...specs,
+  });
   await install(root);
   const output = join(root, "results");
   const { E2E_VIDEO: _left, ...inherited } = plainly(Bun.env);
@@ -534,6 +694,7 @@ export async function sweeping(
       ok: spec["ok"] === true,
       said: saidBy(spec),
       took: tookBy(spec),
+      verdicts: verdictsOf(spec),
       videos: await videosOf(spec, output),
     });
   }

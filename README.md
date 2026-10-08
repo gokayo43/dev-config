@@ -60,7 +60,7 @@ through `files` and `exports`, and each has a page of its own:
 | Export                                                         | Imported by                    | What it holds                                                                                                         |
 | -------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | [`route-log`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the two floors over its route table                                                   |
-| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error or sideways scroll, on every page of the test's context                                              |
+| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error, thrown error, overflow or unprompted shift on its pages                                             |
 | [`count-budget`](docs/exports/count-budget.md)                 | the Playwright specs of a job  | a job's commits, DOM mutations, requests and bytes per phase, held exactly to ceilings the write command never raises |
 | [`limiter-conformance`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                                                                   |
 | [`property`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further                                              |
@@ -1224,8 +1224,8 @@ and Docker's forwarding rule answers it on the box's public address whatever
 The invariant sweep's suite and the count budget's browser suite drive a real
 browser against a real server, because what those fixtures claim is a browser
 fact. The count budget's ceiling rule is not, and its properties run without a
-browser.
-They need Playwright's chromium, which CI installs and a machine gets with:
+browser. Both need Playwright's chromium, which CI installs and a machine gets
+with:
 
 ```sh
 bunx playwright install chromium-headless-shell
