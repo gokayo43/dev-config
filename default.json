@@ -1,10 +1,18 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Dependency policy shared by gokayo43's Bun projects.",
+  "description": [
+    "Dependency policy shared by gokayo43's Bun projects.",
+    "minimumReleaseAge follows the slowest consumer's bunfig.toml, because a PR holding a version that repo's own window refuses fails its install. It moves to 3 days once every consumer's bunfig.toml holds releases for 3 days or less."
+  ],
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "schedule": ["* 0-6 * * 1"],
   "timezone": "Europe/Amsterdam",
   "minimumReleaseAge": "7 days",
+  "vulnerabilityAlerts": { "enabled": true },
+  "osvVulnerabilityAlerts": true,
+  "prBodyNotes": [
+    "{{#if isVulnerabilityAlert}}This security fix skips the release-age wait, so `bun install` may refuse the fixed version as too new; [Vulnerability fixes](https://github.com/gokayo43/dev-config#vulnerability-fixes) has the steps that land it.{{/if}}"
+  ],
   "internalChecksFilter": "strict",
   "rangeStrategy": "pin",
   "dependencyDashboard": true,
@@ -27,8 +35,13 @@
       "automerge": false
     },
     {
-      "description": "This repo's own pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody.",
-      "matchPackageNames": ["gokayo43/dev-config"],
+      "description": "This organisation's own releases skip the wait: the window holds back a stranger's compromised release, and these are ours. bun's window never holds them, since they install from git.",
+      "matchPackageNames": ["gokayo43/*"],
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "dev-config's and dev-config-db's pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody.",
+      "matchPackageNames": ["gokayo43/dev-config", "gokayo43/dev-config-db"],
       "automerge": false
     },
     {

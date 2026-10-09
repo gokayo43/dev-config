@@ -520,6 +520,11 @@ jobs:
     # installs. A fixed host port is also single-occupancy: two runners' jobs
     # overlapping is the ordinary case here, and the second to start dies with
     # "port is already allocated". The assigned port is read back below.
+    #
+    # Each `--tmpfs` covers the data directory its image declares a volume, which
+    # lint-workflows asks for (README, "Where it runs"). The caps are measured:
+    # the largest Postgres data directory a job here had left on the runner box
+    # was 201 MB, and the largest Redis one, its snapshot, under 1 MB.
     services:
       postgres:
         image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
@@ -532,6 +537,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
+          --tmpfs /var/lib/postgresql/data:size=1g
       redis:
         image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
         ports:
@@ -541,6 +547,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
+          --tmpfs /data:size=64m
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

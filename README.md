@@ -1078,9 +1078,11 @@ line:
 }
 ```
 
-The preset runs weekly, holds every release for 7 days, groups patch, minor, pin
-and digest updates into one automerging PR, opens majors as plain PRs to read,
-keeps lockfile maintenance on, and pins GitHub Action digests.
+The preset runs weekly, holds every release but this organisation's own for the
+release-age window, opens a vulnerability fix at once
+([Version policy](#version-policy) has both), groups patch, minor, pin and
+digest updates into one automerging PR, opens majors as plain PRs to read, keeps
+lockfile maintenance on, and pins GitHub Action digests.
 
 Two families move as a unit rather than as packages. Every `expo*`,
 `@expo/*` and `react-native*` pin belongs to one Expo SDK release, and a partial
@@ -1260,6 +1262,10 @@ that reads every `uses:` in the workflows, in the composite actions, and in
 tag is a name its owner can repoint at any commit, including after the version
 was read here. Only a local `./…` reference is skipped, because it is this
 repo's own tree at this commit and has no ref to pin.
+
+The same step holds every service to a capped tmpfs over each path its image
+declares a volume at, for the reason "Where it runs" gives. It asks the runner's
+Docker for those paths, pulling the image first if the runner does not hold it.
 
 The images a job runs are read the same way: a `docker://` action, a job's
 `container:` in either spelling, every `services.*.image`, and the `runs.image`
@@ -1456,7 +1462,7 @@ or its jobs queue until one appears** — there is no timeout on a queued job, s
 the symptom is a run that never starts rather than one that fails. dev-config#88
 is where the move is argued.
 
-Three things follow from the runner being a shared, persistent machine rather
+Four things follow from the runner being a shared, persistent machine rather
 than a fresh cloud VM, and they are why the workflows look the way they do:
 
 - **Service containers publish on `127.0.0.1` and on a port the daemon picks**
@@ -1474,6 +1480,18 @@ than a fresh cloud VM, and they are why the workflows look the way they do:
   `health-url` set explicitly.
 - **The workspace is not discarded when the run ends.** What cleans it is
   `actions/checkout` at the start of the next run.
+- **A service's data directory is a capped tmpfs**
+  (`options: --tmpfs /var/lib/postgresql/data:size=1g`), over each path its
+  image declares a `VOLUME`. Otherwise Docker gives each such path an
+  anonymous volume, and the runner removes the service container after the
+  last step without `-v`, while Docker refuses to remove a volume whose
+  container still exists, so no step can either: every run leaves its volumes
+  on the box's disk. The tmpfs holds the run's data in memory, or swap, up to
+  its cap until the container goes, charged to the container rather than to the
+  runner's slice, so the cap is what stops a runaway run taking the live sites'
+  memory; a run that outgrows it fails on a full disk. `lint-workflows` refuses
+  a service without one, reading the declared paths from the image the
+  workflow pins, so a new major that moves its data directory is caught there.
 
 The Lighthouse example under "Static sites" deliberately stays on
 `ubuntu-latest`: its numbers are the assertion, and a box that is also serving
@@ -2025,13 +2043,13 @@ copies the file and changes `staticDistDir`.
 
 ## Version policy
 
-Dependencies are pinned exactly — no ranges, no carets — and a version is only
-adopted once it has been on npm for at least seven days. Both halves are enforced
-by `bunfig.toml` in the consuming repos, and again by the Renovate preset:
+Dependencies are pinned exactly, with no ranges and no carets, and a version
+published to npm is adopted only once it is at least 3 days old. `bunfig.toml`
+in each consuming repo enforces both halves:
 
 ```toml
 [install]
-minimumReleaseAge = 604800 # 7 days, in seconds
+minimumReleaseAge = 259200 # 3 days, in seconds
 exact = true
 ```
 
@@ -2044,6 +2062,47 @@ does. Probed as a matched pair on both ends of the range this fleet runs, with
 grades the key bun actually reads.
 
 A package published minutes ago cannot be installed, so a compromised release
-that is detected and yanked within hours never reaches a lockfile. Upgrades take
-the newest version that clears the window, which is why this repo's baseline is
-TypeScript 7.0.x rather than a `7.1.0-dev` build.
+that is detected and yanked within hours never reaches a lockfile. Three days
+outlasts those hours, and a longer window would hold every security fix longer
+too. Upgrades take the newest version that clears the window.
+
+The window is moving from 7 days to 3, and its two holders move in order. Each
+repo's `bunfig.toml` moves first, in the change that next moves its dev-config
+pin: the [repo contract](docs/gates/repo-contract.md) holds a bunfig to at
+least 3 days and passes a longer one, so a repo still on 7 days fails nothing.
+The Renovate preset follows the slowest of them, because a Renovate PR holding
+a version its repo's own window refuses fails `bun install` and never
+automerges, so it stays at 7 days for now. The preset moves to 3 days, last,
+once every consumer's `bunfig.toml` holds releases for 3 days or less.
+
+The window reads npm publish times, so it never holds a git dependency (probed,
+bun 1.4.0: a commit hours old installs under a ten-year window). Every package
+this organisation publishes is installed from git, as
+`github:gokayo43/dev-config#<sha>` is, so `minimumReleaseAgeExcludes` names
+none of them. The preset's window does reach them, through the dates of their
+GitHub tags, and the preset exempts everything under `gokayo43/` from it: the
+window guards against a stranger's compromised release, and these are ours.
+
+### Vulnerability fixes
+
+A vulnerability fix arrives as a Renovate PR as soon as there is an advisory
+for it, outside the weekly schedule and without the preset's wait. The preset
+reads two sources, and in a bun repo both reach direct dependencies only: OSV's
+by Renovate's design, and GitHub's because Renovate's bun manager reads only
+`package.json`, so an advisory against a transitive dependency has nothing to
+update. GitHub's advisories also reach Renovate only in a repo with Dependabot
+alerts turned on. A fix to a transitive dependency arrives through the weekly
+lockfile maintenance instead, once the fixed version clears the repo's window.
+
+The repo's `bunfig.toml` can still refuse the fixed version, and the PR's body
+links here for that case. When `bun install` on the PR's branch refuses a
+version as too new, add each package it refuses to `minimumReleaseAgeExcludes`,
+rerun until the install passes, then take the names off again and commit
+`bun.lock`. The lockfile keeps those versions and `bun install
+--frozen-lockfile` does not re-check them, so the exclusion lasts one bump and
+leaves no standing exemption behind. Until the fixed version clears the window,
+anything that resolves it afresh, lockfile maintenance included, refuses it
+again. Name each package exactly: bun ignores a scope pattern such as
+`"@types/*"`, and an exclusion does not reach the package's own dependencies,
+so a dependency the fix moves to a new version needs its own entry (both
+probed, bun 1.4.0).

@@ -1,9 +1,12 @@
 name: Lint workflows
 description: >-
   Runs actionlint over the calling repository's workflows, with shellcheck over
-  every run: block, and holds every `uses:` to a commit SHA. actionlint finds
+  every run: block, holds every `uses:` to a commit SHA, and holds every service
+  to a capped tmpfs over each volume its image declares. actionlint finds
   `.github/workflows` itself; extra-paths is for workflow files kept elsewhere.
-  The pin check parses the YAML, so the caller sets Bun up first.
+  The second step parses the YAML, so the caller sets Bun up first, and it asks
+  Docker for each service image's volumes, so a repo declaring services lints
+  on a runner with Docker.
 
 inputs:
   extra-paths:
@@ -41,7 +44,9 @@ runs:
 
     # actionlint is silent on a floating tag, and a tag is a name its owner can
     # repoint at any commit — including after the version was reviewed here.
-    - name: Pin every action by commit SHA
+    # It is as silent on a service's declared volume, which a persistent runner
+    # keeps after every run.
+    - name: Pin every action by commit SHA, and keep service volumes in tmpfs
       shell: bash
       env:
         INPUT_EXTRA_PATHS: ${{ inputs.extra-paths }}

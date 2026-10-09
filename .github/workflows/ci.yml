@@ -49,6 +49,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
+          --tmpfs /var/lib/postgresql/data:size=1g
 
       # The limiter conformance suite grades a bucket two processes share and a
       # limiter whose Redis is gone, neither of which anything in-process can
@@ -64,6 +65,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
+          --tmpfs /data:size=64m
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
