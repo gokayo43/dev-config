@@ -15,10 +15,11 @@ test("the pricing page loads", async ({ page }) => {
 });
 ```
 
-No export here carries an extension. This one and [the route log](route-log.md)
-resolve to built JavaScript under `dist/`, because the runner that imports them
-is node — `tsdown.config.ts` in the package carries why, and STACK.md's shared
-UI library carries the bargain a committed `dist/` is.
+No export here carries an extension. This one, [the route log](route-log.md) and
+[the count budget](count-budget.md) resolve to built JavaScript under `dist/`,
+because the runner that imports them is node — `tsdown.config.ts` in the package
+carries why, and STACK.md's shared UI library carries the bargain a committed
+`dist/` is.
 
 Four invariants, on every page the test visits in its context:
 

@@ -488,7 +488,7 @@ async function videoAt(path: string): Promise<Video> {
  * every gate here reads one: through `_lib`'s boundary readers, which answer
  * "not that shape" rather than asserting it was.
  */
-function listAt(node: ConfigObject, name: string): ConfigObject[] {
+export function listAt(node: ConfigObject, name: string): ConfigObject[] {
   const held = node[name];
   return isList(held) ? held.map(record) : [];
 }
@@ -499,7 +499,7 @@ function specsIn(node: ConfigObject): ConfigObject[] {
 }
 
 /** Every result the reporter wrote for one spec, however many retries there were. */
-function resultsOf(spec: ConfigObject): ConfigObject[] {
+export function resultsOf(spec: ConfigObject): ConfigObject[] {
   return listAt(spec, "tests").flatMap((each) => listAt(each, "results"));
 }
 
@@ -588,7 +588,7 @@ interface Run {
  * What is copied is what the manifest ships, so the fixture installs the package
  * as published rather than a list kept in step with `files` by hand.
  */
-async function install(root: string): Promise<void> {
+export async function install(root: string): Promise<void> {
   const modules = join(root, "node_modules");
   const installed = join(HERE, "node_modules");
   const manifest = record(await Bun.file(join(HERE, "package.json")).json());
@@ -622,6 +622,45 @@ async function install(root: string): Promise<void> {
 }
 
 /**
+ * One Playwright run over a fixture tree, as its JSON reporter tells it: every
+ * spec the run collected.
+ *
+ * A run that collected no spec at all is the fixture having failed, not a case
+ * having come out badly — a spec whose imports do not load is reported here
+ * and nowhere else, and reading it as "every case is missing" would hide the
+ * one message that says why — so that throws with what the runner said.
+ */
+export async function playwrightRun(
+  root: string,
+  args: readonly string[],
+  env: Readonly<Record<string, string>>,
+): Promise<ConfigObject[]> {
+  const proc = Bun.spawn(
+    [join(root, "node_modules", ".bin", "playwright"), "test", "--reporter=json", ...args],
+    { cwd: root, env, stdout: "pipe", stderr: "pipe" },
+  );
+  const [out, err] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  await proc.exited;
+  let report: unknown;
+  try {
+    report = JSON.parse(out);
+  } catch {
+    throw new Error(`the Playwright run wrote no report:\n${out}\n${err}`);
+  }
+  const specs = specsIn(record(report));
+  if (specs.length === 0) {
+    const refused = listAt(record(report), "errors")
+      .map((error) => (typeof error["message"] === "string" ? error["message"] : ""))
+      .join("\n");
+    throw new Error(`the Playwright run collected no spec:\n${refused}`);
+  }
+  return specs;
+}
+
+/**
  * Runs every spec given, and reports how each came out by its title. One
  * Playwright process for all of them: starting the runner costs more than the
  * cases do, and nothing here depends on a case running alone.
@@ -643,36 +682,13 @@ export async function sweeping(
   const output = join(root, "results");
   const { E2E_VIDEO: _left, ...inherited } = plainly(Bun.env);
 
-  const proc = Bun.spawn(
-    [
-      join(root, "node_modules", ".bin", "playwright"),
-      "test",
-      "--reporter=json",
-      "--output",
-      output,
-    ],
-    {
-      cwd: root,
-      env: { ...inherited, SWEEP_ORIGIN: origin, ...run.env },
-      stdout: "pipe",
-      stderr: "pipe",
-    },
-  );
-  const [out, err] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  await proc.exited;
-
-  let report: unknown;
-  try {
-    report = JSON.parse(out);
-  } catch {
-    throw new Error(`the Playwright run wrote no report:\n${out}\n${err}`);
-  }
-
+  const collected = await playwrightRun(root, ["--output", output], {
+    ...inherited,
+    SWEEP_ORIGIN: origin,
+    ...run.env,
+  });
   const outcomes = new Map<string, Outcome>();
-  for (const spec of specsIn(record(report))) {
+  for (const spec of collected) {
     const title = spec["title"];
     outcomes.set(typeof title === "string" ? title : "", {
       ok: spec["ok"] === true,
@@ -681,16 +697,6 @@ export async function sweeping(
       verdicts: verdictsOf(spec),
       videos: await videosOf(spec, output),
     });
-  }
-  // A run that collected no spec at all is the fixture having failed, not a case
-  // having come out badly — a spec whose imports do not load is reported here
-  // and nowhere else, and reading it as "every case is missing" would hide the
-  // one message that says why.
-  if (outcomes.size === 0) {
-    const refused = listAt(record(report), "errors")
-      .map((error) => (typeof error["message"] === "string" ? error["message"] : ""))
-      .join("\n");
-    throw new Error(`the Playwright run collected no spec:\n${refused}`);
   }
   return outcomes;
 }

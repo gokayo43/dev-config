@@ -30,31 +30,20 @@
  * is a thing that works.
  */
 import { existsSync } from "node:fs";
-import {
-  chmod,
-  link,
-  mkdir,
-  open,
-  readdir,
-  readFile,
-  realpath,
-  rename,
-  rm,
-} from "node:fs/promises";
+import { chmod, mkdir, open, readdir, readFile, realpath, rename, rm } from "node:fs/promises";
 import { networkInterfaces } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import {
   basePort,
   freePort,
-  type Holder,
   type Identity,
   inBlock,
-  isHolder,
   isServer,
   recordStem,
   type Server,
 } from "./dev-server-derive.ts";
+import { bootId, type Holder, lock, ours, procStat } from "./file-lock.ts";
 
 /** The only interface a server here is asked to bind, and the one `up` proves it kept to. */
 const LOOPBACK = "127.0.0.1";
@@ -236,56 +225,6 @@ async function answers(host: string, port: number): Promise<boolean> {
   }
 }
 
-/** This machine's boot. Every pid this tool wrote down belongs to exactly one of these. */
-async function bootId(): Promise<string> {
-  return (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
-}
-
-/**
- * What `/proc` says about a running process, or nothing when it is not there.
- *
- * Read from after the LAST `)`, because field 2 is the executable name, is not
- * escaped, and may contain both spaces and parentheses. What is wanted after
- * that is field 5, the process group, and field 22, the tick this process
- * started on.
- */
-async function procStat(
-  pid: number,
-): Promise<{ startTicks: number; leadsItsGroup: boolean } | null> {
-  let raw: string;
-  try {
-    raw = await readFile(`/proc/${pid}/stat`, "utf8");
-  } catch {
-    // No such process, which is the answer being asked for.
-    return null;
-  }
-  const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
-  const group = Number(fields[2]);
-  const startTicks = Number(fields[19]);
-  if (!Number.isInteger(group) || !Number.isInteger(startTicks)) {
-    throw new Error(
-      `/proc/${pid}/stat is not the shape this reads — fields 5 and 22 are not numbers`,
-    );
-  }
-  return { startTicks, leadsItsGroup: group === pid };
-}
-
-/**
- * Whether a pid a file names is still the process that wrote the file down, or
- * nothing. A pid is reused, and a reboot recycles every one of them at once, so
- * a file carried across either names somebody else — which for a record is a
- * `kill` aimed at a stranger and for a lock is a worktree nobody can start.
- *
- * Answers with what `/proc` said rather than a boolean, because the one caller
- * that goes on to signal has a second question to ask of it and no reason to
- * read the same file twice.
- */
-async function ours(who: Holder, boot: string): Promise<{ leadsItsGroup: boolean } | null> {
-  if (who.bootId !== boot) return null;
-  const stat = await procStat(who.pid);
-  return stat !== null && stat.startTicks === who.startTicks ? stat : null;
-}
-
 async function stillOurs(who: Holder, boot: string): Promise<boolean> {
   return (await ours(who, boot)) !== null;
 }
@@ -377,62 +316,9 @@ function tail(text: string, lines: number): string {
  * concurrent pairs left four servers running that no record named, which nothing
  * can stop and which push every later `up` one port along — past the refusal
  * that is supposed to be the answer to a port that is taken.
- *
- * A lock whose holder is gone is taken: the same three questions `stillOurs`
- * asks of a server, asked of whoever wrote the lock, so a run killed mid-`up`
- * costs the next one nothing.
  */
-async function lock(state: string, stem: string, boot: string): Promise<AsyncDisposable> {
-  const path = join(state, `${stem}.lock`);
-  const mine = await procStat(process.pid);
-  if (mine === null) throw new Error(`/proc/${process.pid} is not readable — this needs Linux`);
-  // Written whole, then LINKED into place. `open` with O_EXCL would make the
-  // file exist before its contents do, and the loser reads it in that gap: an
-  // empty lock parses as nobody, reads as stale, and gets stolen — which is no
-  // lock at all, measured. `link` publishes a complete file or fails.
-  const temporary = `${path}.${process.pid}.tmp`;
-  await Bun.write(
-    temporary,
-    `${JSON.stringify({ pid: process.pid, bootId: boot, startTicks: mine.startTicks })}\n`,
-  );
-  await chmod(temporary, FILE_MODE);
-  try {
-    for (let waited = 0; waited <= LOCK_TIMEOUT_MS; waited += POLL_MS) {
-      try {
-        await link(temporary, path);
-        return {
-          async [Symbol.asyncDispose](): Promise<void> {
-            await rm(path, { force: true });
-          },
-        };
-      } catch (error) {
-        if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
-      }
-      if (await isStale(path, boot)) {
-        await rm(path, { force: true });
-        continue;
-      }
-      await Bun.sleep(POLL_MS);
-    }
-  } finally {
-    await rm(temporary, { force: true });
-  }
-  throw new Error(
-    `another \`dev-server up\` has been working in this worktree for ${LOCK_TIMEOUT_MS}ms (${path}) — wait for it, or delete that file if nothing is`,
-  );
-}
-
-async function isStale(path: string, boot: string): Promise<boolean> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(path, "utf8"));
-  } catch {
-    // Gone between the failed create and this read, or never whole. Either way
-    // nobody can prove a holder it does not name, and a lock nothing can release
-    // is a worktree nobody can start again.
-    return true;
-  }
-  return !isHolder(parsed) || !(await stillOurs(parsed, boot));
+function lockPath(state: string, stem: string): string {
+  return join(state, `${stem}.lock`);
 }
 
 /**
@@ -527,7 +413,7 @@ async function up(here: Checkout): Promise<void> {
   const boot = await bootId();
   await mkdir(here.state, { recursive: true, mode: STATE_MODE });
   await chmod(here.state, STATE_MODE);
-  await using guard = await lock(here.state, here.stem, boot);
+  await using guard = await lock(lockPath(here.state, here.stem), LOCK_TIMEOUT_MS);
   void guard;
   const existing = await serverHere(here);
   if (existing !== null && (await stillOurs(existing, boot))) {

@@ -1,6 +1,6 @@
 {
   "name": "@gokayo43/dev-config",
-  "version": "0.65.0",
+  "version": "0.66.0",
   "description": "Shared TypeScript, oxlint, oxfmt, knip, Renovate and Lighthouse configuration for Bun projects.",
   "license": "MIT",
   "repository": {
@@ -19,6 +19,7 @@
     "dist",
     "dev-server.ts",
     "dev-server-derive.ts",
+    "file-lock.ts",
     "limiter-conformance.ts",
     "property.ts",
     "interleaving.ts",
@@ -40,6 +41,10 @@
     "./invariant-sweep": {
       "types": "./dist/invariant-sweep.d.ts",
       "default": "./dist/invariant-sweep.js"
+    },
+    "./count-budget": {
+      "types": "./dist/count-budget.d.ts",
+      "default": "./dist/count-budget.js"
     },
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
@@ -75,6 +80,8 @@
     "oxfmt": "0.63.0",
     "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2001",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
     "tailwindcss": "4.3.3",
     "tsdown": "0.23.0",
     "typescript": "7.0.2"
