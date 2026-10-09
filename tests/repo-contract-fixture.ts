@@ -45,7 +45,9 @@ const MANIFEST: PackageJson = {
 
 const THRESHOLD = "{ lines = 0.75, functions = 0.75 }";
 
-const BUNFIG = `[install]\nminimumReleaseAge = 604800\nexact = true\n\n[test]\ncoverageThreshold = ${THRESHOLD}\n`;
+const WINDOW = "minimumReleaseAge = 259200\n";
+
+const BUNFIG = `[install]\n${WINDOW}exact = true\n\n[test]\ncoverageThreshold = ${THRESHOLD}\n`;
 
 export const CLEAN: Tree = {
   "package.json": JSON.stringify(MANIFEST),
@@ -169,6 +171,11 @@ export function withoutReasonFor(text: string, rule: string, under = ""): string
   while (first > 0 && (lines[first - 1] ?? "").trim().startsWith("//")) first -= 1;
   lines.splice(first, at - first);
   return lines.join("\n");
+}
+
+/** The clean tree with other release-age lines in place of its 3-day window. */
+export function withReleaseAge(lines: string): Tree {
+  return { ...CLEAN, "bunfig.toml": BUNFIG.replace(WINDOW, lines) };
 }
 
 /** The clean tree with a different coverage floor written into its bunfig. */

@@ -4,7 +4,12 @@
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "schedule": ["* 0-6 * * 1"],
   "timezone": "Europe/Amsterdam",
-  "minimumReleaseAge": "7 days",
+  "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": { "enabled": true },
+  "osvVulnerabilityAlerts": true,
+  "prBodyNotes": [
+    "{{#if isVulnerabilityAlert}}This security fix skips the preset's schedule and release-age wait, but the repo's `minimumReleaseAge` in `bunfig.toml` may still refuse it. If `bun install` on this branch refuses a version as too new, add each package it refuses to `minimumReleaseAgeExcludes`, run `bun install` until it passes, then take the names off again and commit `bun.lock`: the lockfile keeps the versions, and a frozen install does not re-check them.{{/if}}"
+  ],
   "internalChecksFilter": "strict",
   "rangeStrategy": "pin",
   "dependencyDashboard": true,
@@ -25,6 +30,11 @@
       "description": "Majors are read before they are merged.",
       "matchUpdateTypes": ["major"],
       "automerge": false
+    },
+    {
+      "description": "This organisation's own releases skip the wait: the window holds back a stranger's compromised release, and these are ours. bun's window never holds them, since they install from git.",
+      "matchPackageNames": ["gokayo43/*"],
+      "minimumReleaseAge": null
     },
     {
       "description": "This repo's own pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody.",

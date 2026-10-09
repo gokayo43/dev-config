@@ -483,6 +483,27 @@ function floorsCoverage(threshold: unknown): boolean {
   );
 }
 
+/** The fleet's release-age window in seconds; a repo may hold releases longer, never shorter. */
+const MINIMUM_RELEASE_AGE = 259_200;
+
+/**
+ * A whole package name, scoped or not: the only form bun matches an exclusion
+ * against (probed, bun 1.4.0: under `"@types/*"`, `"@types/"` and `"@types"`
+ * alike, `@types/bun` stays held).
+ */
+const PACKAGE_NAME = /^(@[\w.~-]+\/)?[\w.~-]+$/;
+
+function checkReleaseAgeExcludes(excludes: unknown): Problem[] {
+  // Anything but a list bun refuses itself at every install (probed, bun
+  // 1.4.0: "Expected array for minimumReleaseAgeExcludes").
+  return (isList(excludes) ? excludes : [])
+    .filter((entry) => typeof entry !== "string" || !PACKAGE_NAME.test(entry))
+    .map((entry) => ({
+      file: "bunfig.toml",
+      message: `[install] minimumReleaseAgeExcludes lists ${JSON.stringify(entry)}, which exempts nothing: bun matches each entry against a whole package name, so name every package exactly`,
+    }));
+}
+
 async function checkBunfig(root: string): Promise<Problem[]> {
   // The same read every other config here gets, in the dialect this one is
   // written in. `Bun.TOML.parse` throws on a malformed file, and a bare throw
@@ -497,13 +518,13 @@ async function checkBunfig(root: string): Promise<Problem[]> {
   const problems: Problem[] = [];
 
   const minimumReleaseAge = install["minimumReleaseAge"];
-  if (typeof minimumReleaseAge !== "number" || minimumReleaseAge <= 0) {
+  if (typeof minimumReleaseAge !== "number" || minimumReleaseAge < MINIMUM_RELEASE_AGE) {
     problems.push({
       file: "bunfig.toml",
-      message:
-        "[install] minimumReleaseAge must hold new releases — a package published minutes ago must not be installable",
+      message: `[install] minimumReleaseAge must hold new releases for at least 3 days (${MINIMUM_RELEASE_AGE} seconds), so a compromised release pulled within that time never reaches the lockfile`,
     });
   }
+  problems.push(...checkReleaseAgeExcludes(install["minimumReleaseAgeExcludes"]));
   // `exact`, and not `saveExact`, because `saveExact` is a key bun does not
   // read. Probed as a matched pair on both ends of the range this fleet runs —
   // `bun add lodash` under each key alone, HOME neutralised so no user bunfig

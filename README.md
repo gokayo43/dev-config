@@ -1077,9 +1077,11 @@ line:
 }
 ```
 
-The preset runs weekly, holds every release for 7 days, groups patch, minor, pin
-and digest updates into one automerging PR, opens majors as plain PRs to read,
-keeps lockfile maintenance on, and pins GitHub Action digests.
+The preset runs weekly, holds every release but this organisation's own for 3
+days, opens a vulnerability fix at once ([Version policy](#version-policy) has
+both), groups patch, minor, pin and digest updates into one automerging PR,
+opens majors as plain PRs to read, keeps lockfile maintenance on, and pins
+GitHub Action digests.
 
 Two families move as a unit rather than as packages. Every `expo*`,
 `@expo/*` and `react-native*` pin belongs to one Expo SDK release, and a partial
@@ -2022,13 +2024,14 @@ copies the file and changes `staticDistDir`.
 
 ## Version policy
 
-Dependencies are pinned exactly — no ranges, no carets — and a version is only
-adopted once it has been on npm for at least seven days. Both halves are enforced
-by `bunfig.toml` in the consuming repos, and again by the Renovate preset:
+Dependencies are pinned exactly, with no ranges and no carets, and a version
+published to npm is adopted only once it is at least 3 days old. `bunfig.toml`
+in each consuming repo enforces both halves, and the Renovate preset holds its
+updates to the same window:
 
 ```toml
 [install]
-minimumReleaseAge = 604800 # 7 days, in seconds
+minimumReleaseAge = 259200 # 3 days, in seconds
 exact = true
 ```
 
@@ -2041,6 +2044,32 @@ does. Probed as a matched pair on both ends of the range this fleet runs, with
 grades the key bun actually reads.
 
 A package published minutes ago cannot be installed, so a compromised release
-that is detected and yanked within hours never reaches a lockfile. Upgrades take
-the newest version that clears the window, which is why this repo's baseline is
-TypeScript 7.0.x rather than a `7.1.0-dev` build.
+that is detected and yanked within hours never reaches a lockfile. Three days
+outlasts those hours, and a longer window would hold every security fix longer
+too. The [repo contract](docs/gates/repo-contract.md) holds every repo to at
+least 3 days, and a longer window passes. Upgrades take the newest version that
+clears the window.
+
+The window reads npm publish times, so it never holds a git dependency (probed,
+bun 1.4.0: a commit hours old installs under a ten-year window). Every package
+this organisation publishes is installed from git, as
+`github:gokayo43/dev-config#<sha>` is, so `minimumReleaseAgeExcludes` names
+none of them. The preset's window does reach them, through the dates of their
+GitHub tags, and the preset exempts everything under `gokayo43/` from it: the
+window guards against a stranger's compromised release, and these are ours.
+
+**A vulnerability fix** arrives as a Renovate PR as soon as there is an advisory
+for it, outside the weekly schedule and without the wait. The preset reads two
+sources: GitHub's advisories, which reach Renovate only in a repo with
+Dependabot alerts turned on, and OSV's, which cover direct dependencies only.
+The repo's `bunfig.toml` can still refuse the fixed version. When `bun install`
+on the PR's branch refuses a version as too new, add each package it refuses to
+`minimumReleaseAgeExcludes`, rerun until the install passes, then take the
+names off again and commit `bun.lock`. The lockfile keeps those versions and
+`bun install --frozen-lockfile` does not re-check them, so the exclusion lasts
+one bump and leaves no standing exemption behind. Until the fixed version is 3
+days old, anything that resolves it afresh, lockfile maintenance included,
+refuses it again. Name each package exactly: bun ignores a scope pattern such
+as `"@types/*"`, and an exclusion does not reach the package's own
+dependencies, so a dependency the fix moves to a new version needs its own
+entry (both probed, bun 1.4.0). The PR's body repeats these steps.

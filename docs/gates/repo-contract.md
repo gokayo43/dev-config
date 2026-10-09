@@ -14,7 +14,7 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | `typescript` major ≥ 7                                                                                            | the shared tsconfig is written against TypeScript 7                                                 |
 | `oxlint-tsgolint` present, when `.oxlintrc.json` extends `oxlint.base.json`                                       | without it oxlint runs the base's type-aware rules over nothing and reports clean                   |
 | `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`     | a repo that stopped inheriting stops inheriting silently                                            |
-| `bunfig.toml` declares `minimumReleaseAge`, `exact`, and a coverage floor a run can fail                          | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them   |
+| `bunfig.toml` declares a window of 3 days or more, exact exclusions, `exact`, and a coverage floor a run can fail | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them   |
 | every rule, category and option `.oxlintrc.json` switches off carries a reason above it                           | a switch-off nobody wrote a reason for reads the same as one added to get a run green               |
 | `.oxlintrc.json` `extends` the shared bases and nothing else, each once, and no oxlint config sits below the root | a second config is read after the root's and wins over it, in a file this gate never opens          |
 | `.oxlintrc.json` extends `design-system.base.json`, when any manifest depends on `tailwindcss`                    | without it a page using a raw colour, an arbitrary value or a restyled shared component passes lint |
@@ -59,6 +59,16 @@ neither does. A gate asking for the second was asking for a line that pins
 nothing, and that is worse than asking for nothing — the repo carries the field,
 passes this contract, and its next `bun add` writes a range straight past the
 release-age window beside it.
+
+**The window is a floor, and every exclusion names a package.**
+`minimumReleaseAge` has to hold a release for at least 3 days (259200 seconds),
+the fleet's window, and a repo that holds releases longer passes. Each
+`minimumReleaseAgeExcludes` entry has to be a whole package name, because that
+is the only form bun matches: under `"@types/*"`, `"@types/"` and `"@types"`
+alike, `@types/bun` stays held (probed, bun 1.4.0). A pattern there is an
+exemption its author believes in and bun never applies, so the urgent patch it
+was written for still fails to install. A value that is not a list is left to
+bun, which refuses it at every install.
 
 `coveragePathIgnorePatterns` is deliberately not graded, though it can excuse a
 file from the floor as surely as a low threshold can. Each entry is a line in
