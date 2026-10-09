@@ -45,7 +45,20 @@ const MANIFEST: PackageJson = {
 
 const THRESHOLD = "{ lines = 0.75, functions = 0.75 }";
 
-const BUNFIG = `[install]\nminimumReleaseAge = 604800\nexact = true\n\n[test]\ncoverageThreshold = ${THRESHOLD}\n`;
+/** The three parts of the clean tree's bunfig a case may write differently. */
+interface Bunfig {
+  readonly window?: string;
+  readonly pinning?: string;
+  readonly test?: string;
+}
+
+function bunfig({
+  window = "minimumReleaseAge = 259200\n",
+  pinning = "exact = true\n",
+  test = `coverageThreshold = ${THRESHOLD}\n`,
+}: Bunfig = {}): string {
+  return `[install]\n${window}${pinning}\n[test]\n${test}`;
+}
 
 export const CLEAN: Tree = {
   "package.json": JSON.stringify(MANIFEST),
@@ -55,7 +68,7 @@ export const CLEAN: Tree = {
   }),
   "knip.ts":
     'import { base } from "@gokayo43/dev-config/knip.base.ts";\nexport default { ...base };\n',
-  "bunfig.toml": BUNFIG,
+  "bunfig.toml": bunfig(),
   "lefthook.yml":
     "pre-commit:\n  commands:\n    secrets:\n      run: gitleaks git --staged --redact --no-banner .\n\npre-push:\n  commands:\n    typecheck:\n      run: bun run typecheck\n    test:\n      run: bun test\n",
   ".gitignore": "node_modules\n.env\n.env.*\n!.env.example\n!.env.enc\n",
@@ -171,7 +184,7 @@ export function withoutReasonFor(text: string, rule: string, under = ""): string
   return lines.join("\n");
 }
 
-/** The clean tree with a different coverage floor written into its bunfig. */
-export function withThreshold(threshold: string): Tree {
-  return { ...CLEAN, "bunfig.toml": BUNFIG.replace(THRESHOLD, threshold) };
+/** The clean tree with some of its bunfig written differently. */
+export function withBunfig(parts: Bunfig): Tree {
+  return { ...CLEAN, "bunfig.toml": bunfig(parts) };
 }

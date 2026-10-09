@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
   "extends": ["./oxlint.base.json", "./design-system.base.json"],
   "env": { "node": true, "es2024": true },
-  // `dist/**` is what `bun run build` writes from the two exports a node runner
+  // `dist/**` is what `bun run build` writes from the three exports a node runner
   // imports; linting a build is linting its inputs twice, and every rule that
   // reads types reads none there.
   "ignorePatterns": [
@@ -27,6 +27,7 @@
         "dev-server.ts",
         "property.ts",
         "invariant-sweep.ts",
+        "count-budget.ts",
         ".github/actions/_lib/gate.ts",
         ".github/actions/db-gate/database.ts",
         ".github/actions/db-gate/probe.ts",
@@ -46,7 +47,8 @@
         // every property goes through to read them. `invariant-sweep.ts` is the
         // same case for the video switch: the run that wants a recording is a
         // `playwright test` someone starts by hand, and the fixture every spec
-        // imports is the one place it is read.
+        // imports is the one place it is read. `count-budget.ts` is that case
+        // again for the switch that writes ceilings instead of checking them.
         //
         // `gate.ts` is this repo's `env.ts` under another name: `inputs()` and
         // `required()` are the choke point the rule asks for. Each of those

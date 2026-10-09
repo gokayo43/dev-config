@@ -116,16 +116,31 @@ a change to a rule usually lands here too.
   plugin from the working directory, and declaring the two packages in the
   repo's manifest is what puts them under its lockfile, its exact pins and its
   release-age window.
-- The `*.ts` at the root are what a consuming repo reaches directly, as against
-  the gates, which run over it from CI. Seven of them are **exports** it imports
-  and calls; the two `dev-server*` files below are a bin it runs and the module
-  that bin imports. Each is reachable through
+- The `*.ts` at the root are what a consuming repo reaches, as against the
+  gates, which run over it from CI. Eight of them are **exports** it imports and
+  calls, and the two `dev-server*` files below are a bin it runs and the module
+  that bin imports. Two more reach it only inside those, and no specifier
+  exports either. `count-ceilings.ts` is the count budget's ceiling rule — the
+  file's shape, the seal, and the one function both the check and the write
+  command decide by — which the build bundles into `dist/count-budget.js`, a
+  module of its own so `tests/count-ceilings.test.ts` can search it with
+  properties instead of browser runs. `file-lock.ts` is which process a file
+  names, proven from `/proc`, and the one lock both `dev-server up` and the
+  count budget's write command take: the build bundles it into the count
+  budget, `files` ships its source for the bin, and `tests/file-lock.test.ts`
+  holds each waiter before every step through the `between` seam `lock` takes
+  for that suite's sake. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is the protocol between an app and the two floors
   over its route table; `invariant-sweep.ts` replaces Playwright's browser
   context with one that watches every page it opens, popups included, and turns
   Playwright's own `video` on when the run sets `E2E_VIDEO=on`;
+  `count-budget.ts` is that sweep's `test` with a `budget` fixture beside it,
+  which counts a job's work per phase and holds each count exactly to a ceiling
+  committed beside the spec, which the `COUNT_BUDGET=write` run lowers and
+  never raises and a hand edit with a reason raises — deleting a test's entry
+  lets the run write it afresh, which is dev-config#146;
   `limiter-conformance.ts` is STACK's rate-limit rule as a `describe`
   block a repo's limiter has to pass; `response-schema.ts` grades an Elysia
   app's own route table; `characterization-net.ts` is the harness under a golden
@@ -133,19 +148,19 @@ a change to a rule usually lands here too.
   call every property test goes through, so a nightly can multiply how far each
   of them searches with no test changing; `interleaving.ts` runs an Effect
   program under a `Scheduler` whose every choice comes from fast-check data, so
-  a property generates the order overlapping fibers run in. `property.ts` and
-  `invariant-sweep.ts` are the two exports that read the environment for a
-  value. Their pages are `docs/exports/`.
+  a property generates the order overlapping fibers run in. `property.ts`,
+  `invariant-sweep.ts` and `count-budget.ts` are the three exports that read the
+  environment for a value. Their pages are `docs/exports/`.
   `limiter-conformance.ts` registers tests where `response-schema.ts` answers
   with problems, and the split is by subject rather than by taste: a route table
   is a value one call can grade, and a limiter is a sequence of attempts against
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
-  to is this package's business rather than a caller's: two of them are built and
+  to is this package's business rather than a caller's: three of them are built and
   five ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep}.{js,d.ts}`;
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget}.{js,d.ts}`;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
 - `dev-server.ts` and `dev-server-derive.ts` — one supervised dev server per git
@@ -153,7 +168,8 @@ a change to a rule usually lands here too.
   through the `bin` entry. Neither is an export: there is nothing in either for a
   repo to import, so `files` ships them, `bin` names the first, and `exports`
   names neither. The split is by what needs a machine — the bin is the detached
-  child, the claimed port, the lock and the signals; the derivation is what a
+  child, the claimed port, the lock it takes from `file-lock.ts` and the
+  signals; the derivation is what a
   worktree's server is called, which port it gets, and what its record has to be,
   and is the half a test can drive with no repository at all. That is also why
   only the bin is waived from the coverage floor in `bunfig.toml`.
@@ -229,7 +245,17 @@ a change to a rule usually lands here too.
   wrote a case for does not exist. `sweep-fixture.ts` serves the pages the
   invariant sweep is driven over and runs one Playwright process across every
   spec: a browser and a server, because every fact that fixture claims is a
-  browser fact. `property.test.ts` is the limiter's argument once more — a
+  browser fact. `count-budget-fixture.ts` is the same for the count budget's
+  browser facts — the ceiling rule is not one, and is searched without a browser
+  in `count-ceilings.test.ts` — with
+  a React app among its pages that it builds in memory once per suite, for
+  production — `react` and `react-dom` are devDependencies nothing imports for
+  that reason — and its suite runs Playwright several times over one tree,
+  because what one run writes into a ceilings file is what the next is checked
+  against. That suite also spins a process on every core for the length of 20
+  runs of one page, since a count read under load is half of what it grades, and
+  it is the longest browser suite here, at about three and a half minutes.
+  `property.test.ts` is the limiter's argument once more — a
   `bun test` spawned per case, because what `check` does is hand fast-check a
   bigger number and the only thing that says whether it worked is how many times
   the predicate ran; the default it multiplies is graded as a difference against
@@ -267,7 +293,7 @@ a change to a rule usually lands here too.
 ```sh
 bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites
-bun run build   # rewrites the committed dist/ from the two built exports
+bun run build   # rewrites the committed dist/ from the three built exports
 ```
 
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
