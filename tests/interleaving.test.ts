@@ -1,37 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import { Deferred, Effect, Exit, Fiber, Ref } from "effect";
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  FiberStatus,
+  HashSet,
+  Random,
+  Ref,
+  TestClock,
+  TestContext,
+} from "effect";
 import { check as explore, property } from "fast-check";
 
-import { type Interleaving, interleavings, simulate } from "../interleaving.ts";
+import {
+  type Interleaving,
+  interleavings,
+  interleavingsOf,
+  simulate,
+  unpreempted,
+} from "../interleaving.ts";
 import { check } from "../property.ts";
-import { booking, counter } from "./interleaving-fixtures.ts";
-
-/**
- * Every program here builds its state inside the effect, so each `simulate`
- * starts from nothing and two runs of one program share no value.
- */
+import { covered, depositAndRead, finished, makeLedger, races } from "./interleaving-fixtures.ts";
 
 const note = (log: string[], step: string) => Effect.sync(() => void log.push(step));
-
-/** The run's exit value, failing the case when the run did not finish with one. */
-function finished<A, E>(
-  program: Effect.Effect<A, E>,
-  interleaving: Interleaving,
-  maxOps?: number,
-): A {
-  const run =
-    maxOps === undefined
-      ? simulate(program, interleaving)
-      : simulate(program, interleaving, { maxOps });
-  if (run.parked) throw new Error(`the run parked: ${JSON.stringify(interleaving)}`);
-  if (Exit.isFailure(run.exit)) throw new Error(`the run failed: ${String(run.exit.cause)}`);
-  return run.exit.value;
-}
-
-const fifo: Interleaving = { strategy: "walk", preemptAt: [], picks: [] };
-
-/** The page's sizing rule: the run's length under the interleaving that preempts nothing. */
-const sized = <A, E>(program: Effect.Effect<A, E>) => interleavings(simulate(program, fifo).ops);
 
 /** How many fibers Effect holds as roots, which is everything a finished run must not add to. */
 const roots = () => Effect.runSync(Fiber.roots).length;
@@ -40,7 +32,9 @@ describe("the order comes from the interleaving and nothing else", () => {
   /**
    * Every way a fiber gives up the runtime: forks, a yield, a deferred handed
    * between fibers, an uninterruptible region and an interrupt. The result is
-   * the order each step executed in.
+   * the order each step executed in, then the order a hash set of plain
+   * objects iterates in, which Effect hashes with `Math.random`, and a draw
+   * from the `Random` service.
    */
   const mesh = Effect.suspend(() => {
     const log: string[] = [];
@@ -70,37 +64,46 @@ describe("the order comes from the interleaving and nothing else", () => {
       yield* Fiber.join(a);
       yield* Fiber.join(b);
       yield* Fiber.interrupt(c);
-      return log.join(" ");
+      const hashed = HashSet.fromIterable(log.map((step) => ({ step })));
+      const drawn = yield* Random.nextInt;
+      return [...log, "|", ...[...hashed].map(({ step }) => step), "|", drawn].join(" ");
     });
   });
 
-  /** `run`, with `Date.now` and `Math.random` answering what the case says while it runs. */
-  function pinned<A>(now: number, random: number, run: () => A): A {
+  /** `run`, with `Date.now` answering `now` while it runs. */
+  function at<A>(now: number, run: () => A): A {
     const { now: realNow } = Date;
-    const { random: realRandom } = Math;
     Date.now = () => now;
-    Math.random = () => random;
     try {
       return run();
     } finally {
       Date.now = realNow;
-      Math.random = realRandom;
     }
   }
 
-  // Kills a scheduler that reads the clock or `Math.random` to decide, and one
-  // whose order depends on anything a second run does not reproduce.
-  test("the same interleaving replays the same order, whatever the clock and Math.random say", () => {
+  // Kills a scheduler that reads the clock to decide, one whose order depends
+  // on anything a second run does not reproduce, and a run that leaves
+  // `Math.random` or the `Random` service drawing from the process's own state.
+  // Regression: a hash set of plain objects iterated in a different order on
+  // each run of one interleaving, and the `Random` service drew on.
+  test("the same interleaving replays the same order and the same randomness, whatever the clock says", () => {
     const orders = new Set<string>();
     check(
       property(interleavings(64), (interleaving) => {
-        const first = pinned(0, 0, () => simulate(mesh, interleaving));
-        const second = pinned(4_102_444_800_000, 0.999_999, () => simulate(mesh, interleaving));
+        const first = at(0, () => simulate(mesh, interleaving));
+        const second = at(4_102_444_800_000, () => simulate(mesh, interleaving));
         expect(second).toEqual(first);
         orders.add(finished(mesh, interleaving));
       }),
     );
     expect(orders.size).toBeGreaterThan(1);
+  });
+
+  // Kills a run that leaves `Math.random` replaced after it.
+  test("Math.random is the process's own again once the run ends", () => {
+    const { random } = Math;
+    simulate(mesh, unpreempted);
+    expect(Math.random).toBe(random);
   });
 
   const forkThree = Effect.suspend(() => {
@@ -204,13 +207,53 @@ describe("the order comes from the interleaving and nothing else", () => {
       finished(dropped, { strategy: "priority", priorities: [99, 50, 40, 30], changeAt: [] }),
     ).toBe("x1 y1 z1 x2 y2");
   });
+
+  /**
+   * h holds the lock and waits on the gate, x waits on the gate, w waits on
+   * the lock when `contended`, and l opens the gate. Opening it and releasing
+   * the lock to w each hand the scheduler work for other fibers, which leaves
+   * the opener and the releaser where they rank: h, the highest of the
+   * three, runs on to its end.
+   */
+  // Regression: a lock released to a waiter dropped the releaser below every
+  // other fiber, as though it had yielded, so x ran before h.
+  test("handing a lock or a latch on to waiters is not a yield", () => {
+    const handOff = (contended: boolean) =>
+      Effect.suspend(() => {
+        const log: string[] = [];
+        return Effect.gen(function* () {
+          const lock = yield* Effect.makeSemaphore(1);
+          const gate = yield* Effect.makeLatch(false);
+          const fibers = [
+            yield* Effect.fork(
+              lock
+                .withPermits(1)(gate.await)
+                .pipe(Effect.zipRight(note(log, "h"))),
+            ),
+            yield* Effect.fork(gate.await.pipe(Effect.zipRight(note(log, "x")))),
+            yield* Effect.fork(contended ? lock.withPermits(1)(note(log, "w")) : note(log, "w")),
+            yield* Effect.fork(note(log, "l").pipe(Effect.zipRight(gate.open))),
+          ];
+          yield* Fiber.joinAll(fibers);
+          return log.join(" ");
+        });
+      });
+    const under = (contended: boolean) =>
+      finished(handOff(contended), {
+        strategy: "priority",
+        priorities: [99, 90, 30, 50, 10],
+        changeAt: [],
+      });
+    expect(under(false)).toBe("w l h x");
+    expect(under(true)).toBe("l h w x");
+  });
 });
 
 describe("a preemption can fall between any two ops", () => {
   /**
-   * The canary for an Effect upgrade, over the version this repo pins: unless
-   * the runtime asks the scheduler before every op, no interleaving can land
-   * `b` inside `a`'s run of synchronous steps.
+   * Unless the runtime asks the scheduler before every op, no interleaving can
+   * land `b` inside `a`'s run of synchronous steps, whether or not that run is
+   * an uninterruptible region.
    */
   const steps = ["a1", "a2", "a3", "a4"];
   const between = (region: "plain" | "uninterruptible") =>
@@ -267,7 +310,7 @@ describe("ops", () => {
   // Kills an `ops` that counts slices or fibers rather than ops, and one that
   // answers a constant.
   test("every synchronous step a program adds adds the same number of ops", () => {
-    const lengths = [1, 2, 3, 4, 5, 6].map((steps) => simulate(chain(steps), fifo).ops);
+    const lengths = [1, 2, 3, 4, 5, 6].map((steps) => simulate(chain(steps), unpreempted).ops);
     const added = lengths.slice(1).map((length, at) => length - (lengths[at] ?? 0));
     expect(added[0]).toBeGreaterThan(0);
     expect(new Set(added).size).toBe(1);
@@ -275,57 +318,102 @@ describe("ops", () => {
 
   // Kills an `ops` shorter or longer than the run the op indices count: every
   // index below it is reached, and none at or past it.
-  test("a preemption below a run's ops lengthens it, and one at or past them never happens", () => {
-    const program = chain(6);
-    const unpreempted = simulate(program, fifo);
-    for (let op = 0; op < unpreempted.ops; op++)
-      expect(
-        simulate(program, { strategy: "walk", preemptAt: [op], picks: [] }).ops,
-      ).toBeGreaterThan(unpreempted.ops);
-    for (let op = unpreempted.ops; op < unpreempted.ops + 5; op++)
-      expect(simulate(program, { strategy: "walk", preemptAt: [op], picks: [] })).toEqual(
-        unpreempted,
-      );
-  });
+  // Regression: `ops` counted the wind-down too, which no interleaving reaches,
+  // so a program leaving a daemon with a long finalizer sized the search
+  // mostly to ops nothing could preempt.
+  test.each([
+    ["a chain of synchronous steps", chain(6)],
+    [
+      "a program that leaves a daemon with a long finalizer",
+      Effect.forkDaemon(Effect.never.pipe(Effect.onInterrupt(() => chain(1_000)))).pipe(
+        Effect.asVoid,
+      ),
+    ],
+  ] as const)(
+    "%s: a preemption below its ops lengthens the run, and one at or past them never happens",
+    (_name, program) => {
+      const alone = simulate(program, unpreempted);
+      for (let op = 0; op < alone.ops; op++)
+        expect(
+          simulate(program, { strategy: "walk", preemptAt: [op], picks: [] }).ops,
+        ).toBeGreaterThan(alone.ops);
+      for (let op = alone.ops; op < alone.ops + 5; op++)
+        expect(simulate(program, { strategy: "walk", preemptAt: [op], picks: [] })).toEqual(alone);
+    },
+  );
 });
 
 describe("how a run ends", () => {
   /** Two fibers taking two locks in opposite orders: whether they deadlock is the interleaving's call. */
-  const inversion = Effect.gen(function* () {
-    const first = yield* Effect.makeSemaphore(1);
-    const second = yield* Effect.makeSemaphore(1);
-    const both = (outer: Effect.Semaphore, inner: Effect.Semaphore) =>
-      outer.withPermits(1)(
-        Effect.yieldNow().pipe(Effect.zipRight(inner.withPermits(1)(Effect.void))),
-      );
-    const a = yield* Effect.fork(both(first, second));
-    const b = yield* Effect.fork(both(second, first));
-    yield* Fiber.join(a);
-    yield* Fiber.join(b);
-    return "done";
-  });
+  const inversion = (
+    hold: (lock: Effect.Semaphore, then: Effect.Effect<void>) => Effect.Effect<void>,
+  ) =>
+    Effect.gen(function* () {
+      const first = yield* Effect.makeSemaphore(1);
+      const second = yield* Effect.makeSemaphore(1);
+      const both = (outer: Effect.Semaphore, inner: Effect.Semaphore) =>
+        hold(outer, Effect.yieldNow().pipe(Effect.zipRight(hold(inner, Effect.void))));
+      const a = yield* Effect.fork(both(first, second));
+      const b = yield* Effect.fork(both(second, first));
+      yield* Fiber.join(a);
+      yield* Fiber.join(b);
+      return "done";
+    });
 
   // Kills a run reported as finished when it parked, and the reverse: the two
   // outcomes are told apart, each by what the program actually did.
   test("a lock-order inversion parks under some interleavings and finishes under others, and says which", () => {
+    const program = inversion((lock, then) => lock.withPermits(1)(then));
     const parked = new Set<boolean>();
     check(
-      property(sized(inversion), (interleaving) => {
-        const run = simulate(inversion, interleaving);
+      property(interleavingsOf(program), (interleaving) => {
+        const run = simulate(program, interleaving);
         parked.add(run.parked);
-        if (!run.parked) expect(run.exit).toEqual(Exit.succeed("done"));
+        if (run.parked) expect(run.stranded).toBe(0);
+        else expect(run.exit).toEqual(Exit.succeed("done"));
       }),
     );
     expect(parked).toEqual(new Set([false, true]));
   });
 
+  // Regression: a deadlock on locks taken by an uninterruptible acquire threw
+  // instead of parking.
+  test("a lock-order inversion on uninterruptible acquires parks, naming the fibers it strands", () => {
+    const program = inversion((lock, then) =>
+      Effect.scoped(
+        Effect.acquireRelease(lock.take(1), () => lock.release(1)).pipe(Effect.zipRight(then)),
+      ),
+    );
+    const stranded = new Set<number>();
+    check(
+      property(interleavingsOf(program), (interleaving) => {
+        const run = simulate(program, interleaving);
+        if (run.parked) stranded.add(run.stranded);
+        else expect(run.exit).toEqual(Exit.succeed("done"));
+      }),
+    );
+    expect(stranded.size).toBeGreaterThan(0);
+    expect([...stranded]).not.toContain(0);
+  });
+
   test("a program waiting on a deferred nobody completes is parked under every interleaving", () => {
     const stuck = Deferred.make<void>().pipe(Effect.flatMap(Deferred.await));
     check(
-      property(sized(stuck), (interleaving) => {
-        expect(simulate(stuck, interleaving).parked).toBe(true);
+      property(interleavingsOf(stuck), (interleaving) => {
+        expect(simulate(stuck, interleaving)).toMatchObject({ parked: true, stranded: 0 });
       }),
     );
+  });
+
+  // Pins a limit the page states: TestClock waits on a real timer between
+  // adjusting the clock and running what it woke.
+  test("a program on TestClock parks", () => {
+    const slept = Effect.gen(function* () {
+      const sleeper = yield* Effect.fork(Effect.sleep("1 second"));
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(sleeper);
+    }).pipe(Effect.provide(TestContext.TestContext));
+    expect(simulate(slept, unpreempted)).toMatchObject({ parked: true, stranded: 0 });
   });
 
   const priority: Interleaving = { strategy: "priority", priorities: [], changeAt: [] };
@@ -340,7 +428,7 @@ describe("how a run ends", () => {
       }),
     ],
   ] as const)("%s throws rather than hang", (_name, program) => {
-    for (const interleaving of [fifo, priority])
+    for (const interleaving of [unpreempted, priority])
       expect(() => simulate(program, interleaving, { maxOps: 20_000 })).toThrow(
         "the run did not finish within 20000 ops",
       );
@@ -359,8 +447,8 @@ describe("how a run ends", () => {
   // Regression: a fixed limit reported a program that finishes as one that
   // loops forever.
   test("a program longer than the default limit finishes under a limit raised to fit it", () => {
-    expect(() => simulate(long, fifo)).toThrow("the run did not finish within 100000 ops");
-    expect(finished(long, fifo, 1_000_000)).toBe(120_000);
+    expect(() => simulate(long, unpreempted)).toThrow("the run did not finish within 100000 ops");
+    expect(finished(long, unpreempted, { maxOps: 1_000_000 })).toBe(120_000);
   });
 
   /** A fiber waiting for another to set a flag, polling it with `poll` between reads. */
@@ -385,12 +473,12 @@ describe("how a run ends", () => {
     (poll) => {
       const program = waiting(poll);
       for (const interleaving of [
-        fifo,
+        unpreempted,
         { strategy: "priority", priorities: [50, 99, 10], changeAt: [] } as const,
       ])
         expect(finished(program, interleaving)).toBe("done");
       check(
-        property(sized(program), (interleaving) => {
+        property(interleavingsOf(program), (interleaving) => {
           expect(finished(program, interleaving)).toBe("done");
         }),
       );
@@ -431,7 +519,7 @@ describe("how a run ends", () => {
       for (let run = 0; run < 10; run++) {
         const log: string[] = [];
         try {
-          simulate(program(log), fifo, { maxOps: 20_000 });
+          simulate(program(log), unpreempted, { maxOps: 20_000 });
         } catch (error) {
           expect(String(error)).toContain("did not finish within 20000 ops");
         }
@@ -441,12 +529,22 @@ describe("how a run ends", () => {
     },
   );
 
-  test("a fiber that cannot be interrupted out of its wait fails the run loudly", () => {
-    const stuck = Deferred.make<void>().pipe(
-      Effect.flatMap(Deferred.await),
-      Effect.uninterruptible,
+  const uninterruptibleWait = Deferred.make<void>().pipe(
+    Effect.flatMap(Deferred.await),
+    Effect.uninterruptible,
+  );
+
+  test("a parked run whose fiber cannot be interrupted out of its wait says it stranded it", () => {
+    expect(simulate(uninterruptibleWait, unpreempted)).toMatchObject({
+      parked: true,
+      stranded: 1,
+    });
+  });
+
+  test("a finished run that leaves a fiber interruption cannot end fails loudly", () => {
+    expect(() => simulate(Effect.forkDaemon(uninterruptibleWait), unpreempted)).toThrow(
+      "the run finished; 1 of its fibers did not finish when interrupted",
     );
-    expect(() => simulate(stuck, fifo)).toThrow("did not finish when interrupted");
   });
 
   // Regression: a resolved promise settles on a microtask, after the run; the
@@ -456,7 +554,7 @@ describe("how a run ends", () => {
     const before = roots();
     const run = simulate(
       Effect.promise(() => Promise.resolve(1)).pipe(Effect.zipRight(note(log, "settled"))),
-      fifo,
+      unpreempted,
     );
     expect(run.parked).toBe(true);
     await Promise.resolve();
@@ -473,87 +571,94 @@ describe("how a run ends", () => {
     const wait = Effect.async<void>((resume) => {
       wake = resume;
     }).pipe(Effect.zipRight(note(log, "woke")));
-    expect(simulate(wait, fifo).parked).toBe(true);
+    expect(simulate(wait, unpreempted).parked).toBe(true);
     wake(Effect.void);
     expect(log).toEqual([]);
   });
 });
 
 describe("finding races", () => {
-  /** At least the page's run count for the counter, whose share of failing runs is the lower: docs/exports/interleaving.md. */
-  const RUNS = 1_000;
-
-  const fixtures = [
-    {
-      name: "a check-then-act across a yield",
-      program: (fixed: boolean): Effect.Effect<unknown> => booking(fixed),
-      holds: (fixed: boolean, interleaving: Interleaving) =>
-        expect(finished(booking(fixed), interleaving).sold).toBe(1),
-    },
-    {
-      name: "a lost update between two synchronous ops",
-      program: counter,
-      holds: (fixed: boolean, interleaving: Interleaving) =>
-        expect(finished(counter(fixed), interleaving)).toBe(2),
-    },
-  ];
+  /** The page's run count for the torn read, whose share of failing runs is the lowest: docs/exports/interleaving.md. */
+  const RUNS = 3_000;
 
   // Kills a scheduler that never preempts or never reorders: each fixture's
   // race is out of reach of the first-in-first-out order.
-  test.each(fixtures)(
-    "$name: found, and its counterexample replays the race",
-    ({ program, holds }) => {
-      expect(() => holds(false, fifo)).not.toThrow();
-      const details = explore(
-        property(sized(program(false)), (interleaving) => holds(false, interleaving)),
-        { numRuns: RUNS },
-      );
-      if (details.counterexample === null) throw new Error(`no race in ${RUNS} runs`);
-      const [raced] = details.counterexample;
-      expect(() => holds(false, raced)).toThrow("toBe");
-    },
-  );
+  test.each(races)("$name: found, and its counterexample replays the race", (race) => {
+    expect(race.holds(false, unpreempted)).toBe(true);
+    const details = explore(
+      property(interleavings(race.ops(false)), (interleaving) => {
+        expect(race.holds(false, interleaving)).toBe(true);
+      }),
+      { numRuns: RUNS },
+    );
+    if (details.counterexample === null) throw new Error(`no race in ${RUNS} runs`);
+    const [raced] = details.counterexample;
+    expect(race.holds(false, raced)).toBe(false);
+  });
 
-  test.each(fixtures)("$name: the fixed version holds over as many runs", ({ program, holds }) => {
+  test.each(races)("$name: the fixed version holds over as many runs", (race) => {
     check(
-      property(sized(program(true)), (interleaving) => holds(true, interleaving)),
+      property(interleavings(race.ops(true)), (interleaving) => {
+        expect(race.holds(true, interleaving)).toBe(true);
+      }),
       { numRuns: RUNS },
     );
   });
 
-  /**
-   * The page's regression case for a race the search found, run over the
-   * booking: one preemption at every op of the unpreempted run, in order, with
-   * the seat sold once in each and both bookings in flight at once in at least
-   * one. Answers which preemption points broke the invariant.
-   */
-  function swept(locked: boolean, padding: number): number[] {
-    const program = booking(locked, padding);
-    const broken: number[] = [];
-    let overlapped = 0;
-    for (let op = 0; op < simulate(program, fifo).ops; op++) {
-      const run = finished(program, { strategy: "walk", preemptAt: [op], picks: [] });
-      if (run.sold !== 1) broken.push(op);
-      if (run.overlapped) overlapped += 1;
-    }
-    expect(overlapped).toBeGreaterThan(0);
-    return broken;
-  }
-
-  const shapes = [
-    ["as written", 1],
-    ["with one more op", 2],
-    ["with one fewer op", 0],
-  ] as const;
-
-  test.each(shapes)("the sweep over a racy booking %s finds the race", (_shape, padding) => {
-    expect(swept(false, padding)).not.toEqual([]);
+  // The page's reading of a counterexample: the steps it ran, in order, are
+  // where the regression case puts its latch.
+  test("the torn read's counterexample runs a whole deposit between the reading's two reads", () => {
+    const details = explore(
+      property(interleavingsOf(depositAndRead(false)), (interleaving) => {
+        expect(covered(finished(depositAndRead(false), interleaving))).toBe(true);
+      }),
+      { numRuns: RUNS },
+    );
+    if (details.counterexample === null) throw new Error(`no race in ${RUNS} runs`);
+    const [raced] = details.counterexample;
+    expect(finished(depositAndRead(false), raced).steps).toEqual([
+      "read balance",
+      "credit",
+      "append",
+      "read entries",
+    ]);
   });
 
-  test.each(shapes)(
-    "the sweep over a locked booking %s holds, with both bookings in flight at once",
-    (_shape, padding) => {
-      expect(swept(true, padding)).toEqual([]);
-    },
-  );
+  /**
+   * The page's regression case for the torn read: the reading is held at the
+   * seam between its two reads, the deposit runs until it has finished or is
+   * waiting, and the reading is let go. Answers what the reading saw, and
+   * whether the deposit had finished, rather than waiting, when the reading
+   * was let go.
+   */
+  const probe = (locked: boolean) =>
+    Effect.gen(function* () {
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const ledger = yield* makeLedger(
+        locked,
+        Deferred.succeed(held, undefined).pipe(Effect.zipRight(Deferred.await(release))),
+      );
+      const reading = yield* Effect.fork(ledger.read);
+      yield* Deferred.await(held);
+      const deposit = yield* Effect.fork(ledger.deposit);
+      const settled = yield* Fiber.status(deposit).pipe(
+        Effect.repeat({ until: (status) => !FiberStatus.isRunning(status) }),
+      );
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(deposit);
+      return { read: yield* Fiber.join(reading), depositDone: FiberStatus.isDone(settled) };
+    });
+
+  test("the probe drives the torn read: a whole deposit between the reading's reads", async () => {
+    const { read, depositDone } = await Effect.runPromise(probe(false));
+    expect(depositDone).toBe(true);
+    expect(covered(read)).toBe(false);
+  });
+
+  test("the probe holds the locked ledger, with the deposit waiting on the reading", async () => {
+    const { read, depositDone } = await Effect.runPromise(probe(true));
+    expect(depositDone).toBe(false);
+    expect(covered(read)).toBe(true);
+  });
 });
