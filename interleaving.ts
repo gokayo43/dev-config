@@ -163,22 +163,32 @@ const strategyOf = (interleaving: Interleaving): Strategy =>
     : priority(interleaving.priorities, interleaving.changeAt);
 
 /**
- * Whether `task` is `fiber` going on with its own work, as opposed to work it
- * hands the scheduler for others, such as a semaphore release waking its
- * waiters. Effect 3.22 schedules a fiber's continuation as the fiber's `run`,
- * which its public type does not declare; `verifyRuntime` checks it.
+ * Whether `task` is `fiber` going on with its own work. Effect 3.22 schedules a
+ * fiber's continuation as the fiber's `run`, which its public type does not
+ * declare, and schedules other work under a fiber too: a semaphore release
+ * waking its waiters, and the task `Effect.all` starts a child from.
+ * `verifyRuntime` checks both.
  */
 const continues = (fiber: AnyFiber, task: () => void): boolean =>
   "run" in fiber && fiber.run === task;
 
-/** The state of one run: its fibers, the tasks queued for them, and the ops executed so far. */
+/** Gives way nowhere, picks first in first out, and records nothing. */
+const inert: Strategy = { next: () => 0, preempt: () => false, yielded: () => undefined };
+
+/** What one drain did: whether it left no task queued, and how many ops it executed. */
+interface Drained {
+  readonly emptied: boolean;
+  readonly ops: number;
+}
+
+/** The state of one run: its fibers, the tasks queued for them, and the task running now. */
 class Run {
   readonly fibers = new Set<AnyFiber>();
-  readonly #queue: Task[] = [];
-  #strategy = strategyOf(unpreempted);
+  #queue: Task[] = [];
+  #strategy = inert;
   #ops = 0;
   #end = 0;
-  #running: AnyFiber | undefined;
+  #current: Task | undefined;
   #slice = 0;
   #preempted = false;
 
@@ -186,7 +196,7 @@ class Run {
     scheduleTask: (run, _priority, fiber) => {
       if (fiber !== undefined) {
         this.fibers.add(fiber);
-        if (fiber === this.#running && !this.#preempted && continues(fiber, run))
+        if (!this.#preempted && this.#current?.run === run && continues(fiber, run))
           this.#strategy.yielded(fiber);
       }
       this.#queue.push({ run, fiber });
@@ -204,54 +214,58 @@ class Run {
     },
   };
 
-  get ops(): number {
-    return this.#ops;
-  }
-
   /**
-   * Runs queued tasks in the order `strategy` decides. Answers true once none
-   * is left, and false when `budget` more ops have executed first.
+   * Runs queued tasks in the order `strategy` decides, its op indices counted
+   * from 0, until none is left or `budget` ops have executed.
    */
-  drain(strategy: Strategy, budget: number): boolean {
+  drain(strategy: Strategy, budget: number): Drained {
     this.#strategy = strategy;
-    this.#end = this.#ops + budget;
+    this.#ops = 0;
+    this.#end = budget;
     while (this.#queue.length > 0) {
-      if (this.#ops >= this.#end) return false;
+      if (this.#ops >= this.#end) return { emptied: false, ops: this.#ops };
       // One task: `splice` answers the task at the picked index.
       for (const task of this.#queue.splice(
         this.#queue.length > 1 ? strategy.next(this.#queue) : 0,
         1,
       )) {
-        this.#running = task.fiber;
+        this.#current = task;
         this.#slice = 0;
         this.#preempted = false;
         task.run();
-        this.#running = undefined;
+        this.#current = undefined;
       }
     }
-    return true;
+    return { emptied: true, ops: this.#ops };
   }
 
   /**
    * Interrupts every fiber of the run still unfinished, daemons included, and
    * drains first in first out, again for any fiber that starts meanwhile,
-   * within `budget` ops. Answers how many fibers are still unfinished: each is
-   * waiting where interruption cannot reach it.
+   * within `budget` ops, then lets go of everything the run held. Answers how
+   * many fibers are still unfinished: each is waiting where interruption
+   * cannot reach it.
    */
   windDown(budget: number): number {
-    const end = this.#ops + budget;
     const unfinished = () => [...this.fibers].filter((fiber) => fiber.unsafePoll() === null);
     const interrupted = new Set<AnyFiber>();
+    let left = budget;
     let fresh = unfinished();
     while (fresh.length > 0) {
       for (const fiber of fresh) {
         interrupted.add(fiber);
         fiber.unsafeInterruptAsFork(FiberId.none);
       }
-      if (!this.drain(strategyOf(unpreempted), end - this.#ops)) break;
+      const { emptied, ops } = this.drain(inert, left);
+      if (!emptied) break;
+      left -= ops;
       fresh = unfinished().filter((fiber) => !interrupted.has(fiber));
     }
-    return unfinished().length;
+    const stranded = unfinished().length;
+    this.fibers.clear();
+    this.#queue = [];
+    this.#strategy = inert;
+    return stranded;
   }
 }
 
@@ -279,7 +293,7 @@ function execute<A, E>(
   maxOps: number,
   seed: number,
 ): Simulated<A, E> {
-  const { quiesced, exit, ops, stranded } = seeded(seed, () => {
+  const { drained, exit, stranded } = seeded(seed, () => {
     const run = new Run();
     const root = Effect.runFork(program, {
       scheduler: run.scheduler,
@@ -295,19 +309,16 @@ function execute<A, E>(
           ),
         }),
     });
-    const drained = run.drain(strategy, maxOps);
-    return {
-      quiesced: drained,
-      exit: root.unsafePoll(),
-      ops: run.ops,
-      stranded: run.windDown(maxOps),
-    };
+    const scheduled = run.drain(strategy, maxOps);
+    const ended = root.unsafePoll();
+    return { drained: scheduled, exit: ended, stranded: run.windDown(maxOps) };
   });
+  const { ops } = drained;
   const outliving =
     stranded > 0
       ? `; ${stranded} of its fibers did not finish when interrupted, waiting in an uninterruptible region or on a finalizer that never completes, and stay alive for the life of the process`
       : "";
-  if (!quiesced) {
+  if (!drained.emptied) {
     throw new Error(
       `the run did not finish within ${maxOps} ops: a fiber loops or yields forever, or the program needs more and simulate's maxOps has to be raised${outliving}`,
     );
@@ -352,23 +363,29 @@ function verifyRuntime(): void {
   }
   const yielded = new Set<AnyFiber>();
   const run = new Run();
-  const child = Effect.runFork(Effect.fork(Effect.yieldNow()).pipe(Effect.tap(Fiber.join)), {
-    scheduler: run.scheduler,
-    immediate: false,
-  });
-  run.drain({ ...strategyOf(unpreempted), yielded: (fiber) => yielded.add(fiber) }, 10_000);
-  const forked = child.unsafePoll();
-  if (forked === null || Exit.isFailure(forked)) {
+  const root = Effect.runFork(
+    Effect.gen(function* () {
+      yield* Effect.all([Effect.void, Effect.void], { concurrency: "unbounded" });
+      const child = yield* Effect.fork(Effect.yieldNow());
+      yield* Fiber.join(child);
+      return child;
+    }),
+    { scheduler: run.scheduler, immediate: false },
+  );
+  run.drain({ ...inert, yielded: (fiber) => yielded.add(fiber) }, 10_000);
+  const exit = root.unsafePoll();
+  if (exit === null || Exit.isFailure(exit)) {
     throw new Error("this process's effect did not fork a fiber under simulate's scheduler");
   }
-  if (!run.fibers.has(forked.value)) {
+  const child = exit.value;
+  if (!run.fibers.has(child)) {
     throw new Error(
       "this process's effect schedules a fiber's work without naming the fiber, so simulate can neither rank fibers nor end a run's fibers before answering; it was written against effect 3.22.0",
     );
   }
-  if (!yielded.has(forked.value)) {
+  if (!yielded.has(child) || yielded.size > 1) {
     throw new Error(
-      "this process's effect schedules a fiber's yield as something other than the fiber's own run, so the priority strategy cannot tell a yield from work a fiber hands others; it was written against effect 3.22.0",
+      "this process's effect schedules a fiber's yield differently from the fiber's own run rescheduling itself, so the priority strategy cannot tell a yield from a fiber starting or from work a fiber hands others; it was written against effect 3.22.0",
     );
   }
   runtimeAnswered = true;
@@ -399,6 +416,12 @@ export function simulate<A, E>(
     program,
     strategyOf(interleaving),
     limits.maxOps,
-    Hash.string(JSON.stringify(interleaving)),
+    Hash.string(
+      JSON.stringify(
+        interleaving.strategy === "walk"
+          ? [interleaving.strategy, interleaving.preemptAt, interleaving.picks]
+          : [interleaving.strategy, interleaving.priorities, interleaving.changeAt],
+      ),
+    ),
   );
 }

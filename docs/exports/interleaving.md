@@ -82,9 +82,10 @@ promises a test wraps, and in the prototype this export came from
 Everything rests on three things Effect 3.22's runtime does: it asks the
 scheduler before every op; it names the fiber each task is for, which the
 priority strategy ranks by and the wind-down finds the run's fibers by; and it
-schedules a fiber's yield as that fiber's own continuation, which is how a yield
-is told apart from work the fiber hands to others. The first `simulate` in a
-process runs two small programs that check all three, and throws if one fails.
+schedules a fiber's yield as that fiber's own continuation, from inside that
+continuation, which is how a yield is told apart from a fiber being started and
+from work a fiber hands to others. The first `simulate` in a process runs two
+small programs that check all three, and throws if one fails.
 So a repo whose Effect stopped doing any of them fails its race properties
 loudly, instead of passing them by finding nothing or leaving each run's fibers
 alive.
@@ -98,9 +99,11 @@ its races:
 - a priority strategy, PCT (Burckhardt et al., ASPLOS 2010), which gives each
   fiber a generated priority, always runs the highest, and drops a fiber below
   every other when it yields of its own accord and at up to three generated op
-  indices. A fiber that hands the scheduler work for others keeps its
-  priority: releasing a lock to the fibers waiting on it, or opening a latch,
-  is not a yield. Up to 24 priorities are generated, so fibers the run meets
+  indices. Only a fiber's own continuation rescheduling itself is a yield. A
+  fiber started by `Effect.all` or `Effect.forEach` keeps the priority it is
+  given, though Effect starts it from a task scheduled under it, and a fiber
+  that hands the scheduler work for others keeps its own: releasing a lock to
+  the fibers waiting on it, or opening a latch, is not a yield. Up to 24 priorities are generated, so fibers the run meets
   after the 24th all get 0.
 
 ## What a program may contain
@@ -125,7 +128,9 @@ alone.
 
 For the run's duration `simulate` replaces `Math.random`, and provides the
 program a `Random` service, each drawing from a generator seeded by the
-interleaving, then puts `Math.random` back. That covers Effect's hashing of
+interleaving's values, then puts `Math.random` back. The same interleaving draws
+the same numbers however its fields are written, and an interleaving fast-check
+shrinks draws others. That covers Effect's hashing of
 plain objects, which draws from `Math.random`, so a `HashSet` or `HashMap` keyed
 by them iterates in the same order on every run of one interleaving. A program
 that reaches past these for anything that differs between runs is not
@@ -137,10 +142,17 @@ wait is interrupted, so a timer is cleared, and a promise that settles later
 wakes nothing. A wait that interruption cannot reach is not let go: one inside
 an uninterruptible region, such as the acquire of `Effect.acquireRelease`, or a
 finalizer that never completes. The parked verdict counts such fibers in
-`stranded`, and they stay alive for the life of the process, with the run's
-root among Effect's roots. A property that asserts `parked: false` fails on the
-first such run, so what it strands is that run's fibers and those of the runs
-fast-check shrinks it with, not its whole budget.
+`stranded`. `simulate` lets go of its own state for the run, its queue, the
+run's fibers and the strategy's ranks, but Effect keeps every root fiber in a
+global set until it ends, and offers no public way to drop one. So each run
+that strands fibers leaves its root among Effect's roots for the life of the
+process, and through it the stranded fibers and everything they hold: about
+41 KB a run for this repo's lock-order inversion on `Effect.acquireRelease`,
+147 MB after 3 580 such parks. A property that asserts `parked: false` fails
+on the first such run, so what it strands is that run's and those of the runs
+fast-check shrinks it with. A test that parks such a program on purpose parks
+a fixed few, as this repo's suite does, rather than a property's budget, which
+the nightly multiplies.
 
 ## Sizing `ops` and the run count
 
@@ -183,7 +195,7 @@ failing runs among 20 000 generated on seed 1. The runs to find are the
 |                                           |       | priority | 29%           | 5                   | 14                  |
 |                                           |       | mixed    | 32%           | 3                   | 12                  |
 | a lost update between two synchronous ops | 184   | walk     | 3.1%          | 31.5                | 118                 |
-|                                           |       | priority | 0.96%         | 64.5                | 460                 |
+|                                           |       | priority | 0.94%         | 64.5                | 460                 |
 |                                           |       | mixed    | 2.1%          | 41.5                | 137                 |
 | a torn read across a whole write          | 50    | walk     | 0.21%         | 617                 | 1 753               |
 |                                           |       | priority | 0.69%         | 74                  | 549                 |
@@ -289,43 +301,62 @@ the latch goes.
 
 This repo's torn read is a ledger whose deposit credits the balance and then
 appends the entry, and whose reading reads the balance and then the entries. A
-reading must never see an entry the balance does not pay for. The search finds
+reading must never see an entry the balance does not pay for. That invariant is
+narrower than judging the run by a serial order, as the section above does: it
+accepts a reading of the balance credited and the entry not yet appended, which
+no serial order explains. The fixture narrows it on purpose, so that the race
+left needs two preemptions, the kind a one-preemption sweep misses. The search finds
 the race, and the counterexample's log is `read balance`, `credit`, `append`,
 `read entries`: the reading was cut between its two reads, and a whole deposit
 ran in the gap. One latch, between the reading's two reads:
 
 ```ts
-test("a reading never sees an entry the balance does not pay for", async () => {
-  const read = await Effect.runPromise(
-    Effect.gen(function* () {
-      const reached = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const ledger = yield* makeLedger(
-        Deferred.succeed(reached, undefined).pipe(Effect.zipRight(Deferred.await(release))),
-      );
-      const reading = yield* Effect.fork(ledger.read);
-      yield* Deferred.await(reached);
-      const deposit = yield* Effect.fork(ledger.deposit);
-      yield* Fiber.status(deposit).pipe(
-        Effect.repeat({ until: (status) => !FiberStatus.isRunning(status) }),
-      );
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(deposit);
-      return yield* Fiber.join(reading);
-    }),
-  );
-  expect(read.entries).toBeLessThanOrEqual(read.balance);
+const probe = (locked: boolean) =>
+  Effect.gen(function* () {
+    const reached = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const ledger = yield* makeLedger(
+      locked,
+      Deferred.succeed(reached, undefined).pipe(Effect.zipRight(Deferred.await(release))),
+    );
+    const reading = yield* Effect.fork(ledger.read);
+    yield* Deferred.await(reached);
+    const deposit = yield* Effect.fork(ledger.deposit);
+    const settled = yield* Fiber.status(deposit).pipe(
+      Effect.repeat({ until: (status) => !FiberStatus.isRunning(status) }),
+    );
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(deposit);
+    return { read: yield* Fiber.join(reading), depositDone: FiberStatus.isDone(settled) };
+  });
+
+test("the probe drives the torn read: a whole deposit between the reading's reads", async () => {
+  const { read, depositDone } = await Effect.runPromise(probe(false));
+  expect(depositDone).toBe(true);
+  expect(covered(read)).toBe(false);
+});
+
+test("the probe holds the locked ledger, with the deposit waiting on the reading", async () => {
+  const { read, depositDone } = await Effect.runPromise(probe(true));
+  expect(depositDone).toBe(false);
+  expect(covered(read)).toBe(true);
 });
 ```
+
+`covered` is the invariant: no more entries than the balance pays for. This
+repo keeps both versions of the ledger, so its suite asserts that the probe
+catches the racy one and passes the locked one. A repo with one ledger keeps the
+second test's assertions, which fail until the race is fixed.
 
 The probe runs on Effect's own runtime, not under `simulate`: the latch decides
 the order, and nothing else can change it. Against the racy ledger the deposit
 finishes while the reading is held, and the reading sees an entry with no
 balance behind it. Against a ledger whose deposit and reading take one lock,
 the deposit is waiting on the lock when the reading is let go, and the reading
-sees neither. Either way the deposit was in flight while the reading was held,
-so the probe proves it reached the race rather than passing beside it. This
-repo's suite holds that probe on the racy ledger and on the locked one.
+sees neither. `depositDone` says which: either way the deposit was in flight
+while the reading was held, and asserting where it stood proves the probe
+reached the race rather than passing beside it. This repo's suite holds both
+cases as written here.
 
 The property stays beside the probe. It is what finds the race's siblings.
 

@@ -247,6 +247,62 @@ describe("the order comes from the interleaving and nothing else", () => {
     expect(under(false)).toBe("w l h x");
     expect(under(true)).toBe("l h w x");
   });
+
+  /**
+   * The root forks p, then starts c by `start` and waits for both. Over every
+   * priority on a grid, c outranking p runs c first, and p outranking c runs
+   * p first.
+   */
+  // Regression: a fiber `Effect.all` started was taken as having yielded at
+  // birth, since Effect starts it from a task scheduled under it, so the
+  // priority strategy dropped it below every other fiber before its first op
+  // and c never ran before p.
+  test.each(["fork", "all"] as const)(
+    "a fiber started by %s gets the priority it is given",
+    (start) => {
+      const pair = Effect.suspend(() => {
+        const log: string[] = [];
+        const steps = (name: string) =>
+          note(log, `${name}1`).pipe(Effect.zipRight(note(log, `${name}2`)));
+        return Effect.gen(function* () {
+          const p = yield* Effect.fork(steps("p"));
+          if (start === "all")
+            yield* Effect.all([steps("c"), Effect.void], { concurrency: "unbounded" });
+          else yield* Fiber.join(yield* Effect.fork(steps("c")));
+          yield* Fiber.join(p);
+          return log.join(" ");
+        });
+      });
+      const grid = [0, 25, 50, 75, 99];
+      const orders = new Set(
+        grid.flatMap((root) =>
+          grid.flatMap((first) =>
+            grid.flatMap((second) =>
+              grid.map((third) =>
+                finished(pair, {
+                  strategy: "priority",
+                  priorities: [root, first, second, third],
+                  changeAt: [],
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(orders).toEqual(new Set(["p1 p2 c1 c2", "c1 c2 p1 p2"]));
+    },
+  );
+
+  // Regression: the seed was the interleaving's JSON, so one written with its
+  // fields in another order drew other numbers.
+  test("an interleaving written with its fields in another order replays the same randomness", () => {
+    const drawn = Random.nextInt.pipe(
+      Effect.zipWith(Random.nextInt, (left, right) => [left, right]),
+    );
+    expect(simulate(drawn, { picks: [3], preemptAt: [1], strategy: "walk" })).toEqual(
+      simulate(drawn, { strategy: "walk", preemptAt: [1], picks: [3] }),
+    );
+  });
 });
 
 describe("a preemption can fall between any two ops", () => {
@@ -377,23 +433,22 @@ describe("how a run ends", () => {
   });
 
   // Regression: a deadlock on locks taken by an uninterruptible acquire threw
-  // instead of parking.
+  // instead of parking. Each such park strands its fibers for the life of the
+  // process, so the case parks three runs rather than a property's budget.
   test("a lock-order inversion on uninterruptible acquires parks, naming the fibers it strands", () => {
     const program = inversion((lock, then) =>
       Effect.scoped(
         Effect.acquireRelease(lock.take(1), () => lock.release(1)).pipe(Effect.zipRight(then)),
       ),
     );
-    const stranded = new Set<number>();
-    check(
-      property(interleavingsOf(program), (interleaving) => {
-        const run = simulate(program, interleaving);
-        if (run.parked) stranded.add(run.stranded);
-        else expect(run.exit).toEqual(Exit.succeed("done"));
-      }),
-    );
-    expect(stranded.size).toBeGreaterThan(0);
-    expect([...stranded]).not.toContain(0);
+    const before = roots();
+    const stranded: number[] = [];
+    for (let op = 0; op < 200 && stranded.length < 3; op++) {
+      const run = simulate(program, { strategy: "walk", preemptAt: [op], picks: [] });
+      if (run.parked) stranded.push(run.stranded);
+    }
+    expect(stranded).toEqual([3, 3, 3]);
+    expect(roots() - before).toBe(3);
   });
 
   test("a program waiting on a deferred nobody completes is parked under every interleaving", () => {
@@ -633,14 +688,14 @@ describe("finding races", () => {
    */
   const probe = (locked: boolean) =>
     Effect.gen(function* () {
-      const held = yield* Deferred.make<void>();
+      const reached = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const ledger = yield* makeLedger(
         locked,
-        Deferred.succeed(held, undefined).pipe(Effect.zipRight(Deferred.await(release))),
+        Deferred.succeed(reached, undefined).pipe(Effect.zipRight(Deferred.await(release))),
       );
       const reading = yield* Effect.fork(ledger.read);
-      yield* Deferred.await(held);
+      yield* Deferred.await(reached);
       const deposit = yield* Effect.fork(ledger.deposit);
       const settled = yield* Fiber.status(deposit).pipe(
         Effect.repeat({ until: (status) => !FiberStatus.isRunning(status) }),
