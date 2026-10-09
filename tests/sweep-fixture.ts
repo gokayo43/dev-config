@@ -445,8 +445,8 @@ export interface Outcome {
   readonly ok: boolean;
   /** Everything the run wrote about why it failed, joined — what a diagnostic is asserted against. */
   readonly said: string;
-  /** How long the case took, in ms, which is the only place a drain's cost is visible. */
-  readonly took: number;
+  /** What each departure the case measured asked the page's timer to sleep, in ms, in the order it left: what a drain cost, as the drain asked for it. */
+  readonly asked: readonly number[];
   /** Whether each run of the case passed, one entry per repetition the run asked for. */
   readonly verdicts: readonly boolean[];
   /** Every video the case left under the run's output directory. */
@@ -531,12 +531,15 @@ async function videosOf(spec: ConfigObject, output: string): Promise<Video[]> {
   return await Promise.all(named.map(videoAt));
 }
 
-/** What one spec spent, in ms: the longest result, since a retry runs the case again. */
-function tookBy(spec: ConfigObject): number {
-  const spent = resultsOf(spec).map((result) =>
-    typeof result["duration"] === "number" ? result["duration"] : 0,
-  );
-  return Math.max(0, ...spent);
+/** The annotation a spec notes one measured departure under, its description the ms that departure asked for. One constant, two ends. */
+export const ASKED = "asked";
+
+/** Every departure one spec measured, as its results noted them. */
+function askedBy(spec: ConfigObject): number[] {
+  return resultsOf(spec)
+    .flatMap((result) => listAt(result, "annotations"))
+    .filter((annotation) => annotation["type"] === ASKED)
+    .map((annotation) => Number(annotation["description"]));
 }
 
 /** Whether each repetition of one spec came out as expected, which is how the reporter says it passed. */
@@ -693,7 +696,7 @@ export async function sweeping(
     outcomes.set(typeof title === "string" ? title : "", {
       ok: spec["ok"] === true,
       said: saidBy(spec),
-      took: tookBy(spec),
+      asked: askedBy(spec),
       verdicts: verdictsOf(spec),
       videos: await videosOf(spec, output),
     });

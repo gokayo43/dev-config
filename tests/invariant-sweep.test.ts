@@ -19,7 +19,15 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { LONG_AFTER, type Outcome, serving, sweeping, type Use, WRITTEN } from "./sweep-fixture.ts";
+import {
+  ASKED,
+  LONG_AFTER,
+  type Outcome,
+  serving,
+  sweeping,
+  type Use,
+  WRITTEN,
+} from "./sweep-fixture.ts";
 
 const SWEEP = JSON.stringify(`${import.meta.dir}/../invariant-sweep.ts`);
 
@@ -41,20 +49,37 @@ ${body}
 }
 
 /**
- * What one departure from a page may cost, in ms.
- *
- * The drain is the document's own answer, and a document that is changing
- * without pause gives it at twice the quiet window — a second, whatever the page
- * is doing. The rest of the budget is the browser's own navigation and enough
- * slack that a loaded box does not decide a verdict. What it is a bound against
- * is the shape that had the runner hold the clock: a page that never went quiet
- * cost the runner's whole cap every time it was left, which measured 5s a
- * departure and 25s across the five below.
+ * The most sleep a departure from a document changing without pause asks of the
+ * page's timer, in ms: twice the quiet window from when it armed, the horizon
+ * `docs/exports/invariant-sweep.md` gives such a document. Asked for, not
+ * measured, so a loaded box can only lower it.
  */
-const A_DEPARTURE = 2_000;
+const HORIZON = 1_000;
 
-/** How many times the animated case leaves the page, which is what its budget multiplies. */
-const DEPARTURES = 5;
+/**
+ * What a spec that measures a departure runs first. The drain sleeps on the
+ * page's own `setTimeout`, so wrapping it lets each document tally the sleep
+ * it was asked for, in the whole ms the timer takes: its delay is a WebIDL
+ * `long`. `leave` navigates and notes what that departure asked for under
+ * `ASKED`. The tally lives in the document and is read there, so a measured
+ * departure navigates within the document. The drain runs before the call
+ * whatever the call goes on to replace.
+ */
+const MEASURED = `  await page.addInitScript(() => {
+    const sleep = window.setTimeout;
+    window.__asked = 0;
+    window.setTimeout = (handler, ms, ...rest) => {
+      window.__asked += Math.trunc(ms);
+      return sleep(handler, ms, ...rest);
+    };
+  });
+  const asked = async () => await page.evaluate(() => window.__asked);
+  const leave = async (url) => {
+    const before = await asked();
+    await page.goto(url);
+    test.info().annotations.push({ type: ${JSON.stringify(ASKED)}, description: String((await asked()) - before) });
+  };
+`;
 
 /** How many times each steady case runs, on a quiet renderer and again on a slowed one. */
 const RUNS = 20;
@@ -133,18 +158,18 @@ const CASES = [
   ),
   // A document that is changing without pause has nothing more to say and no
   // gap in which to say so, so leaving it is bounded by the cutoff rather than
-  // by a cap the runner holds. What this asserts is the cost, since the page
-  // breaks no invariant either way.
+  // by a cap. What this asserts is the cost, since the page breaks no invariant
+  // either way.
   spec(
     "leaving an animated page costs no more than its budget",
-    Array.from({ length: DEPARTURES }, () => `  await page.goto("/animated");`).join("\n"),
+    `${MEASURED}  await page.goto("/animated");\n  await leave("/animated#left");`,
   ),
-  // The middle one is a fragment: a navigation with no new document behind it.
-  // Nothing re-runs in the page, so a drain waiting on anything the runner arms
-  // per navigation waits for a word that can no longer be spoken.
+  // The second is a fragment: a navigation with no new document behind it.
+  // Nothing re-runs in the page, so a drain waiting on anything armed per
+  // navigation waits for a word that can no longer be spoken.
   spec(
     "a same-document navigation does not stall the next one",
-    `  await page.goto("/clean");\n  await page.goto("/clean#section");\n  await page.goto("/clean");`,
+    `${MEASURED}  await page.goto("/clean");\n  await page.goto("/clean#section");\n  await leave("/clean#next");`,
   ),
   // The popup logs its violation and then goes, while the drain that would have
   // flushed it is still waiting. What it measured has already crossed; the run
@@ -774,19 +799,21 @@ describe("the shift verdict, run after run", () => {
 });
 
 // Draining is a wait, and a wait nobody bounds is a suite nobody runs. Both
-// cases here are about what leaving a page costs, and both were minutes rather
-// than seconds when the runner held the clock instead of the document.
+// cases here are about what leaving a page costs, counted as the sleep the drain
+// asked for rather than timed: a drain that waited on a cap, or on a same-document
+// navigation, asks for seconds of it, and a loaded box asks for no more.
 describe("what leaving a page costs", () => {
   test("an animated page is bounded by its cutoff, not by a cap", () => {
-    const { ok, took } = outcome("leaving an animated page costs no more than its budget");
+    const { ok, asked } = outcome("leaving an animated page costs no more than its budget");
     expect(ok).toBe(true);
-    expect(took).toBeLessThan(DEPARTURES * A_DEPARTURE);
+    expect(asked).toHaveLength(1);
+    for (const sleep of asked) expect(sleep).toBeLessThanOrEqual(HORIZON);
   });
 
   test("and a same-document navigation waits for nothing", () => {
-    const { ok, took } = outcome("a same-document navigation does not stall the next one");
+    const { ok, asked } = outcome("a same-document navigation does not stall the next one");
     expect(ok).toBe(true);
-    expect(took).toBeLessThan(A_DEPARTURE);
+    expect(asked).toEqual([0]);
   });
 });
 
