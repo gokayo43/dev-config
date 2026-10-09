@@ -1,14 +1,17 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Dependency policy shared by gokayo43's Bun projects.",
+  "description": [
+    "Dependency policy shared by gokayo43's Bun projects.",
+    "minimumReleaseAge follows the slowest consumer's bunfig.toml, because a PR holding a version that repo's own window refuses fails its install. It moves to 3 days once every consumer's bunfig.toml holds releases for 3 days or less."
+  ],
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "schedule": ["* 0-6 * * 1"],
   "timezone": "Europe/Amsterdam",
-  "minimumReleaseAge": "3 days",
+  "minimumReleaseAge": "7 days",
   "vulnerabilityAlerts": { "enabled": true },
   "osvVulnerabilityAlerts": true,
   "prBodyNotes": [
-    "{{#if isVulnerabilityAlert}}This security fix skips the preset's schedule and release-age wait, but the repo's `minimumReleaseAge` in `bunfig.toml` may still refuse it. If `bun install` on this branch refuses a version as too new, add each package it refuses to `minimumReleaseAgeExcludes`, run `bun install` until it passes, then take the names off again and commit `bun.lock`: the lockfile keeps the versions, and a frozen install does not re-check them.{{/if}}"
+    "{{#if isVulnerabilityAlert}}This security fix skips the release-age wait, so `bun install` may refuse the fixed version as too new; [Vulnerability fixes](https://github.com/gokayo43/dev-config#vulnerability-fixes) has the steps that land it.{{/if}}"
   ],
   "internalChecksFilter": "strict",
   "rangeStrategy": "pin",
@@ -37,8 +40,8 @@
       "minimumReleaseAge": null
     },
     {
-      "description": "This repo's own pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody.",
-      "matchPackageNames": ["gokayo43/dev-config"],
+      "description": "dev-config's and dev-config-db's pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody.",
+      "matchPackageNames": ["gokayo43/dev-config", "gokayo43/dev-config-db"],
       "automerge": false
     },
     {

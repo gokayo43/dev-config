@@ -3,15 +3,18 @@ import { describe, expect, test } from "bun:test";
 import {
   ACTION_FILES,
   imagesIn,
-  pinGate,
   referencesIn,
   unpinned,
+  workflowGate,
 } from "../.github/actions/lint-workflows/pins.ts";
 import { containing } from "./matchers.ts";
 import { materialise, type Tree } from "./tree.ts";
 
 const COMMIT = "3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DIGEST = "sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416";
+
+/** Every image declaring no volume, so these cases grade the pins alone. */
+const noVolumes = (): Promise<readonly string[]> => Promise.resolve([]);
 
 function uses(...values: string[]): string[] {
   return unpinned(values.map((value) => ({ file: "w.yml", kind: "action", value }))).map(
@@ -162,7 +165,9 @@ describe("the files read", () => {
 
   test("both spellings, at any depth, and the extra paths", async () => {
     const root = await materialise(CLEAN);
-    const problems = (await pinGate(root, ["setup/*.yml"])).map(({ file }) => file ?? "");
+    const problems = (await workflowGate(root, ["setup/*.yml"], noVolumes)).map(
+      ({ file }) => file ?? "",
+    );
     expect(problems.toSorted((a, b) => (a < b ? -1 : 1))).toEqual([
       ".github/actions/nested/deeper/action.yaml",
       ".github/workflows/lighthouse.yaml",
@@ -188,29 +193,49 @@ describe("the files read", () => {
       ].join("\n"),
     });
 
-    const mutable = await pinGate(await materialise(workflow("postgres:16-alpine")), []);
+    const mutable = await workflowGate(
+      await materialise(workflow("postgres:16-alpine")),
+      [],
+      noVolumes,
+    );
     expect(mutable.map(({ file, message }) => `${file ?? ""}: ${message}`)).toEqual([
       containing(".github/workflows/db.yml: postgres:16-alpine is a mutable image tag"),
     ]);
-    expect(await pinGate(await materialise(workflow(`postgres:16-alpine@${DIGEST}`)), [])).toEqual(
-      [],
-    );
+    expect(
+      await workflowGate(
+        await materialise(workflow(`postgres:16-alpine@${DIGEST}`)),
+        [],
+        noVolumes,
+      ),
+    ).toEqual([]);
   });
 
   test("a docker action's image is refused by the file that declares it", async () => {
-    const mutable = await pinGate(await materialise(dockerActionTree("docker://alpine:3.22")), []);
+    const mutable = await workflowGate(
+      await materialise(dockerActionTree("docker://alpine:3.22")),
+      [],
+      noVolumes,
+    );
     expect(mutable.map(({ file, message }) => `${file ?? ""}: ${message}`)).toEqual([
       containing(".github/actions/dockery/action.yml: docker://alpine:3.22 is a mutable image tag"),
     ]);
     expect(
-      await pinGate(await materialise(dockerActionTree(`docker://alpine@${DIGEST}`)), []),
+      await workflowGate(
+        await materialise(dockerActionTree(`docker://alpine@${DIGEST}`)),
+        [],
+        noVolumes,
+      ),
     ).toEqual([]);
-    expect(await pinGate(await materialise(dockerActionTree("Dockerfile")), [])).toEqual([]);
+    expect(
+      await workflowGate(await materialise(dockerActionTree("Dockerfile")), [], noVolumes),
+    ).toEqual([]);
   });
 
   test("an extra path that matches nothing is how a renamed file stops being checked", async () => {
     const root = await materialise(CLEAN);
-    const messages = (await pinGate(root, ["setup/renamed-*.yml"])).map(({ message }) => message);
+    const messages = (await workflowGate(root, ["setup/renamed-*.yml"], noVolumes)).map(
+      ({ message }) => message,
+    );
     expect(messages[0]).toEqual(containing("matched no file"));
     expect(messages).toHaveLength(3);
   });
@@ -222,7 +247,7 @@ describe("the files read", () => {
       ...CLEAN,
       ".github/workflows/broken.yml": "jobs:\n  a:\n   - oops\n  b: [",
     });
-    const problems = (await pinGate(root, [])).map(({ file }) => file ?? "");
+    const problems = (await workflowGate(root, [], noVolumes)).map(({ file }) => file ?? "");
     expect(problems).toContain(".github/workflows/broken.yml");
     expect(problems).toContain(".github/workflows/lighthouse.yaml");
   });
@@ -234,7 +259,7 @@ describe("the files read", () => {
       "node_modules/some-action/.github/workflows/ci.yml":
         "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v5\n",
     });
-    expect((await pinGate(root, [])).map(({ file }) => file ?? "")).not.toContain(
+    expect((await workflowGate(root, [], noVolumes)).map(({ file }) => file ?? "")).not.toContain(
       "node_modules/some-action/.github/workflows/ci.yml",
     );
   });

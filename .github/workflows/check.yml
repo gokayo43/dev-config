@@ -521,15 +521,10 @@ jobs:
     # overlapping is the ordinary case here, and the second to start dies with
     # "port is already allocated". The assigned port is read back below.
     #
-    # Each image declares its data directory a VOLUME, so without the `--tmpfs`
-    # over it every job would leave one anonymous volume per service on the
-    # runner box: the runner removes a service container without its volumes,
-    # after the last step, and no step can remove them earlier, since Docker
-    # refuses to remove a volume while its container exists. In memory, the
-    # job's data dies with the container. Postgres is capped at 1g, five times
-    # the largest data directory measured on the runner box (201 MB), so a
-    # runaway job fails on a full disk instead of taking the box's memory from
-    # the live sites.
+    # Each `--tmpfs` covers the data directory its image declares a volume, which
+    # lint-workflows asks for (README, "Where it runs"). The caps are measured:
+    # the largest Postgres data directory a job here had left on the runner box
+    # was 201 MB, and the largest Redis one, its snapshot, under 1 MB.
     services:
       postgres:
         image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
@@ -552,7 +547,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
-          --tmpfs /data
+          --tmpfs /data:size=64m
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

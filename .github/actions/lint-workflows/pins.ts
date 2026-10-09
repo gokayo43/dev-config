@@ -1,4 +1,5 @@
 import { isList, type Problem, parseEach, record, repoFiles } from "../_lib/gate.ts";
+import { imageOf, servicesIn, unmounted, type VolumesOf } from "./services.ts";
 
 /** GitHub accepts both spellings for every one of these, so both are read. */
 export const ACTION_FILES = [".github/actions/*/action.yml", ".github/actions/*/action.yaml"];
@@ -28,13 +29,6 @@ export function referencesIn(document: unknown): string[] {
   ];
 }
 
-/** `container: node:22` and `container: {image: node:22}` are one declaration, and a service is written the second way. */
-function imageOf(node: unknown): string[] {
-  if (typeof node === "string") return [node];
-  const image = record(node)["image"];
-  return typeof image === "string" ? [image] : [];
-}
-
 /**
  * A Docker container action names its image in its metadata rather than in a
  * `uses:`. Only the `docker://` form is a registry reference — every other
@@ -53,14 +47,11 @@ function actionImageOf(document: unknown): string[] {
  * take an action input that happens to be called `container` with it.
  */
 export function imagesIn(document: unknown): string[] {
-  const jobs = Object.values(record(record(document)["jobs"])).flatMap((job) => {
-    const node = record(job);
-    return [
-      ...imageOf(node["container"]),
-      ...Object.values(record(node["services"])).flatMap(imageOf),
-    ];
-  });
-  return [...jobs, ...actionImageOf(document)];
+  const containers = Object.values(record(record(document)["jobs"])).flatMap((job) =>
+    imageOf(record(job)["container"]),
+  );
+  const services = servicesIn(document).map(({ image }) => image);
+  return [...containers, ...services, ...actionImageOf(document)];
 }
 
 export interface Reference {
@@ -97,7 +88,11 @@ export function unpinned(references: readonly Reference[]): Problem[] {
   });
 }
 
-export async function pinGate(root: string, extraPaths: readonly string[]): Promise<Problem[]> {
+export async function workflowGate(
+  root: string,
+  extraPaths: readonly string[],
+  volumesOf: VolumesOf,
+): Promise<Problem[]> {
   const own = await repoFiles(root, OWN);
   // An extra path that matches nothing is a problem in its own right: it is how
   // a renamed file quietly stops being checked.
@@ -116,5 +111,14 @@ export async function pinGate(root: string, extraPaths: readonly string[]): Prom
     ...imagesIn(value).map((image) => ({ file, kind: "image" as const, value: image })),
   ]);
 
-  return [...missing, ...documents.problems, ...unpinned(references)];
+  const services = documents.read.flatMap(({ file, value }) =>
+    servicesIn(value).map((service) => ({ ...service, file })),
+  );
+
+  return [
+    ...missing,
+    ...documents.problems,
+    ...unpinned(references),
+    ...(await unmounted(services, volumesOf)),
+  ];
 }

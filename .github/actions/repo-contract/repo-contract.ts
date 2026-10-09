@@ -484,7 +484,9 @@ function floorsCoverage(threshold: unknown): boolean {
 }
 
 /** The fleet's release-age window in seconds; a repo may hold releases longer, never shorter. */
-const MINIMUM_RELEASE_AGE = 259_200;
+export const MINIMUM_RELEASE_AGE = 259_200;
+
+const DAY = 86_400;
 
 /**
  * A whole package name, scoped or not: the only form bun matches an exclusion
@@ -521,7 +523,7 @@ async function checkBunfig(root: string): Promise<Problem[]> {
   if (typeof minimumReleaseAge !== "number" || minimumReleaseAge < MINIMUM_RELEASE_AGE) {
     problems.push({
       file: "bunfig.toml",
-      message: `[install] minimumReleaseAge must hold new releases for at least 3 days (${MINIMUM_RELEASE_AGE} seconds), so a compromised release pulled within that time never reaches the lockfile`,
+      message: `[install] minimumReleaseAge must hold new releases for at least ${MINIMUM_RELEASE_AGE / DAY} days (${MINIMUM_RELEASE_AGE} seconds), so a compromised release pulled within that time never reaches the lockfile`,
     });
   }
   problems.push(...checkReleaseAgeExcludes(install["minimumReleaseAgeExcludes"]));

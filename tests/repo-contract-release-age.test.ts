@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { containing } from "./matchers.ts";
-import { contract, withReleaseAge } from "./repo-contract-fixture.ts";
+import { contract, withBunfig } from "./repo-contract-fixture.ts";
 
 /**
  * How a bunfig's release-age window and its exclusions are graded. Its own file
@@ -28,7 +28,7 @@ describe("the release-age window", () => {
       [containing("minimumReleaseAge must hold new releases for at least 3 days")],
     ],
   ])("a release-age window of %s", async (_what, window, expected) => {
-    expect(await contract(withReleaseAge(window))).toEqual([...expected]);
+    expect(await contract(withBunfig({ window }))).toEqual([...expected]);
   });
 
   // Bun matches an exclusion against a whole package name: under `"@types/*"`,
@@ -38,13 +38,17 @@ describe("the release-age window", () => {
   // fails the exact names, and one that looks only for a `*`.
   test("exclusions pass when each names a package exactly", async () => {
     const excludes = 'minimumReleaseAgeExcludes = ["@types/node", "typescript"]\n';
-    expect(await contract(withReleaseAge(`minimumReleaseAge = 259200\n${excludes}`))).toEqual([]);
+    expect(
+      await contract(withBunfig({ window: `minimumReleaseAge = 259200\n${excludes}` })),
+    ).toEqual([]);
   });
 
   test("every exclusion that names no package is refused by name", async () => {
     const excludes =
       'minimumReleaseAgeExcludes = ["@gokayo43/*", "typescript", "@types/", "@types"]\n';
-    expect(await contract(withReleaseAge(`minimumReleaseAge = 259200\n${excludes}`))).toEqual([
+    expect(
+      await contract(withBunfig({ window: `minimumReleaseAge = 259200\n${excludes}` })),
+    ).toEqual([
       containing('lists "@gokayo43/*", which exempts nothing'),
       containing('lists "@types/", which exempts nothing'),
       containing('lists "@types", which exempts nothing'),

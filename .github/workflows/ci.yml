@@ -36,9 +36,7 @@ jobs:
     # on a self-hosted runner; the short of it is that a bare `5432:5432` is
     # reachable from off the box, and that two of these jobs cannot both have
     # it. Every URL below is built from the assignment rather than from a
-    # number, which is also what makes TEST_DATABASE_URL explicit here. The
-    # `--tmpfs` over each image's data directory is check.yml's too, for the
-    # volume each service would otherwise leave on the runner box.
+    # number, which is also what makes TEST_DATABASE_URL explicit here.
     services:
       postgres:
         image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
@@ -67,7 +65,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
-          --tmpfs /data
+          --tmpfs /data:size=64m
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

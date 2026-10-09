@@ -9,8 +9,8 @@ import {
   DEFAULTS,
   manifestWith,
   PIN,
+  withBunfig,
   withSpec,
-  withThreshold,
 } from "./repo-contract-fixture.ts";
 import { materialise, type Tree, without } from "./tree.ts";
 
@@ -136,12 +136,7 @@ describe("repo contract", () => {
     ],
     ["neither", "", [containing("[install] exact must be true")]],
   ])("a bunfig that pins with %s", async (_what, pinning, expected) => {
-    expect(
-      await contract({
-        ...CLEAN,
-        "bunfig.toml": `[install]\nminimumReleaseAge = 604800\n${pinning}\n[test]\ncoverageThreshold = { lines = 0.75, functions = 0.75 }\n`,
-      }),
-    ).toEqual([...expected]);
+    expect(await contract(withBunfig({ pinning }))).toEqual([...expected]);
   });
 
   // A floor was checked for being declared, and `0` is declared. Bun enforces
@@ -155,7 +150,7 @@ describe("repo contract", () => {
     ["an empty table", "{  }"],
     ["a floor bun does not read", "{ line = 0.9 }"],
   ])("a coverage floor that is %s is refused", async (_what, threshold) => {
-    expect(await contract(withThreshold(threshold))).toEqual([
+    expect(await contract(withBunfig({ test: `coverageThreshold = ${threshold}\n` }))).toEqual([
       containing("coverageThreshold must be a floor a run can fail"),
     ]);
   });
@@ -164,7 +159,7 @@ describe("repo contract", () => {
     ["a number above 0", "0.75"],
     ["a table of floors above 0", "{ lines = 0.75, statements = 0.9 }"],
   ])("a coverage floor that is %s passes", async (_what, threshold) => {
-    expect(await contract(withThreshold(threshold))).toEqual([]);
+    expect(await contract(withBunfig({ test: `coverageThreshold = ${threshold}\n` }))).toEqual([]);
   });
 
   // Collection belongs to the run CI makes — docs/gates/test-suite.md. Three
@@ -187,8 +182,8 @@ describe("repo contract", () => {
       [containing("[test] coverage decides where the floor is applied")],
     ],
   ])("a floored bunfig that %s", async (_what, line, expected) => {
-    const bunfig = `[install]\nminimumReleaseAge = 604800\nexact = true\n\n[test]\n${line}coverageThreshold = { lines = 0.75, functions = 0.75 }\n`;
-    expect(await contract({ ...CLEAN, "bunfig.toml": bunfig })).toEqual(expected);
+    const floored = `${line}coverageThreshold = { lines = 0.75, functions = 0.75 }\n`;
+    expect(await contract(withBunfig({ test: floored }))).toEqual(expected);
   });
 
   // `Bun.TOML.parse` throws, so a bunfig nobody can read used to leave the step
