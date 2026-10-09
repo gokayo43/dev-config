@@ -1,5 +1,5 @@
 /**
- * The committed `dist/`, held equal to a fresh build. Which two exports are built
+ * The committed `dist/`, held equal to a fresh build. Which three exports are built
  * and why is `tsdown.config.ts`; that the result is committed rather than built
  * on install is STACK.md's bargain for a git dependency.
  *

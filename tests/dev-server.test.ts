@@ -858,7 +858,7 @@ describe("the fixture's own guards", () => {
 });
 
 describe("the package", () => {
-  test("ships the CLI and its derivation, and names only the CLI as a binary", async () => {
+  test("ships the CLI, its derivation and its lock, and names only the CLI as a binary", async () => {
     // Two wrong implementations. A file omitted from `files` is not published and
     // one omitted from `bin` has no name for `bun run` to find. And a bin listed
     // in `exports` is a module this package tells consumers to import, which is
@@ -875,8 +875,10 @@ describe("the package", () => {
     }
     expect(parsed.files).toContain("dev-server.ts");
     expect(parsed.files).toContain("dev-server-derive.ts");
+    expect(parsed.files).toContain("file-lock.ts");
     expect(parsed.bin).toEqual({ "dev-server": "./dev-server.ts" });
     expect(parsed.exports).not.toHaveProperty(["./dev-server.ts"]);
     expect(parsed.exports).not.toHaveProperty(["./dev-server-derive.ts"]);
+    expect(parsed.exports).not.toHaveProperty(["./file-lock.ts"]);
   });
 });

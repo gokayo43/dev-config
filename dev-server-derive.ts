@@ -10,6 +10,7 @@
  * record and one port for two servers, which is one worktree serving another's
  * code under a URL it prints itself.
  */
+import { type Holder, isHolder } from "./file-lock.ts";
 
 /**
  * Where derived dev ports live. The floor is above the ports servers are
@@ -32,23 +33,6 @@ export interface Identity {
   readonly branch: string;
   /** Whether that commit is all the name there is. */
   readonly detached: boolean;
-}
-
-/**
- * Which process a file names, beyond its number. A pid alone names a different
- * process after a reboot and, given time, on the same one — and this tool
- * signals process GROUPS, so being wrong costs somebody else's processes rather
- * than an error. The boot id says which boot the number was taken on, and the
- * start tick (`/proc/<pid>/stat` field 22) says when within it, which together
- * no recycled pid reproduces.
- *
- * Two files carry one: a server's record, and the lock one `up` holds against
- * another. So one guard reads both, and one question is asked of both.
- */
-export interface Holder {
-  readonly pid: number;
-  readonly bootId: string;
-  readonly startTicks: number;
 }
 
 /** What `up` wrote down, and what every other command reads to find the process again. */
@@ -143,21 +127,6 @@ export function isServer(value: unknown): value is Server {
   return isHolder(value) && hasText(value) && hasPort(value);
 }
 
-/** The three fields that say which process, in a record or in a lock. */
-export function isHolder(value: unknown): value is Holder {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "pid" in value &&
-    isPid(value.pid) &&
-    "bootId" in value &&
-    typeof value.bootId === "string" &&
-    value.bootId !== "" &&
-    "startTicks" in value &&
-    isTick(value.startTicks)
-  );
-}
-
 /** The five fields that are text. */
 function hasText(value: unknown): value is {
   worktree: string;
@@ -186,11 +155,6 @@ function hasPort(value: unknown): value is { port: number } {
   return typeof value === "object" && value !== null && "port" in value && isPort(value.port);
 }
 
-/** A pid this tool may signal: a real process, never `0` (its own group) or `1` (everything). */
-function isPid(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 1;
-}
-
 /** A port this tool could have derived. Anything else did not come from here. */
 function isPort(value: unknown): value is number {
   return (
@@ -199,11 +163,6 @@ function isPort(value: unknown): value is number {
     value >= PORT_FLOOR &&
     value < PORT_CEILING
   );
-}
-
-/** A tick count `/proc` could have reported. */
-function isTick(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 /** FNV-1a: short, stable across runs, and not a security claim — it names things. */

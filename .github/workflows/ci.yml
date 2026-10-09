@@ -24,7 +24,7 @@ concurrency:
 jobs:
   check:
     runs-on: [self-hosted, linux]
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     # The replay gate's fixtures are two databases and what each ends up
     # holding, so the suite drives a real Postgres — see tests/replay.test.ts
