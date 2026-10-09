@@ -151,10 +151,10 @@ a change to a rule usually lands here too.
   a property generates the order overlapping fibers run in. `property.ts`,
   `invariant-sweep.ts` and `count-budget.ts` are the three exports that read the
   environment for a value. Their pages are `docs/exports/`.
-  Two of them register tests rather than answering with problems, and the split
-  is by subject rather than by taste: a route table is a value one call can
-  grade, and a limiter is a sequence of attempts against a live Redis that only
-  a test framework can sequence.
+  `limiter-conformance.ts` registers tests where `response-schema.ts` answers
+  with problems, and the split is by subject rather than by taste: a route table
+  is a value one call can grade, and a limiter is a sequence of attempts against
+  a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
   to is this package's business rather than a caller's: three of them are built and
   five ship their source, and no import says which. `tsdown.config.ts` is where
@@ -262,9 +262,10 @@ a change to a rule usually lands here too.
   `fc.assert` rather than against the literal 100, which is fast-check's to
   change. `interleaving.test.ts` searches the racy fixtures in
   `interleaving-fixtures.ts` on fresh seeds, sized and counted by the rules on
-  the export's page, and holds the page's regression recipe on the booking;
-  the fixtures are a module of their own so that measuring them runs the code
-  the suite runs. `fuzz.test.ts` drives the fuzzer against a real server on a real
+  the export's page, and holds the page's regression probe on the torn read;
+  the fixtures are a module of their own because
+  `interleaving-measure.ts`, which re-takes the page's measurement table, runs
+  them too. `fuzz.test.ts` drives the fuzzer against a real server on a real
   port, since each of its four invariants is a statement about a response — and the
   route that never answers is why that fixture disposes without awaiting
   `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:
