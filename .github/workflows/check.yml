@@ -417,36 +417,36 @@ jobs:
           fi
           exit "$wrong"
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
           data-jobs-external: ${{ inputs['data-jobs-external'] }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
         with:
           stack-allowlist: ${{ inputs.stack-allowlist }}
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.
-      - uses: gokayo43/dev-config/.github/actions/lint-workflows@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
 
       # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
-      - uses: gokayo43/dev-config/.github/actions/shell-scripts@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/shell-scripts@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/install@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
@@ -475,7 +475,7 @@ jobs:
           bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
         with:
           nightly: ${{ inputs.nightly }}
           test-network: ${{ inputs['test-network'] }}
@@ -495,7 +495,7 @@ jobs:
       # every step before it down with it.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
-        uses: gokayo43/dev-config/.github/actions/mutation-lane@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+        uses: gokayo43/dev-config/.github/actions/mutation-lane@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
 
@@ -527,7 +527,7 @@ jobs:
     # was 201 MB, and the largest Redis one, its snapshot, under 1 MB.
     services:
       postgres:
-        image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
+        image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -539,7 +539,7 @@ jobs:
           --health-retries 30
           --tmpfs /var/lib/postgresql/data:size=1g
       redis:
-        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
         ports:
           - 127.0.0.1::6379
         options: >-
@@ -566,7 +566,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/install@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
@@ -598,7 +598,7 @@ jobs:
                   console.log(`PORT=${s.port}`); s.stop(true);' >> "$GITHUB_ENV"
           printf 'DATABASE_URL=%s\nREDIS_URL=%s\n' "$DATABASE_URL" "$REDIS_URL" >> "$GITHUB_ENV"
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@3abdc3fb889ff0e68bc8eb2bfe4c1a25ae693822 # v0.67.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@202552b7c2459bf12fbd8a32405308ee879b8c9d # v0.68.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}
