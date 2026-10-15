@@ -210,15 +210,8 @@ describe("repo contract", () => {
   // holding another list — and a gate that knew only `commands:` passed a
   // config declaring every hook it asks for while reading none of them.
   test("the jobs form is read, groups and all, which kills a gate reading only the commands map", async () => {
-    const jobs = [
-      "pre-commit:",
-      "  jobs:",
-      "    - name: staged",
-      "      group:",
-      "        jobs:",
-      "          - run: gitleaks git --staged --redact --no-banner .",
-      "",
-    ].join("\n");
+    const jobs =
+      "pre-commit:\n  jobs:\n    - name: staged\n      group:\n        jobs:\n          - run: gitleaks git --staged --redact --no-banner .\n";
     expect(await contract({ ...CLEAN, "lefthook.yml": jobs })).toEqual([]);
   });
 
@@ -240,27 +233,37 @@ describe("repo contract", () => {
     ).toEqual([containing("gitleaks git --staged")]);
   });
 
-  // The suite is CI's, on the pull request. The wrong implementation is the
-  // retired rule kept: a push hook that typechecks and tests is exactly what
-  // it asked for and exactly what this one refuses, once, in either form.
+  // The suite is CI's, on the pull request, so a push hook that runs anything
+  // is refused once, in either config shape. lefthook runs a file as well as a
+  // command: a `script:` job, or a key of the hook's `scripts:` map.
   test.each([
     [
-      "commands",
+      "typechecks and tests in the commands form",
+      "keeping the retired requirement",
       "pre-push:\n  commands:\n    typecheck:\n      run: bun run typecheck\n    test:\n      run: bun test\n",
     ],
-    ["jobs", "pre-push:\n  jobs:\n    - run: bun run typecheck\n    - run: bun test\n"],
-  ])(
-    "a pre-push hook in the %s form that typechecks and tests is refused once, which kills keeping the retired requirement",
-    async (_form, prePush) => {
-      const lefthook = `${CLEAN["lefthook.yml"]}\n${prePush}`;
-      expect(await contract({ ...CLEAN, "lefthook.yml": lefthook })).toEqual([
-        containing("pre-push runs nothing"),
-      ]);
-    },
-  );
-
-  test("a pre-push job nested in a group is refused, which kills a refusal reading only top-level runs", async () => {
-    const lefthook = `${CLEAN["lefthook.yml"]}\npre-push:\n  jobs:\n    - group:\n        jobs:\n          - run: bun test\n`;
+    [
+      "typechecks and tests in the jobs form",
+      "keeping the retired requirement",
+      "pre-push:\n  jobs:\n    - run: bun run typecheck\n    - run: bun test\n",
+    ],
+    [
+      "runs a job nested in a group",
+      "a refusal reading only top-level runs",
+      "pre-push:\n  jobs:\n    - group:\n        jobs:\n          - run: bun test\n",
+    ],
+    [
+      "runs a file through a script: job",
+      "a refusal reading run: alone",
+      'pre-push:\n  jobs:\n    - script: "suite.sh"\n      runner: bash\n',
+    ],
+    [
+      "runs a file through a scripts: map",
+      "a refusal reading run: alone",
+      'pre-push:\n  scripts:\n    "suite.sh":\n      runner: bash\n',
+    ],
+  ])("a pre-push hook that %s is refused once, which kills %s", async (_what, _kills, prePush) => {
+    const lefthook = `${CLEAN["lefthook.yml"]}\n${prePush}`;
     expect(await contract({ ...CLEAN, "lefthook.yml": lefthook })).toEqual([
       containing("pre-push runs nothing"),
     ]);
