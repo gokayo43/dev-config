@@ -1658,9 +1658,9 @@ for a private git dependency where the caller passed one — the optional build,
 `format:check`, `lint`, `typecheck`, `knip`, the test suite, the assertion that
 the suite ran, and — where the repo asks for it — the mutation lane over the
 domain files this branch changed.
-Everything from
-`format:check` to the test suite is the local `bun run check`, so a green
-pre-push is a green CI run; the rest is what only CI has.
+From `format:check` to `knip` the chain is the local `bun run check`, and the
+suite after it is the local `bun test`. CI runs both on the pull request, and
+the git hooks run none of it on push. The rest is what only CI has.
 
 The declarative gates come before `bun install` deliberately. They read the tree
 as committed, so a repo that has drifted out of the contract says so in seconds

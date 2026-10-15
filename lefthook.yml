@@ -1,7 +1,7 @@
 # Install/refresh with: bun run prepare
 #
-# pre-commit stays fast and staged-only; the whole-project checks (typecheck,
-# knip, tests) live on pre-push so a green push is a green CI run.
+# pre-commit checks the format and lint of the staged files and scans the index
+# for secrets. No hook runs on push, since the suite is CI's on the pull request.
 
 pre-commit:
   parallel: true
@@ -31,11 +31,3 @@ pre-commit:
       # commit is already burned, and a working-tree scan would fail over files
       # that were never going anywhere.
       run: gitleaks git --staged --redact --no-banner .
-
-pre-push:
-  parallel: true
-  commands:
-    typecheck:
-      run: bun run typecheck
-    test:
-      run: bun test

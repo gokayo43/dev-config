@@ -561,23 +561,36 @@ async function checkBunfig(root: string): Promise<Problem[]> {
  * `commands:` map. A gate that knew only one of them passes a config that
  * declares every hook it asks for and reads none of them.
  */
-function runsOf(entry: unknown): string[] {
+function entriesOf(entry: unknown): ConfigObject[] {
   const node = record(entry);
-  const run = node["run"];
   const nested = record(node["group"])["jobs"];
+  return [node, ...(isList(nested) ? nested.flatMap(entriesOf) : [])];
+}
+
+function hookEntries(hooks: ConfigObject, hook: string): ConfigObject[] {
+  const node = record(hooks[hook]);
+  const jobs = node["jobs"];
   return [
-    ...(typeof run === "string" ? [run] : []),
-    ...(isList(nested) ? nested.flatMap(runsOf) : []),
+    ...Object.values(record(node["commands"])).flatMap(entriesOf),
+    ...(isList(jobs) ? jobs.flatMap(entriesOf) : []),
   ];
 }
 
 function hookRuns(hooks: ConfigObject, hook: string): string[] {
-  const node = record(hooks[hook]);
-  const jobs = node["jobs"];
-  return [
-    ...Object.values(record(node["commands"])).flatMap(runsOf),
-    ...(isList(jobs) ? jobs.flatMap(runsOf) : []),
-  ];
+  return hookEntries(hooks, hook).flatMap(({ run }) => (typeof run === "string" ? [run] : []));
+}
+
+/**
+ * lefthook runs a file as well as a command: a job's `script:`, or a key of
+ * the hook's `scripts:` map, each run by its `runner`.
+ */
+function hookRunsAnything(hooks: ConfigObject, hook: string): boolean {
+  return (
+    Object.keys(record(record(hooks[hook])["scripts"])).length > 0 ||
+    hookEntries(hooks, hook).some(
+      ({ run, script }) => typeof run === "string" || typeof script === "string",
+    )
+  );
 }
 
 async function checkLefthook(root: string): Promise<Problem[]> {
@@ -599,15 +612,11 @@ async function checkLefthook(root: string): Promise<Problem[]> {
     });
   }
 
-  const prePush = hookRuns(hooks, "pre-push");
-  if (!prePush.some((run) => run.includes("typecheck"))) {
+  if (hookRunsAnything(hooks, "pre-push")) {
     problems.push({
       file: "lefthook.yml",
-      message: "pre-push must typecheck, so a green push is a green CI run",
+      message: "pre-push runs nothing; the suite is CI's on the pull request",
     });
-  }
-  if (!prePush.some((run) => /\btest\b/.test(run))) {
-    problems.push({ file: "lefthook.yml", message: "pre-push must run the test suite" });
   }
   return problems;
 }

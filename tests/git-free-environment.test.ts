@@ -1,10 +1,10 @@
 /**
  * The suite, run the way a git hook runs it, against a repository it must not
- * touch. `lefthook.yml` runs `bun test` from `pre-push`, and git hands every
- * hook the location of the repository it is acting on — so the fixtures' own
- * `git init` / `git add` / `git commit` land in that repository instead of in
- * the temp directory they were given, which is how a push once rewrote its own
- * branch into `commit 0`, `commit 1` and flipped `core.bare` to `true`.
+ * touch. git hands every hook the location of the repository it is acting on,
+ * so under any hook the fixtures' own `git init` / `git add` / `git commit`
+ * land in that repository instead of in the temp directory they were given,
+ * which is how a push once rewrote its own branch into `commit 0`, `commit 1`
+ * and flipped `core.bare` to `true`.
  *
  * Observed from outside: a `bun test` child is given a hook's variables pointed
  * at a sacrificial repository this case builds, and what is graded is that
@@ -172,7 +172,7 @@ async function runs(exported: Record<string, string>): Promise<{ code: number; s
   return { code: await proc.exited, said: `${out}\n${bad}` };
 }
 
-/** What git exports to `pre-push`, which is the hook `lefthook.yml` runs the suite from. */
+/** What git exports to `pre-push`. */
 function prePush({ gitDir }: Sacrificial) {
   return { GIT_DIR: gitDir, GIT_EDITOR: "true", GIT_EXEC_PATH: EXEC_PATH, GIT_PREFIX: "" };
 }
