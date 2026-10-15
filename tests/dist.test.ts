@@ -5,8 +5,7 @@
  *
  * A committed artifact is a second copy of the source, so something has to hold
  * the two together. It is a test rather than a CI step so that it runs wherever
- * the suite runs: in CI on the pull request, and in a local `bun test` before
- * the push.
+ * the suite runs: in CI on the pull request, and in any local `bun test`.
  */
 import { describe, expect, test } from "bun:test";
 import { readdir, stat } from "node:fs/promises";
