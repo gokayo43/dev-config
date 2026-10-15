@@ -1,0 +1,25 @@
+name: Build
+description: >-
+  `bun run build`, with the build tool's cache kept on the runner between runs.
+
+inputs:
+  cache:
+    description: >-
+      Paths the build tool caches in, one per line and relative to the
+      repository root, such as `.next/cache` for a Next app. Restored from the
+      runner's tool cache before the build and saved there after one that
+      passed, keyed on bun.lock, one key per repository per runner. A store
+      that cannot be read or written warns and costs the cache, never the
+      build. A path that is absolute, has a `..` segment, is the repository
+      root, is named twice or sits inside another named path, or a repository
+      with no bun.lock, is refused before the build. Empty, the default, runs
+      `bun run build` and keeps nothing.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BUILD_CACHE: ${{ inputs.cache }}
+      run: bash "$GITHUB_ACTION_PATH/build.sh"
