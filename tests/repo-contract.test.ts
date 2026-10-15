@@ -209,47 +209,76 @@ describe("repo contract", () => {
   // lefthook 2.x leads with `jobs:` — a list whose entries may be a `group:`
   // holding another list — and a gate that knew only `commands:` passed a
   // config declaring every hook it asks for while reading none of them.
-  test("the jobs form is read, groups and all", async () => {
+  test("the jobs form is read, groups and all, which kills a gate reading only the commands map", async () => {
     const jobs = [
       "pre-commit:",
       "  jobs:",
-      "    - name: secrets",
-      "      run: gitleaks git --staged --redact --no-banner .",
-      "",
-      "pre-push:",
-      "  jobs:",
-      "    - name: whole project",
+      "    - name: staged",
       "      group:",
       "        jobs:",
-      "          - run: bun run typecheck",
-      "          - run: bun test",
+      "          - run: gitleaks git --staged --redact --no-banner .",
       "",
     ].join("\n");
     expect(await contract({ ...CLEAN, "lefthook.yml": jobs })).toEqual([]);
   });
 
-  test("a jobs-form config that declares the hooks and runs nothing is still refused", async () => {
-    const empty =
+  test("a jobs-form config that declares both hooks with the wrong runs is refused on both, which kills a gate that reads a declared hook as a satisfied one", async () => {
+    const wrong =
       "pre-commit:\n  jobs:\n    - run: echo hi\n\npre-push:\n  jobs:\n    - run: echo hi\n";
-    expect(await contract({ ...CLEAN, "lefthook.yml": empty })).toEqual([
+    expect(await contract({ ...CLEAN, "lefthook.yml": wrong })).toEqual([
       containing("gitleaks git --staged"),
-      containing("pre-push must typecheck"),
-      containing("pre-push must run the test suite"),
+      containing("pre-push runs nothing"),
     ]);
   });
 
-  test("the hooks have to scan the index and gate the push", async () => {
+  test("the commit hook has to scan the index, and no push hook is asked for, which kills a gate still requiring one", async () => {
     expect(
       await contract({
         ...CLEAN,
         "lefthook.yml": "pre-commit:\n  commands:\n    secrets:\n      run: gitleaks git .\n",
       }),
-    ).toEqual([
-      containing("gitleaks git --staged"),
-      containing("pre-push must typecheck"),
-      containing("pre-push must run the test suite"),
+    ).toEqual([containing("gitleaks git --staged")]);
+  });
+
+  // The suite is CI's, on the pull request. The wrong implementation is the
+  // retired rule kept: a push hook that typechecks and tests is exactly what
+  // it asked for and exactly what this one refuses, once, in either form.
+  test.each([
+    [
+      "commands",
+      "pre-push:\n  commands:\n    typecheck:\n      run: bun run typecheck\n    test:\n      run: bun test\n",
+    ],
+    ["jobs", "pre-push:\n  jobs:\n    - run: bun run typecheck\n    - run: bun test\n"],
+  ])(
+    "a pre-push hook in the %s form that typechecks and tests is refused once, which kills keeping the retired requirement",
+    async (_form, prePush) => {
+      const lefthook = `${CLEAN["lefthook.yml"]}\n${prePush}`;
+      expect(await contract({ ...CLEAN, "lefthook.yml": lefthook })).toEqual([
+        containing("pre-push runs nothing"),
+      ]);
+    },
+  );
+
+  test("a pre-push job nested in a group is refused, which kills a refusal reading only top-level runs", async () => {
+    const lefthook = `${CLEAN["lefthook.yml"]}\npre-push:\n  jobs:\n    - group:\n        jobs:\n          - run: bun test\n`;
+    expect(await contract({ ...CLEAN, "lefthook.yml": lefthook })).toEqual([
+      containing("pre-push runs nothing"),
     ]);
   });
+
+  // A key with nothing under it runs nothing, so it is not what the rule
+  // refuses. The wrong implementation refuses the key's presence.
+  test.each([
+    ["no hook list at all", "pre-push:\n"],
+    ["an empty jobs list", "pre-push:\n  jobs: []\n"],
+    ["an empty commands map", "pre-push:\n  commands: {}\n"],
+  ])(
+    "a pre-push key with %s passes, which kills a refusal of the key's presence",
+    async (_shape, prePush) => {
+      const lefthook = `${CLEAN["lefthook.yml"]}\n${prePush}`;
+      expect(await contract({ ...CLEAN, "lefthook.yml": lefthook })).toEqual([]);
+    },
+  );
 
   test("a tracked .env is refused", async () => {
     const root = await materialise(CLEAN, [".env.example", ".env"]);

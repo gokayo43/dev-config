@@ -599,15 +599,11 @@ async function checkLefthook(root: string): Promise<Problem[]> {
     });
   }
 
-  const prePush = hookRuns(hooks, "pre-push");
-  if (!prePush.some((run) => run.includes("typecheck"))) {
+  if (hookRuns(hooks, "pre-push").length > 0) {
     problems.push({
       file: "lefthook.yml",
-      message: "pre-push must typecheck, so a green push is a green CI run",
+      message: "pre-push runs nothing; the suite is CI's on the pull request",
     });
-  }
-  if (!prePush.some((run) => /\btest\b/.test(run))) {
-    problems.push({ file: "lefthook.yml", message: "pre-push must run the test suite" });
   }
   return problems;
 }
