@@ -12,9 +12,20 @@ on:
   workflow_call:
     inputs:
       build:
-        description: Build before the static gate — for repos whose types come from generated code that is not committed.
+        description: >-
+          Build before the static gate and the boot gate: for repos whose types come from
+          generated code that is not committed, and for an app the boot gate starts, which
+          serves from its build.
         type: boolean
         default: false
+      build-cache:
+        description: >-
+          Paths the build tool caches in, one per line and relative to the repository
+          root, such as `.next/cache` for a Next app. Restored from the runner's tool
+          cache before the build and saved there after one that passed, keyed on
+          bun.lock. Needs `build: true`, and is refused without it.
+        type: string
+        default: ""
       affected:
         description: >-
           Run the typecheck lane over the packages a pull request changed rather than the
@@ -301,7 +312,8 @@ jobs:
       # other — `semantic-fixtures` needs the replay `upgrade-gate` adds, and
       # `probe-timeout` bounds a `probe-command` — so each is asked twice,
       # once about the job and once about the input it rides on. Then the mutation
-      # lane's floor, which bounds a score only that step measures, and
+      # lane's floor, which bounds a score only that step measures, the build
+      # cache, which is kept around a build only `build: true` runs, and
       # `affected`, which needs a turbo to hand the flag to — the one condition
       # here that is a fact about the tree rather than about the inputs, which
       # is why the step runs after the checkout.
@@ -332,6 +344,8 @@ jobs:
           PROBE_TIMEOUT: ${{ inputs['probe-timeout'] }}
           MUTATION_LANE: ${{ inputs['mutation-lane'] }}
           MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
+          BUILD: ${{ inputs.build }}
+          BUILD_CACHE: ${{ inputs['build-cache'] }}
           AFFECTED: ${{ inputs.affected }}
         run: |
           set -euo pipefail
@@ -412,41 +426,44 @@ jobs:
           if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_FLOOR" ]; then
             refuse "mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
           fi
+          if [ "$BUILD" != true ] && [ -n "$BUILD_CACHE" ]; then
+            refuse "build-cache needs build: true; the paths it names are kept around the build that input runs"
+          fi
           if [ "$AFFECTED" = true ] && [ ! -f turbo.json ]; then
             refuse "affected: true needs a turbo.json at the repository root — --affected is turbo's flag, and without turbo it is an argument this repo's build and typecheck scripts would be handed and refuse"
           fi
           exit "$wrong"
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
           data-jobs-external: ${{ inputs['data-jobs-external'] }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
         with:
           stack-allowlist: ${{ inputs.stack-allowlist }}
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.
-      - uses: gokayo43/dev-config/.github/actions/lint-workflows@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
 
       # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
-      - uses: gokayo43/dev-config/.github/actions/shell-scripts@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/shell-scripts@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/install@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
@@ -456,7 +473,9 @@ jobs:
       # packages alone leaves lint, knip and the root typecheck reading files
       # nothing wrote this run.
       - if: inputs.build
-        run: bun run build
+        uses: gokayo43/dev-config/.github/actions/build@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+        with:
+          cache: ${{ inputs['build-cache'] }}
 
       - run: bun run format:check
       - run: bun run lint
@@ -475,7 +494,7 @@ jobs:
           bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
         with:
           nightly: ${{ inputs.nightly }}
           test-network: ${{ inputs['test-network'] }}
@@ -495,7 +514,7 @@ jobs:
       # every step before it down with it.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
-        uses: gokayo43/dev-config/.github/actions/mutation-lane@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+        uses: gokayo43/dev-config/.github/actions/mutation-lane@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
 
@@ -566,12 +585,14 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/install@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
       - if: inputs.build
-        run: bun run build
+        uses: gokayo43/dev-config/.github/actions/build@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+        with:
+          cache: ${{ inputs['build-cache'] }}
 
       # The port the boot gate's app listens on, picked by the kernel rather
       # than stated. 3000 is the framework default and therefore the one port
@@ -598,7 +619,7 @@ jobs:
                   console.log(`PORT=${s.port}`); s.stop(true);' >> "$GITHUB_ENV"
           printf 'DATABASE_URL=%s\nREDIS_URL=%s\n' "$DATABASE_URL" "$REDIS_URL" >> "$GITHUB_ENV"
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@83ed183cc948eb47050b4f235edd94a35d897603 # v0.69.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}

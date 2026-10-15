@@ -45,14 +45,21 @@ a change to a rule usually lands here too.
   whole run before anything starts, `if:` and `needs` included
   (actions/runner#4151) — so filing lives where the caller's own job can carry
   `issues: write`, and a repo with no nightly never names the file.
-- `.github/actions/*/` — the executable steps, which are the gates plus one.
-  Each is an `action.yml`, the modules the suite drives, and a `*.main.ts` that
-  GitHub runs. `install` is the one that grades nothing: `bun install
---frozen-lockfile`, and — where the caller passed a key for a private git
-  dependency — that key, written, used and removed inside the action's own
-  shell so no lane after it runs holding the path of a private key. It is an
-  action for the reason the gates are: both jobs of `check.yml` install, and a
-  copy of forty lines of shell per job is a copy that rots untested (#101). An action holds
+- `.github/actions/*/` — the executable steps, which are the gates plus two.
+  Each is an `action.yml` and what it runs, which takes one of two shapes. A
+  step whose logic is TypeScript runs a `*.main.ts` over the modules the suite
+  drives. A step that is shell runs it as a body: inline in `action.yml` for
+  `secret-scan`, `install` and `test-suite`, or as a script beside it for
+  `build` (`build/build.sh`). A new shell action takes the script shape, since
+  a file is what the suite can run and the shell-scripts gate reads, where an
+  inline body is reached only by extracting it. `install` and `build` are the
+  two that grade nothing. `install` is `bun install --frozen-lockfile`, and —
+  where the caller passed a key for a private git dependency — that key,
+  written, used and removed inside the action's own shell so no lane after it
+  runs holding the path of a private key. `build` is `bun run build` with the
+  paths the caller names kept in the runner's tool cache between runs. They are
+  actions because both jobs of `check.yml` run them, and one copy serves both
+  where a copy per job rots untested (#101). An action holds
   more than one module when it holds more than one subject:
   `repo-contract/live.ts` is what the word "live" derives — everything a repo
   owes because it carries people — beside the contract every repo satisfies
@@ -182,7 +189,9 @@ a change to a rule usually lands here too.
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
-  clean one. A gate without one is a claim; `anti-slop.test.ts`,
+  clean one. A gate without one is a claim. `build-cache.test.ts` is the build
+  action's, running `build.sh` against a fixture repository whose build records
+  what the cache held when it started. `anti-slop.test.ts`,
   `anti-slop-test-smells.test.ts`, `anti-slop-env.test.ts` and
   `lint-policy.test.ts` hold every lint rule in `anti-slop/` to the same bar — a
   block of cases per rule, split where the base splits, since the rules scoped to
