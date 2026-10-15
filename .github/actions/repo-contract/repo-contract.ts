@@ -581,17 +581,33 @@ function hookRuns(hooks: ConfigObject, hook: string): string[] {
 }
 
 /**
- * lefthook runs a file as well as a command: a job's `script:`, or a key of
- * the hook's `scripts:` map, each run by its `runner`.
+ * lefthook runs a file as well as a command (a job's `script:`, or a key of the
+ * hook's `scripts:` map, each run by its `runner`), and a hook's `setup:`
+ * commands before either.
  */
 function hookRunsAnything(hooks: ConfigObject, hook: string): boolean {
+  const node = record(hooks[hook]);
+  const setup = node["setup"];
   return (
-    Object.keys(record(record(hooks[hook])["scripts"])).length > 0 ||
+    Object.keys(record(node["scripts"])).length > 0 ||
+    (isList(setup) && setup.some((step) => typeof record(step)["run"] === "string")) ||
     hookEntries(hooks, hook).some(
       ({ run, script }) => typeof run === "string" || typeof script === "string",
     )
   );
 }
+
+/**
+ * Every spelling of lefthook's local config that lefthook 2.1.10 merges into
+ * `lefthook.yml` (probed one by one: each ran a pre-push command the main
+ * config did not declare). The main config's other spellings lose to
+ * `lefthook.yml` and are never read beside it.
+ */
+const LOCAL_CONFIGS = ["", ".", ".config/"].flatMap((dir) =>
+  ["yml", "yaml", "toml", "json", "jsonc"].map((ext) => `${dir}lefthook-local.${ext}`),
+);
+
+const READ_ALONE = "the gate reads lefthook.yml alone, so the hooks have to be in it";
 
 async function checkLefthook(root: string): Promise<Problem[]> {
   const lefthook = await readConfig(root, "lefthook.yml", "YAML");
@@ -617,6 +633,17 @@ async function checkLefthook(root: string): Promise<Problem[]> {
       file: "lefthook.yml",
       message: "pre-push runs nothing; the suite is CI's on the pull request",
     });
+  }
+  for (const key of ["extends", "remotes"]) {
+    if (key in hooks) {
+      problems.push({
+        file: "lefthook.yml",
+        message: `lefthook.yml merges in more config through \`${key}\`; ${READ_ALONE}`,
+      });
+    }
+  }
+  for (const path of await repoFiles(root, LOCAL_CONFIGS)) {
+    problems.push({ file: path, message: `${path} is in the repo; ${READ_ALONE}` });
   }
   return problems;
 }

@@ -10,11 +10,13 @@
  * and the whole prefix goes rather than the set a hook is known to carry.
  */
 
-// git hands a hook the repository it is acting on, and a run of this suite
-// under any hook inherits it: from `pre-push` in a linked worktree that is
-// `GIT_DIR`, absolute, beside `GIT_EDITOR`, `GIT_EXEC_PATH` and `GIT_PREFIX`,
-// and no index (githooks(7); probed against git 2.43.0, where `pre-commit` is
-// the one that also carries `GIT_INDEX_FILE` and the `GIT_AUTHOR_*`). `GIT_DIR`
+// git hands a hook the repository it is acting on. No hook of this repo runs
+// the suite, but a developer's own hook or gitignored `lefthook-local.yml` that
+// runs `bun test` passes it on, as this once did: from `pre-push` in a linked
+// worktree that is `GIT_DIR`, absolute, beside `GIT_EDITOR`, `GIT_EXEC_PATH`
+// and `GIT_PREFIX`, and no index (githooks(7); probed against git 2.43.0, where
+// `pre-commit` is the one that also carries `GIT_INDEX_FILE` and the
+// `GIT_AUTHOR_*`). `GIT_DIR`
 // outranks the working directory a child is given, so without this the fixtures
 // are built inside the repository the hook acts on: `git init` with no work tree
 // makes it bare, and every fixture commit rewrites its branch.
