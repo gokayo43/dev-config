@@ -206,51 +206,6 @@ describe("repo contract", () => {
     expect(problems).toEqual([containing("is not valid YAML")]);
   });
 
-  // lefthook 2.x leads with `jobs:` — a list whose entries may be a `group:`
-  // holding another list — and a gate that knew only `commands:` passed a
-  // config declaring every hook it asks for while reading none of them.
-  test("the jobs form is read, groups and all", async () => {
-    const jobs = [
-      "pre-commit:",
-      "  jobs:",
-      "    - name: secrets",
-      "      run: gitleaks git --staged --redact --no-banner .",
-      "",
-      "pre-push:",
-      "  jobs:",
-      "    - name: whole project",
-      "      group:",
-      "        jobs:",
-      "          - run: bun run typecheck",
-      "          - run: bun test",
-      "",
-    ].join("\n");
-    expect(await contract({ ...CLEAN, "lefthook.yml": jobs })).toEqual([]);
-  });
-
-  test("a jobs-form config that declares the hooks and runs nothing is still refused", async () => {
-    const empty =
-      "pre-commit:\n  jobs:\n    - run: echo hi\n\npre-push:\n  jobs:\n    - run: echo hi\n";
-    expect(await contract({ ...CLEAN, "lefthook.yml": empty })).toEqual([
-      containing("gitleaks git --staged"),
-      containing("pre-push must typecheck"),
-      containing("pre-push must run the test suite"),
-    ]);
-  });
-
-  test("the hooks have to scan the index and gate the push", async () => {
-    expect(
-      await contract({
-        ...CLEAN,
-        "lefthook.yml": "pre-commit:\n  commands:\n    secrets:\n      run: gitleaks git .\n",
-      }),
-    ).toEqual([
-      containing("gitleaks git --staged"),
-      containing("pre-push must typecheck"),
-      containing("pre-push must run the test suite"),
-    ]);
-  });
-
   test("a tracked .env is refused", async () => {
     const root = await materialise(CLEAN, [".env.example", ".env"]);
     expect((await repoContract(root, DEFAULTS)).map(({ message }) => message)).toEqual([

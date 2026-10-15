@@ -4,10 +4,8 @@
  * on install is STACK.md's bargain for a git dependency.
  *
  * A committed artifact is a second copy of the source, so something has to hold
- * the two together — and it is a test rather than a CI step because the pre-push
- * hook runs `bun test` and does not run CI. A stale `dist/` is then caught before
- * it is pushed rather than after, which is the whole difference between this and
- * a red build.
+ * the two together. It is a test rather than a CI step so that it runs wherever
+ * the suite runs: in CI on the pull request, and in any local `bun test`.
  */
 import { describe, expect, test } from "bun:test";
 import { readdir, stat } from "node:fs/promises";

@@ -274,12 +274,13 @@ a change to a rule usually lands here too.
   `git-free-environment.ts` is the one file here that is not a suite and not a
   fixture: `bunfig.toml` preloads it, so it runs before the first test file of
   every `bun test`. It takes the whole `GIT_` prefix out of the environment,
-  because git hands a hook the location of the repository it is acting on and a
-  `pre-push` run of this suite would otherwise build its fixtures inside the
-  repository being pushed. Doing that to `process.env` reaches only the spawn
-  sites that pass one, since bun's `env` default is the block the process
-  launched with — so it also replaces `Bun.spawn` and `Bun.spawnSync` for the
-  whole test process. **That is the repo-wide gotcha**: a `Bun.spawn(cmd,
+  because git hands a hook the location of the repository it is acting on. No
+  hook of this repo runs the suite, but a developer's own hook or gitignored
+  `lefthook-local.yml` that runs `bun test` would otherwise build its fixtures
+  inside that repository, which once rewrote a branch. Doing that to
+  `process.env` reaches only the spawn sites that pass one, since bun's `env`
+  default is the block the process launched with — so it also replaces
+  `Bun.spawn` and `Bun.spawnSync` for the whole test process. **That is the repo-wide gotcha**: a `Bun.spawn(cmd,
 { cwd })` written in any suite here is given the environment as it stands, not
   bun's default, and one variable rides along that bun would have left out —
   `NODE_ENV`, which `bun test` sets after launch.

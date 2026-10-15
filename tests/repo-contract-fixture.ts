@@ -70,7 +70,7 @@ export const CLEAN: Tree = {
     'import { base } from "@gokayo43/dev-config/knip.base.ts";\nexport default { ...base };\n',
   "bunfig.toml": bunfig(),
   "lefthook.yml":
-    "pre-commit:\n  commands:\n    secrets:\n      run: gitleaks git --staged --redact --no-banner .\n\npre-push:\n  commands:\n    typecheck:\n      run: bun run typecheck\n    test:\n      run: bun test\n",
+    "pre-commit:\n  commands:\n    secrets:\n      run: gitleaks git --staged --redact --no-banner .\n",
   ".gitignore": "node_modules\n.env\n.env.*\n!.env.example\n!.env.enc\n",
   ".env": "BETTER_AUTH_SECRET=not-a-real-value\n",
   ".env.example": "BETTER_AUTH_SECRET=\n",
