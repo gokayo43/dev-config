@@ -1462,7 +1462,7 @@ or its jobs queue until one appears** — there is no timeout on a queued job, s
 the symptom is a run that never starts rather than one that fails. dev-config#88
 is where the move is argued.
 
-Four things follow from the runner being a shared, persistent machine rather
+Five things follow from the runner being a shared, persistent machine rather
 than a fresh cloud VM, and they are why the workflows look the way they do:
 
 - **Service containers publish on `127.0.0.1` and on a port the daemon picks**
@@ -1492,6 +1492,11 @@ than a fresh cloud VM, and they are why the workflows look the way they do:
   memory; a run that outgrows it fails on a full disk. `lint-workflows` refuses
   a service without one, reading the declared paths from the image the
   workflow pins, so a new major that moves its data directory is caught there.
+- **A build cache lives on the runner's own disk.** The `build` action keeps
+  the paths `build-cache` names in the runner's tool cache (`RUNNER_TOOL_CACHE`),
+  one store per runner, so a runner's first run builds cold and the runs after
+  it build warm, and two runners each warm their own. A store that is missing
+  or cannot be read is a cold build with a warning, never a failure.
 
 The Lighthouse example under "Static sites" deliberately stays on
 `ubuntu-latest`: its numbers are the assertion, and a box that is also serving
@@ -1531,6 +1536,7 @@ it runs. Effect says which, per input.
 | Input                 | Declared | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `build`               | `false`  | Runs `bun run build` before the static gate and before the boot gate.                                                                                                                                                                                                                                                                                                                                                                     |
+| `build-cache`         | `""`     | Paths the build tool caches in, one per line, relative to the repository root, such as `.next/cache` for Next. Restored from the runner's tool cache before the build and saved after one that passed, keyed on `bun.lock`, one key per repository per runner. A store failure warns and builds cold. Refused: an absolute path, a `..` segment, the root itself, a path named twice or inside another, no `bun.lock`, no `build: true`.  |
 | `nightly`             | `false`  | The run nobody is waiting on: property tests get fifty times the runs they ask for with a two-minute limit on each, the fuzzer gets ten minutes instead of twenty seconds, and both jobs get a timeout that fits. The caller supplies the schedule, and a second job of its own files what a red one leaves behind — [The nightly run](#the-nightly-run).                                                                                 |
 | `affected`            | `false`  | Runs the `typecheck` lane over the packages a pull request changed, via turbo's `--affected` with `TURBO_SCM_BASE` set to the pull request's base commit. Needs `turbo.json` at the root and is refused without one; ignored on a push, where `main` stays the full run.                                                                                                                                                                  |
 | `database`            | `none`   | `postgres` adds the database job: an empty Postgres, the migrations replayed onto it twice, the app booted against the result, and a k6 ramp over every route it serves. `external` says a workflow wrapping this one runs the database gates in that job's place. `none` is a repo with no schema. Anything but `none` makes `db:migrate` part of the repo contract; anything outside the three is refused.                              |
@@ -1628,7 +1634,8 @@ than on the job, and are asked a second question for the same reason:
 `semantic-fixtures` is refused without `upgrade-gate: true`, since the rows go
 into the replay that input adds, and `probe-timeout` is refused without
 `probe-command`, since on its own it bounds nothing. `mutation-floor` is refused
-without `mutation-lane: true` on the same argument.
+without `mutation-lane: true` on the same argument, and `build-cache` without
+`build: true`, since the paths it names are kept around that build.
 
 The call is pinned by commit SHA with the release as the trailing comment — the
 same contract the actions inside it carry, and the reason a change here reaches
@@ -1652,8 +1659,8 @@ question asked of the booted app's answers rather than of its tables.
 can see.
 
 In order, the pinned workflow runs the gitleaks scan, the declarative gates
-(repo contract, stack denylist, suppression hygiene, shellcheck over the repo's
-own scripts, and the compose lint when asked), `bun install` — carrying the key
+(repo contract, stack denylist, the workflow lint, suppression hygiene,
+shellcheck over the repo's own scripts, and the compose lint when asked), `bun install` — carrying the key
 for a private git dependency where the caller passed one — the optional build,
 `format:check`, `lint`, `typecheck`, `knip`, the test suite, the assertion that
 the suite ran, and — where the repo asks for it — the mutation lane over the
@@ -1669,12 +1676,14 @@ rather than after a full dependency resolution.
 The steps that are shell or a script rather than a `bun run` live in
 `.github/actions/` as composite actions — `secret-scan`, `repo-contract`,
 `stack-gate`, `suppression-hygiene`, `shell-scripts`, `compose-lint`,
-`install`, `test-suite`, `db-gate`, `lint-workflows` — so the workflow above and
-any repo that has to run the same thing outside it share one copy. `install` is
-the one that is not a gate: it is `bun install --frozen-lockfile` plus the
-credential a private git dependency needs, and it is an action for the same
-reason as the rest — both jobs run it, and a copy per job is a copy that can
-rot untested.
+`install`, `build`, `test-suite`, `mutation-lane`, `db-gate`, `lint-workflows`
+— so the workflow above and any repo that has to run the same thing outside it
+share one copy. `install` and `build` are the two that are not gates, and are
+actions for a reason of their own: both jobs run them, so one copy serves both
+where a copy per job could rot untested. `install` is
+`bun install --frozen-lockfile` plus the credential a private git dependency
+needs; `build` is `bun run build` with the paths `build-cache` names restored
+before it and saved after it.
 `check.yml` references them by full path and SHA rather than `./`: inside a
 called workflow a relative `uses:` resolves against the _caller's_ checkout, and
 the alternative — checking this repo out into the caller's workspace — puts its
@@ -1747,7 +1756,9 @@ drift.
 A repo whose types depend on generated code that is not committed — a TanStack
 route tree, a codegen client — passes `build: true`, since a clean checkout has
 none of it and both `tsc` and the type-aware lint rules would report the
-generated symbols as missing.
+generated symbols as missing. So does an app the boot gate starts, which
+serves from its build; a Next app is that case, and the reason `build-cache`'s
+example is `.next/cache`.
 
 ### A private git dependency
 
