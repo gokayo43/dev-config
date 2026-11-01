@@ -1514,7 +1514,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -1921,7 +1921,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -1971,9 +1971,9 @@ every other one the schedule keeps running through however quiet a month gets.
 Re-enabling a disabled one is a button on the workflow's page in the Actions
 tab.
 
-The `concurrency` group above is per-ref, so a push landing while the nightly
-runs cancels it — and a cancelled run files nothing, deliberately. A repo that
-wants both to survive adds `${{ github.event_name }}` to the group.
+The `concurrency` group above carries the event, as the repo contract requires,
+so a push landing while the nightly runs does not cancel it — a cancelled run
+files nothing, deliberately.
 
 #### What a red nightly does
 

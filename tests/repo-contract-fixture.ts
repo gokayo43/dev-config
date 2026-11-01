@@ -60,6 +60,9 @@ function bunfig({
   return `[install]\n${window}${pinning}\n[test]\n${test}`;
 }
 
+export const WORKFLOW_HEAD =
+  "name: CI\non:\n  pull_request:\nconcurrency:\n  group: ci-${{ github.ref }}-${{ github.event_name }}\n  cancel-in-progress: true\njobs:\n";
+
 export const CLEAN: Tree = {
   "package.json": JSON.stringify(MANIFEST),
   "tsconfig.json": JSON.stringify({ extends: "@gokayo43/dev-config/tsconfig.base.json" }),
@@ -76,7 +79,7 @@ export const CLEAN: Tree = {
   ".env.example": "BETTER_AUTH_SECRET=\n",
   "CONTEXT.md": "# Domain\n",
   "CLAUDE.md": "# Repo\n",
-  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: postgres\n`,
+  ".github/workflows/ci.yml": `${WORKFLOW_HEAD}  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: postgres\n`,
 };
 
 /** No pull request and no previous tip: what a workflow_dispatch or a first push tells the gate. */
@@ -142,7 +145,7 @@ export function liveManifestJson(change: (contents: PackageJson) => void = () =>
 export const LIVE_STATIC: Tree = {
   ...CLEAN,
   "package.json": liveManifestJson(),
-  ".github/workflows/ci.yml": `name: CI\non:\n  pull_request:\njobs:\n  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
+  ".github/workflows/ci.yml": `${WORKFLOW_HEAD}  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
 };
 
 /**
