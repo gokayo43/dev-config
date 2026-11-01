@@ -9,9 +9,9 @@ import { DEPENDENCY_FIELDS, kindOf, type Manifest, type Problem, record } from "
  * checks about files.
  *
  * It sits beside `gate.ts` rather than inside a gate because two of them read
- * it: the repo contract grades every spec through `checkPins` and reads a major
- * off one through `isExactVersion`, and the stack denylist asks `aliasedPackage`
- * which package a manifest actually installs.
+ * it: the repo contract grades every spec through `checkPins` and asks
+ * `isExactVersion` whether `packageManager` names one Bun, and the stack
+ * denylist asks `aliasedPackage` which package a manifest actually installs.
  */
 
 const EXACT_SEMVER = /^\d+\.\d+\.\d+(?:[-+].+)?$/;
@@ -221,9 +221,10 @@ export function checkPins(all: readonly Manifest[]): Problem[] {
 }
 
 /**
- * Whether the spec is a plain exact version — the question the contract's
- * typescript floor asks before reading a major off it. Exported as a predicate
- * rather than as the pattern, so that what a caller can do with it is ask.
+ * Whether the spec is a plain exact version — the question the contract asks of
+ * the Bun `packageManager` names before comparing it with a floor. Exported as a
+ * predicate rather than as the pattern, so that what a caller can do with it is
+ * ask.
  */
 export function isExactVersion(spec: string): boolean {
   return EXACT_SEMVER.test(spec);
