@@ -11,8 +11,9 @@
  * The fixture root is derived rather than made fresh, for `tests/tree.ts`'s
  * reason one step further on: what a killed run leaks here is a detached server
  * process holding a port, and the port comes from the package name — so two
- * checkouts under review get different names and different ports, while two runs
- * of one checkout get the same ones and reclaim them.
+ * checkouts under review get different names, while two runs of one checkout get
+ * the same ones and reclaim them. Different names can still hash to one port
+ * block, which is why the suite holds one lock per machine for its whole run.
  */
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm } from "node:fs/promises";
