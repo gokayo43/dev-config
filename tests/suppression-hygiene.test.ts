@@ -42,8 +42,10 @@ describe("suppression hygiene", () => {
     ["oxlint", "// oxlint-disable-next-line typescript/no-unnecessary-condition"],
     ["eslint", "// eslint-disable-next-line no-empty"],
     // Stryker's own, which takes a mutant out of the mutation lane's run and
-    // out of its score. Three tools, one rule.
+    // out of its score, and the one that keeps a clone the duplicate-code gate
+    // would refuse. Four spellings, one rule.
     ["Stryker", "// Stryker disable next-line all"],
+    ["duplicate-code", "// duplicate-code-allow"],
   ])("a reasonless %s directive is refused — oxlint honours both spellings", async (_, line) => {
     expect(await hygiene({ ...CLEAN, "src/index.ts": `${line}\nif (x) {\n}\n` })).toEqual([
       containing("src/index.ts: line 1"),

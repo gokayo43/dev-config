@@ -98,7 +98,9 @@ a change to a rule usually lands here too.
   `lifecycle` field itself: the repo contract derives what "live" costs a repo
   and db-gate's compatibility floor asks the same word whether a route may be
   dropped, and one field read twice is two answers to whether anyone is on the
-  other end. What two gates of one action
+  other end — and `change-set.ts`, the lines a branch wrote, which the mutation
+  lane and the duplicate-code gate each hold a branch to, so both mean the same
+  thing by "this branch". What two gates of one action
   share stays in that action's directory instead — `db-gate/database.ts`, the
   scratch database its three data gates each build for themselves and the one
   derivation of "these two dumps came out the same", and
@@ -122,7 +124,10 @@ a change to a rule usually lands here too.
   install rather than a binary it pins itself: Stryker resolves its runner
   plugin from the working directory, and declaring the two packages in the
   repo's manifest is what puts them under its lockfile, its exact pins and its
-  release-age window.
+  release-age window. `duplicate-code` is written here rather than run as jscpd
+  for the reason `fuzz.ts` carries its own PRNG: an action runs from a checkout
+  with no install, and a tool fetched from npm at run time is pinned by a
+  version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
   gates, which run over it from CI. Eight of them are **exports** it imports and
   calls, and the two `dev-server*` files below are a bin it runs and the module
