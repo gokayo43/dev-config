@@ -2,8 +2,9 @@
  * Where a text's comments are, in JavaScript's lexical grammar: a config's,
  * which `withoutComments` reads for the JSON-with-comments dialect, and a
  * source file's, which the duplicate-code gate normalises with
- * `commentsBlanked`. Those two are the module's face; the scan behind them is
- * its own subject, which is why it is not in `gate.ts`.
+ * `commentsBlanked` and every directive is read from with `commentsIn`. Those
+ * three are the module's face; the scan behind them is its own subject, which
+ * is why it is not in `gate.ts`.
  */
 
 /**
@@ -41,6 +42,23 @@ export function commentsBlanked(text: string): string {
   return lexed(text)
     .map((span) => (span.kind === "comment" ? asBlank(span.text) : span.text))
     .join("");
+}
+
+/** A comment as written, from its opening marker, and the line that marker is on, from 1. */
+export interface Comment {
+  readonly line: number;
+  readonly text: string;
+}
+
+/** Every comment in the text, in order. A line comment's text stops short of its newline. */
+export function commentsIn(text: string): Comment[] {
+  const found: Comment[] = [];
+  let line = 1;
+  for (const span of lexed(text)) {
+    if (span.kind === "comment") found.push({ line, text: span.text });
+    line += span.text.split("\n").length - 1;
+  }
+  return found;
 }
 
 /** A comment as the whitespace it stands in for: its newlines kept, everything else a space. */

@@ -6,7 +6,7 @@
 
 import { appendFile } from "node:fs/promises";
 
-import { withoutComments } from "./comments.ts";
+import { commentsIn, withoutComments } from "./comments.ts";
 
 /**
  * One violation, addressed to the file that has to change. A line without a
@@ -293,14 +293,39 @@ export function list(value: string): string[] {
 export const REASON = " -- ";
 
 /**
- * What follows the first `REASON` in a line, trimmed: the reason a directive or
- * an allowlist entry gives, or the empty string where it gives none. The
- * separator alone is not a reason, since a line ending `-- ` tells the next
- * reader exactly what no comment at all would.
+ * A line cut at the first `REASON` after `token`, both halves trimmed: what it
+ * waives, and the reason it gives, or the empty string where it gives none. An
+ * allowlist entry is cut from its start; a directive after its own token,
+ * since what comes before the token is not part of what it says. The separator
+ * alone is not a reason, since a line ending `-- ` tells the next reader
+ * exactly what no comment at all would.
  */
-export function reasonAfter(line: string): string {
-  const [, ...reason] = line.split(REASON);
-  return reason.join(REASON).trim();
+export function split(line: string, token = ""): { subject: string; reason: string } {
+  const from = line.indexOf(token) + token.length;
+  const cut = line.indexOf(REASON, from);
+  if (cut === -1) return { subject: line.trim(), reason: "" };
+  return { subject: line.slice(0, cut).trim(), reason: line.slice(cut + REASON.length).trim() };
+}
+
+/** A directive where a comment states it: the line it is on, from 1, and the reason it gives. */
+export interface Directive {
+  readonly line: number;
+  readonly reason: string;
+}
+
+/**
+ * Every directive `pattern` finds in the source's comments, and only there: a
+ * string literal spelling one is data, to the tool the directive speaks to as
+ * much as to a gate. A block comment's closing marker is not part of its reason.
+ */
+export function directivesIn(source: string, pattern: RegExp): Directive[] {
+  return commentsIn(source).flatMap(({ line, text }) => {
+    const body = text.startsWith("/*") ? text.replace(/\*\/$/, "") : text;
+    const found = pattern.exec(body);
+    if (found === null) return [];
+    const above = body.slice(0, found.index + found[0].length).split("\n").length - 1;
+    return [{ line: line + above, reason: split(body, found[0]).reason }];
+  });
 }
 
 /** The extensions source is written in, as pathspecs: every gate that reads a repo's code reads these. */
@@ -379,8 +404,8 @@ export interface Allowlist {
  */
 export function allowlistFrom(value: string, input: string): Allowlist {
   const read = entriesIn(value).map((item) => {
-    const [subject = ""] = item.split(REASON);
-    return { subject: subject.trim(), reasoned: reasonAfter(item) !== "" };
+    const { subject, reason } = split(item);
+    return { subject, reasoned: reason !== "" };
   });
 
   const unreasoned = read.filter(({ reasoned }) => !reasoned).map(({ subject }) => subject);

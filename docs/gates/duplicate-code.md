@@ -16,8 +16,9 @@ A run of at least **twelve normalised lines** in a file this branch changed, at
 least one of which this branch wrote, that also appears anywhere else in the
 repo's source: in another file, or elsewhere in the same file. Elsewhere means
 the two ranges do not overlap. A stretch whose lines repeat themselves, such as
-rows of a table, is one self-repeating block: reported once, as its first two
-periods side by side, however many rows it has.
+rows of a table, is one self-repeating block: reported once, however many rows
+it has, as two neighbouring periods, one of them holding the first line in the
+stretch this branch wrote.
 
 A **normalised** line is a line with its comments removed and every run of
 whitespace collapsed to one space, and a line left blank by that is dropped.
@@ -29,10 +30,15 @@ review.
 Each clone is reported once, extended both ways to the longest run the two
 places share, with both places as `file:first-last` and the run's length. Each
 line of a changed file takes part in at most one reported clone with any one
-other file, and in at most one with its own file, so a block is named once per
-file it repeats: a new copy of a block that already sits in two other files is
-two refusals, one per file. A line a directive marks is where a block starts,
-so no run grows across it in either direction.
+other file, and in at most one with its own file. A new copy of a block that
+already sits in two other files is therefore two refusals, one per file, and
+four copies of one block pasted into one file are two, each pairing two of
+them.
+
+A block whose directive this branch wrote starts where the directive puts it,
+so no run grows across that line in either direction. A directive already in
+the tree marks nothing, so an old directive inside a block does not split a new
+copy of it into halves too short to count.
 
 ## Which files
 
@@ -88,13 +94,19 @@ no history.
 A clone that was already in the tree before the branch is not the branch's,
 and passes. A pull request that changed no source file is a pass that says so.
 
-The diff reads each file's own text whatever the repo or the reader says about
-it. Rename detection stays at git's default, since under `diff.renames=copies` a
-copied file arrives as a copy with no line written, the one change this gate
-exists to see. And `--text`, `--no-ext-diff`, `--no-textconv`, an empty
-`diff.external` and no reader's attributes file keep a `-diff` marking, a NUL
-byte, an external diff driver or a text converter from turning a file the
-branch wrote into "Binary files differ" with no lines at all.
+The diff is the base ref's tree against the commit checked out, never against
+the working tree, so a local run with uncommitted edits grades the last commit,
+as CI does. It is asked from the same kind of empty git directory the generated
+marking is, so no clean filter, `info/attributes` line or setting in the
+checkout's own git config reaches it. Rename detection stays at git's default,
+since under `diff.renames=copies` a copied file arrives as a copy with no line
+written, the one change this gate exists to see. No context joins two hunks,
+and the diff algorithm and its indent heuristic are fixed, since either can put
+a change on lines the branch never wrote. And `--text`, `--no-ext-diff`,
+`--no-textconv`, an empty `diff.external` and no reader's attributes file keep
+a `-diff` marking, a NUL byte, an external diff driver or a text converter from
+turning a file the branch wrote into "Binary files differ" with no lines at
+all.
 
 ## Why twelve, and why it is not an input
 
@@ -119,6 +131,9 @@ export const price0 = measure(0, "price");
 A line between the directive and the block takes it out of reach, and so does a
 directive anywhere further up. The failure names the line, and the hint in it
 says "on line N or the line above it".
+
+The directive is a comment. Spelled inside a string, it is data: it keeps
+nothing, and suppression-hygiene does not ask it for a reason.
 
 The directive keeps that clone for the run, and the gate's log names each clone
 it kept with its reason. It counts only where this branch wrote the directive's

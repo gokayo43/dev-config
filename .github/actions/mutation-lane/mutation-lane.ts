@@ -516,7 +516,7 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
     noun: "domain file",
     nothing: "nothing to mutate",
   });
-  if ("problems" in change) return change;
+  if (change.kind === "settled") return change.verdict;
   const { changed } = change;
 
   const stryker = join(root, "node_modules", ".bin", "stryker");

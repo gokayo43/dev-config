@@ -18,14 +18,12 @@ assignee, no close, and no one who has agreed to drain it; the register is GitHu
 issues in the repo the work belongs to, and a second register is deletion that
 feels responsible.
 
-The scan reads source rather than intent, so a directive quoted in prose counts:
-a doc comment that writes one out to explain it is a suppression as far as this
-is concerned. Markdown is not scanned, which is where most of that prose lives;
-a comment in code says the name without the leading slashes instead.
+The scan reads comments, the only place a tool reads a directive from. A string
+literal that spells one is data, which is what a suite's fixtures are, and owes
+nothing. A comment is read whole, so a directive quoted in prose counts: a doc
+comment that writes one out to explain it is a suppression as far as this is
+concerned. Markdown is not scanned, which is where most of that prose lives; a
+comment in code says the name without the leading slashes instead.
 
-The scan reads raw lines, not comment spans: a line that spells a directive
-counts wherever on the line the spelling sits, a string literal included. A suite
-whose fixtures spell directives in strings is therefore named in the `fixtures`
-input, where it is visible in the caller's diff. A suite that needs only one such
-spelling can assemble it at runtime instead, as the duplicate-code suite does,
-and needs no entry.
+The reason is what follows `--` after the directive's own name, in the same
+comment. A `--` in the code before the comment is not one.
