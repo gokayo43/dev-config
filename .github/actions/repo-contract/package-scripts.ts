@@ -26,6 +26,8 @@
  * newline, or a program matched anywhere in it, answers yes to a job that runs
  * no suite at all.
  */
+import { posix } from "node:path";
+
 import { type Manifest, record } from "../_lib/gate.ts";
 
 /** A package script a command runs, and the manifest that has to hold it — any of them, where the runner selects across the workspace. */
@@ -58,19 +60,20 @@ const TURBO = "turbo";
  * value is read as the script name and a real suite is reported missing:
  * `bun run --filter web test:e2e` would be a run of the script `web`.
  *
- * `--cwd` names one directory, so the script is that manifest's. `--filter`
- * (bun's `-F`) selects across the workspace, so the script is whichever
- * manifest declares it — the same answer `turbo run` gets, for the same reason.
+ * `--cwd` names one directory, relative to the one the command runs in, so the
+ * script is that manifest's. `--filter` (bun's `-F`) selects across the
+ * workspace, so the script is whichever manifest declares it — the same answer
+ * `turbo run` gets, for the same reason.
  */
-const VALUE_FLAGS = new Map<string, (value: string) => string | undefined>([
-  ["--cwd", manifestIn],
+const VALUE_FLAGS = new Map<string, (value: string, here: string) => string | undefined>([
+  ["--cwd", (value, here) => manifestIn(posix.join(here, value))],
   ["--filter", () => undefined],
   ["-F", () => undefined],
 ]);
 
 /** The manifest a runner pointed at a directory reads its scripts from. */
 function manifestIn(directory: string): string {
-  const written = directory.replace(/\/+$/, "").replace(/^\.\//, "");
+  const written = directory.replace(/\/+$/, "");
   return written === "" || written === "." ? ROOT_MANIFEST : `${written}/${ROOT_MANIFEST}`;
 }
 
@@ -137,9 +140,14 @@ function runsAtHead(words: readonly string[], { program, argument, flags }: Invo
 /**
  * The script a runner invocation names: the first word after it that is neither
  * a flag nor its own `run`, with every value-taking flag consumed along with
- * its value in both the `--flag value` and `--flag=value` spellings.
+ * its value in both the `--flag value` and `--flag=value` spellings. `here` is
+ * the directory the command runs in, which a relative `--cwd` starts from.
  */
-function scriptAfter(after: readonly string[], from: string | undefined): Invocation | undefined {
+function scriptAfter(
+  after: readonly string[],
+  from: string | undefined,
+  here: string,
+): Invocation | undefined {
   const rest = [...after];
   let file = from;
   for (let word = rest.shift(); word !== undefined; word = rest.shift()) {
@@ -147,7 +155,7 @@ function scriptAfter(after: readonly string[], from: string | undefined): Invoca
     const takes = VALUE_FLAGS.get(equals === -1 ? word : word.slice(0, equals));
     if (takes !== undefined) {
       const value = equals === -1 ? rest.shift() : word.slice(equals + 1);
-      if (value !== undefined) file = takes(value);
+      if (value !== undefined) file = takes(value, here);
       continue;
     }
     if (word === "run" || word.startsWith("-")) continue;
@@ -158,28 +166,32 @@ function scriptAfter(after: readonly string[], from: string | undefined): Invoca
 
 /**
  * The package script this command runs, where its head is one of the two
- * runners this house runs one with. `bun` reads the root manifest's scripts
- * unless a flag moves it; `turbo` runs the task in whichever workspace declares
- * one.
+ * runners this house runs one with. `bun` reads the scripts of the manifest the
+ * command was read from, since a package script runs in its own package's
+ * directory, unless a flag moves it; `turbo` runs the task in whichever
+ * workspace declares one.
  */
-function invocationAt(words: readonly string[]): Invocation | undefined {
+function invocationAt(words: readonly string[], from: string): Invocation | undefined {
   const [head, ...after] = words;
   if (head === undefined) return undefined;
-  if (invokes(head, BUN)) return scriptAfter(after, ROOT_MANIFEST);
-  if (invokes(head, TURBO)) return scriptAfter(after, undefined);
+  const here = posix.dirname(from);
+  if (invokes(head, BUN)) return scriptAfter(after, from, here);
+  if (invokes(head, TURBO)) return scriptAfter(after, undefined, here);
   return undefined;
 }
 
+/** `from` is the manifest whose directory the block runs in. */
 function reaches(
   block: string,
   invoked: Invoked,
   all: readonly Manifest[],
   seen: Set<string>,
+  from: string,
 ): boolean {
   return commandsOf(block).some((command) => {
     const words = atTheHead(command);
     if (runsAtHead(words, invoked)) return true;
-    const call = invocationAt(words);
+    const call = invocationAt(words, from);
     return call !== undefined && scriptReaches(call, invoked, all, seen);
   });
 }
@@ -201,7 +213,7 @@ function scriptReaches(
     const key = `${where} ${script}`;
     if (typeof command !== "string" || seen.has(key)) return false;
     seen.add(key);
-    return reaches(command, invoked, all, seen);
+    return reaches(command, invoked, all, seen, where);
   });
 }
 
@@ -209,8 +221,9 @@ function scriptReaches(
  * Whether this command runs that program with that argument and those flags —
  * directly, or through a package script that reaches it. Scripts chain (`e2e`
  * runs `test:e2e:ci` runs the binary), so the walk follows them across every
- * manifest in the workspace.
+ * manifest in the workspace. The command itself runs at the repository root,
+ * where a workflow step and check.yml's lanes run.
  */
 export function runsProgram(command: string, invoked: Invoked, all: readonly Manifest[]): boolean {
-  return reaches(command, invoked, all, new Set());
+  return reaches(command, invoked, all, new Set(), ROOT_MANIFEST);
 }

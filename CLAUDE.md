@@ -65,11 +65,14 @@ a change to a rule usually lands here too.
   owes because it carries people — beside the contract every repo satisfies
   whether or not anyone is on the other end; `repo-contract/browser-suite.ts` is
   the half of that word about pages rather than about a schema, which is a
-  second subject reached through the one field; and
+  second subject reached through the one field;
+  `repo-contract/typecheck.ts` is what CI type-checks with — the script
+  check.yml's typecheck lane reaches and the Bun `packageManager` names, one
+  fact seen from both ends; and
   `repo-contract/package-scripts.ts` is what a workflow step ends up running
   once the package scripts it goes through are followed, since reading a command
-  for the program it runs is a subject of its own and the rule that asks the
-  question is not about it.
+  for the program it runs is a subject of its own and neither rule that asks the
+  question is about it.
   Of what `db-gate` holds beside its replay, six need their reason stated:
   `semantic-fixtures.ts`, since what
   the base ref's replay proves about a _schema_ and what it proves about the
@@ -227,9 +230,11 @@ a change to a rule usually lands here too.
   one word deciding whether a whole rule set applies is its own subject), what
   pages cost a live repo in `repo-contract-browser.test.ts` (a second subject
   under that same word, and the reason the live static site is in the fixture
-  rather than in either), how a dependency spec is read, and what CI
-  type-checks with in `repo-contract-typecheck.test.ts` (the `typecheck` script
-  and the Bun that has `bun check`);
+  rather than in either), how a dependency spec is read in
+  `repo-contract-pins.test.ts`, the git hooks in `repo-contract-lefthook.test.ts`,
+  the bunfig's release-age window and its exclusions in
+  `repo-contract-release-age.test.ts`, and what CI type-checks with in
+  `repo-contract-typecheck.test.ts` (mirroring `typecheck.ts`);
   `journalled-migrator.ts`, `replaying-migrator.ts` and
   `schema-migrator.ts` are the three `db:migrate` shapes the database gates are
   written for — a journalled one, a hand-rolled runner with no journal, and the
