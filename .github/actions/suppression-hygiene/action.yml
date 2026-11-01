@@ -10,11 +10,6 @@ inputs:
   working-directory:
     description: Where the repository root is.
     default: .
-  fixtures:
-    description: >-
-      Paths whose directives are fixture text rather than suppressions,
-      space-separated. Only a suite that tests this gate has any.
-    default: ""
 
 runs:
   using: composite
@@ -22,7 +17,6 @@ runs:
     - shell: bash
       env:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
-        INPUT_FIXTURES: ${{ inputs.fixtures }}
       run: |
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/suppression-hygiene.main.ts"

@@ -21,10 +21,11 @@ import {
   type Call,
   checkCall,
   checkConcurrency,
+  CI_WORKFLOW,
   type DatabaseGates,
-  readWorkflow,
 } from "./ci-workflow.ts";
 import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
+import { checkTypecheck } from "./typecheck.ts";
 
 const DEV_CONFIG = "@gokayo43/dev-config";
 
@@ -50,6 +51,8 @@ const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 const KNIP_JSON_CONFIGS = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc"];
 
 const KNIP_CONFIGS = ["knip.ts", "knip.config.ts", "knip.js", "knip.config.js", "knip.mjs"];
+
+const BUN_PIN = /^bun@(.+)$/;
 
 /**
  * Facts a repo can be structurally unable to satisfy, as opposed to merely not
@@ -730,28 +733,21 @@ export interface Contract {
   readonly event: Event;
 }
 
+/** The exact Bun `packageManager` pins, or nothing where it pins no one Bun. */
+function pinnedBun(packageManager: unknown): string | undefined {
+  if (typeof packageManager !== "string") return undefined;
+  const version = BUN_PIN.exec(packageManager)?.[1];
+  return version !== undefined && isExactVersion(version) ? version : undefined;
+}
+
 function checkRoot(contents: ConfigObject, contract: Contract): Problem[] {
   const problems: Problem[] = [];
 
-  const packageManager = contents["packageManager"];
-  if (typeof packageManager !== "string" || !packageManager.startsWith("bun@")) {
+  if (pinnedBun(contents["packageManager"]) === undefined) {
     problems.push({
       file: "package.json",
       message:
-        "packageManager must read bun@<version> — setup-bun takes the runner's Bun from it, so CI and the dev machine cannot drift",
-    });
-  }
-
-  // Only a spec checkPins has already accepted is read for a major: anything
-  // else is reported there, and parsing `next` for a version number yields NaN
-  // and a second diagnostic about the same line.
-  const typescript = specOf(contents, "typescript");
-  if (typescript === undefined) {
-    problems.push({ file: "package.json", message: "typescript is not declared" });
-  } else if (isExactVersion(typescript) && Number.parseInt(typescript, 10) < 7) {
-    problems.push({
-      file: "package.json",
-      message: `typescript is pinned at ${typescript} — the shared tsconfig is written against TypeScript 7`,
+        "packageManager must read bun@<version>, one exact version — setup-bun takes the runner's Bun from it, so CI and the dev machine cannot drift",
     });
   }
 
@@ -798,8 +794,10 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   // `upgrade-gate: true` to. What it does have is steps and a queue: the
   // browser suite is a job the repo runs itself, and its runs still queue on
   // its one runner. So the queue is read beside the call rather than inside it,
-  // and the exemption touches the call alone, keeping its steps.
-  const workflow = await readWorkflow(root);
+  // and the exemption touches the call alone, keeping its steps. A workflow
+  // that is missing or will not parse is the queue's to report, the one rule
+  // no exemption reaches, so it is reported once whatever the exemptions.
+  const workflow = await readConfig(root, CI_WORKFLOW, "YAML");
   const queue = checkConcurrency(workflow);
   const read = checkCall(workflow);
   const call: Call = exempt("ci-call") ? { ...read, asked: undefined, problems: [] } : read;
@@ -856,6 +854,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   // takes its place in that order like anything else.
   return [
     ...checkRoot(rootManifest.value, contract),
+    ...checkTypecheck(pinnedBun(rootManifest.value["packageManager"]), all.read),
     ...checkLifecycle(declared, base, exempt("lifecycle-retire")),
     ...all.problems,
     ...checkPins(all.read),

@@ -402,7 +402,8 @@ describe("what going live requires", () => {
     const renamed = manifestWith((contents) => {
       contents.lifecycle = "live";
       contents.dependencies = { "@sentry/bun": "10.24.0" };
-      contents.scripts = { ...scripts, test: "bun test" };
+      contents.scripts = { ...contents.scripts, ...scripts };
+      delete contents.scripts["db:migrate"];
     });
     const tree: Tree = {
       ...without(without(LIVE, BACKUP), RESTORE_DRILL),
@@ -421,7 +422,7 @@ describe("what going live requires", () => {
     const none = manifestWith((contents) => {
       contents.lifecycle = "live";
       contents.dependencies = { "@sentry/astro": "10.24.0" };
-      contents.scripts = { test: "bun test" };
+      delete contents.scripts?.["db:migrate"];
     });
     const tree: Tree = {
       ...without(without(LIVE, BACKUP), RESTORE_DRILL),

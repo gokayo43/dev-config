@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 
-import { KEEP_CLONE, type Problem, REASON, reasonAfter, repoFiles, SOURCE } from "../_lib/gate.ts";
+import { directivesIn, KEEP_CLONE, type Problem, REASON, repoFiles, SOURCE } from "../_lib/gate.ts";
 
 /**
  * Every directive that silences a check, whoever reads it. Both lint spellings,
@@ -26,29 +26,20 @@ const DIRECTIVE = new RegExp(
  */
 const REGISTERS = new Set(["TODO.md", "BACKLOG.md", "TASKS.md", "ISSUES.md", "ROADMAP.md"]);
 
-export interface Scope {
-  readonly root: string;
-  /**
-   * Paths whose directives are fixture text rather than suppressions.
-   * docs/gates/suppression-hygiene.md says why the answer is a named path.
-   */
-  readonly fixtures: readonly string[];
-}
-
-export async function suppressionHygiene({ root, fixtures }: Scope): Promise<Problem[]> {
-  const exempt = new Set(fixtures);
+export async function suppressionHygiene(root: string): Promise<Problem[]> {
   const problems: Problem[] = [];
 
   for (const file of await repoFiles(root, SOURCE)) {
-    if (exempt.has(file)) continue;
-    const lines = (await Bun.file(`${root}/${file}`).text()).split("\n");
-    lines.forEach((line, index) => {
-      if (!DIRECTIVE.test(line) || reasonAfter(line) !== "") return;
+    for (const { line, reason } of directivesIn(
+      await Bun.file(`${root}/${file}`).text(),
+      DIRECTIVE,
+    )) {
+      if (reason !== "") continue;
       problems.push({
         file,
-        message: `line ${index + 1}: a directive without a '${REASON.trim()} reason' is a suppressed bug — say what the check cannot know`,
+        message: `line ${line}: a directive without a '${REASON.trim()} reason' is a suppressed bug — say what the check cannot know`,
       });
-    });
+    }
   }
 
   for (const file of await repoFiles(root, ["*.md"])) {

@@ -105,12 +105,7 @@ jobs:
 
       - uses: ./.github/actions/stack-gate
 
-      # Two suites write directives as fixture text: the hygiene suite, whose
-      # job is to contain them, and the React suite, which drives the compiler's
-      # rule against an `eslint-disable` a fixture has to spell without a reason.
       - uses: ./.github/actions/suppression-hygiene
-        with:
-          fixtures: tests/suppression-hygiene.test.ts tests/lint-policy-react.test.ts
 
       - uses: ./.github/actions/duplicate-code
 
@@ -162,7 +157,7 @@ jobs:
       # run check` above fails loudly on a broken one. So the skip has to match
       # where that tool actually looks. oxlint reads a config from the directory
       # it is linting, at any depth, and the base it extends with it; oxfmt reads
-      # the one at the root; `tsc` here is given the root project alone, so a
+      # the one at the root; `bun check` here reads the root project alone, so a
       # tsconfig in a subdirectory is parsed by nothing and belongs in this step.
       - name: Parse every JSON config
         run: |
