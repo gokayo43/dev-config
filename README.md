@@ -84,11 +84,12 @@ instead.
 ## TypeScript
 
 The type checker is `bun check`, Bun's port of TypeScript 7's checker, which
-reports what `tsc` reports and is part of the runtime from Bun 1.4.3. A repo's
-`typecheck` script is `bun check --no-script`: without the flag, `bun check`
-runs the repo's own `check` script, and that script runs `typecheck`. So a repo
+reports what `tsc` reports. A repo's `typecheck` script is `bun check
+--no-script`: without the flag, `bun check` runs the repo's own `check` script,
+and that script runs `typecheck`. The flag arrived in Bun 1.4.4, a release after
+the command, and 1.4.3 hands it to the `check` script instead. So a repo
 installs no `typescript` to type-check, and the repo contract holds the script
-and a `packageManager` of `bun@1.4.3` or later. A repo adds `typescript` only
+and a `packageManager` of `bun@1.4.4` or later. A repo adds `typescript` only
 for a tool that calls its API; this one does, because tsdown's declaration pass
 builds the `.d.ts` files in `dist/` with it.
 

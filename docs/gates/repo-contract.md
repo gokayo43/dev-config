@@ -5,25 +5,25 @@ Every gate above rests on a string somewhere: a `packageManager` field, an
 deleted, renamed or never written, and when one is, the gate it feeds does not
 fail — it stops existing. `repo-contract` reads them and says so.
 
-| Fact                                                                                                              | Why it is load-bearing                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `packageManager` reads `bun@<version>`, one exact version, 1.4.3 or later                                         | `setup-bun` takes the runner's Bun from it, so CI and the dev machine cannot drift, and `bun check` arrived in 1.4.3      |
-| No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                           | a second lockfile installs a second dependency tree                                                                       |
-| Every spec outside `peerDependencies` resolves to one thing                                                       | a lockfile refresh must not be able to change what is installed                                                           |
-| Every `peerDependencies` range refuses some version                                                               | a range that accepts everything says what declaring no peer says, and `bun add` writes one                                |
-| `bun run typecheck` reaches `bun check --no-script`, directly or through package scripts                          | it is check.yml's typecheck lane; without the flag `bun check` runs the repo's own `check` script, which runs `typecheck` |
-| `oxlint-tsgolint` present, when `.oxlintrc.json` extends `oxlint.base.json`                                       | without it oxlint runs the base's type-aware rules over nothing and reports clean                                         |
-| `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`     | a repo that stopped inheriting stops inheriting silently                                                                  |
-| `bunfig.toml` declares a window of 3 days or more, exact exclusions, `exact`, and a coverage floor a run can fail | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them                         |
-| every rule, category and option `.oxlintrc.json` switches off carries a reason above it                           | a switch-off nobody wrote a reason for reads the same as one added to get a run green                                     |
-| `.oxlintrc.json` `extends` the shared bases and nothing else, each once, and no oxlint config sits below the root | a second config is read after the root's and wins over it, in a file this gate never opens                                |
-| `.oxlintrc.json` extends `design-system.base.json`, when any manifest depends on `tailwindcss`                    | without it a page using a raw colour, an arbitrary value or a restyled shared component passes lint                       |
-| `lefthook.yml` scans staged files with gitleaks pre-commit, runs nothing pre-push, and nothing merges into it     | a committed key is burned, the suite is CI's on the pull request, and the gate reads only that file                       |
-| `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern   | a blanket `.env.*` rule silently deletes the two files that have to ship                                                  |
-| `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                   | the docs spine                                                                                                            |
-| `db:migrate` exists, when `database` is anything but `none`                                                       | whichever gate replays this repo's migrations replays them through it                                                     |
-| a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                             | a tag is a name someone else can repoint                                                                                  |
-| `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                  | it is what every rule under "Going live" below reconfigures off                                                           |
+| Fact                                                                                                              | Why it is load-bearing                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packageManager` reads `bun@<version>`, one exact version, 1.4.4 or later                                         | `setup-bun` takes the runner's Bun from it, so CI and the dev machine cannot drift, and `bun check --no-script` needs 1.4.4, the release that added the flag |
+| No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                           | a second lockfile installs a second dependency tree                                                                                                          |
+| Every spec outside `peerDependencies` resolves to one thing                                                       | a lockfile refresh must not be able to change what is installed                                                                                              |
+| Every `peerDependencies` range refuses some version                                                               | a range that accepts everything says what declaring no peer says, and `bun add` writes one                                                                   |
+| `bun run typecheck` reaches `bun check --no-script`, directly or through package scripts                          | it is check.yml's typecheck lane; without the flag `bun check` runs the repo's own `check` script, which runs `typecheck`                                    |
+| `oxlint-tsgolint` present, when `.oxlintrc.json` extends `oxlint.base.json`                                       | without it oxlint runs the base's type-aware rules over nothing and reports clean                                                                            |
+| `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`     | a repo that stopped inheriting stops inheriting silently                                                                                                     |
+| `bunfig.toml` declares a window of 3 days or more, exact exclusions, `exact`, and a coverage floor a run can fail | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them                                                            |
+| every rule, category and option `.oxlintrc.json` switches off carries a reason above it                           | a switch-off nobody wrote a reason for reads the same as one added to get a run green                                                                        |
+| `.oxlintrc.json` `extends` the shared bases and nothing else, each once, and no oxlint config sits below the root | a second config is read after the root's and wins over it, in a file this gate never opens                                                                   |
+| `.oxlintrc.json` extends `design-system.base.json`, when any manifest depends on `tailwindcss`                    | without it a page using a raw colour, an arbitrary value or a restyled shared component passes lint                                                          |
+| `lefthook.yml` scans staged files with gitleaks pre-commit, runs nothing pre-push, and nothing merges into it     | a committed key is burned, the suite is CI's on the pull request, and the gate reads only that file                                                          |
+| `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern   | a blanket `.env.*` rule silently deletes the two files that have to ship                                                                                     |
+| `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                   | the docs spine                                                                                                                                               |
+| `db:migrate` exists, when `database` is anything but `none`                                                       | whichever gate replays this repo's migrations replays them through it                                                                                        |
+| a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                             | a tag is a name someone else can repoint                                                                                                                     |
+| `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                  | it is what every rule under "Going live" below reconfigures off                                                                                              |
 
 ## What decides which rules run
 
@@ -402,7 +402,8 @@ its line — and the program counts only at a command's head, after any leading
 `KEY=value`, with `bunx` and `bun x` as the one wrapper before it. A step counts
 when a command runs `playwright test` (directly, wrapped, or out of
 `node_modules/.bin`) or runs a package script that reaches it: `bun run
-<script>` in the root manifest, `--cwd <dir>` in that directory's, `--filter` /
+<script>` in the manifest the command was read from (the root's, for a step),
+`--cwd <dir>` in that directory's, relative to the same place, `--filter` /
 `-F` and `turbo run <task>` in whichever workspace declares it — each
 value-taking flag consumed with its value in both spellings, since a value read
 as a bare word IS the script name. Script chains are followed (`e2e` runs
@@ -414,6 +415,16 @@ prints advice about the binary. `playwright install --with-deps chromium`, `echo
 "run playwright test to reproduce"` and a `#` line all carry the words and run
 no suite, and a script whose _name_ carries the word runs whatever its command
 says.
+
+**The typecheck lane is read the same way, from check.yml's own command.**
+check.yml type-checks with `bun run typecheck`, so the rule asks the reading
+above whether that command reaches `bun check --no-script`. A script runs in its
+own package's directory, so under `turbo run typecheck` a `bun run` inside a
+workspace's script names that workspace's script, not the root's. Two more facts
+decide its verdicts. A required flag may sit anywhere after the argument, so
+`bun check -p . --no-script` passes. And a bare `bun check` is read as what Bun
+does with it, a run of the repo's own `check` script, which in this fleet runs
+`typecheck` again: it reaches the type checker only if that script does.
 
 ### A scheduled job is three files
 

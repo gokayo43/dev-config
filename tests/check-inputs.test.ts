@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { type ConfigObject, isList, record } from "../.github/actions/_lib/gate.ts";
+import { TYPECHECK_LANE } from "../.github/actions/repo-contract/typecheck.ts";
 import { DATABASE_JOB, INPUTS, ran, scriptOf, STATIC, textAt } from "./check-workflow.ts";
 import type { Tree } from "./tree.ts";
 
@@ -382,5 +383,21 @@ describe("what the build steps are handed", () => {
       expect(step["if"]).toBe("inputs.build");
       expect(record(step["with"])).toEqual({ cache: "${{ inputs['build-cache'] }}" });
     }
+  });
+});
+
+// The repo contract grades what `bun run typecheck` reaches because that is
+// the command this job runs. Renaming the step's command without the contract
+// would leave it grading a lane CI no longer runs.
+describe("the typecheck lane the repo contract reads", () => {
+  test("is a command the static job runs", () => {
+    const commands = STEPS.flatMap((step) =>
+      scriptOf(step)
+        .split("\n")
+        .map((line) => line.trim()),
+    );
+    expect(
+      commands.some((line) => line === TYPECHECK_LANE || line.startsWith(`${TYPECHECK_LANE} `)),
+    ).toBe(true);
   });
 });
