@@ -8,8 +8,8 @@
 // to move as one — which is what this package's release pair already does.
 // Plain JavaScript, not TypeScript: Node refuses to strip types from any file
 // under `node_modules` (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING), and this
-// directory is inside `node_modules` for every repo that consumes it. `tsc`
-// still checks it here — `checkJs` in this repo's tsconfig.
+// directory is inside `node_modules` for every repo that consumes it.
+// `bun check` still checks it here — `checkJs` in this repo's tsconfig.
 /** @import { Plugin } from "@oxlint/plugins" */
 
 import {
