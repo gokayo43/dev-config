@@ -221,13 +221,15 @@ a change to a rule usually lands here too.
   not the compiler's, and three comparisons holding that table, the base and the
   README's own table to one set. And `action-evidence.test.ts` holds every action
   publishing an artifact to keeping the runner-temp paths its own YAML names.
-  `repo-contract-fixture.ts` is the clean tree the repo contract's four suites
+  `repo-contract-fixture.ts` is the clean tree the repo contract's suites
   share — split the way the gate is: the facts every repo satisfies, the
   `lifecycle` half in `repo-contract-live.test.ts` (mirroring `live.ts`, since
   one word deciding whether a whole rule set applies is its own subject), what
   pages cost a live repo in `repo-contract-browser.test.ts` (a second subject
   under that same word, and the reason the live static site is in the fixture
-  rather than in either), and how a dependency spec is read;
+  rather than in either), how a dependency spec is read, and what CI
+  type-checks with in `repo-contract-typecheck.test.ts` (the `typecheck` script
+  and the Bun that has `bun check`);
   `journalled-migrator.ts`, `replaying-migrator.ts` and
   `schema-migrator.ts` are the three `db:migrate` shapes the database gates are
   written for — a journalled one, a hand-rolled runner with no journal, and the

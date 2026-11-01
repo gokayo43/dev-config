@@ -129,7 +129,9 @@ export async function checkBrowserSuite(
   }
 
   if (
-    !steps.some((step) => runsProgram(step, { program: PLAYWRIGHT_BIN, argument: "test" }, all))
+    !steps.some((step) =>
+      runsProgram(step, { program: PLAYWRIGHT_BIN, argument: "test", flags: [] }, all),
+    )
   ) {
     problems.push({
       file: CI_WORKFLOW,

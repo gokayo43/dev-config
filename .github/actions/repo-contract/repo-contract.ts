@@ -19,6 +19,7 @@ import { checkPins, isExactVersion } from "../_lib/dependency-specs.ts";
 import { declaredIn } from "../_lib/lifecycle.ts";
 import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
 import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
+import { type Invoked, runsProgram } from "./package-scripts.ts";
 
 const DEV_CONFIG = "@gokayo43/dev-config";
 
@@ -46,6 +47,19 @@ const KNIP_JSON_CONFIGS = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc
 const KNIP_CONFIGS = ["knip.ts", "knip.config.ts", "knip.js", "knip.config.js", "knip.mjs"];
 
 const CHECK_CALL = /^gokayo43\/dev-config\/\.github\/workflows\/check\.yml@[0-9a-f]{40}$/;
+
+/** check.yml's typecheck lane, so what it reaches is what CI type-checks with. */
+const TYPECHECK_LANE = "bun run typecheck";
+
+/**
+ * The type checker. Without `--no-script`, `bun check` runs the repo's own
+ * `check` script when it has one, and in this fleet that script runs
+ * `typecheck`: a lane that recurses instead of type-checking.
+ */
+const BUN_CHECK: Invoked = { program: "bun", argument: "check", flags: ["--no-script"] };
+
+/** The first Bun that ships `bun check`. */
+const BUN_CHECK_SINCE = "1.4.3";
 
 /**
  * Facts a repo can be structurally unable to satisfy, as opposed to merely not
@@ -798,24 +812,20 @@ function checkRoot(contents: ConfigObject, contract: Contract): Problem[] {
   const problems: Problem[] = [];
 
   const packageManager = contents["packageManager"];
-  if (typeof packageManager !== "string" || !packageManager.startsWith("bun@")) {
+  const bun =
+    typeof packageManager === "string" && packageManager.startsWith("bun@")
+      ? packageManager.slice("bun@".length)
+      : "";
+  if (!isExactVersion(bun)) {
     problems.push({
       file: "package.json",
       message:
-        "packageManager must read bun@<version> — setup-bun takes the runner's Bun from it, so CI and the dev machine cannot drift",
+        "packageManager must read bun@<version>, one exact version — setup-bun takes the runner's Bun from it, so CI and the dev machine cannot drift",
     });
-  }
-
-  // Only a spec checkPins has already accepted is read for a major: anything
-  // else is reported there, and parsing `next` for a version number yields NaN
-  // and a second diagnostic about the same line.
-  const typescript = specOf(contents, "typescript");
-  if (typescript === undefined) {
-    problems.push({ file: "package.json", message: "typescript is not declared" });
-  } else if (isExactVersion(typescript) && Number.parseInt(typescript, 10) < 7) {
+  } else if (!Bun.semver.satisfies(bun, `>=${BUN_CHECK_SINCE}`)) {
     problems.push({
       file: "package.json",
-      message: `typescript is pinned at ${typescript} — the shared tsconfig is written against TypeScript 7`,
+      message: `packageManager names bun@${bun} — name bun@${BUN_CHECK_SINCE} or later, since the typecheck runs \`bun check\`, which no older Bun has, and setup-bun installs the Bun named here`,
     });
   }
 
@@ -828,6 +838,17 @@ function checkRoot(contents: ConfigObject, contract: Contract): Problem[] {
   }
 
   return problems;
+}
+
+function checkTypecheck(all: readonly Manifest[]): Problem[] {
+  if (runsProgram(TYPECHECK_LANE, BUN_CHECK, all)) return [];
+  return [
+    {
+      file: "package.json",
+      message:
+        "the typecheck script must run `bun check --no-script` (directly or through a package script) — check.yml type-checks through `bun run typecheck`, bun check is the type checker, and without the flag it runs the repo's own check script instead",
+    },
+  ];
 }
 
 export async function repoContract(root: string, contract: Contract): Promise<Problem[]> {
@@ -921,6 +942,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   // takes its place in that order like anything else.
   return [
     ...checkRoot(rootManifest.value, contract),
+    ...checkTypecheck(all.read),
     ...checkLifecycle(declared, base, exempt("lifecycle-retire")),
     ...all.problems,
     ...checkPins(all.read),
