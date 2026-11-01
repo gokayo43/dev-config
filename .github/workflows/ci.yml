@@ -162,7 +162,7 @@ jobs:
       # run check` above fails loudly on a broken one. So the skip has to match
       # where that tool actually looks. oxlint reads a config from the directory
       # it is linting, at any depth, and the base it extends with it; oxfmt reads
-      # the one at the root; `tsc` here is given the root project alone, so a
+      # the one at the root; `bun check` here reads the root project alone, so a
       # tsconfig in a subdirectory is parsed by nothing and belongs in this step.
       - name: Parse every JSON config
         run: |

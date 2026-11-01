@@ -96,9 +96,9 @@ describe("the inputs that need the database job", () => {
 });
 
 describe("what a caller may pass, and what the jobs do with it", () => {
-  // Refused rather than passed through: `tsc --noEmit --affected` is an error
-  // from a tool that has never heard of the flag, and the run would blame the
-  // repo's own script for an argument the workflow added.
+  // Refused rather than passed through: `bun check --no-script --affected` is
+  // an error from a tool that has never heard of the flag, and the run would
+  // blame the repo's own script for an argument the workflow added.
   test("a repo with no turbo is told so rather than handed the flag", async () => {
     const { status, output } = await ran(
       VALIDATION,
