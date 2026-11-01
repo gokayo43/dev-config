@@ -13,9 +13,8 @@ const CLEAN: Tree = {
   "README.md": "# A repo\n",
 };
 
-async function hygiene(tree: Tree, fixtures: readonly string[] = []): Promise<string[]> {
-  const root = await materialise(tree);
-  return (await suppressionHygiene({ root, fixtures })).map(
+async function hygiene(tree: Tree): Promise<string[]> {
+  return (await suppressionHygiene(await materialise(tree))).map(
     ({ file, message }) => `${file ?? ""}: ${message}`,
   );
 }
@@ -42,13 +41,18 @@ describe("suppression hygiene", () => {
     ["oxlint", "// oxlint-disable-next-line typescript/no-unnecessary-condition"],
     ["eslint", "// eslint-disable-next-line no-empty"],
     // Stryker's own, which takes a mutant out of the mutation lane's run and
-    // out of its score. Three tools, one rule.
+    // out of its score, and the one that keeps a clone the duplicate-code gate
+    // would refuse. Four spellings, one rule.
     ["Stryker", "// Stryker disable next-line all"],
-  ])("a reasonless %s directive is refused — oxlint honours both spellings", async (_, line) => {
-    expect(await hygiene({ ...CLEAN, "src/index.ts": `${line}\nif (x) {\n}\n` })).toEqual([
-      containing("src/index.ts: line 1"),
-    ]);
-  });
+    ["duplicate-code", "// duplicate-code-allow"],
+  ])(
+    "a reasonless %s directive is refused, in every spelling any tool honours",
+    async (_, line) => {
+      expect(await hygiene({ ...CLEAN, "src/index.ts": `${line}\nif (x) {\n}\n` })).toEqual([
+        containing("src/index.ts: line 1"),
+      ]);
+    },
+  );
 
   test.each([
     "/* oxlint-disable no-console */",
@@ -83,10 +87,31 @@ describe("suppression hygiene", () => {
     );
   });
 
-  test("a named fixture file is the one place a bare directive is text, not a suppression", async () => {
-    const tree = { ...CLEAN, "tests/hygiene.test.ts": "// oxlint-disable no-console\n" };
-    expect(await hygiene(tree)).toEqual([containing("tests/hygiene.test.ts")]);
-    expect(await hygiene(tree, ["tests/hygiene.test.ts"])).toEqual([]);
+  // A directive is a comment, and a string spelling one is data to oxlint as
+  // much as to this gate. The wrong implementation scans raw lines, which
+  // refuses every suite whose fixtures spell a directive.
+  test("a directive spelled inside a string literal is not a suppression", async () => {
+    const fixture = 'const fixture = "// oxlint-disable no-console";\n';
+    expect(await hygiene({ ...CLEAN, "tests/fixture.test.ts": fixture })).toEqual([]);
+  });
+
+  // The reason is what the directive says after its own token. The wrong
+  // implementation takes the first ` -- ` on the line, which here is code.
+  test("a separator in the code before a directive is not its reason", async () => {
+    const line = 'console.log("a -- b"); // oxlint-disable-line no-console\n';
+    expect(await hygiene({ ...CLEAN, "src/cli.ts": line })).toEqual([
+      containing("src/cli.ts: line 1"),
+    ]);
+  });
+
+  // A block comment may open on one line and name its directive on the next,
+  // which oxlint honours. The wrong implementations read only a comment's
+  // first line, which misses it, or report where the comment opens.
+  test("a directive on a block comment's second line is refused on that line", async () => {
+    const block = "const a = 1;\n/*\n  oxlint-disable no-console\n*/\nconsole.log(a);\n";
+    expect(await hygiene({ ...CLEAN, "src/cli.ts": block })).toEqual([
+      containing("src/cli.ts: line 3"),
+    ]);
   });
 
   test.each(["TODO.md", "BACKLOG.md", "TASKS.md", "ISSUES.md", "ROADMAP.md"])(

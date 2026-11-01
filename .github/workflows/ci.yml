@@ -16,8 +16,6 @@ permissions:
   contents: read
 
 concurrency:
-  # The event is in the group so that a push landing at two in the morning does
-  # not cancel the nightly, and a nightly does not cancel a push.
   group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
@@ -107,12 +105,9 @@ jobs:
 
       - uses: ./.github/actions/stack-gate
 
-      # Two suites write directives as fixture text: the hygiene suite, whose
-      # job is to contain them, and the React suite, which drives the compiler's
-      # rule against an `eslint-disable` a fixture has to spell without a reason.
       - uses: ./.github/actions/suppression-hygiene
-        with:
-          fixtures: tests/suppression-hygiene.test.ts tests/lint-policy-react.test.ts
+
+      - uses: ./.github/actions/duplicate-code
 
       # This repo's own shell is the three libraries the composites source, and
       # the gate that reads a consuming repo's scripts reads them here.

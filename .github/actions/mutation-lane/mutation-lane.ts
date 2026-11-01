@@ -2,16 +2,16 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { branchChange } from "../_lib/change-set.ts";
 import {
-  baseRevision,
   type ConfigObject,
   type Event,
-  git,
   isList,
   isObject,
   kindOf,
   oneOf,
   plainly,
+  plural,
   type Problem,
   readConfig,
   type Verdict,
@@ -219,128 +219,6 @@ function noFolderProblem(globs: readonly string[]): Problem {
   };
 }
 
-/** Where a hunk header says the lines it added start, and how many there are. */
-const HUNK = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/;
-
-/**
- * The line that opens a file's section, and the one that names it. Read in that
- * order because only the first is safe on its own: every line of diff content
- * carries a `+`, `-` or space in column one, so nothing in a file's body can
- * begin `diff --git ` — while an added line reading `++ b/x` renders exactly as
- * a `+++ b/` header does.
- */
-const OPENS = "diff --git ";
-const NAMES = "+++ b/";
-
-interface Changed {
-  /** Every line this branch wrote, per domain file. */
-  readonly changed: Map<string, Set<number>>;
-  /** One per section whose file could not be named. */
-  readonly problems: Problem[];
-}
-
-/**
- * Every line this branch wrote, per domain file — one diff, which is the whole
- * of what "changed" means here. The same map answers both questions the lane
- * asks: its keys are the files Stryker is pointed at, and its values are what a
- * surviving mutant is measured against, so the two cannot disagree about what
- * the change was.
- *
- * `--unified=0` is what makes the answer lines rather than neighbourhoods: with
- * context the hunk header covers untouched lines either side, and a mutant
- * sitting in one of them would be reported as something this branch introduced.
- * `--diff-filter=d` drops what the branch deleted, since Stryker is handed
- * paths to read. `--relative` makes both the pathspec and the reported paths
- * the working directory's rather than the repository root's, which is the same
- * statement the repo contract and the upgrade gate make with `<rev>:./path`: a
- * monorepo's project sits below the root, and a path measured from the root
- * would be handed to Stryker as one it cannot resolve from the project.
- * `:(glob)` gives git the pattern semantics the layer rule means, where a
- * single wildcard stops at a slash and a double one does not — a bare pathspec
- * crosses slashes on either, so a workspace's element would classify a project
- * nested deeper than any workspace declares.
- */
-async function changeSet(root: string, rev: string, globs: readonly string[]): Promise<Changed> {
-  const diff = await git(root, [
-    // Every setting below shapes the text this function then reads back, and
-    // each of them is one a developer sets for themselves and forgets. A gate
-    // whose answer depends on the reader's `~/.gitconfig` has no answer.
-    //
-    // `core.quotepath` off, so a path outside ASCII arrives as itself rather
-    // than inside quotes with escapes in it — the name is matched against the
-    // mutation report's. `color.ui` off, because escape codes around every
-    // header stop `diff --git ` and `@@` from starting a line, which reads as a
-    // branch that changed no domain file at all: this gate's way of passing.
-    // The prefixes fixed, because `diff.noprefix` and `diff.mnemonicPrefix`
-    // rewrite the `a/` and `b/` the rename check below is written against.
-    "-c",
-    "core.quotepath=false",
-    "-c",
-    "color.ui=never",
-    "-c",
-    "diff.noprefix=false",
-    "-c",
-    "diff.mnemonicPrefix=false",
-    "diff",
-    "--no-color",
-    "--src-prefix=a/",
-    "--dst-prefix=b/",
-    "--relative",
-    "--unified=0",
-    "--diff-filter=d",
-    rev,
-    "--",
-    ...globs.map((glob) => `:(glob)${glob}/**`),
-  ]);
-  if (!diff.ok) throw new Error(`git diff against ${rev} failed in ${root}`);
-
-  const changed = new Map<string, Set<number>>();
-  const problems: Problem[] = [];
-  let unnamed: string | undefined;
-  let lines: Set<number> | undefined;
-
-  for (const line of diff.stdout.split("\n")) {
-    if (line.startsWith(OPENS)) {
-      unnamed = line;
-      lines = undefined;
-      continue;
-    }
-    if (unnamed !== undefined && line.startsWith(NAMES)) {
-      // git delimits the name with a tab when it holds a space.
-      const named = line.slice(NAMES.length);
-      const tab = named.indexOf("\t");
-      const file = tab === -1 ? named : named.slice(0, tab);
-      unnamed = undefined;
-      if (isMutable(file)) {
-        lines = new Set();
-        changed.set(file, lines);
-      }
-      continue;
-    }
-    const hunk = HUNK.exec(line);
-    if (hunk === null) continue;
-    if (unnamed !== undefined) {
-      // Content changed under a name this parser could not read: git C-quotes a
-      // path holding a quote, a backslash or a control character, and its
-      // header then reads `+++ "b/…"`. Refused rather than skipped, because a
-      // domain file the lane cannot see is a domain file the lane cannot grade
-      // while reporting that it did.
-      problems.push({ message: renameProblem(unnamed) });
-      unnamed = undefined;
-      continue;
-    }
-    if (lines === undefined) continue;
-    const start = Number(hunk[1]);
-    const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
-    for (let at = start; at < start + count; at += 1) lines.add(at);
-  }
-  return { changed, problems };
-}
-
-function renameProblem(header: string): string {
-  return `rename the file this branch changed so git can name it plainly — \`${header}\` is quoted because the path holds a quote, a backslash or a control character, and the lane cannot tell whether it is domain code`;
-}
-
 interface Mutant {
   readonly file: string;
   readonly from: number;
@@ -491,10 +369,6 @@ function survivorProblem(mutant: Mutant): Problem {
   return { file: mutant.file, message };
 }
 
-function plural(many: number, noun: string): string {
-  return `${many} ${noun}${many === 1 ? "" : "s"}`;
-}
-
 /**
  * What the runner logs, at its default level, when the run it was asked to grade
  * did not pass before anything was mutated: bun exited non-zero, and no test it
@@ -619,7 +493,7 @@ export interface Input {
  * output, the filesystem under `root`, Stryker's glob resolver — and the one
  * failure this gate cannot afford is a file that goes missing between two of
  * them, because a file nobody mutated has no mutants and reads as a pass. So
- * both crossings are checked rather than assumed: `changeSet` refuses a name it
+ * both crossings are checked rather than assumed: `branchChange` refuses a name it
  * could not read out of the diff, and every `mutate` entry Stryker could not
  * resolve is refused by name below.
  */
@@ -631,26 +505,19 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
     return { note: "the pure domain is not declared", problems: [...domain.problems] };
   }
 
-  const base = await baseRevision(root, event, READS_THE_BASE_REF);
-  if ("refused" in base) {
-    return { note: "the base ref could not be read", problems: [{ message: base.refused }] };
-  }
-  if (base.rev === undefined) {
-    return {
-      note: "there is no earlier commit to compare against — nothing to mutate",
-      problems: [],
-    };
-  }
-  const rev = base.rev;
-
-  const { changed, problems } = await changeSet(root, rev, domain.globs);
-  if (problems.length > 0) return { note: "a changed file could not be named", problems };
-  if (changed.size === 0) {
-    return {
-      note: `no domain file changed against ${rev.slice(0, 12)} — nothing to mutate`,
-      problems: [],
-    };
-  }
+  // `:(glob)` gives git the pattern semantics the layer rule means, where a
+  // single wildcard stops at a slash and a double one does not — a bare
+  // pathspec crosses slashes on either, so a workspace's element would classify
+  // a project nested deeper than any workspace declares.
+  const change = await branchChange(root, event, {
+    why: READS_THE_BASE_REF,
+    pathspecs: domain.globs.map((glob) => `:(glob)${glob}/**`),
+    keeps: isMutable,
+    noun: "domain file",
+    nothing: "nothing to mutate",
+  });
+  if (change.kind === "settled") return change.verdict;
+  const { changed } = change;
 
   const stryker = join(root, "node_modules", ".bin", "stryker");
   if (!(await Bun.file(stryker).exists())) {

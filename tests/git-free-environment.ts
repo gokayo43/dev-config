@@ -10,15 +10,15 @@
  * and the whole prefix goes rather than the set a hook is known to carry.
  */
 
-// git hands a hook the repository it is acting on. No hook of this repo runs
-// the suite, but a developer's own hook or gitignored `lefthook-local.yml` that
-// runs `bun test` passes it on, as this once did: from `pre-push` in a linked
-// worktree that is `GIT_DIR`, absolute, beside `GIT_EDITOR`, `GIT_EXEC_PATH`
-// and `GIT_PREFIX`, and no index (githooks(7); probed against git 2.43.0, where
-// `pre-commit` is the one that also carries `GIT_INDEX_FILE` and the
-// `GIT_AUTHOR_*`). `GIT_DIR`
+// git hands a command it runs the repository it is acting on. No hook of this
+// repo runs the suite, but `git rebase --exec 'bun test'` does: from a linked
+// worktree it hands the command `GIT_DIR`, absolute, beside `GIT_EXEC_PATH`,
+// `GIT_PREFIX`, `GIT_SEQUENCE_EDITOR` and `GIT_CHERRY_PICK_HELP`, and no index.
+// A developer's own `pre-push` hook gets the same `GIT_DIR`, and `pre-commit`
+// also `GIT_INDEX_FILE` and the `GIT_AUTHOR_*` (githooks(7); probed against
+// git 2.43.0, where `git bisect run` hands its command none). `GIT_DIR`
 // outranks the working directory a child is given, so without this the fixtures
-// are built inside the repository the hook acts on: `git init` with no work tree
+// are built inside the repository git acts on: `git init` with no work tree
 // makes it bare, and every fixture commit rewrites its branch.
 for (const name of Object.keys(process.env)) {
   if (name.startsWith("GIT_")) delete process.env[name];

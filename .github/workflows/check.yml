@@ -91,6 +91,15 @@ on:
           and enforces nothing. Set it with mutation-lane or not at all.
         type: string
         default: ""
+      duplicate-code:
+        description: >-
+          Fail on a run of twelve or more lines, comments and whitespace aside, that this
+          branch wrote and that also appears elsewhere in the repo's source, unless a
+          directive on its first line or the line above keeps it. A file .gitattributes
+          marks linguist-generated is not read. docs/gates/duplicate-code.md is where it
+          is argued.
+        type: boolean
+        default: false
       contract-exemptions:
         description: >-
           Repo-contract facts this repo is structurally unable to satisfy, space-separated
@@ -289,15 +298,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Three steps here read history. gitleaks: the default shallow
+          # Four steps here read history. gitleaks: the default shallow
           # checkout hands it one commit, so a secret committed and later
           # deleted on the same branch would go unreported even though pushing
           # it had already burned the key. repo-contract: `lifecycle` is
           # compared with the base ref's, and on a pull request the base branch
           # has to be in the clone — a ref this run names and the checkout lacks
-          # is refused outright. The mutation lane: what it mutates is what this
-          # branch changed against that same base ref, and it is refused the
-          # same way.
+          # is refused outright. The mutation lane and the duplicate-code gate:
+          # what each grades is what this branch changed against that same base
+          # ref, and each is refused the same way.
           fetch-depth: 0
           # Nothing in this job pushes, and it installs and runs the repo's
           # dependencies in the same workspace the token would sit in.
@@ -434,36 +443,39 @@ jobs:
           fi
           exit "$wrong"
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
           data-jobs-external: ${{ inputs['data-jobs-external'] }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           stack-allowlist: ${{ inputs.stack-allowlist }}
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.
-      - uses: gokayo43/dev-config/.github/actions/lint-workflows@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
+
+      - if: inputs['duplicate-code']
+        uses: gokayo43/dev-config/.github/actions/duplicate-code@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
 
       # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
-      - uses: gokayo43/dev-config/.github/actions/shell-scripts@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/shell-scripts@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/install@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
@@ -473,7 +485,7 @@ jobs:
       # packages alone leaves lint, knip and the root typecheck reading files
       # nothing wrote this run.
       - if: inputs.build
-        uses: gokayo43/dev-config/.github/actions/build@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+        uses: gokayo43/dev-config/.github/actions/build@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           cache: ${{ inputs['build-cache'] }}
 
@@ -494,7 +506,7 @@ jobs:
           bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           nightly: ${{ inputs.nightly }}
           test-network: ${{ inputs['test-network'] }}
@@ -514,7 +526,7 @@ jobs:
       # every step before it down with it.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
-        uses: gokayo43/dev-config/.github/actions/mutation-lane@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+        uses: gokayo43/dev-config/.github/actions/mutation-lane@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
 
@@ -585,12 +597,12 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/install@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
       - if: inputs.build
-        uses: gokayo43/dev-config/.github/actions/build@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+        uses: gokayo43/dev-config/.github/actions/build@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           cache: ${{ inputs['build-cache'] }}
 
@@ -619,7 +631,7 @@ jobs:
                   console.log(`PORT=${s.port}`); s.stop(true);' >> "$GITHUB_ENV"
           printf 'DATABASE_URL=%s\nREDIS_URL=%s\n' "$DATABASE_URL" "$REDIS_URL" >> "$GITHUB_ENV"
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@4c398a3584b1508c26165c19cf453fc9e0e2b277 # v0.71.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}

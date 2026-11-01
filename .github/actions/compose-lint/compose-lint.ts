@@ -5,6 +5,7 @@ import {
   REASON,
   record,
   repoFiles,
+  split,
 } from "../_lib/gate.ts";
 
 const MIGRATE = "migrate";
@@ -38,17 +39,14 @@ function looksLikeATest(path: string): boolean {
  * answer one, and the house ` -- reason` after it, the way every allowlist entry
  * here carries prose beside its subject.
  *
- * A path rather than the prose it used to be. What the key waives is a claim
- * about a service's runtime, and a lint cannot check a runtime — but it can
- * insist the claim belongs to something that can. Prose alone passed whatever
- * anybody typed: one waiver in the fleet read "the runtime exits the process on
- * a failure the loop cannot recover from", which was false, and the gate took
- * it. Naming the test moves the claim somewhere a run either agrees with or
- * does not.
+ * A path, not prose. What the key waives is a claim about a service's runtime,
+ * and a lint cannot check a runtime — but it can insist the claim belongs to
+ * something that can. Prose alone passes whatever anybody types, a false claim
+ * about how the runtime fails included. Naming the test moves the claim
+ * somewhere a run either agrees with or does not.
  *
  * `./x.test.ts` and `x.test.ts` are one path. git lists the second spelling and
- * only the second, so a waiver written the first way was being told the file it
- * is looking at is not in the repository.
+ * only the second, so the leading `./` is dropped before the path is looked up.
  */
 interface Waiver {
   readonly path: string;
@@ -59,9 +57,9 @@ interface Waiver {
 function waivedBy(service: ConfigObject): Waiver | undefined {
   const value = service[OPT_OUT];
   if (typeof value !== "string") return undefined;
-  const [named = "", ...reason] = value.split(REASON);
-  const path = named.trim().replace(/^\.\//, "");
-  return path === "" ? undefined : { path, reasoned: reason.join(REASON).trim() !== "" };
+  const { subject, reason } = split(value);
+  const path = subject.replace(/^\.\//, "");
+  return path === "" ? undefined : { path, reasoned: reason !== "" };
 }
 
 function checkHealthcheck(

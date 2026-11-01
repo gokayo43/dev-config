@@ -24,6 +24,7 @@ import {
   liveSite,
   manifestWith,
   type PackageJson,
+  workflow,
 } from "./repo-contract-fixture.ts";
 import type { Tree } from "./tree.ts";
 
@@ -150,8 +151,9 @@ describe("a live repo that ships a browser surface", () => {
   test("and its CI is read for the suite even where the check.yml call is waived", async () => {
     const ownCi: Tree = {
       ...SWEPT_SUITE,
-      ".github/workflows/ci.yml":
-        "name: CI\non:\n  pull_request:\njobs:\n  e2e:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bunx playwright test\n",
+      ".github/workflows/ci.yml": workflow(
+        `  e2e:\n    runs-on: ubuntu-latest\n    steps:\n      - run: bunx playwright test\n`,
+      ),
     };
     expect(await pageSite(ownCi, { exemptions: ["ci-call"] })).toEqual([]);
   });

@@ -13,11 +13,17 @@ import {
   readConfig,
   record,
   repoFiles,
-  withoutComments,
 } from "../_lib/gate.ts";
+import { withoutComments } from "../_lib/comments.ts";
 import { checkPins, isExactVersion } from "../_lib/dependency-specs.ts";
 import { declaredIn } from "../_lib/lifecycle.ts";
-import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
+import {
+  type Call,
+  checkCall,
+  checkConcurrency,
+  CI_WORKFLOW,
+  type DatabaseGates,
+} from "./ci-workflow.ts";
 import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
 import { checkTypecheck } from "./typecheck.ts";
 
@@ -45,8 +51,6 @@ const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock"];
 const KNIP_JSON_CONFIGS = ["knip.json", "knip.jsonc", ".knip.json", ".knip.jsonc"];
 
 const KNIP_CONFIGS = ["knip.ts", "knip.config.ts", "knip.js", "knip.config.js", "knip.mjs"];
-
-const CHECK_CALL = /^gokayo43\/dev-config\/\.github\/workflows\/check\.yml@[0-9a-f]{40}$/;
 
 const BUN_PIN = /^bun@(.+)$/;
 
@@ -634,7 +638,8 @@ async function checkLefthook(root: string): Promise<Problem[]> {
   if (hookRunsAnything(hooks, "pre-push")) {
     problems.push({
       file: "lefthook.yml",
-      message: "pre-push runs nothing; the suite is CI's on the pull request",
+      message:
+        "pre-push runs nothing; the chain runs once, on the state that lands, at landing or in CI",
     });
   }
   for (const key of ["extends", "remotes"]) {
@@ -707,75 +712,6 @@ async function checkDocs(root: string): Promise<Problem[]> {
     problems.push({ file: "CLAUDE.md", message: "CLAUDE.md is missing" });
   }
   return problems;
-}
-
-/** The repo's call into the shared gate, and what is wrong with the workflow that should hold it. */
-interface Call {
-  /** The `with:` block of the job that calls check.yml, or nothing when no job does. */
-  readonly asked: ConfigObject | undefined;
-  /**
-   * Every `run:` the workflow's own steps carry, in job order — what this file
-   * says the repo does for itself, as against what it asked the shared workflow
-   * for. Empty where the file is missing or unreadable, which is a workflow
-   * that runs nothing either way.
-   */
-  readonly steps: readonly string[];
-  readonly problems: Problem[];
-}
-
-/** Every step of every job that runs something, as the command it runs. */
-function stepsIn(jobs: ConfigObject): string[] {
-  return Object.values(jobs).flatMap((job) => {
-    const steps = record(job)["steps"];
-    if (!isList(steps)) return [];
-    return steps.flatMap((step) => {
-      const run = record(step)["run"];
-      return typeof run === "string" ? [run] : [];
-    });
-  });
-}
-
-/**
- * Read once and handed to everyone who has a question about it. Three rules turn
- * on this file — that the call exists and is pinned, that a live repo's copy of
- * it asks for the upgrade gate, and that a live repo with pages runs its browser
- * suite somewhere in it — and they belong to different subjects: one is about
- * the workflow, the other two about the lifecycle. Threading a `live` boolean
- * into the first would put them inside a check that is not about them, and hide
- * the fact that `ci-call` waives the pin and the upgrade gate together.
- */
-async function checkCall(root: string): Promise<Call> {
-  if (!(await Bun.file(`${root}/${CI_WORKFLOW}`).exists())) {
-    return {
-      asked: undefined,
-      steps: [],
-      problems: [{ file: CI_WORKFLOW, message: "the repo has no CI workflow" }],
-    };
-  }
-
-  const workflow = await readConfig(root, CI_WORKFLOW, "YAML");
-  if (workflow.contents === undefined)
-    return { asked: undefined, steps: [], problems: [...workflow.problems] };
-
-  const jobs = record(workflow.contents["jobs"]);
-  const steps = stepsIn(jobs);
-  const call = Object.values(jobs)
-    .map((job) => record(job))
-    .find(({ uses }) => typeof uses === "string" && CHECK_CALL.test(uses));
-  if (call === undefined) {
-    return {
-      asked: undefined,
-      steps,
-      problems: [
-        {
-          file: CI_WORKFLOW,
-          message:
-            "no job calls gokayo43/dev-config/.github/workflows/check.yml pinned to a 40-character commit SHA — a tag is a name someone else can repoint",
-        },
-      ],
-    };
-  }
-  return { asked: record(call["with"]), steps, problems: [] };
 }
 
 export interface Contract {
@@ -852,18 +788,19 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
 
   const declared = declaredIn(rootManifest.value);
 
-  // One read of the workflow, three subjects asking about it — and `ci-call`
+  // One read of the workflow, four subjects asking about it — and `ci-call`
   // waives two of them, which is a thing to be able to see rather than to
   // discover. A repo whose CI is not a call into check.yml has no call to pass
-  // `upgrade-gate: true` to. What it does have is steps: the browser suite is a
-  // job the repo runs itself, so the exemption drops the call and keeps them.
-  // It drops the parse problems with the call, so an exempt repo whose ci.yml
-  // is not readable YAML is told to add a job that runs the suite rather than
-  // that its workflow will not parse.
-  const read = await checkCall(root);
-  const call: Call = exempt("ci-call")
-    ? { asked: undefined, steps: read.steps, problems: [] }
-    : read;
+  // `upgrade-gate: true` to. What it does have is steps and a queue: the
+  // browser suite is a job the repo runs itself, and its runs still queue on
+  // its one runner. So the queue is read beside the call rather than inside it,
+  // and the exemption touches the call alone, keeping its steps. A workflow
+  // that is missing or will not parse is the queue's to report, the one rule
+  // no exemption reaches, so it is reported once whatever the exemptions.
+  const workflow = await readConfig(root, CI_WORKFLOW, "YAML");
+  const queue = checkConcurrency(workflow);
+  const read = checkCall(workflow);
+  const call: Call = exempt("ci-call") ? { ...read, asked: undefined, problems: [] } : read;
 
   // One read of .oxlintrc.json, three subjects asking about it — where it
   // inherits from, whether a Tailwind repo inherits the design-system base, and
@@ -931,6 +868,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     ...secrets,
     ...docs,
     ...call.problems,
+    ...queue,
     ...live,
   ];
 }

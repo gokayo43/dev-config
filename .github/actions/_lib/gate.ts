@@ -6,6 +6,8 @@
 
 import { appendFile } from "node:fs/promises";
 
+import { commentsIn, withoutComments } from "./comments.ts";
+
 /**
  * One violation, addressed to the file that has to change. A line without a
  * file is unrepresentable: GitHub attaches `line=` to the file the annotation
@@ -29,7 +31,7 @@ export type Problem = { readonly message: string } & (
  * and arrive as `%250A`. Only the three characters GitHub decodes: this is its
  * encoding, and anything else escaped here arrives visibly wrong.
  */
-function commanded(message: string): string {
+export function commanded(message: string): string {
   return message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
 
@@ -277,6 +279,11 @@ export function oneOf<const Name extends string>(
   return names.find((name) => name === value);
 }
 
+/** A count and the noun it counts, which takes an `s` for any count but one. */
+export function plural(many: number, noun: string): string {
+  return `${many} ${noun}${many === 1 ? "" : "s"}`;
+}
+
 /** A space-separated action input, as a list. */
 export function list(value: string): string[] {
   return value.split(/\s+/).filter((item) => item !== "");
@@ -284,6 +291,51 @@ export function list(value: string): string[] {
 
 /** The separator oxlint uses between a suppression and its reason, and every allowlist here follows it. */
 export const REASON = " -- ";
+
+/**
+ * A line cut at the first `REASON` after `token`, both halves trimmed: what it
+ * waives, and the reason it gives, or the empty string where it gives none. An
+ * allowlist entry is cut from its start; a directive after its own token,
+ * since what comes before the token is not part of what it says. The separator
+ * alone is not a reason, since a line ending `-- ` tells the next reader
+ * exactly what no comment at all would.
+ */
+export function split(line: string, token = ""): { subject: string; reason: string } {
+  const from = line.indexOf(token) + token.length;
+  const cut = line.indexOf(REASON, from);
+  if (cut === -1) return { subject: line.trim(), reason: "" };
+  return { subject: line.slice(0, cut).trim(), reason: line.slice(cut + REASON.length).trim() };
+}
+
+/** A directive where a comment states it: the line it is on, from 1, and the reason it gives. */
+export interface Directive {
+  readonly line: number;
+  readonly reason: string;
+}
+
+/**
+ * Every directive `pattern` finds in the source's comments, and only there: a
+ * string literal spelling one is data, to the tool the directive speaks to as
+ * much as to a gate. A block comment's closing marker is not part of its reason.
+ */
+export function directivesIn(source: string, pattern: RegExp): Directive[] {
+  return commentsIn(source).flatMap(({ line, text }) => {
+    const body = text.startsWith("/*") ? text.replace(/\*\/$/, "") : text;
+    const found = pattern.exec(body);
+    if (found === null) return [];
+    const above = body.slice(0, found.index + found[0].length).split("\n").length - 1;
+    return [{ line: line + above, reason: split(body, found[0]).reason }];
+  });
+}
+
+/** The extensions source is written in, as pathspecs: every gate that reads a repo's code reads these. */
+export const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
+
+/**
+ * The directive that keeps a clone the duplicate-code gate would refuse, which
+ * suppression-hygiene holds to its reason like every other.
+ */
+export const KEEP_CLONE = "duplicate-code-allow";
 
 /**
  * One entry per line — not space-separated, because an entry contains spaces: a
@@ -352,8 +404,8 @@ export interface Allowlist {
  */
 export function allowlistFrom(value: string, input: string): Allowlist {
   const read = entriesIn(value).map((item) => {
-    const [subject = "", ...reason] = item.split(REASON);
-    return { subject: subject.trim(), reasoned: reason.join(REASON).trim() !== "" };
+    const { subject, reason } = split(item);
+    return { subject, reasoned: reason !== "" };
   });
 
   const unreasoned = read.filter(({ reasoned }) => !reasoned).map(({ subject }) => subject);
@@ -435,9 +487,27 @@ export interface Ran {
  * than thrown, because to most of what is asked here "no" is the answer — a
  * path that is not tracked, a lineage the base ref did not carry — and the one
  * caller that cannot go on without an answer says so itself.
+ *
+ * `stdin` is for a command that takes its list there, `check-attr --stdin`
+ * being the one, since a repo's paths can outgrow an argument list. `env` is
+ * laid over the process's own environment, for a caller that has to keep a
+ * variable of the reader's away from git.
  */
-export async function git(cwd: string, args: readonly string[]): Promise<Ran> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
+export async function git(
+  cwd: string,
+  args: readonly string[],
+  {
+    stdin,
+    env,
+  }: { readonly stdin?: string | undefined; readonly env?: Record<string, string> } = {},
+): Promise<Ran> {
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "ignore",
+    ...(stdin === undefined ? {} : { stdin: new TextEncoder().encode(stdin) }),
+    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+  });
   const stdout = await new Response(proc.stdout).text();
   return { ok: (await proc.exited) === 0, stdout };
 }
@@ -537,10 +607,11 @@ export async function baseRevision(root: string, event: Event, why: string): Pro
  * Never a repo's own code, whatever its .gitignore says. `--others` lists
  * anything git would keep, so a repo whose .gitignore forgets node_modules
  * hands every gate tens of thousands of third-party files — and a gate that
- * denounces a dependency's dependency is worse than no gate. Excluded here, at
- * the one place every walking gate goes through, rather than in each of them.
+ * denounces a dependency's dependency is worse than no gate. Excluded at the
+ * places every walking gate goes through — the listings below and the change
+ * set's diff — rather than in each gate.
  */
-const NEVER = ":(exclude,glob)**/node_modules/**";
+export const NOT_A_DEPENDENCY = ":(exclude,glob)**/node_modules/**";
 
 /**
  * The files a gate looks at: what is on disk, minus what .gitignore describes.
@@ -553,20 +624,36 @@ const NEVER = ":(exclude,glob)**/node_modules/**";
  * itself leaves behind.
  */
 export async function repoFiles(root: string, pathspecs: readonly string[]): Promise<string[]> {
+  return await listed(root, ["--cached", "--others", "--exclude-standard"], pathspecs);
+}
+
+/**
+ * The files git tracks, for a gate whose other half is a diff. `git diff` never
+ * shows an untracked file, so a gate holding what a branch wrote against the
+ * rest of the tree reads both sides from one population — and a scratch copy
+ * nobody committed is neither.
+ */
+export async function trackedFiles(root: string, pathspecs: readonly string[]): Promise<string[]> {
+  return await listed(root, ["--cached"], pathspecs);
+}
+
+async function listed(
+  root: string,
+  which: readonly string[],
+  pathspecs: readonly string[],
+): Promise<string[]> {
   const listing = await git(root, [
     "ls-files",
-    "--cached",
-    "--others",
-    "--exclude-standard",
+    ...which,
     "-z",
     "--",
     ...pathspecs,
-    NEVER,
+    NOT_A_DEPENDENCY,
   ]);
   if (!listing.ok) throw new Error(`git ls-files failed in ${root}`);
-  const listed = listing.stdout.split("\0").filter((path) => path !== "");
+  const paths = listing.stdout.split("\0").filter((path) => path !== "");
   const found = await Promise.all(
-    listed.map(async (path) => ((await Bun.file(`${root}/${path}`).exists()) ? path : undefined)),
+    paths.map(async (path) => ((await Bun.file(`${root}/${path}`).exists()) ? path : undefined)),
   );
   return found.filter((path) => path !== undefined);
 }
@@ -614,88 +701,6 @@ const DIALECTS = {
 } satisfies Record<string, Decode>;
 
 export type Dialect = keyof typeof DIALECTS;
-
-/**
- * The text with its comments and trailing commas blanked out. README asks a
- * repo to write the reason for an override beside it, and oxlint's schema
- * declares `allowComments` and `allowTrailingCommas` while TypeScript has
- * always taken both — so a gate that refused the reason it asked for would be
- * refusing a valid file. Blanked rather than deleted so a parse error still
- * points at the character it is about — and so a line that has something in the
- * file and nothing here is exactly a comment, which is how the repo contract
- * finds the reason written above an override.
- *
- * A scan rather than a regex, because `//` inside a string is data: the
- * `$schema` line at the top of these files is a URL, and a stripper that ate it
- * would turn a working config into the failure it was written to prevent.
- */
-export function withoutComments(text: string): string {
-  const kept: string[] = [];
-  const commas: number[] = [];
-  let index = 0;
-  while (index < text.length) {
-    const char = text[index] ?? "";
-    if (char === '"') {
-      index = copyString(text, index, kept);
-      continue;
-    }
-    if (char === "/" && (text[index + 1] === "/" || text[index + 1] === "*")) {
-      index = blankComment(text, index, kept);
-      continue;
-    }
-    if (char === ",") commas.push(kept.length);
-    kept.push(char);
-    index += 1;
-  }
-  for (const at of commas) {
-    if (closesNext(kept, at)) kept[at] = " ";
-  }
-  return kept.join("");
-}
-
-/** Whether the next thing after the comma at `at` closes its object or array, making it trailing. */
-function closesNext(kept: readonly string[], at: number): boolean {
-  for (let index = at + 1; index < kept.length; index += 1) {
-    const char = kept[index] ?? "";
-    if (char.trim() === "") continue;
-    return char === "}" || char === "]";
-  }
-  return false;
-}
-
-/** The string literal starting at `from`, copied whole; answers the index after it. */
-function copyString(text: string, from: number, kept: string[]): number {
-  kept.push('"');
-  let index = from + 1;
-  while (index < text.length) {
-    const char = text[index] ?? "";
-    kept.push(char);
-    if (char === "\\") {
-      kept.push(text[index + 1] ?? "");
-      index += 2;
-      continue;
-    }
-    index += 1;
-    if (char === '"') break;
-  }
-  return index;
-}
-
-/** The comment starting at `from`, as the whitespace it stands in for. */
-function blankComment(text: string, from: number, kept: string[]): number {
-  const end =
-    text[from + 1] === "/"
-      ? nextIndexOf(text, "\n", from + 2)
-      : nextIndexOf(text, "*/", from + 2) + 2;
-  for (let index = from; index < end; index += 1) kept.push(text[index] === "\n" ? "\n" : " ");
-  return end;
-}
-
-/** Where `needle` next appears, or the end of the text when it does not appear again. */
-function nextIndexOf(text: string, needle: string, from: number): number {
-  const at = text.indexOf(needle, from);
-  return at === -1 ? text.length : at;
-}
 
 /**
  * Parses every file, each rescued on its own. A batch that threw would take

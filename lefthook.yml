@@ -1,7 +1,8 @@
 # Install/refresh with: bun run prepare
 #
 # pre-commit checks the format and lint of the staged files and scans the index
-# for secrets. No hook runs on push, since the suite is CI's on the pull request.
+# for secrets. No hook runs on push, since the chain runs once, on the state that
+# lands, at landing or in CI.
 
 pre-commit:
   parallel: true
