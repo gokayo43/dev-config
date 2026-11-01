@@ -2,9 +2,9 @@ name: Duplicate code
 description: >-
   Fails on a run of twelve or more lines, comments and whitespace aside, that
   this branch wrote and that also appears elsewhere in the repo's source, unless
-  its first line carries a reasoned `duplicate-code-allow` directive. What counts
-  as source, as a line and as this branch's, and why twelve:
-  docs/gates/duplicate-code.md.
+  a `duplicate-code-allow` directive on its first line or the line above keeps
+  it. What counts as source, as a line and as this branch's, which files are
+  generated, and why twelve: docs/gates/duplicate-code.md.
 
 inputs:
   working-directory:

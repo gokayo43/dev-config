@@ -95,8 +95,9 @@ on:
         description: >-
           Fail on a run of twelve or more lines, comments and whitespace aside, that this
           branch wrote and that also appears elsewhere in the repo's source, unless a
-          reasoned directive on its first line keeps it. docs/gates/duplicate-code.md is
-          where it is argued.
+          directive on its first line or the line above keeps it. A file .gitattributes
+          marks linguist-generated is not read. docs/gates/duplicate-code.md is where it
+          is argued.
         type: boolean
         default: false
       contract-exemptions:

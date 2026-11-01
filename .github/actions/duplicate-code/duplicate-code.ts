@@ -56,7 +56,7 @@ export function normalised(source: string): Line[] {
     });
 }
 
-/** The directive that keeps a clone, on its first line. */
+/** The directive that keeps a clone, on its first line or the line above it. */
 const DIRECTIVE = /(?:\/\/|\/\*)\s*duplicate-code-allow\b/;
 
 interface Source {
@@ -117,7 +117,14 @@ export async function duplicateCode({ root, event }: Input): Promise<Verdict> {
   }
   const rev = base.rev;
 
-  const { changed, problems } = await changeSet(root, rev, SOURCE, isGraded);
+  const listed = (await trackedFiles(root, SOURCE)).filter(isGraded);
+  const generated = await generatedAmong(root, listed);
+  const { changed, problems } = await changeSet(
+    root,
+    rev,
+    SOURCE,
+    (path) => isGraded(path) && !generated.has(path),
+  );
   if (problems.length > 0) return { note: "a changed file could not be named", problems };
   if (changed.size === 0) {
     return {
@@ -126,7 +133,10 @@ export async function duplicateCode({ root, event }: Input): Promise<Verdict> {
     };
   }
 
-  const sources = await readSources(root);
+  const sources = await readSources(
+    root,
+    listed.filter((file) => !generated.has(file)),
+  );
   const index = windowIndex(sources);
   const clones = uniquePairs(
     [...changed.keys()].toSorted().flatMap((file) => {
@@ -154,12 +164,54 @@ export async function duplicateCode({ root, event }: Input): Promise<Verdict> {
 }
 
 /**
+ * The files git marks `linguist-generated`, which is the attribute GitHub reads
+ * to fold a generated file away in a pull request, so one marking serves both.
+ * A generator's output repeats itself by design and is rewritten wholesale, so
+ * a directive written into it would not survive the next run.
+ *
+ * The reader's own attributes file is pinned away, for the reason
+ * `_lib/change-set.ts` pins its diff settings: the marking that counts is the
+ * one the repo commits, and a gate whose answer depends on the reader's config
+ * has no answer.
+ */
+async function generatedAmong(root: string, files: readonly string[]): Promise<Set<string>> {
+  const proc = Bun.spawn(
+    [
+      "git",
+      "-c",
+      "core.attributesFile=/dev/null",
+      "check-attr",
+      "-z",
+      "--stdin",
+      "linguist-generated",
+    ],
+    {
+      cwd: root,
+      stdin: new TextEncoder().encode(files.map((file) => `${file}\0`).join("")),
+      stdout: "pipe",
+      stderr: "ignore",
+    },
+  );
+  const answered = await new Response(proc.stdout).text();
+  if ((await proc.exited) !== 0) throw new Error(`git check-attr failed in ${root}`);
+  // `-z` answers path, attribute and value per file, each ended by a NUL. A
+  // value of `set` is the bare attribute and `true` is `=true`; `unset`,
+  // `false` and `unspecified` are a file nobody marked.
+  const fields = answered.split("\0");
+  const generated = new Set<string>();
+  for (let at = 0; at + 2 < fields.length; at += 3) {
+    const value = fields[at + 2];
+    if (value === "set" || value === "true") generated.add(fields[at] ?? "");
+  }
+  return generated;
+}
+
+/**
  * Every graded source file, read and normalised. A symlink is skipped rather
  * than followed: its target is either another tracked file, read as itself, or
  * somewhere outside the checkout, which is not this repo's code to grade.
  */
-async function readSources(root: string): Promise<Map<string, Source>> {
-  const files = (await trackedFiles(root, SOURCE)).filter(isGraded);
+async function readSources(root: string, files: readonly string[]): Promise<Map<string, Source>> {
   const ids = new Map<string, number>();
   const read = await Promise.all(
     files.map(async (file) => {
@@ -313,8 +365,10 @@ function describe({ here, there, length }: Clone): string {
 
 /**
  * The reason a clone is kept, or nothing where it is not. The directive counts
- * on the first line of a side this branch wrote into: a directive somebody wrote
- * on an older block does not license the next copy of it.
+ * on the first line of a side this branch wrote into, or on the line directly
+ * above it, where a comment on its own line sits — the shape every other
+ * directive here takes. A directive somebody wrote on an older block does not
+ * license the next copy of it.
  *
  * A directive with no reason still keeps the clone here, and the
  * suppression-hygiene gate refuses it: one mistake, one diagnostic.
@@ -328,8 +382,10 @@ function allowance(
     const ownsALine = source.lines
       .slice(start, start + length)
       .some(({ at }) => written?.has(at) === true);
-    const line = source.raw[from - 1] ?? "";
-    if (!ownsALine || !DIRECTIVE.test(line)) continue;
+    const line = [source.raw[from - 1], source.raw[from - 2]].find(
+      (each) => each !== undefined && DIRECTIVE.test(each),
+    );
+    if (!ownsALine || line === undefined) continue;
     const [, ...reason] = line.split(REASON);
     const why = reason.join(REASON).trim();
     return why === "" ? "(no reason given, which suppression-hygiene refuses)" : why;
@@ -341,6 +397,6 @@ function cloneProblem({ here, there, length }: Clone): Problem {
   return {
     file: here.source.file,
     line: here.from,
-    message: `move the ${length} normalised lines ${located(here)} shares with ${located(there)} into one place both call, or keep the copy with \`// duplicate-code-allow${REASON}<reason>\` on line ${here.from}`,
+    message: `move the ${length} normalised lines ${located(here)} shares with ${located(there)} into one place both call, or keep the copy with \`// duplicate-code-allow${REASON}<reason>\` on line ${here.from} or the line above it`,
   };
 }

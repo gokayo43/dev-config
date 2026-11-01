@@ -237,7 +237,7 @@ describe("the duplicate-code gate", () => {
       {
         file: "src/discounts.ts",
         line: 2,
-        message: `move the 15 normalised lines src/discounts.ts:2-16 shares with src/prices.ts:3-17 ${FIX} on line 2`,
+        message: `move the 15 normalised lines src/discounts.ts:2-16 shares with src/prices.ts:3-17 ${FIX} on line 2 or the line above it`,
       },
     ]);
   });
@@ -258,7 +258,7 @@ describe("the duplicate-code gate", () => {
       {
         file: "src/rates.ts",
         line: 1,
-        message: `move the 15 normalised lines src/rates.ts:1-15 shares with src/rates.ts:17-31 ${FIX} on line 1`,
+        message: `move the 15 normalised lines src/rates.ts:1-15 shares with src/rates.ts:17-31 ${FIX} on line 1 or the line above it`,
       },
     ]);
   });
@@ -347,6 +347,23 @@ describe("the duplicate-code gate", () => {
     );
   });
 
+  // The shape every other directive here takes: a comment on its own line,
+  // which normalising removes, so it sits on no line of the run. The wrong
+  // implementations read only the run's first line, which refuses this, or
+  // any comment somewhere above the block, which keeps the second row.
+  test.each([
+    ["directly above the block", 0, ""],
+    ["with a line between it and the block", 1, "\n"],
+  ])("a directive on its own line %s draws %i refusals", async (_where, refusals, gap) => {
+    const above = `// duplicate-code-allow -- the fixture mirrors the wire format\n${gap}`;
+    const { verdict } = await gate([
+      BASE,
+      { ...BASE, "src/fixture.ts": `${above}${block("price", 15)}` },
+    ]);
+
+    expect(verdict.problems).toHaveLength(refusals);
+  });
+
   // One mistake, one diagnostic: the directive without a reason keeps the clone
   // here, and the gate that holds every directive to its reason refuses it. The
   // wrong implementation is a hygiene scan that never learned the spelling,
@@ -374,6 +391,63 @@ describe("the duplicate-code gate", () => {
     const { verdict } = await gate([before, { ...before, "src/again.ts": block("price", 15) }]);
 
     expect(messages(verdict)).toEqual([containing("src/again.ts:1-15 shares with")]);
+  });
+
+  // A generator's output repeats itself by design, and the attribute GitHub
+  // reads to fold it away is the marking. The wrong implementations index the
+  // marked file anyway, or skip nothing at all. The unmarked row is the same
+  // tree without the line, so the marking is the one variable.
+  test.each([
+    ["marked", 0, "src/*.gen.ts linguist-generated=true\n"],
+    ["unmarked", 1, ""],
+  ])(
+    "a copy of a block in a %s generated file draws %i refusals",
+    async (_how, refusals, marking) => {
+      const before = {
+        ...BASE,
+        ".gitattributes": marking,
+        "src/routes.gen.ts": block("route", 15),
+      };
+      const { verdict } = await gate([before, { ...before, "src/routes.ts": block("route", 15) }]);
+
+      expect(verdict.problems).toHaveLength(refusals);
+    },
+  );
+
+  // The other half of the marking: a branch that only regenerates a marked
+  // file, whose output repeats itself, changed no source. The wrong
+  // implementation leaves the marked file in the change set and counts it.
+  test("a branch that only regenerated a marked file changed no source", async () => {
+    const before = {
+      ...BASE,
+      ".gitattributes": "src/*.gen.ts linguist-generated=true\n",
+      "src/routes.gen.ts": block("route", 3),
+    };
+    const { verdict } = await gate([
+      before,
+      { ...before, "src/routes.gen.ts": block("route", 15).repeat(2) },
+    ]);
+
+    expect(verdict.problems).toEqual([]);
+    expect(verdict.note).toEqual(containing("no source file changed"));
+  });
+
+  // The marking that counts is the one the repo commits. The wrong
+  // implementation asks git with the reader's own attributes file in play, so
+  // a developer whose config marks the file passes a clone CI would refuse.
+  test("a generated marking in the reader's own attributes file does not count", async () => {
+    const elsewhere = await scratch();
+    const attributes = join(elsewhere, "attributes");
+    await Bun.write(attributes, "*.gen.ts linguist-generated=true\n");
+    const before = { ...BASE, "src/routes.gen.ts": block("route", 15) };
+    const { verdict } = await gate(
+      [before, { ...before, "src/routes.ts": block("route", 15) }],
+      [["core.attributesFile", attributes]],
+    );
+
+    expect(messages(verdict)).toEqual([
+      containing("src/routes.ts:1-15 shares with src/routes.gen.ts:1-15"),
+    ]);
   });
 
   test("a branch that changed no source file says so", async () => {

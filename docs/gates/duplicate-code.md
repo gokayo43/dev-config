@@ -46,6 +46,26 @@ nobody committed is neither.
 A symlink is not read. Its target is either another tracked file, read as
 itself, or somewhere outside the checkout, which is not this repo's code.
 
+## Generated files
+
+A file git marks `linguist-generated` is neither graded nor indexed: a branch
+that regenerates one changed no source, and a hand-written copy of a block in
+one is not refused for it. It is the attribute GitHub reads to fold a generated
+file away in a pull request, so one marking serves both. A generator's output
+repeats itself by design and is rewritten wholesale, so a directive written
+into it would not survive the next run.
+
+A repo marks its generated files in a committed `.gitattributes`, and the pin
+move that turns this gate on is where the line goes:
+
+```gitattributes
+*.gen.ts linguist-generated=true
+```
+
+The marking that counts is the committed one. The gate asks git with the
+reader's own attributes file (`core.attributesFile`) set aside, so a developer
+whose config marks a file sees the run CI sees.
+
 ## What "this branch" means
 
 The same thing it means to [the mutation lane](mutation-lane.md), because both
@@ -75,11 +95,18 @@ blocks and form fields copied whole. dev-config itself held none at twelve.
 
 ## Keeping a copy
 
-A directive on the clone's first line, in the file the branch wrote:
+A directive on the clone's first line, or on the line directly above it, in
+the file the branch wrote. Above it is the shape every other directive here
+takes, a comment on its own line:
 
 ```ts
-export const price0 = measure(0, "price"); // duplicate-code-allow -- the fixture mirrors the wire format
+// duplicate-code-allow -- the fixture mirrors the wire format
+export const price0 = measure(0, "price");
 ```
+
+A line between the directive and the block takes it out of reach, and so does a
+directive anywhere further up. The failure names the line, and the hint in it
+says "on line N or the line above it".
 
 The directive keeps that clone for the run, and the gate's log names each clone
 it kept with its reason. It counts only on a side the branch wrote into, so a
