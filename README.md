@@ -12,11 +12,13 @@ consumed exactly as they are committed:
 
 ```sh
 bun add -d github:gokayo43/dev-config \
-  typescript oxlint oxlint-tsgolint oxfmt knip \
+  oxlint oxlint-tsgolint oxfmt knip \
   eslint-plugin-boundaries eslint-import-resolver-typescript
 ```
 
 The tools are peer dependencies, all optional: a repo installs the ones it uses.
+The type checker is not among them: it is `bun check`, which ships with Bun
+([TypeScript](#typescript)).
 `oxlint-tsgolint` is not optional in practice — without it `oxlint` skips every
 type-aware rule (see below). A repo that builds its pages with Tailwind adds
 `@shadcn/lint` ([Design system](#design-system)).
@@ -27,7 +29,7 @@ to override a shared setting, the override carries a comment naming the reason.
 
 | File                           | Consumed by    | How                                        |
 | ------------------------------ | -------------- | ------------------------------------------ |
-| `tsconfig.base.json`           | `tsc`          | `extends` by package name                  |
+| `tsconfig.base.json`           | `bun check`    | `extends` by package name                  |
 | `oxlint.base.json`             | `oxlint`       | `extends` by `node_modules` path           |
 | `anti-slop/`                   | `oxlint`       | `jsPlugins` in `oxlint.base.json`          |
 | `design-system.base.json`      | `oxlint`       | `extends` beside it, in a Tailwind repo    |
@@ -80,6 +82,15 @@ whenever the lockfile does. Anything a repo calls directly is one of these
 instead.
 
 ## TypeScript
+
+The type checker is `bun check`, Bun's port of TypeScript 7's checker, which
+reports what `tsc` reports and is part of the runtime from Bun 1.4.3. A repo's
+`typecheck` script is `bun check --no-script`: without the flag, `bun check`
+runs the repo's own `check` script, and that script runs `typecheck`. So a repo
+installs no `typescript` to type-check, and the repo contract holds the script
+and a `packageManager` of `bun@1.4.3` or later. A repo adds `typescript` only
+for a tool that calls its API; this one does, because tsdown's declaration pass
+builds the `.d.ts` files in `dist/` with it.
 
 `tsconfig.base.json` resolves through Node module resolution, so it is referenced
 by package name:
@@ -571,7 +582,7 @@ finding it was written for and quietly widens: the rule it names stops applying
 to that line for the next person who writes there.
 
 Type-aware rules need resolved types, so a repo whose types come from generated
-code runs its codegen before linting, exactly as it does before `tsc`.
+code runs its codegen before linting, exactly as it does before `bun check`.
 
 ### The anti-slop plugin
 
@@ -812,7 +823,7 @@ Two facts about how it is wired, both load-bearing:
 - **The plugin is JavaScript, not TypeScript.** Node refuses to strip types from
   any file under `node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`),
   and this directory is inside `node_modules` for every repo that consumes it.
-  `tsc` still checks it in this repo, through `checkJs` and JSDoc types.
+  `bun check` still checks it in this repo, through `checkJs` and JSDoc types.
 
 `tests/anti-slop.test.ts` drives the unscoped rules with the real binary: a block of cases
 per rule — alias chains, shadowed built-ins, type parameters bound by default,
@@ -1601,10 +1612,11 @@ tree, a codegen client — and a build over the changed packages alone leaves
 `lint`, `knip` and the root typecheck reading files nothing wrote this run.
 
 A repo with no `turbo.json` is refused rather than handed the flag, since
-without turbo it arrives at `tsc`. That check is the file, not the script: a
-repo that has a `turbo.json` and a `typecheck` that is still `tsc --noEmit` gets
-`--affected` passed to `tsc`, which fails with TS5023 — loudly, which is the
-better half of a wrong answer, but a wrong answer.
+without turbo it arrives at `bun check`. That check is the file, not the script:
+a repo that has a `turbo.json` and a `typecheck` that is still `bun check
+--no-script` gets `--affected` passed to `bun check`, which fails with `Unknown
+flag "--affected"` — loudly, which is the better half of a wrong answer, but a
+wrong answer.
 
 `TURBO_TELEMETRY_DISABLED` needs no input. It is set in this workflow's own
 `env:`, which is the only place a called workflow can be given one: `env:` is
@@ -1699,7 +1711,7 @@ The matching scripts:
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint --report-unused-disable-directives-severity=error",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "bun check --no-script",
     "knip": "knip",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run knip"
   }
@@ -1755,7 +1767,7 @@ drift.
 
 A repo whose types depend on generated code that is not committed — a TanStack
 route tree, a codegen client — passes `build: true`, since a clean checkout has
-none of it and both `tsc` and the type-aware lint rules would report the
+none of it and both `bun check` and the type-aware lint rules would report the
 generated symbols as missing. So does an app the boot gate starts, which
 serves from its build; a Next app is that case, and the reason `build-cache`'s
 example is `.next/cache`.

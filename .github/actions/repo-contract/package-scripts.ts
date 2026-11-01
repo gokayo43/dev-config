@@ -34,10 +34,16 @@ interface Invocation {
   readonly file: string | undefined;
 }
 
-/** One program with the argument that has to follow it, which is what tells `playwright test` from `playwright install`. */
+/**
+ * One program with the argument that has to follow it, which is what tells
+ * `playwright test` from `playwright install`, and the flags that have to come
+ * after that argument, which is what tells `bun check --no-script` from a
+ * `bun check` that runs the repo's own `check` script instead.
+ */
 export interface Invoked {
   readonly program: string;
   readonly argument: string;
+  readonly flags: readonly string[];
 }
 
 const ROOT_MANIFEST = "package.json";
@@ -114,10 +120,18 @@ function unwrapped(words: readonly string[]): readonly string[] {
   return words;
 }
 
-/** Whether this command runs that program with that argument, at its head where a program runs. */
-function runsAtHead(words: readonly string[], { program, argument }: Invoked): boolean {
-  const [head, next] = unwrapped(words);
-  return head !== undefined && invokes(head, program) && next === argument;
+/**
+ * Whether this command runs that program with that argument and those flags, at
+ * its head where a program runs.
+ */
+function runsAtHead(words: readonly string[], { program, argument, flags }: Invoked): boolean {
+  const [head, next, ...rest] = unwrapped(words);
+  return (
+    head !== undefined &&
+    invokes(head, program) &&
+    next === argument &&
+    flags.every((flag) => rest.includes(flag))
+  );
 }
 
 /**
@@ -192,9 +206,9 @@ function scriptReaches(
 }
 
 /**
- * Whether this command runs that program with that argument — directly, or
- * through a package script that reaches it. Scripts chain (`e2e` runs
- * `test:e2e:ci` runs the binary), so the walk follows them across every
+ * Whether this command runs that program with that argument and those flags —
+ * directly, or through a package script that reaches it. Scripts chain (`e2e`
+ * runs `test:e2e:ci` runs the binary), so the walk follows them across every
  * manifest in the workspace.
  */
 export function runsProgram(command: string, invoked: Invoked, all: readonly Manifest[]): boolean {
