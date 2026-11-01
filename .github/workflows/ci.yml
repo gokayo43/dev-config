@@ -16,8 +16,6 @@ permissions:
   contents: read
 
 concurrency:
-  # The event is in the group so that a push landing at two in the morning does
-  # not cancel the nightly, and a nightly does not cancel a push.
   group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 

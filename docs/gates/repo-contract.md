@@ -5,25 +5,26 @@ Every gate above rests on a string somewhere: a `packageManager` field, an
 deleted, renamed or never written, and when one is, the gate it feeds does not
 fail — it stops existing. `repo-contract` reads them and says so.
 
-| Fact                                                                                                              | Why it is load-bearing                                                                              |
-| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `packageManager` reads `bun@<version>`                                                                            | `setup-bun` takes the runner's Bun from it; without it CI and the dev machine drift                 |
-| No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                           | a second lockfile installs a second dependency tree                                                 |
-| Every spec outside `peerDependencies` resolves to one thing                                                       | a lockfile refresh must not be able to change what is installed                                     |
-| Every `peerDependencies` range refuses some version                                                               | a range that accepts everything says what declaring no peer says, and `bun add` writes one          |
-| `typescript` major ≥ 7                                                                                            | the shared tsconfig is written against TypeScript 7                                                 |
-| `oxlint-tsgolint` present, when `.oxlintrc.json` extends `oxlint.base.json`                                       | without it oxlint runs the base's type-aware rules over nothing and reports clean                   |
-| `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`     | a repo that stopped inheriting stops inheriting silently                                            |
-| `bunfig.toml` declares a window of 3 days or more, exact exclusions, `exact`, and a coverage floor a run can fail | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them   |
-| every rule, category and option `.oxlintrc.json` switches off carries a reason above it                           | a switch-off nobody wrote a reason for reads the same as one added to get a run green               |
-| `.oxlintrc.json` `extends` the shared bases and nothing else, each once, and no oxlint config sits below the root | a second config is read after the root's and wins over it, in a file this gate never opens          |
-| `.oxlintrc.json` extends `design-system.base.json`, when any manifest depends on `tailwindcss`                    | without it a page using a raw colour, an arbitrary value or a restyled shared component passes lint |
-| `lefthook.yml` scans staged files with gitleaks pre-commit, runs nothing pre-push, and nothing merges into it     | a committed key is burned, the suite is CI's on the pull request, and the gate reads only that file |
-| `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern   | a blanket `.env.*` rule silently deletes the two files that have to ship                            |
-| `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                   | the docs spine                                                                                      |
-| `db:migrate` exists, when `database` is anything but `none`                                                       | whichever gate replays this repo's migrations replays them through it                               |
-| a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                             | a tag is a name someone else can repoint                                                            |
-| `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                  | it is what every rule under "Going live" below reconfigures off                                     |
+| Fact                                                                                                                                                     | Why it is load-bearing                                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `packageManager` reads `bun@<version>`                                                                                                                   | `setup-bun` takes the runner's Bun from it; without it CI and the dev machine drift                                            |
+| No `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock`                                                                                                  | a second lockfile installs a second dependency tree                                                                            |
+| Every spec outside `peerDependencies` resolves to one thing                                                                                              | a lockfile refresh must not be able to change what is installed                                                                |
+| Every `peerDependencies` range refuses some version                                                                                                      | a range that accepts everything says what declaring no peer says, and `bun add` writes one                                     |
+| `typescript` major ≥ 7                                                                                                                                   | the shared tsconfig is written against TypeScript 7                                                                            |
+| `oxlint-tsgolint` present, when `.oxlintrc.json` extends `oxlint.base.json`                                                                              | without it oxlint runs the base's type-aware rules over nothing and reports clean                                              |
+| `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`                                            | a repo that stopped inheriting stops inheriting silently                                                                       |
+| `bunfig.toml` declares a window of 3 days or more, exact exclusions, `exact`, and a coverage floor a run can fail                                        | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them                              |
+| every rule, category and option `.oxlintrc.json` switches off carries a reason above it                                                                  | a switch-off nobody wrote a reason for reads the same as one added to get a run green                                          |
+| `.oxlintrc.json` `extends` the shared bases and nothing else, each once, and no oxlint config sits below the root                                        | a second config is read after the root's and wins over it, in a file this gate never opens                                     |
+| `.oxlintrc.json` extends `design-system.base.json`, when any manifest depends on `tailwindcss`                                                           | without it a page using a raw colour, an arbitrary value or a restyled shared component passes lint                            |
+| `lefthook.yml` scans staged files with gitleaks pre-commit, runs nothing pre-push, and nothing merges into it                                            | a committed key is burned, the chain runs once on the state that lands, at landing or in CI, and the gate reads only that file |
+| `.env` untracked and ignored, `.env.example` tracked, neither `.env.example` nor `.env.enc` caught by a pattern                                          | a blanket `.env.*` rule silently deletes the two files that have to ship                                                       |
+| `CONTEXT.md` (or `CONTEXT-MAP.md`), `CLAUDE.md`                                                                                                          | the docs spine                                                                                                                 |
+| `db:migrate` exists, when `database` is anything but `none`                                                                                              | whichever gate replays this repo's migrations replays them through it                                                          |
+| a job `uses:` this repo's `check.yml` at a 40-hex SHA                                                                                                    | a tag is a name someone else can repoint                                                                                       |
+| `ci.yml` has a top-level `concurrency` block with `cancel-in-progress: true` and a `group` naming `github.ref` and `github.event_name`, `ci-call` or not | a repo's runs queue on its one runner, and the event keeps a push and a nightly from cancelling each other                     |
+| `lifecycle` reads `"dev"` or `"live"`, and never moves back down                                                                                         | it is what every rule under "Going live" below reconfigures off                                                                |
 
 ## What decides which rules run
 
@@ -601,13 +602,13 @@ with:
   contract-exemptions: config-lineage ci-call secrets
 ```
 
-| Exemption          | Waives                                                                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `config-lineage`   | _where_ the configs inherit from — not whether they exist                                                                                               |
-| `ci-call`          | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call — there is no call to pass it to             |
-| `docs-spine`       | the glossary and `CLAUDE.md`                                                                                                                            |
-| `lifecycle-retire` | the comparison with the base ref's `lifecycle`, for a repo being deliberately wound down — not the field itself, and refused once it is waiving nothing |
-| `secrets`          | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                               |
+| Exemption          | Waives                                                                                                                                                                                    |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config-lineage`   | _where_ the configs inherit from — not whether they exist                                                                                                                                 |
+| `ci-call`          | the SHA-pinned call into `check.yml`, and with it the `upgrade-gate: true` a live repo passes to that call, since there is no call to pass it to — not the workflow's `concurrency` block |
+| `docs-spine`       | the glossary and `CLAUDE.md`                                                                                                                                                              |
+| `lifecycle-retire` | the comparison with the base ref's `lifecycle`, for a repo being deliberately wound down — not the field itself, and refused once it is waiving nothing                                   |
+| `secrets`          | the `.env` / `.env.example` shape, for a repo with no runtime environment                                                                                                                 |
 
 Every exemption is echoed as a `::notice` in the run, and a name outside the
 table fails rather than waiving anything — a typo cannot quietly turn a check

@@ -11,6 +11,7 @@ import {
   PIN,
   withBunfig,
   withSpec,
+  WORKFLOW_HEAD,
 } from "./repo-contract-fixture.ts";
 import { materialise, type Tree, without } from "./tree.ts";
 
@@ -257,10 +258,57 @@ describe("repo contract", () => {
     expect(
       await contract({
         ...CLEAN,
-        ".github/workflows/ci.yml":
-          "name: CI\non:\n  pull_request:\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo green\n",
+        ".github/workflows/ci.yml": `${WORKFLOW_HEAD}  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo green\n`,
       }),
     ).toEqual([containing("check.yml")]);
+  });
+});
+
+describe("the CI workflow cancels a run a newer push replaced", () => {
+  const CANCEL =
+    "`cancel-in-progress: true` — every CI run of a repo queues on its one self-hosted runner";
+  const GROUP =
+    "has to name both `github.ref` and `github.event_name`, as `ci-${{ github.ref }}-${{ github.event_name }}` does — the ref keeps a push from cancelling another branch's run, and the event keeps a push from cancelling a nightly and a nightly from cancelling a push";
+
+  /** CLEAN's workflow with its concurrency block replaced by `block`, or by nothing. */
+  function withConcurrency(block: string): Tree {
+    const ci = (CLEAN[".github/workflows/ci.yml"] ?? "").replace(
+      /^concurrency:\n(?: {2}.*\n)+/m,
+      block,
+    );
+    return { ...CLEAN, ".github/workflows/ci.yml": ci };
+  }
+
+  test("a workflow with no concurrency block is refused on both counts", async () => {
+    expect(await contract(withConcurrency(""))).toEqual([containing(CANCEL), containing(GROUP)]);
+  });
+
+  test("a run that is queued behind rather than cancelled is refused", async () => {
+    const queued =
+      "concurrency:\n  group: ci-${{ github.ref }}-${{ github.event_name }}\n  cancel-in-progress: false\n";
+    expect(await contract(withConcurrency(queued))).toEqual([containing(CANCEL)]);
+  });
+
+  // The event is the half a group is likeliest to be written without, since
+  // the ref alone is what most workflows carry. `github.ref_name` kills a
+  // substring match, which reads it as the ref it is not.
+  test.each([
+    ["omits the event", "ci-${{ github.ref }}"],
+    ["omits the ref", "ci-${{ github.event_name }}"],
+    ["names ref_name rather than the ref", "ci-${{ github.ref_name }}-${{ github.event_name }}"],
+  ])("a group that %s is refused", async (_what, group) => {
+    const block = `concurrency:\n  group: ${group}\n  cancel-in-progress: true\n`;
+    expect(await contract(withConcurrency(block))).toEqual([containing(GROUP)]);
+  });
+
+  // `ci-call` waives the shape of the call into check.yml, and a repo whose CI
+  // is its own jobs still queues on its one runner. The wrong implementation
+  // puts the rule among the call's problems, which the exemption drops.
+  test("ci-call does not waive it", async () => {
+    expect(await contract(withConcurrency(""), { exemptions: ["ci-call"] })).toEqual([
+      containing(CANCEL),
+      containing(GROUP),
+    ]);
   });
 });
 

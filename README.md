@@ -1514,7 +1514,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -1666,8 +1666,9 @@ for a private git dependency where the caller passed one — the optional build,
 the suite ran, and — where the repo asks for it — the mutation lane over the
 domain files this branch changed.
 From `format:check` to `knip` the chain is the local `bun run check`, and the
-suite after it is the local `bun test`. CI runs both on the pull request, and
-the git hooks run none of it on push. The rest is what only CI has.
+suite after it is the local `bun test`. The git hooks run none of it on push,
+because the chain runs once, on the state that lands, at landing or in CI. The
+rest is what only CI has.
 
 The declarative gates come before `bun install` deliberately. They read the tree
 as committed, so a repo that has drifted out of the contract says so in seconds
@@ -1921,7 +1922,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
@@ -1971,9 +1972,9 @@ every other one the schedule keeps running through however quiet a month gets.
 Re-enabling a disabled one is a button on the workflow's page in the Actions
 tab.
 
-The `concurrency` group above is per-ref, so a push landing while the nightly
-runs cancels it — and a cancelled run files nothing, deliberately. A repo that
-wants both to survive adds `${{ github.event_name }}` to the group.
+The `concurrency` group above carries the event, as the repo contract requires,
+so a push landing while the nightly runs does not cancel it — a cancelled run
+files nothing, deliberately.
 
 #### What a red nightly does
 

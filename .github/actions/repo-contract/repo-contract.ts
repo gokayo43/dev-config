@@ -631,7 +631,8 @@ async function checkLefthook(root: string): Promise<Problem[]> {
   if (hookRunsAnything(hooks, "pre-push")) {
     problems.push({
       file: "lefthook.yml",
-      message: "pre-push runs nothing; the suite is CI's on the pull request",
+      message:
+        "pre-push runs nothing; the chain runs once, on the state that lands, at landing or in CI",
     });
   }
   for (const key of ["extends", "remotes"]) {
@@ -717,6 +718,8 @@ interface Call {
    * that runs nothing either way.
    */
   readonly steps: readonly string[];
+  /** What the workflow's top-level `concurrency` block lacks, which `ci-call` does not waive. */
+  readonly queue: readonly Problem[];
   readonly problems: Problem[];
 }
 
@@ -732,12 +735,38 @@ function stepsIn(jobs: ConfigObject): string[] {
   });
 }
 
+function checkConcurrency(workflow: ConfigObject): Problem[] {
+  const concurrency = record(workflow["concurrency"]);
+  const group = concurrency["group"];
+  const problems: Problem[] = [];
+  if (concurrency["cancel-in-progress"] !== true) {
+    problems.push({
+      file: CI_WORKFLOW,
+      message:
+        "the top-level `concurrency` block has to set `cancel-in-progress: true` — every CI run of a repo queues on its one self-hosted runner, and a run a newer push has replaced holds that runner until it finishes unless it is cancelled",
+    });
+  }
+  if (
+    typeof group !== "string" ||
+    !/\bgithub\.ref\b/.test(group) ||
+    !/\bgithub\.event_name\b/.test(group)
+  ) {
+    problems.push({
+      file: CI_WORKFLOW,
+      message:
+        "the top-level `concurrency` block's `group` has to name both `github.ref` and `github.event_name`, as `ci-${{ github.ref }}-${{ github.event_name }}` does — the ref keeps a push from cancelling another branch's run, and the event keeps a push from cancelling a nightly and a nightly from cancelling a push",
+    });
+  }
+  return problems;
+}
+
 /**
- * Read once and handed to everyone who has a question about it. Three rules turn
- * on this file — that the call exists and is pinned, that a live repo's copy of
- * it asks for the upgrade gate, and that a live repo with pages runs its browser
- * suite somewhere in it — and they belong to different subjects: one is about
- * the workflow, the other two about the lifecycle. Threading a `live` boolean
+ * Read once and handed to everyone who has a question about it. Four rules turn
+ * on this file — that the call exists and is pinned, that the workflow cancels
+ * a run a newer push replaced, that a live repo's copy of the call asks for the
+ * upgrade gate, and that a live repo with pages runs its browser suite
+ * somewhere in it — and they belong to different subjects: two are about the
+ * workflow, the other two about the lifecycle. Threading a `live` boolean
  * into the first would put them inside a check that is not about them, and hide
  * the fact that `ci-call` waives the pin and the upgrade gate together.
  */
@@ -746,16 +775,18 @@ async function checkCall(root: string): Promise<Call> {
     return {
       asked: undefined,
       steps: [],
+      queue: [],
       problems: [{ file: CI_WORKFLOW, message: "the repo has no CI workflow" }],
     };
   }
 
   const workflow = await readConfig(root, CI_WORKFLOW, "YAML");
   if (workflow.contents === undefined)
-    return { asked: undefined, steps: [], problems: [...workflow.problems] };
+    return { asked: undefined, steps: [], queue: [], problems: [...workflow.problems] };
 
   const jobs = record(workflow.contents["jobs"]);
   const steps = stepsIn(jobs);
+  const queue = checkConcurrency(workflow.contents);
   const call = Object.values(jobs)
     .map((job) => record(job))
     .find(({ uses }) => typeof uses === "string" && CHECK_CALL.test(uses));
@@ -763,6 +794,7 @@ async function checkCall(root: string): Promise<Call> {
     return {
       asked: undefined,
       steps,
+      queue,
       problems: [
         {
           file: CI_WORKFLOW,
@@ -772,7 +804,7 @@ async function checkCall(root: string): Promise<Call> {
       ],
     };
   }
-  return { asked: record(call["with"]), steps, problems: [] };
+  return { asked: record(call["with"]), steps, queue, problems: [] };
 }
 
 export interface Contract {
@@ -856,17 +888,18 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
 
   const declared = declaredIn(rootManifest.value);
 
-  // One read of the workflow, three subjects asking about it — and `ci-call`
+  // One read of the workflow, four subjects asking about it — and `ci-call`
   // waives two of them, which is a thing to be able to see rather than to
   // discover. A repo whose CI is not a call into check.yml has no call to pass
-  // `upgrade-gate: true` to. What it does have is steps: the browser suite is a
-  // job the repo runs itself, so the exemption drops the call and keeps them.
+  // `upgrade-gate: true` to. What it does have is steps and a queue: the
+  // browser suite is a job the repo runs itself, and its runs still queue on
+  // its one runner, so the exemption drops the call and keeps both.
   // It drops the parse problems with the call, so an exempt repo whose ci.yml
   // is not readable YAML is told to add a job that runs the suite rather than
   // that its workflow will not parse.
   const read = await checkCall(root);
   const call: Call = exempt("ci-call")
-    ? { asked: undefined, steps: read.steps, problems: [] }
+    ? { asked: undefined, steps: read.steps, queue: read.queue, problems: [] }
     : read;
 
   // One read of .oxlintrc.json, three subjects asking about it — where it
@@ -934,6 +967,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     ...secrets,
     ...docs,
     ...call.problems,
+    ...call.queue,
     ...live,
   ];
 }
