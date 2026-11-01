@@ -7,7 +7,7 @@ only thing that caught it. `duplicate-code` fails the run instead, and is
 switched on with the `duplicate-code` input.
 
 ```
-::error file=src/discounts.ts,line=2::move the 15 normalised lines src/discounts.ts:2-16 shares with src/prices.ts:3-17 into one place both call, or keep the copy with `// duplicate-code-allow -- <reason>` on line 2
+::error file=src/discounts.ts,line=2::move the 15 normalised lines src/discounts.ts:2-16 shares with src/prices.ts:3-17 into one place both call, or keep the copy with `// duplicate-code-allow -- <reason>` on line 2 or the line above it
 ```
 
 ## What a clone is
@@ -15,8 +15,9 @@ switched on with the `duplicate-code` input.
 A run of at least **twelve normalised lines** in a file this branch changed, at
 least one of which this branch wrote, that also appears anywhere else in the
 repo's source: in another file, or elsewhere in the same file. Elsewhere means
-the two ranges do not overlap, so a block whose lines repeat a short pattern,
-such as rows of a table, is one block rather than a clone of itself.
+the two ranges do not overlap. A stretch whose lines repeat themselves, such as
+rows of a table, is one self-repeating block: reported once, as its first two
+periods side by side, however many rows it has.
 
 A **normalised** line is a line with its comments removed and every run of
 whitespace collapsed to one space, and a line left blank by that is dropped.
@@ -26,9 +27,12 @@ one decision that share no lines are a judgement about intent, which stays with
 review.
 
 Each clone is reported once, extended both ways to the longest run the two
-places share, with both places as `file:first-last` and the run's length. A
-new copy of a block that already sits in two places is two refusals, one per
-pair.
+places share, with both places as `file:first-last` and the run's length. Each
+line of a changed file takes part in at most one reported clone with any one
+other file, and in at most one with its own file, so a block is named once per
+file it repeats: a new copy of a block that already sits in two other files is
+two refusals, one per file. A line a directive marks is where a block starts,
+so no run grows across it in either direction.
 
 ## Which files
 
@@ -44,7 +48,9 @@ untracked file, so both sides are read from one population and a scratch copy
 nobody committed is neither.
 
 A symlink is not read. Its target is either another tracked file, read as
-itself, or somewhere outside the checkout, which is not this repo's code.
+itself, or somewhere outside the checkout, which is not this repo's code. A
+tracked `node_modules` path is never source, on the branch's side of a clone
+either.
 
 ## Generated files
 
@@ -62,9 +68,12 @@ move that turns this gate on is where the line goes:
 *.gen.ts linguist-generated=true
 ```
 
-The marking that counts is the committed one. The gate asks git with the
-reader's own attributes file (`core.attributesFile`) set aside, so a developer
-whose config marks a file sees the run CI sees.
+The marking that counts is the committed one. The gate asks git about the
+committed tree from an empty git directory borrowing the repo's objects, with
+the reader's own attributes file (`core.attributesFile`) set aside, so neither
+the checkout's `.git/info/attributes` nor the reader's config can mark a file
+CI would grade. (`check-attr --source=HEAD` alone still reads
+`info/attributes`.)
 
 ## What "this branch" means
 
@@ -79,10 +88,13 @@ no history.
 A clone that was already in the tree before the branch is not the branch's,
 and passes. A pull request that changed no source file is a pass that says so.
 
-The diff runs with git's rename detection at its default whatever the reader's
-own config says. A reader whose `diff.renames` is `copies` would otherwise see a
-copied file as a copy with no line written, which is the one change this gate
-exists to see.
+The diff reads each file's own text whatever the repo or the reader says about
+it. Rename detection stays at git's default, since under `diff.renames=copies` a
+copied file arrives as a copy with no line written, the one change this gate
+exists to see. And `--text`, `--no-ext-diff`, `--no-textconv`, an empty
+`diff.external` and no reader's attributes file keep a `-diff` marking, a NUL
+byte, an external diff driver or a text converter from turning a file the
+branch wrote into "Binary files differ" with no lines at all.
 
 ## Why twelve, and why it is not an input
 
@@ -95,9 +107,9 @@ blocks and form fields copied whole. dev-config itself held none at twelve.
 
 ## Keeping a copy
 
-A directive on the clone's first line, or on the line directly above it, in
-the file the branch wrote. Above it is the shape every other directive here
-takes, a comment on its own line:
+A directive on the clone's first line, or on the line directly above it where
+that line is a comment of its own. Above it is the shape every other directive
+here takes:
 
 ```ts
 // duplicate-code-allow -- the fixture mirrors the wire format
@@ -109,8 +121,9 @@ directive anywhere further up. The failure names the line, and the hint in it
 says "on line N or the line above it".
 
 The directive keeps that clone for the run, and the gate's log names each clone
-it kept with its reason. It counts only on a side the branch wrote into, so a
-directive written on an older block does not license the next copy of it.
+it kept with its reason. It counts only where this branch wrote the directive's
+own line, so a directive somebody wrote on an older block licenses nothing new,
+even once the branch edits that block.
 
 The reason is owed, as for every other directive here.
 [suppression-hygiene](suppression-hygiene.md) refuses a `duplicate-code-allow`

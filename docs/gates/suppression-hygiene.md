@@ -23,8 +23,9 @@ a doc comment that writes one out to explain it is a suppression as far as this
 is concerned. Markdown is not scanned, which is where most of that prose lives;
 a comment in code says the name without the leading slashes instead.
 
-A suite that tests this gate necessarily contains directives that are fixture
-text rather than suppressions. Those files are named in the `fixtures` input —
-narrower than teaching the scan enough TypeScript to tell a comment from a
-string literal, and visible in the caller's diff rather than hidden in a
-heuristic.
+The scan reads raw lines, not comment spans: a line that spells a directive
+counts wherever on the line the spelling sits, a string literal included. A suite
+whose fixtures spell directives in strings is therefore named in the `fixtures`
+input, where it is visible in the caller's diff. A suite that needs only one such
+spelling can assemble it at runtime instead, as the duplicate-code suite does,
+and needs no entry.

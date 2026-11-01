@@ -1661,8 +1661,9 @@ question asked of the booted app's answers rather than of its tables.
 can see.
 
 In order, the pinned workflow runs the gitleaks scan, the declarative gates
-(repo contract, stack denylist, the workflow lint, suppression hygiene,
-shellcheck over the repo's own scripts, and the compose lint when asked), `bun install` — carrying the key
+(repo contract, stack denylist, the workflow lint, suppression hygiene, the
+duplicate-code gate when asked, shellcheck over the repo's own scripts, and the
+compose lint when asked), `bun install` — carrying the key
 for a private git dependency where the caller passed one — the optional build,
 `format:check`, `lint`, `typecheck`, `knip`, the test suite, the assertion that
 the suite ran, and — where the repo asks for it — the mutation lane over the
@@ -1678,9 +1679,9 @@ rather than after a full dependency resolution.
 
 The steps that are shell or a script rather than a `bun run` live in
 `.github/actions/` as composite actions — `secret-scan`, `repo-contract`,
-`stack-gate`, `suppression-hygiene`, `shell-scripts`, `compose-lint`,
-`install`, `build`, `test-suite`, `mutation-lane`, `db-gate`, `lint-workflows`
-— so the workflow above and any repo that has to run the same thing outside it
+`stack-gate`, `suppression-hygiene`, `duplicate-code`, `shell-scripts`,
+`compose-lint`, `install`, `build`, `test-suite`, `mutation-lane`, `db-gate`,
+`lint-workflows` — so the workflow above and any repo that has to run the same thing outside it
 share one copy. `install` and `build` are the two that are not gates, and are
 actions for a reason of their own: both jobs run them, so one copy serves both
 where a copy per job could rot untested. `install` is
@@ -2008,8 +2009,9 @@ and filing on one is how a repo collects a duplicate issue a night.
 
 ### Where each gate is written down
 
-`repo-contract`, `stack-gate`, `suppression-hygiene`, `shell-scripts`,
-`lint-workflows` and `compose-lint` run in the static job; `db-gate` is the
+`repo-contract`, `stack-gate`, `lint-workflows`, `suppression-hygiene`,
+`duplicate-code`, `shell-scripts`, `compose-lint`, `test-suite` and
+`mutation-lane` run in the static job; `db-gate` is the
 database job, and the capacity ramp and the route fuzzer are steps of it. Each has its page under
 [`docs/gates/`](docs/gates/), listed in the table at the top of this file.
 

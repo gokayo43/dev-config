@@ -1,8 +1,10 @@
 name: Suppression hygiene
 description: >-
-  Two ways work hides in a tree rather than in the queue: a lint directive that
-  suppresses a finding without saying why, and a checked-in list of things to do
-  that nobody can label, assign or close.
+  Two ways work hides in a tree rather than in the queue: a directive that
+  suppresses a finding without saying why — oxlint's and eslint's spellings,
+  Stryker's disable and duplicate-code's allow, four spellings across three
+  tools — and a checked-in list of things to do that nobody can label, assign
+  or close.
 
 inputs:
   working-directory:

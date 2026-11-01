@@ -298,15 +298,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Three steps here read history. gitleaks: the default shallow
+          # Four steps here read history. gitleaks: the default shallow
           # checkout hands it one commit, so a secret committed and later
           # deleted on the same branch would go unreported even though pushing
           # it had already burned the key. repo-contract: `lifecycle` is
           # compared with the base ref's, and on a pull request the base branch
           # has to be in the clone — a ref this run names and the checkout lacks
-          # is refused outright. The mutation lane: what it mutates is what this
-          # branch changed against that same base ref, and it is refused the
-          # same way.
+          # is refused outright. The mutation lane and the duplicate-code gate:
+          # what each grades is what this branch changed against that same base
+          # ref, and each is refused the same way.
           fetch-depth: 0
           # Nothing in this job pushes, and it installs and runs the repo's
           # dependencies in the same workspace the token would sit in.

@@ -2,9 +2,8 @@ import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { changeSet } from "../_lib/change-set.ts";
+import { branchChange } from "../_lib/change-set.ts";
 import {
-  baseRevision,
   type ConfigObject,
   type Event,
   isList,
@@ -494,7 +493,7 @@ export interface Input {
  * output, the filesystem under `root`, Stryker's glob resolver — and the one
  * failure this gate cannot afford is a file that goes missing between two of
  * them, because a file nobody mutated has no mutants and reads as a pass. So
- * both crossings are checked rather than assumed: `changeSet` refuses a name it
+ * both crossings are checked rather than assumed: `branchChange` refuses a name it
  * could not read out of the diff, and every `mutate` entry Stryker could not
  * resolve is refused by name below.
  */
@@ -506,35 +505,19 @@ export async function mutationLane({ root, event, floor }: Input): Promise<Verdi
     return { note: "the pure domain is not declared", problems: [...domain.problems] };
   }
 
-  const base = await baseRevision(root, event, READS_THE_BASE_REF);
-  if ("refused" in base) {
-    return { note: "the base ref could not be read", problems: [{ message: base.refused }] };
-  }
-  if (base.rev === undefined) {
-    return {
-      note: "there is no earlier commit to compare against — nothing to mutate",
-      problems: [],
-    };
-  }
-  const rev = base.rev;
-
   // `:(glob)` gives git the pattern semantics the layer rule means, where a
   // single wildcard stops at a slash and a double one does not — a bare
   // pathspec crosses slashes on either, so a workspace's element would classify
   // a project nested deeper than any workspace declares.
-  const { changed, problems } = await changeSet(
-    root,
-    rev,
-    domain.globs.map((glob) => `:(glob)${glob}/**`),
-    isMutable,
-  );
-  if (problems.length > 0) return { note: "a changed file could not be named", problems };
-  if (changed.size === 0) {
-    return {
-      note: `no domain file changed against ${rev.slice(0, 12)} — nothing to mutate`,
-      problems: [],
-    };
-  }
+  const change = await branchChange(root, event, {
+    why: READS_THE_BASE_REF,
+    pathspecs: domain.globs.map((glob) => `:(glob)${glob}/**`),
+    keeps: isMutable,
+    noun: "domain file",
+    nothing: "nothing to mutate",
+  });
+  if ("problems" in change) return change;
+  const { changed } = change;
 
   const stryker = join(root, "node_modules", ".bin", "stryker");
   if (!(await Bun.file(stryker).exists())) {

@@ -1,8 +1,6 @@
 import { basename } from "node:path";
 
-import { type Problem, REASON, repoFiles } from "../_lib/gate.ts";
-
-const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
+import { KEEP_CLONE, type Problem, REASON, reasonAfter, repoFiles, SOURCE } from "../_lib/gate.ts";
 
 /**
  * Every directive that silences a check, whoever reads it. Both lint spellings,
@@ -17,20 +15,9 @@ const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
  * `Stryker restore` is not here. It ends a disabled region rather than opening
  * one, and the reason it is asking for was owed at the `disable` above it.
  */
-const DIRECTIVE =
-  /(?:\/\/|\/\*)\s*(?:(?:oxlint|eslint)-disable(?:-next-line|-line)?|Stryker disable|duplicate-code-allow)\b/;
-
-/**
- * Whether the directive on this line actually says why. The separator alone is
- * not a reason: a line ending `-- ` satisfies a test for the marker and tells
- * the next reader exactly what no comment at all would. The same bar
- * `allowlistFrom` holds a waiver to, in the other dialect a suppression is
- * written in.
- */
-function saysWhy(line: string): boolean {
-  const [, ...reason] = line.split(REASON);
-  return reason.join(REASON).trim() !== "";
-}
+const DIRECTIVE = new RegExp(
+  String.raw`(?:\/\/|\/\*)\s*(?:(?:oxlint|eslint)-disable(?:-next-line|-line)?|Stryker disable|${KEEP_CLONE})\b`,
+);
 
 /**
  * Files that park work in the tree. The queue is GitHub issues, in the repo the
@@ -42,10 +29,8 @@ const REGISTERS = new Set(["TODO.md", "BACKLOG.md", "TASKS.md", "ISSUES.md", "RO
 export interface Scope {
   readonly root: string;
   /**
-   * Paths whose directives are fixture text rather than suppressions — this
-   * gate's own suite is the case that exists. Naming the file is narrower than
-   * teaching the scan enough TypeScript to tell a comment from a string
-   * literal, and it is visible: an exempt path sits in the caller's diff.
+   * Paths whose directives are fixture text rather than suppressions.
+   * docs/gates/suppression-hygiene.md says why the answer is a named path.
    */
   readonly fixtures: readonly string[];
 }
@@ -58,7 +43,7 @@ export async function suppressionHygiene({ root, fixtures }: Scope): Promise<Pro
     if (exempt.has(file)) continue;
     const lines = (await Bun.file(`${root}/${file}`).text()).split("\n");
     lines.forEach((line, index) => {
-      if (!DIRECTIVE.test(line) || saysWhy(line)) return;
+      if (!DIRECTIVE.test(line) || reasonAfter(line) !== "") return;
       problems.push({
         file,
         message: `line ${index + 1}: a directive without a '${REASON.trim()} reason' is a suppressed bug — say what the check cannot know`,

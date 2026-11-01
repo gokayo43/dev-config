@@ -60,8 +60,17 @@ function bunfig({
   return `[install]\n${window}${pinning}\n[test]\n${test}`;
 }
 
-export const WORKFLOW_HEAD =
-  "name: CI\non:\n  pull_request:\nconcurrency:\n  group: ci-${{ github.ref }}-${{ github.event_name }}\n  cancel-in-progress: true\njobs:\n";
+/** A whole `ci.yml` holding `jobs`, under the head every repo's workflow carries: its trigger and its queue. */
+export function workflow(jobs: string): string {
+  return `name: CI\non:\n  pull_request:\nconcurrency:\n  group: ci-\${{ github.ref }}-\${{ github.event_name }}\n  cancel-in-progress: true\njobs:\n${jobs}`;
+}
+
+/** The job that calls check.yml at the fixture's pin, with one `with:` line per input given. */
+export function checkJob(...inputs: string[]): string {
+  const asked =
+    inputs.length === 0 ? "" : `    with:\n${inputs.map((input) => `      ${input}\n`).join("")}`;
+  return `  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n${asked}`;
+}
 
 export const CLEAN: Tree = {
   "package.json": JSON.stringify(MANIFEST),
@@ -79,7 +88,7 @@ export const CLEAN: Tree = {
   ".env.example": "BETTER_AUTH_SECRET=\n",
   "CONTEXT.md": "# Domain\n",
   "CLAUDE.md": "# Repo\n",
-  ".github/workflows/ci.yml": `${WORKFLOW_HEAD}  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n    with:\n      database: postgres\n`,
+  ".github/workflows/ci.yml": workflow(checkJob("database: postgres")),
 };
 
 /** No pull request and no previous tip: what a workflow_dispatch or a first push tells the gate. */
@@ -145,7 +154,7 @@ export function liveManifestJson(change: (contents: PackageJson) => void = () =>
 export const LIVE_STATIC: Tree = {
   ...CLEAN,
   "package.json": liveManifestJson(),
-  ".github/workflows/ci.yml": `${WORKFLOW_HEAD}  check:\n    uses: gokayo43/dev-config/.github/workflows/check.yml@${PIN} # v0.6.0\n`,
+  ".github/workflows/ci.yml": workflow(checkJob()),
 };
 
 /**

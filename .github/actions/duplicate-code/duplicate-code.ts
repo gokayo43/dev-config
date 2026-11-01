@@ -1,14 +1,19 @@
-import { lstat } from "node:fs/promises";
+import { lstat, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { changeSet } from "../_lib/change-set.ts";
+import { branchChange } from "../_lib/change-set.ts";
+import { commentsBlanked } from "../_lib/comments.ts";
 import {
-  baseRevision,
-  commentsBlanked,
+  commanded,
   type Event,
+  git,
+  KEEP_CLONE,
   plural,
   type Problem,
   REASON,
+  reasonAfter,
+  SOURCE,
   trackedFiles,
   type Verdict,
 } from "../_lib/gate.ts";
@@ -19,9 +24,6 @@ import {
  * can move is a floor no repo has. docs/gates/duplicate-code.md says why twelve.
  */
 const WINDOW = 12;
-
-/** The extensions source is written in, as pathspecs git narrows a listing by. */
-const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
 
 /**
  * Of what `SOURCE` lists, what is somebody's hand-written code: never a
@@ -56,36 +58,34 @@ export function normalised(source: string): Line[] {
     });
 }
 
-/** The directive that keeps a clone, on its first line or the line above it. */
-const DIRECTIVE = /(?:\/\/|\/\*)\s*duplicate-code-allow\b/;
+/** The directive that keeps a clone, as a comment spells it. */
+const DIRECTIVE = new RegExp(String.raw`(?:\/\/|\/\*)\s*${KEEP_CLONE}\b`);
 
 interface Source {
   readonly file: string;
-  /** The file's own lines, before normalising, which is where the directive is read. */
-  readonly raw: readonly string[];
   readonly lines: readonly Line[];
   /** Each normalised line as a number shared by every line with its text, so a window compares as numbers. */
   readonly ids: readonly number[];
+  /** The reason each directive in the file gives, by the line it is written on. */
+  readonly directives: ReadonlyMap<number, string>;
+  /** The lines this branch wrote, by number — none, for a file it did not change. */
+  readonly written: ReadonlySet<number>;
+  /** The line of the directive marking a block that starts at a normalised line, by that line's index. */
+  readonly keptBy: ReadonlyMap<number, number>;
+  /** How many normalised lines before each index start a block a directive marks, so a range is asked in one subtraction. */
+  readonly marked: readonly number[];
 }
 
-interface Window {
+/** A run of normalised lines in one file, by the index of its first. */
+interface Place {
   readonly source: Source;
   readonly start: number;
 }
 
-/** One side of a clone: a run of normalised lines in one file. */
-interface Side {
-  readonly source: Source;
-  /** Index of the run's first normalised line. */
-  readonly start: number;
-  /** The line numbers in the file the run starts and ends on. */
-  readonly from: number;
-  readonly to: number;
-}
-
+/** Two places sharing `length` normalised lines; `here` holds a line this branch wrote. */
 interface Clone {
-  readonly here: Side;
-  readonly there: Side;
+  readonly here: Place;
+  readonly there: Place;
   readonly length: number;
 }
 
@@ -105,51 +105,36 @@ export interface Input {
  * ways to the longest run the two places share.
  */
 export async function duplicateCode({ root, event }: Input): Promise<Verdict> {
-  const base = await baseRevision(root, event, READS_THE_BASE_REF);
-  if ("refused" in base) {
-    return { note: "the base ref could not be read", problems: [{ message: base.refused }] };
-  }
-  if (base.rev === undefined) {
-    return {
-      note: "there is no earlier commit to compare against — nothing this branch wrote to look for",
-      problems: [],
-    };
-  }
-  const rev = base.rev;
-
   const listed = (await trackedFiles(root, SOURCE)).filter(isGraded);
   const generated = await generatedAmong(root, listed);
-  const { changed, problems } = await changeSet(
-    root,
-    rev,
-    SOURCE,
-    (path) => isGraded(path) && !generated.has(path),
-  );
-  if (problems.length > 0) return { note: "a changed file could not be named", problems };
-  if (changed.size === 0) {
-    return {
-      note: `no source file changed against ${rev.slice(0, 12)} — nothing to look for`,
-      problems: [],
-    };
-  }
+  const change = await branchChange(root, event, {
+    why: READS_THE_BASE_REF,
+    pathspecs: SOURCE,
+    keeps: (path) => isGraded(path) && !generated.has(path),
+    noun: "source file",
+    nothing: "nothing to look for",
+  });
+  if ("problems" in change) return change;
+  const { changed } = change;
 
   const sources = await readSources(
     root,
     listed.filter((file) => !generated.has(file)),
+    changed,
   );
   const index = windowIndex(sources);
   const clones = uniquePairs(
     [...changed.keys()].toSorted().flatMap((file) => {
-      // A changed file that is not among the sources is a symlink, which is not read.
+      // A changed file that is not among the sources is a tracked symlink, which is not read.
       const source = sources.get(file);
-      return source === undefined ? [] : clonesIn(source, ownLines(source, changed), index);
+      return source === undefined ? [] : clonesIn(source, index);
     }),
   );
 
-  const judged = clones.map((clone) => ({ clone, reason: allowance(clone, changed) }));
+  const judged = clones.map((clone) => ({ clone, reason: allowance(clone) }));
   const refused = judged.filter(({ reason }) => reason === undefined).map(({ clone }) => clone);
   const kept = judged.flatMap(({ clone, reason }) =>
-    reason === undefined ? [] : [`kept: ${describe(clone)}${REASON}${reason}`],
+    reason === undefined ? [] : [keptLine(clone, reason)],
   );
   const files = plural(changed.size, "changed source file");
   const keptNote = kept.length === 0 ? "" : `; ${plural(kept.length, "clone")} kept by directive`;
@@ -169,41 +154,61 @@ export async function duplicateCode({ root, event }: Input): Promise<Verdict> {
  * A generator's output repeats itself by design and is rewritten wholesale, so
  * a directive written into it would not survive the next run.
  *
- * The reader's own attributes file is pinned away, for the reason
- * `_lib/change-set.ts` pins its diff settings: the marking that counts is the
- * one the repo commits, and a gate whose answer depends on the reader's config
- * has no answer.
+ * The marking that counts is the one the repo commits, for the reason
+ * `_lib/change-set.ts` pins its diff settings: a gate whose answer depends on
+ * the reader's config has no answer. So the question goes to an empty git
+ * directory borrowing this repo's objects, asked of the committed tree: that
+ * reads the tree's `.gitattributes` and neither the checkout's
+ * `info/attributes` nor, with the pin, the reader's own attributes file. A repo
+ * with no commit yet has no committed marking.
  */
 async function generatedAmong(root: string, files: readonly string[]): Promise<Set<string>> {
-  const proc = Bun.spawn(
-    [
-      "git",
-      "-c",
-      "core.attributesFile=/dev/null",
-      "check-attr",
-      "-z",
-      "--stdin",
-      "linguist-generated",
-    ],
-    {
-      cwd: root,
-      stdin: new TextEncoder().encode(files.map((file) => `${file}\0`).join("")),
-      stdout: "pipe",
-      stderr: "ignore",
-    },
-  );
-  const answered = await new Response(proc.stdout).text();
-  if ((await proc.exited) !== 0) throw new Error(`git check-attr failed in ${root}`);
-  // `-z` answers path, attribute and value per file, each ended by a NUL. A
-  // value of `set` is the bare attribute and `true` is `=true`; `unset`,
-  // `false` and `unspecified` are a file nobody marked.
-  const fields = answered.split("\0");
-  const generated = new Set<string>();
-  for (let at = 0; at + 2 < fields.length; at += 3) {
-    const value = fields[at + 2];
-    if (value === "set" || value === "true") generated.add(fields[at] ?? "");
+  const tree = await git(root, ["rev-parse", "--verify", "--quiet", "HEAD^{tree}"]);
+  if (!tree.ok) return new Set();
+  const [common, prefix] = await Promise.all([
+    git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    git(root, ["rev-parse", "--show-prefix"]),
+  ]);
+  if (!common.ok || !prefix.ok) throw new Error(`git cannot name the repository at ${root}`);
+  const under = prefix.stdout.trim();
+
+  const scratch = await mkdtemp(join(tmpdir(), "duplicate-code-"));
+  try {
+    if (!(await git(scratch, ["init", "--quiet", "--bare"])).ok) {
+      throw new Error(`git could not make a scratch repository in ${scratch}`);
+    }
+    await Bun.write(
+      join(scratch, "objects", "info", "alternates"),
+      `${common.stdout.trim()}/objects\n`,
+    );
+    const answered = await git(
+      scratch,
+      [
+        "-c",
+        "core.attributesFile=/dev/null",
+        "check-attr",
+        `--source=${tree.stdout.trim()}`,
+        "-z",
+        "--stdin",
+        "linguist-generated",
+      ],
+      files.map((file) => `${under}${file}\0`).join(""),
+    );
+    if (!answered.ok) throw new Error(`git check-attr failed for ${root}`);
+    // `-z` answers path, attribute and value per file, each ended by a NUL. A
+    // value of `set` is the bare attribute and `true` is `=true`; `unset`,
+    // `false` and `unspecified` are a file nobody marked.
+    const fields = answered.stdout.split("\0");
+    const generated = new Set<string>();
+    for (let at = 0; at + 2 < fields.length; at += 3) {
+      const value = fields[at + 2];
+      if (value === "set" || value === "true")
+        generated.add((fields[at] ?? "").slice(under.length));
+    }
+    return generated;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
   }
-  return generated;
 }
 
 /**
@@ -211,17 +216,35 @@ async function generatedAmong(root: string, files: readonly string[]): Promise<S
  * than followed: its target is either another tracked file, read as itself, or
  * somewhere outside the checkout, which is not this repo's code to grade.
  */
-async function readSources(root: string, files: readonly string[]): Promise<Map<string, Source>> {
+async function readSources(
+  root: string,
+  files: readonly string[],
+  changed: ReadonlyMap<string, ReadonlySet<number>>,
+): Promise<Map<string, Source>> {
   const ids = new Map<string, number>();
   const read = await Promise.all(
-    files.map(async (file) => {
+    files.map(async (file): Promise<Source | undefined> => {
       const path = join(root, file);
       if ((await lstat(path)).isSymbolicLink()) return undefined;
       const text = await Bun.file(path).text();
       const lines = normalised(text);
+      const directives = new Map(
+        text
+          .split("\n")
+          .flatMap((line, index): [number, string][] =>
+            DIRECTIVE.test(line) ? [[index + 1, reasonAfter(line)]] : [],
+          ),
+      );
+      const keptBy = new Map(
+        lines.flatMap(({ at }, index): [number, number][] => {
+          const line = directiveLineFor(at, directives, lines[index - 1]?.at);
+          return line === undefined ? [] : [[index, line]];
+        }),
+      );
+      let count = 0;
+      const marked = [0, ...lines.map((_, index) => (count += keptBy.has(index) ? 1 : 0))];
       return {
         file,
-        raw: text.split("\n"),
         lines,
         ids: lines.map(({ text: line }) => {
           const known = ids.get(line);
@@ -229,6 +252,10 @@ async function readSources(root: string, files: readonly string[]): Promise<Map<
           ids.set(line, ids.size);
           return ids.size - 1;
         }),
+        directives,
+        written: changed.get(file) ?? new Set(),
+        keptBy,
+        marked,
       };
     }),
   );
@@ -241,77 +268,110 @@ function keyAt(ids: readonly number[], start: number): string {
   return ids.slice(start, start + WINDOW).join(",");
 }
 
-/** Every window of every file, by its text. */
-function windowIndex(sources: ReadonlyMap<string, Source>): Map<string, Window[]> {
-  const index = new Map<string, Window[]>();
+/** Every window of every file by its text, and under it, where each file holds it. */
+function windowIndex(sources: ReadonlyMap<string, Source>): Map<string, Map<Source, number[]>> {
+  const index = new Map<string, Map<Source, number[]>>();
   for (const source of sources.values()) {
     for (let start = 0; start + WINDOW <= source.ids.length; start += 1) {
       const key = keyAt(source.ids, start);
-      const found = index.get(key);
-      if (found === undefined) index.set(key, [{ source, start }]);
-      else found.push({ source, start });
+      const found = index.get(key) ?? new Map<Source, number[]>();
+      index.set(key, found);
+      const starts = found.get(source);
+      if (starts === undefined) found.set(source, [start]);
+      else starts.push(start);
     }
   }
   return index;
 }
 
-/** Per normalised line of a changed file, whether this branch wrote it. */
-function ownLines(source: Source, changed: ReadonlyMap<string, ReadonlySet<number>>): boolean[] {
-  const written = changed.get(source.file);
-  return source.lines.map(({ at }) => written?.has(at) === true);
+/** Whether a directive marks a block starting at any of `from` up to, not including, `to`. */
+function marksIn(source: Source, from: number, to: number): boolean {
+  return (source.marked[to] ?? 0) - (source.marked[from] ?? 0) > 0;
+}
+
+/**
+ * The line carrying the directive that marks a block starting on line `at`: the
+ * line itself, or the line directly above it where that line is a comment of
+ * its own — the shape every other directive here takes. A directive trailing
+ * the code above belongs to that line's block, not to this one.
+ */
+function directiveLineFor(
+  at: number,
+  directives: ReadonlyMap<number, string>,
+  previous: number | undefined,
+): number | undefined {
+  if (directives.has(at)) return at;
+  return directives.has(at - 1) && previous !== at - 1 ? at - 1 : undefined;
 }
 
 /**
  * The clones a changed file's own lines take part in, each extended to the
  * longest run both places share.
  *
- * A run is found once per diagonal — the offset between the two places — and
- * the windows inside a run already found on that diagonal are skipped rather
- * than extended again, which is what keeps a file copied whole linear rather
- * than quadratic in its length.
+ * Each normalised line of the file takes part in at most one reported clone
+ * with any one other file, and in at most one with itself: once a run is
+ * reported, a window starting inside it is not matched against that file
+ * again. That is what reports a block once however often it is repeated, and
+ * what keeps the work linear in the file — a window inside a reported run
+ * costs one lookup, not a fresh extension.
  */
 function clonesIn(
   here: Source,
-  own: readonly boolean[],
-  index: ReadonlyMap<string, readonly Window[]>,
+  index: ReadonlyMap<string, ReadonlyMap<Source, readonly number[]>>,
 ): Clone[] {
+  const own = here.lines.map(({ at }) => here.written.has(at));
+  const covers = new Map<Source, Uint8Array>();
+  const coverFor = (source: Source): Uint8Array => {
+    const found = covers.get(source) ?? new Uint8Array(here.ids.length);
+    covers.set(source, found);
+    return found;
+  };
   const clones: Clone[] = [];
-  const reached = new Map<string, number>();
   for (let start = 0; start + WINDOW <= here.ids.length; start += 1) {
     if (!own.slice(start, start + WINDOW).includes(true)) continue;
-    for (const there of index.get(keyAt(here.ids, start)) ?? []) {
-      // Two places in one file are two places only while their ranges stay
-      // apart: a block repeating itself within its own run is one block, so a
-      // same-file match counts from no closer than a window away and grows no
-      // further than the distance between its ends.
-      if (there.source === here && Math.abs(there.start - start) < WINDOW) continue;
-      const diagonal = `${there.source.file}\0${there.start - start}`;
-      if ((reached.get(diagonal) ?? -1) > start) continue;
-      const clone = extended(here, start, there);
-      reached.set(diagonal, clone.here.start + clone.length);
-      clones.push(clone);
+    if (marksIn(here, start + 1, start + WINDOW)) continue;
+    for (const [source, starts] of index.get(keyAt(here.ids, start)) ?? []) {
+      const cover = coverFor(source);
+      if (cover[start] === 1) continue;
+      const at = starts.find(
+        (each) =>
+          !marksIn(source, each + 1, each + WINDOW) &&
+          (source !== here || (Math.abs(each - start) >= WINDOW && cover[each] !== 1)),
+      );
+      if (at === undefined) continue;
+      const clone = extended(here, start, { source, start: at });
+      clones.push(reportedAs(clone, cover));
     }
   }
   return clones;
 }
 
-/** The match between `here` at `start` and `there`, grown both ways for as long as the lines agree. */
-function extended(here: Source, start: number, there: Window): Clone {
+/**
+ * The match between `here` at `start` and `there`, grown both ways for as long
+ * as the lines agree. A line a directive marks is where a block starts, so a
+ * run never grows across one: backwards it would start the run a line early,
+ * on a closing brace shared by what came before both places, and leave the
+ * directive on no line of it; forwards it would fold the next block, kept or
+ * not, into this one. A window with such a line inside it is skipped in
+ * `clonesIn` for the same reason, and the run is found from that line instead.
+ */
+function extended(here: Source, start: number, there: Place): Clone {
   const a = here.ids;
   const b = there.source.ids;
-  const apart = there.source === here ? Math.abs(there.start - start) : Infinity;
   let back = 0;
   while (
-    back + WINDOW < apart &&
     start - back > 0 &&
     there.start - back > 0 &&
+    !marksIn(here, start - back, start - back + 1) &&
+    !marksIn(there.source, there.start - back, there.start - back + 1) &&
     a[start - back - 1] === b[there.start - back - 1]
   ) {
     back += 1;
   }
   let length = back + WINDOW;
   while (
-    length < apart &&
+    !marksIn(here, start - back + length, start - back + length + 1) &&
+    !marksIn(there.source, there.start - back + length, there.start - back + length + 1) &&
     start - back + length < a.length &&
     there.start - back + length < b.length &&
     a[start - back + length] === b[there.start - back + length]
@@ -319,14 +379,34 @@ function extended(here: Source, start: number, there: Window): Clone {
     length += 1;
   }
   return {
-    here: side(here, start - back, length),
-    there: side(there.source, there.start - back, length),
+    here: { source: here, start: start - back },
+    there: { source: there.source, start: there.start - back },
     length,
   };
 }
 
-function side(source: Source, start: number, length: number): Side {
-  return { source, start, from: lineAt(source, start), to: lineAt(source, start + length - 1) };
+/**
+ * The clone as it is reported, with what it covers marked. Against another
+ * file that is the run in this one. Against this file it is both ranges, and
+ * where they overlap — a block repeating itself, rows of a table — the whole
+ * stretch they span, reported as its first two periods side by side: two places
+ * in one file are two places only where they do not overlap.
+ */
+function reportedAs(clone: Clone, cover: Uint8Array): Clone {
+  const { here, there, length } = clone;
+  if (here.source !== there.source) {
+    cover.fill(1, here.start, here.start + length);
+    return clone;
+  }
+  const apart = Math.abs(there.start - here.start);
+  const from = Math.min(here.start, there.start);
+  if (length > apart) {
+    cover.fill(1, from, from + apart + length);
+    return { here, there, length: apart };
+  }
+  cover.fill(1, here.start, here.start + length);
+  cover.fill(1, there.start, there.start + length);
+  return clone;
 }
 
 function lineAt(source: Source, index: number): number {
@@ -339,8 +419,7 @@ function lineAt(source: Source, index: number): number {
 
 /**
  * The clones with the second report of each pair dropped: two changed files
- * sharing a run, or one file sharing a run with itself, are found from both
- * ends.
+ * sharing a run are found from both ends.
  */
 function uniquePairs(clones: readonly Clone[]): Clone[] {
   const seen = new Set<string>();
@@ -355,48 +434,43 @@ function uniquePairs(clones: readonly Clone[]): Clone[] {
   });
 }
 
-function located({ source, from, to }: Side): string {
-  return `${source.file}:${from}-${to}`;
+function located({ source, start }: Place, length: number): string {
+  return `${source.file}:${lineAt(source, start)}-${lineAt(source, start + length - 1)}`;
 }
 
 function describe({ here, there, length }: Clone): string {
-  return `${located(here)} repeats ${located(there)} (${length} normalised lines)`;
+  return `${located(here, length)} repeats ${located(there, length)} (${length} normalised lines)`;
 }
 
 /**
- * The reason a clone is kept, or nothing where it is not. The directive counts
- * on the first line of a side this branch wrote into, or on the line directly
- * above it, where a comment on its own line sits — the shape every other
- * directive here takes. A directive somebody wrote on an older block does not
- * license the next copy of it.
+ * The reason a clone is kept, or nothing where it is not: the directive counts
+ * only where this branch wrote the line it is on. A directive somebody wrote on
+ * an older block licenses nothing new, even once the branch edits that block.
  *
  * A directive with no reason still keeps the clone here, and the
  * suppression-hygiene gate refuses it: one mistake, one diagnostic.
  */
-function allowance(
-  { here, there, length }: Clone,
-  changed: ReadonlyMap<string, ReadonlySet<number>>,
-): string | undefined {
-  for (const { source, start, from } of [here, there]) {
-    const written = changed.get(source.file);
-    const ownsALine = source.lines
-      .slice(start, start + length)
-      .some(({ at }) => written?.has(at) === true);
-    const line = [source.raw[from - 1], source.raw[from - 2]].find(
-      (each) => each !== undefined && DIRECTIVE.test(each),
-    );
-    if (!ownsALine || line === undefined) continue;
-    const [, ...reason] = line.split(REASON);
-    const why = reason.join(REASON).trim();
-    return why === "" ? "(no reason given, which suppression-hygiene refuses)" : why;
+function allowance({ here, there }: Clone): string | undefined {
+  for (const place of [here, there]) {
+    const line = place.source.keptBy.get(place.start);
+    if (line !== undefined && place.source.written.has(line)) {
+      return place.source.directives.get(line);
+    }
   }
   return undefined;
 }
 
+/** A kept clone for the log, escaped as an annotation is: the reason is the repo's text, and stdout is the runner's. */
+function keptLine(clone: Clone, reason: string): string {
+  const why = reason === "" ? "no reason given, which suppression-hygiene refuses" : reason;
+  return commanded(`kept: ${describe(clone)}${REASON}${why}`);
+}
+
 function cloneProblem({ here, there, length }: Clone): Problem {
+  const from = lineAt(here.source, here.start);
   return {
     file: here.source.file,
-    line: here.from,
-    message: `move the ${length} normalised lines ${located(here)} shares with ${located(there)} into one place both call, or keep the copy with \`// duplicate-code-allow${REASON}<reason>\` on line ${here.from} or the line above it`,
+    line: from,
+    message: `move the ${length} normalised lines ${located(here, length)} shares with ${located(there, length)} into one place both call, or keep the copy with \`// ${KEEP_CLONE}${REASON}<reason>\` on line ${from} or the line above it`,
   };
 }

@@ -11,7 +11,7 @@ import {
   PIN,
   withBunfig,
   withSpec,
-  WORKFLOW_HEAD,
+  workflow,
 } from "./repo-contract-fixture.ts";
 import { materialise, type Tree, without } from "./tree.ts";
 
@@ -258,7 +258,9 @@ describe("repo contract", () => {
     expect(
       await contract({
         ...CLEAN,
-        ".github/workflows/ci.yml": `${WORKFLOW_HEAD}  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo green\n`,
+        ".github/workflows/ci.yml": workflow(
+          `  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo green\n`,
+        ),
       }),
     ).toEqual([containing("check.yml")]);
   });
@@ -268,7 +270,7 @@ describe("the CI workflow cancels a run a newer push replaced", () => {
   const CANCEL =
     "`cancel-in-progress: true` — every CI run of a repo queues on its one self-hosted runner";
   const GROUP =
-    "has to name both `github.ref` and `github.event_name`, as `ci-${{ github.ref }}-${{ github.event_name }}` does — the ref keeps a push from cancelling another branch's run, and the event keeps a push from cancelling a nightly and a nightly from cancelling a push";
+    "has to name both `github.ref` and `github.event_name`, each inside `${{ }}`, as `ci-${{ github.ref }}-${{ github.event_name }}` does — the ref keeps a push from cancelling another branch's run, and the event keeps a push from cancelling a nightly and a nightly from cancelling a push";
 
   /** CLEAN's workflow with its concurrency block replaced by `block`, or by nothing. */
   function withConcurrency(block: string): Tree {
@@ -296,6 +298,9 @@ describe("the CI workflow cancels a run a newer push replaced", () => {
     ["omits the event", "ci-${{ github.ref }}"],
     ["omits the ref", "ci-${{ github.event_name }}"],
     ["names ref_name rather than the ref", "ci-${{ github.ref_name }}-${{ github.event_name }}"],
+    // Outside an expression the names are text, and every run shares the one
+    // fixed group they spell. A match on the names alone reads it as both.
+    ["spells both names outside an expression", "github.ref-github.event_name"],
   ])("a group that %s is refused", async (_what, group) => {
     const block = `concurrency:\n  group: ${group}\n  cancel-in-progress: true\n`;
     expect(await contract(withConcurrency(block))).toEqual([containing(GROUP)]);
@@ -304,6 +309,18 @@ describe("the CI workflow cancels a run a newer push replaced", () => {
   // `ci-call` waives the shape of the call into check.yml, and a repo whose CI
   // is its own jobs still queues on its one runner. The wrong implementation
   // puts the rule among the call's problems, which the exemption drops.
+  // The exemption drops the call's problems, and an unreadable file used to be
+  // only that: an exempt repo whose ci.yml will not parse was told nothing
+  // about a queue nobody could read.
+  test("under ci-call, a workflow that will not parse is reported for the block", async () => {
+    expect(
+      await contract(
+        { ...CLEAN, ".github/workflows/ci.yml": "key: [unclosed\n" },
+        { exemptions: ["ci-call"] },
+      ),
+    ).toEqual([containing("`concurrency` block cannot be read")]);
+  });
+
   test("ci-call does not waive it", async () => {
     expect(await contract(withConcurrency(""), { exemptions: ["ci-call"] })).toEqual([
       containing(CANCEL),

@@ -9,7 +9,14 @@
  * the branch did, and the day they disagreed one gate would hold a pull request
  * to lines the other said it never touched.
  */
-import { git, type Problem } from "./gate.ts";
+import {
+  baseRevision,
+  type Event,
+  git,
+  NOT_A_DEPENDENCY,
+  type Problem,
+  type Verdict,
+} from "./gate.ts";
 
 /** Where a hunk header says the lines it added start, and how many there are. */
 const HUNK = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/;
@@ -24,7 +31,7 @@ const HUNK = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/;
 const OPENS = "diff --git ";
 const NAMES = "+++ b/";
 
-export interface Changed {
+interface Changed {
   /** Every line this branch wrote, per file the caller keeps. */
   readonly changed: Map<string, Set<number>>;
   /** One per section whose file could not be named. */
@@ -48,7 +55,7 @@ export interface Changed {
  * monorepo's project sits below the root, and a path measured from the root
  * would be one the gate cannot resolve from the project.
  */
-export async function changeSet(
+async function changeSet(
   root: string,
   rev: string,
   pathspecs: readonly string[],
@@ -70,6 +77,14 @@ export async function changeSet(
     // copied arrives as a copy with no lines written, which is the one change
     // the duplicate-code gate exists to see, and under `false` a file the
     // branch only moved arrives with every line written.
+    //
+    // And the file's own text, whatever the repo or the reader says about it:
+    // `--text` past a `-diff` attribute and past a NUL byte, either of which
+    // makes git print "Binary files differ" and no hunk; `--no-ext-diff` and an
+    // empty `diff.external` past an external driver, which prints what it
+    // likes; `--no-textconv` past a converter; and no attributes file of the
+    // reader's. Each of them otherwise turns a file the branch wrote into one
+    // with no line written, which reads as a branch that changed nothing.
     "-c",
     "core.quotepath=false",
     "-c",
@@ -80,8 +95,15 @@ export async function changeSet(
     "diff.mnemonicPrefix=false",
     "-c",
     "diff.renames=true",
+    "-c",
+    "diff.external=",
+    "-c",
+    "core.attributesFile=/dev/null",
     "diff",
     "--no-color",
+    "--text",
+    "--no-ext-diff",
+    "--no-textconv",
     "--src-prefix=a/",
     "--dst-prefix=b/",
     "--relative",
@@ -90,6 +112,7 @@ export async function changeSet(
     rev,
     "--",
     ...pathspecs,
+    NOT_A_DEPENDENCY,
   ]);
   if (!diff.ok) throw new Error(`git diff against ${rev} failed in ${root}`);
 
@@ -138,4 +161,50 @@ export async function changeSet(
 
 function unnamedProblem(header: string): string {
   return `rename the file this branch changed so git can name it plainly — \`${header}\` is quoted because the path holds a quote, a backslash or a control character, and a gate cannot tell whether a file it cannot name is one it grades`;
+}
+
+/** Which files a gate holds a branch to, and the gate's own words for them. */
+export interface Scope {
+  /** What the gate wants the base ref for, which a checkout without it is told. */
+  readonly why: string;
+  readonly pathspecs: readonly string[];
+  /** Of what the pathspecs reach, the files the gate grades. */
+  readonly keeps: (path: string) => boolean;
+  /** One of those files in the gate's words, as in "no domain file changed". */
+  readonly noun: string;
+  /** What a run with nothing to grade did not do, as in "nothing to mutate". */
+  readonly nothing: string;
+}
+
+/**
+ * The lines this branch wrote against its base ref, or the verdict a gate
+ * answers with instead: a checkout that cannot name a base is refused, a run
+ * with no earlier commit or no changed file passes saying so, and a changed
+ * file git could not name plainly is refused. Every gate that holds a branch to
+ * its own lines opens the same way, so the opening is here once.
+ */
+export async function branchChange(
+  root: string,
+  event: Event,
+  scope: Scope,
+): Promise<{ readonly rev: string; readonly changed: Map<string, Set<number>> } | Verdict> {
+  const base = await baseRevision(root, event, scope.why);
+  if ("refused" in base) {
+    return { note: "the base ref could not be read", problems: [{ message: base.refused }] };
+  }
+  if (base.rev === undefined) {
+    return {
+      note: `there is no earlier commit to compare against — ${scope.nothing}`,
+      problems: [],
+    };
+  }
+  const { changed, problems } = await changeSet(root, base.rev, scope.pathspecs, scope.keeps);
+  if (problems.length > 0) return { note: "a changed file could not be named", problems };
+  if (changed.size === 0) {
+    return {
+      note: `no ${scope.noun} changed against ${base.rev.slice(0, 12)} — ${scope.nothing}`,
+      problems: [],
+    };
+  }
+  return { rev: base.rev, changed };
 }
