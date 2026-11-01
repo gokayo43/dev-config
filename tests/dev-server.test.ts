@@ -9,7 +9,7 @@
  * twenty seconds where a server is meant to come up, two where the case is about
  * one that never does.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +24,7 @@ import {
   recordStem,
   worktreeSlug,
 } from "../dev-server-derive.ts";
+import { lock } from "../file-lock.ts";
 import {
   answers,
   bystander,
@@ -43,6 +44,34 @@ import {
 
 /** Long enough for `bun run dev` to boot a fixture server, short enough to fail a hung suite. */
 const CASE_MS = 60_000;
+
+/**
+ * One run of this suite at a time per machine, because two concurrent runs
+ * collide: two runs of one checkout share every fixture, and runs of two
+ * checkouts, whose 33 port blocks each are names hashed into one of 4000, share
+ * a block in one pair of checkouts in five (measured over 20,000 pairs), where
+ * `up` probing a port free races the other run's server binding it. The path
+ * carries no checkout, so every checkout waits on the same lock.
+ */
+const SUITE_LOCK = join(tmpdir(), "dev-config-dev-server-suite.lock");
+
+/**
+ * How long a run waits for the one holding the lock, which takes about fifteen
+ * seconds when nothing hangs. The hook outlasts it so the lock's own refusal,
+ * naming the holder, is what the log shows.
+ */
+const SUITE_PATIENCE_MS = 600_000;
+
+let release = async (): Promise<void> => {};
+
+beforeAll(async () => {
+  const held = await lock(SUITE_LOCK, SUITE_PATIENCE_MS);
+  release = async () => await held[Symbol.asyncDispose]();
+}, SUITE_PATIENCE_MS + CASE_MS);
+
+afterAll(async () => {
+  await release();
+});
 
 /** A worktree on a branch, as the two derivations take one. */
 const named = (worktree: string, branch: string) => ({ worktree, branch, detached: false });
