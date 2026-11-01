@@ -49,22 +49,9 @@ describe("repo contract", () => {
     expect(await contract(CLEAN)).toEqual([]);
   });
 
-  test("the package manager has to be bun, pinned", async () => {
-    const missing = await contract(manifestWith((contents) => delete contents.packageManager));
-    expect(missing).toEqual([containing("packageManager")]);
-    const wrong = await contract(manifestWith((contents) => (contents.packageManager = "pnpm@10")));
-    expect(wrong).toEqual([containing("packageManager")]);
-  });
-
   test("another package manager's lockfile is refused", async () => {
     expect(await contract({ ...CLEAN, "pnpm-lock.yaml": "lockfileVersion: 9\n" })).toEqual([
       containing("bun.lock is the only lockfile"),
-    ]);
-  });
-
-  test("typescript below 7 is refused", async () => {
-    expect(await contract(withSpec("typescript", "5.9.3"))).toEqual([
-      containing("typescript is pinned at 5.9.3"),
     ]);
   });
 

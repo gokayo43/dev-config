@@ -33,12 +33,15 @@ export interface PackageJson {
 
 const MANIFEST: PackageJson = {
   name: "clean",
-  packageManager: "bun@1.4.0",
+  packageManager: "bun@1.4.4",
   lifecycle: "dev",
-  scripts: { "db:migrate": "bun run src/server/migrate.ts", test: "bun test" },
+  scripts: {
+    "db:migrate": "bun run src/server/migrate.ts",
+    test: "bun test",
+    typecheck: "bun check --no-script",
+  },
   devDependencies: {
     "@gokayo43/dev-config": "github:gokayo43/dev-config#04d2938c7e1368d79169426d944107c9a0674fbc",
-    typescript: "7.0.2",
     "oxlint-tsgolint": "7.1.0",
   },
 };
