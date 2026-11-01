@@ -390,8 +390,9 @@ the opposite of the rule it derives from.
 
 **Running the suite is read out of the workflow's own steps, and this is the
 one rule that reads them.** Everything else about `ci.yml` is read off the call
-into `check.yml`, because a repo can write the words of a gate in a comment and
-only the call is the fact. There is no call to read here and no input that would
+into `check.yml` or off the top-level `concurrency` block, because a repo can
+write the words of a gate in a comment and only the call and the block are the
+fact. There is no call to read here and no input that would
 help: `check.yml`'s only app-booting job is the database job, which never runs
 for the static sites this rule is mostly about, and a browser suite needs _this_
 repo's app booted with _its_ browsers against _its_ fixtures. The run is a job
