@@ -34,10 +34,10 @@ describe("the git hooks a repo declares", () => {
     ).toEqual([containing("gitleaks git --staged")]);
   });
 
-  // The suite is CI's, on the pull request, so a push hook that runs anything
-  // is refused once, in either config shape. lefthook runs a file as well as a
-  // command (a `script:` job, or a key of the hook's `scripts:` map), and a
-  // hook's `setup:` commands before either.
+  // The chain runs once, on the state that lands, at landing or in CI, so a
+  // push hook that runs anything is refused once, in either config shape.
+  // lefthook runs a file as well as a command (a `script:` job, or a key of the
+  // hook's `scripts:` map), and a hook's `setup:` commands before either.
   test.each([
     [
       "typechecks and tests in the commands form",

@@ -631,7 +631,8 @@ async function checkLefthook(root: string): Promise<Problem[]> {
   if (hookRunsAnything(hooks, "pre-push")) {
     problems.push({
       file: "lefthook.yml",
-      message: "pre-push runs nothing; the suite is CI's on the pull request",
+      message:
+        "pre-push runs nothing; the chain runs once, on the state that lands, at landing or in CI",
     });
   }
   for (const key of ["extends", "remotes"]) {
