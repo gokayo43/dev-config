@@ -325,7 +325,14 @@ describe("up", () => {
       expect(record.branch).toBe("main");
       expect(record.packageName).toMatch(/^dev-server-fixture-/);
       expect(record.log).toBe(scratch.paths("main").log);
-      expect(record.port).toBe(basePort(record.packageName, named(scratch.root, "main")));
+      // The port written down is the one the server answers on, somewhere in
+      // the block the worktree's name picks. The base of that block is not the
+      // answer: `up` takes the next port of the block when the base is held, and
+      // on a shared box another suite's server can be holding it.
+      expect(inBlock(basePort(record.packageName, named(scratch.root, "main")), record.port)).toBe(
+        true,
+      );
+      expect(await answers(record.port)).toBe(true);
       expect(record.bootId).toBe(
         (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim(),
       );
