@@ -174,13 +174,14 @@ async function runs(exported: Record<string, string>): Promise<{ code: number; s
 
 /** What git exports to `pre-push`. */
 function prePush({ gitDir }: Sacrificial) {
-  return { GIT_DIR: gitDir, GIT_EDITOR: "true", GIT_EXEC_PATH: EXEC_PATH, GIT_PREFIX: "" };
+  return { GIT_DIR: gitDir, GIT_EXEC_PATH: EXEC_PATH, GIT_PREFIX: "" };
 }
 
 /**
- * One hook environment per case, each with the wrong implementation it exists to
- * kill — reported as the failure's message, so a case that goes red says which
- * guarantee went with it rather than only which bytes moved.
+ * One environment git hands a command per case, each with the wrong
+ * implementation it exists to kill — reported as the failure's message, so a
+ * case that goes red says which guarantee went with it rather than only which
+ * bytes moved.
  *
  * Every set is what git 2.43.0 was probed exporting from a linked worktree,
  * except `GIT_CONFIG_PARAMETERS`, which git adds only when the invocation
@@ -210,9 +211,19 @@ const HOOKS = [
     (repository: Sacrificial) => ({ ...prePush(repository), GIT_WORK_TREE: repository.worktree }),
     "a scrub of the set a hook is known to carry rather than of the whole `GIT_` prefix",
   ],
+  [
+    "git rebase --exec, which is no hook and carries the sequencer's variables besides",
+    (repository: Sacrificial) => ({
+      ...prePush(repository),
+      GIT_SEQUENCE_EDITOR: ":",
+      GIT_CHERRY_PICK_HELP:
+        'Resolve all conflicts manually, mark them as resolved with\n"git add/rm <conflicted_files>", then run "git rebase --continue".\nYou can instead skip this commit: run "git rebase --skip".\nTo abort and get back to the state before "git rebase", run "git rebase --abort".',
+    }),
+    "a scrub that runs only under a hook, where the input the preload names hands its command `GIT_DIR` from no hook at all",
+  ],
 ] as const;
 
-describe("a suite run from a git hook", () => {
+describe("a suite git runs", () => {
   test.each(HOOKS)("leaves the repository it is acting on untouched: %s", async (_, set, kills) => {
     const repository = await sacrificial();
     const before = state(repository);
