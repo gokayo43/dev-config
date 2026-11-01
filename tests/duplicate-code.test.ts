@@ -604,6 +604,22 @@ describe("the duplicate-code gate", () => {
   });
 });
 
+/**
+ * A global git config of the reader's, in force for every git the process
+ * spawns until it is disposed.
+ */
+async function globalGitConfig(text: string): Promise<{ readonly file: string } & AsyncDisposable> {
+  const file = join(await scratch(), "gitconfig");
+  await Bun.write(file, text);
+  process.env["GIT_CONFIG_GLOBAL"] = file;
+  return {
+    file,
+    [Symbol.asyncDispose]: async () => {
+      delete process.env["GIT_CONFIG_GLOBAL"];
+    },
+  };
+}
+
 describe("what the reader's own git state cannot change", () => {
   // Each of these turns a file the branch wrote into one `git diff` prints no
   // hunk for, which reads as a branch that changed no source. The wrong
@@ -645,6 +661,38 @@ describe("what the reader's own git state cannot change", () => {
     );
 
     expect(verdict.problems).toEqual([]);
+  });
+
+  // The reader's global config reaches every git a developer runs, and no
+  // pin lists every setting in it. The wrong implementation pins the settings
+  // it knows of and lets the rest through: here a hunk joined across the
+  // unchanged clone between two edits, and an external driver that prints
+  // nothing, both set where only a global config would set them.
+  test("settings in the reader's global git config change nothing", async () => {
+    const around = (value: number): string =>
+      `export const above = ${value};\n${block("price", 15)}export const below = ${value};\n`;
+    const before = { ...BASE, "src/old-copy.ts": around(1) };
+    const { root } = await history(before, {
+      ...before,
+      "src/old-copy.ts": around(2),
+      "src/copy.ts": block("price", 15),
+    });
+    await using reader = await globalGitConfig(
+      "[diff]\n\tinterHunkContext = 20\n\texternal = true\n",
+    );
+
+    const verdict = await duplicateCode({ root, event: { baseRef: "", before: "" } });
+
+    // The reader's own git does read the file, so the settings are live.
+    expect(await git(root, ["config", "--show-origin", "--get", "diff.external"])).toContain(
+      reader.file,
+    );
+    // The new copy repeats both older blocks. The old copy, edited only on
+    // either side, is never the side the branch wrote.
+    expect(messages(verdict)).toEqual([
+      containing("src/copy.ts:1-15 shares with src/old-copy.ts:2-16 "),
+      containing("src/copy.ts:1-15 shares with src/prices.ts:3-17 "),
+    ]);
   });
 
   // A clean filter the reader's `info/attributes` names rewrites the checkout's

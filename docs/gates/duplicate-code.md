@@ -76,7 +76,8 @@ move that turns this gate on is where the line goes:
 
 The marking that counts is the committed one. The gate asks git about the
 committed tree from an empty git directory borrowing the repo's objects, with
-the reader's own attributes file (`core.attributesFile`) set aside, so neither
+the reader's config files and own attributes file (`core.attributesFile`) set
+aside, so neither
 the checkout's `.git/info/attributes` nor the reader's config can mark a file
 CI would grade. (`check-attr --source=HEAD` alone still reads
 `info/attributes`.)
@@ -97,13 +98,13 @@ and passes. A pull request that changed no source file is a pass that says so.
 The diff is the base ref's tree against the commit checked out, never against
 the working tree, so a local run with uncommitted edits grades the last commit,
 as CI does. It is asked from the same kind of empty git directory the generated
-marking is, so no clean filter, `info/attributes` line or setting in the
-checkout's own git config reaches it. Rename detection stays at git's default,
-since under `diff.renames=copies` a copied file arrives as a copy with no line
-written, the one change this gate exists to see. No context joins two hunks,
-and the diff algorithm and its indent heuristic are fixed, since either can put
-a change on lines the branch never wrote. And `--text`, `--no-ext-diff`,
-`--no-textconv`, an empty `diff.external` and no reader's attributes file keep
+marking is, with every config file of the reader's set aside, the checkout's,
+the global and the system one alike, so no clean filter, `info/attributes` line
+or setting anybody made for themselves reaches it. Rename detection is git's
+default, since under `diff.renames=copies` a copied file arrives as a copy with
+no line written, the one change this gate exists to see. The indent heuristic
+is off, since it can slide a change onto lines the branch never wrote. And
+`--text`, `--no-ext-diff`, `--no-textconv` and no reader's attributes file keep
 a `-diff` marking, a NUL byte, an external diff driver or a text converter from
 turning a file the branch wrote into "Binary files differ" with no lines at
 all.

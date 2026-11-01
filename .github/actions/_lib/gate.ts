@@ -489,14 +489,24 @@ export interface Ran {
  * caller that cannot go on without an answer says so itself.
  *
  * `stdin` is for a command that takes its list there, `check-attr --stdin`
- * being the one, since a repo's paths can outgrow an argument list.
+ * being the one, since a repo's paths can outgrow an argument list. `env` is
+ * laid over the process's own environment, for a caller that has to keep a
+ * variable of the reader's away from git.
  */
-export async function git(cwd: string, args: readonly string[], stdin?: string): Promise<Ran> {
+export async function git(
+  cwd: string,
+  args: readonly string[],
+  {
+    stdin,
+    env,
+  }: { readonly stdin?: string | undefined; readonly env?: Record<string, string> } = {},
+): Promise<Ran> {
   const proc = Bun.spawn(["git", ...args], {
     cwd,
     stdout: "pipe",
     stderr: "ignore",
     ...(stdin === undefined ? {} : { stdin: new TextEncoder().encode(stdin) }),
+    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
   });
   const stdout = await new Response(proc.stdout).text();
   return { ok: (await proc.exited) === 0, stdout };

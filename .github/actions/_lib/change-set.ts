@@ -76,52 +76,29 @@ async function changeSet(
 ): Promise<Changed> {
   await using scratch = await scratchRepository(root);
   const diff = await scratch.git([
-    // Every setting below shapes the text this function then reads back, and
-    // each of them is one a developer sets for themselves and forgets. The
-    // scratch repository already leaves the checkout's own config behind; the
-    // pins are for the reader's `~/.gitconfig`, which it does not.
+    // The scratch repository's git reads no config of the reader's, so no
+    // setting a developer made for themselves can reshape the text read back
+    // below. What remains is where git's own defaults are not what this parse
+    // needs. `core.quotepath` off, so a path outside ASCII arrives as itself
+    // rather than inside quotes with escapes in it — the name is matched
+    // against what a tool reports back. The indent heuristic off, since it
+    // slides a change onto different lines of the same file. And no attributes
+    // file of the reader's, which git reads from its default path with no
+    // setting naming it.
     //
-    // `core.quotepath` off, so a path outside ASCII arrives as itself rather
-    // than inside quotes with escapes in it — the name is matched against what
-    // a tool reports back. `color.ui` off, because escape codes around every
-    // header stop `diff --git ` and `@@` from starting a line, which reads as a
-    // branch that changed nothing: a gate's way of passing. The prefixes fixed,
-    // because `diff.noprefix` and `diff.mnemonicPrefix` rewrite the `a/` and
-    // `b/` the header check below is written against. `diff.renames` at git's
-    // own default — renames, never copies: under `copies` a file the branch
-    // copied arrives as a copy with no lines written, which is the one change
-    // the duplicate-code gate exists to see, and under `false` a file the
-    // branch only moved arrives with every line written. `interHunkContext` at
-    // nothing, since any more joins two hunks across the unchanged lines
-    // between them, which then read as written; and the algorithm at myers with
-    // the indent heuristic off, since either setting can slide a change onto
-    // different lines of the same file.
-    //
-    // And the file's own text, whatever the repo or the reader says about it:
-    // `--text` past a `-diff` attribute and past a NUL byte, either of which
-    // makes git print "Binary files differ" and no hunk; `--no-ext-diff` and an
-    // empty `diff.external` past an external driver, which prints what it
-    // likes; `--no-textconv` past a converter; and no attributes file of the
-    // reader's. Each of them otherwise turns a file the branch wrote into one
-    // with no line written, which reads as a branch that changed nothing.
+    // And the file's own text, whatever the repo or the environment says about
+    // it: `--text` past a `-diff` attribute and past a NUL byte, either of
+    // which makes git print "Binary files differ" and no hunk; `--no-ext-diff`
+    // past `GIT_EXTERNAL_DIFF`, which prints what it likes; `--no-textconv`
+    // past a converter. Each of them otherwise turns a file the branch wrote
+    // into one with no line written, which reads as a branch that changed
+    // nothing. Rename detection stays at git's default — renames, never copies:
+    // under `copies` a file the branch copied arrives as a copy with no lines
+    // written, which is the one change the duplicate-code gate exists to see.
     "-c",
     "core.quotepath=false",
     "-c",
-    "color.ui=never",
-    "-c",
-    "diff.noprefix=false",
-    "-c",
-    "diff.mnemonicPrefix=false",
-    "-c",
-    "diff.renames=true",
-    "-c",
-    "diff.interHunkContext=0",
-    "-c",
-    "diff.algorithm=myers",
-    "-c",
     "diff.indentHeuristic=false",
-    "-c",
-    "diff.external=",
     "-c",
     "core.attributesFile=/dev/null",
     "diff",
@@ -252,10 +229,14 @@ function settled(verdict: Verdict): BranchChange {
 /**
  * An empty bare git directory borrowing the repository's objects, where a gate
  * asks about committed trees with none of the reader's own state in play: no
- * `.git/info/attributes`, no clean filter, no setting from `.git/config`. A
- * gate whose answer depends on the reader's git has no answer. Removed when
+ * `.git/info/attributes`, no clean filter, and no config, the repository's,
+ * the reader's global one or the system's. A gate whose answer depends on the
+ * reader's git has no answer. Removed when
  * the `await using` holding it ends.
  */
+/** The environment that keeps every global and system config file away from git. */
+const NO_READER_CONFIG = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+
 interface Scratch extends AsyncDisposable {
   /** git, asked from the scratch directory. */
   readonly git: (args: readonly string[], stdin?: string) => Promise<Ran>;
@@ -281,7 +262,7 @@ export async function scratchRepository(root: string): Promise<Scratch> {
   }
   await Bun.write(join(dir, "objects", "info", "alternates"), `${common.stdout.trim()}/objects\n`);
   return {
-    git: async (args, stdin) => await git(dir, args, stdin),
+    git: async (args, stdin) => await git(dir, args, { stdin, env: NO_READER_CONFIG }),
     head: head.stdout.trim(),
     prefix: prefix.stdout.trim(),
     [Symbol.asyncDispose]: async () => await rm(dir, { recursive: true, force: true }),
