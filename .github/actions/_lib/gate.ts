@@ -31,7 +31,7 @@ export type Problem = { readonly message: string } & (
  * and arrive as `%250A`. Only the three characters GitHub decodes: this is its
  * encoding, and anything else escaped here arrives visibly wrong.
  */
-function commanded(message: string): string {
+export function commanded(message: string): string {
   return message.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
 
@@ -293,6 +293,26 @@ export function list(value: string): string[] {
 export const REASON = " -- ";
 
 /**
+ * What follows the first `REASON` in a line, trimmed: the reason a directive or
+ * an allowlist entry gives, or the empty string where it gives none. The
+ * separator alone is not a reason, since a line ending `-- ` tells the next
+ * reader exactly what no comment at all would.
+ */
+export function reasonAfter(line: string): string {
+  const [, ...reason] = line.split(REASON);
+  return reason.join(REASON).trim();
+}
+
+/** The extensions source is written in, as pathspecs: every gate that reads a repo's code reads these. */
+export const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
+
+/**
+ * The directive that keeps a clone the duplicate-code gate would refuse, which
+ * suppression-hygiene holds to its reason like every other.
+ */
+export const KEEP_CLONE = "duplicate-code-allow";
+
+/**
  * One entry per line — not space-separated, because an entry contains spaces: a
  * quoted SQL identifier, the method and path of a route, and the reason each of
  * them carries.
@@ -359,8 +379,8 @@ export interface Allowlist {
  */
 export function allowlistFrom(value: string, input: string): Allowlist {
   const read = entriesIn(value).map((item) => {
-    const [subject = "", ...reason] = item.split(REASON);
-    return { subject: subject.trim(), reasoned: reason.join(REASON).trim() !== "" };
+    const [subject = ""] = item.split(REASON);
+    return { subject: subject.trim(), reasoned: reasonAfter(item) !== "" };
   });
 
   const unreasoned = read.filter(({ reasoned }) => !reasoned).map(({ subject }) => subject);
@@ -442,9 +462,17 @@ export interface Ran {
  * than thrown, because to most of what is asked here "no" is the answer — a
  * path that is not tracked, a lineage the base ref did not carry — and the one
  * caller that cannot go on without an answer says so itself.
+ *
+ * `stdin` is for a command that takes its list there, `check-attr --stdin`
+ * being the one, since a repo's paths can outgrow an argument list.
  */
-export async function git(cwd: string, args: readonly string[]): Promise<Ran> {
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
+export async function git(cwd: string, args: readonly string[], stdin?: string): Promise<Ran> {
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "ignore",
+    ...(stdin === undefined ? {} : { stdin: new TextEncoder().encode(stdin) }),
+  });
   const stdout = await new Response(proc.stdout).text();
   return { ok: (await proc.exited) === 0, stdout };
 }
@@ -544,10 +572,11 @@ export async function baseRevision(root: string, event: Event, why: string): Pro
  * Never a repo's own code, whatever its .gitignore says. `--others` lists
  * anything git would keep, so a repo whose .gitignore forgets node_modules
  * hands every gate tens of thousands of third-party files — and a gate that
- * denounces a dependency's dependency is worse than no gate. Excluded here, at
- * the one place every walking gate goes through, rather than in each of them.
+ * denounces a dependency's dependency is worse than no gate. Excluded at the
+ * places every walking gate goes through — the listings below and the change
+ * set's diff — rather than in each gate.
  */
-const NEVER = ":(exclude,glob)**/node_modules/**";
+export const NOT_A_DEPENDENCY = ":(exclude,glob)**/node_modules/**";
 
 /**
  * The files a gate looks at: what is on disk, minus what .gitignore describes.
@@ -578,7 +607,14 @@ async function listed(
   which: readonly string[],
   pathspecs: readonly string[],
 ): Promise<string[]> {
-  const listing = await git(root, ["ls-files", ...which, "-z", "--", ...pathspecs, NEVER]);
+  const listing = await git(root, [
+    "ls-files",
+    ...which,
+    "-z",
+    "--",
+    ...pathspecs,
+    NOT_A_DEPENDENCY,
+  ]);
   if (!listing.ok) throw new Error(`git ls-files failed in ${root}`);
   const paths = listing.stdout.split("\0").filter((path) => path !== "");
   const found = await Promise.all(

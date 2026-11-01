@@ -46,11 +46,14 @@ describe("suppression hygiene", () => {
     // would refuse. Four spellings, one rule.
     ["Stryker", "// Stryker disable next-line all"],
     ["duplicate-code", "// duplicate-code-allow"],
-  ])("a reasonless %s directive is refused — oxlint honours both spellings", async (_, line) => {
-    expect(await hygiene({ ...CLEAN, "src/index.ts": `${line}\nif (x) {\n}\n` })).toEqual([
-      containing("src/index.ts: line 1"),
-    ]);
-  });
+  ])(
+    "a reasonless %s directive is refused, in every spelling any tool honours",
+    async (_, line) => {
+      expect(await hygiene({ ...CLEAN, "src/index.ts": `${line}\nif (x) {\n}\n` })).toEqual([
+        containing("src/index.ts: line 1"),
+      ]);
+    },
+  );
 
   test.each([
     "/* oxlint-disable no-console */",

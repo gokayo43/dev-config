@@ -3,6 +3,7 @@ import {
   isList,
   type Problem,
   REASON,
+  reasonAfter,
   record,
   repoFiles,
 } from "../_lib/gate.ts";
@@ -59,9 +60,9 @@ interface Waiver {
 function waivedBy(service: ConfigObject): Waiver | undefined {
   const value = service[OPT_OUT];
   if (typeof value !== "string") return undefined;
-  const [named = "", ...reason] = value.split(REASON);
+  const [named = ""] = value.split(REASON);
   const path = named.trim().replace(/^\.\//, "");
-  return path === "" ? undefined : { path, reasoned: reason.join(REASON).trim() !== "" };
+  return path === "" ? undefined : { path, reasoned: reasonAfter(value) !== "" };
 }
 
 function checkHealthcheck(
