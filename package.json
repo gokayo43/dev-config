@@ -96,8 +96,7 @@
     "knip": ">=6",
     "oxfmt": ">=0.63",
     "oxlint": ">=1.80",
-    "oxlint-tsgolint": ">=7",
-    "typescript": ">=7"
+    "oxlint-tsgolint": ">=7"
   },
   "peerDependenciesMeta": {
     "@playwright/test": {
@@ -128,9 +127,6 @@
       "optional": true
     },
     "oxlint-tsgolint": {
-      "optional": true
-    },
-    "typescript": {
       "optional": true
     }
   },
