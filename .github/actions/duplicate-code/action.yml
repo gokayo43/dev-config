@@ -1,0 +1,29 @@
+name: Duplicate code
+description: >-
+  Fails on a run of twelve or more lines, comments and whitespace aside, that
+  this branch wrote and that also appears elsewhere in the repo's source, unless
+  its first line carries a reasoned `duplicate-code-allow` directive. What counts
+  as source, as a line and as this branch's, and why twelve:
+  docs/gates/duplicate-code.md.
+
+inputs:
+  working-directory:
+    description: Where the repository root is.
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # The two facts about the run are read from the `github` context here, as
+    # the mutation lane reads them: they are the event's own, identical for
+    # every caller, and a caller that had to pass them could pass them wrong.
+    # The base ref has to be in the checkout — fetch-depth: 0 — and this is
+    # refused without it.
+    - shell: bash
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_BASE_REF: ${{ github.base_ref }}
+        INPUT_BEFORE: ${{ github.event.before }}
+      run: |
+        set -euo pipefail
+        bun "$GITHUB_ACTION_PATH/duplicate-code.main.ts"

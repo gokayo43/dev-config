@@ -558,20 +558,29 @@ const NEVER = ":(exclude,glob)**/node_modules/**";
  * itself leaves behind.
  */
 export async function repoFiles(root: string, pathspecs: readonly string[]): Promise<string[]> {
-  const listing = await git(root, [
-    "ls-files",
-    "--cached",
-    "--others",
-    "--exclude-standard",
-    "-z",
-    "--",
-    ...pathspecs,
-    NEVER,
-  ]);
+  return await listed(root, ["--cached", "--others", "--exclude-standard"], pathspecs);
+}
+
+/**
+ * The files git tracks, for a gate whose other half is a diff. `git diff` never
+ * shows an untracked file, so a gate holding what a branch wrote against the
+ * rest of the tree reads both sides from one population — and a scratch copy
+ * nobody committed is neither.
+ */
+export async function trackedFiles(root: string, pathspecs: readonly string[]): Promise<string[]> {
+  return await listed(root, ["--cached"], pathspecs);
+}
+
+async function listed(
+  root: string,
+  which: readonly string[],
+  pathspecs: readonly string[],
+): Promise<string[]> {
+  const listing = await git(root, ["ls-files", ...which, "-z", "--", ...pathspecs, NEVER]);
   if (!listing.ok) throw new Error(`git ls-files failed in ${root}`);
-  const listed = listing.stdout.split("\0").filter((path) => path !== "");
+  const paths = listing.stdout.split("\0").filter((path) => path !== "");
   const found = await Promise.all(
-    listed.map(async (path) => ((await Bun.file(`${root}/${path}`).exists()) ? path : undefined)),
+    paths.map(async (path) => ((await Bun.file(`${root}/${path}`).exists()) ? path : undefined)),
   );
   return found.filter((path) => path !== undefined);
 }

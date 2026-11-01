@@ -2,13 +2,15 @@
 
 Two ways work hides in a tree rather than in the queue, both a failed step:
 
-- a directive with no ` -- reason` after the rule names, in any of three
+- a directive with no ` -- reason` after the rule names, in any of four
   spellings: oxlint honours `eslint-disable` exactly as it honours
   `oxlint-disable`, so a gate that knew only its own name left the other one
-  unreasoned and unreported — and Stryker's `disable` comment silences a mutant
-  in [the mutation lane](mutation-lane.md), which is the same act by a third
-  tool. `Stryker restore` is not one: it ends a disabled region rather than
-  opening one, and the reason was owed at the `disable` above it.
+  unreasoned and unreported — Stryker's `disable` comment silences a mutant in
+  [the mutation lane](mutation-lane.md), and `duplicate-code-allow` keeps a
+  clone [the duplicate-code gate](duplicate-code.md) would refuse, which are
+  the same act by two more tools. `Stryker restore` is not one: it ends a
+  disabled region rather than opening one, and the reason was owed at the
+  `disable` above it.
 - a tracked `TODO.md`, `BACKLOG.md`, `TASKS.md`, `ISSUES.md` or `ROADMAP.md`.
 
 The second one is not about the filename. A list in a file has no labels, no

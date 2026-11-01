@@ -8,15 +8,17 @@ const SOURCE = ["*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs", "*.cjs"];
  * Every directive that silences a check, whoever reads it. Both lint spellings,
  * because oxlint honours both — an `eslint-disable-next-line` silences a rule
  * exactly as an `oxlint-disable-next-line` does, so a gate that knew only the
- * oxlint spelling left the other one unreasoned and unreported — and Stryker's
+ * oxlint spelling left the other one unreasoned and unreported — Stryker's
  * `Stryker disable` comment, which takes a mutant out of the mutation lane's
- * run and out of its score. Three tools, one rule: a suppression says why.
+ * run and out of its score, and `duplicate-code-allow`, which keeps a clone the
+ * duplicate-code gate would refuse. Four spellings, one rule: a suppression
+ * says why.
  *
  * `Stryker restore` is not here. It ends a disabled region rather than opening
  * one, and the reason it is asking for was owed at the `disable` above it.
  */
 const DIRECTIVE =
-  /(?:\/\/|\/\*)\s*(?:(?:oxlint|eslint)-disable(?:-next-line|-line)?|Stryker disable)\b/;
+  /(?:\/\/|\/\*)\s*(?:(?:oxlint|eslint)-disable(?:-next-line|-line)?|Stryker disable|duplicate-code-allow)\b/;
 
 /**
  * Whether the directive on this line actually says why. The separator alone is
@@ -59,7 +61,7 @@ export async function suppressionHygiene({ root, fixtures }: Scope): Promise<Pro
       if (!DIRECTIVE.test(line) || saysWhy(line)) return;
       problems.push({
         file,
-        message: `line ${index + 1}: a lint directive without a '${REASON.trim()} reason' is a suppressed bug — say what the rule cannot know`,
+        message: `line ${index + 1}: a directive without a '${REASON.trim()} reason' is a suppressed bug — say what the check cannot know`,
       });
     });
   }

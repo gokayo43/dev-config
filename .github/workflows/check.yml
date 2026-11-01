@@ -91,6 +91,14 @@ on:
           and enforces nothing. Set it with mutation-lane or not at all.
         type: string
         default: ""
+      duplicate-code:
+        description: >-
+          Fail on a run of twelve or more lines, comments and whitespace aside, that this
+          branch wrote and that also appears elsewhere in the repo's source, unless a
+          reasoned directive on its first line keeps it. docs/gates/duplicate-code.md is
+          where it is argued.
+        type: boolean
+        default: false
       contract-exemptions:
         description: >-
           Repo-contract facts this repo is structurally unable to satisfy, space-separated
@@ -456,6 +464,9 @@ jobs:
       - uses: gokayo43/dev-config/.github/actions/lint-workflows@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
 
       - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
+
+      - if: inputs['duplicate-code']
+        uses: gokayo43/dev-config/.github/actions/duplicate-code@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
 
       # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
       - uses: gokayo43/dev-config/.github/actions/shell-scripts@ab9bfa8be7edabd6d08156e493a4ef4d3c4eeac9 # v0.70.0
