@@ -1,24 +1,19 @@
 /**
- * The repo's CI workflow — where it lives, the call into the shared check.yml
- * it makes and what that call asks for, and the queue its runs share — which
- * both halves of the contract have an opinion about and neither owns.
- *
- * `repo-contract.ts` asks whether the file calls the shared check.yml at a
- * pinned SHA, whether the workflow cancels a run a newer push replaced, and
- * whether the repo exposes the migration entry point that call implies — facts
- * about every repo. `live.ts` names the same file in two problems about what
- * that call has to ask for — facts about a repo with users. Either module could
- * hold them and import them to the other; both directions read as one of them
- * owning something it merely mentions, and one of them is the cycle. So they
- * are here, the way `db-gate` keeps what two of its gates share inside its own
- * directory rather than in `_lib`.
+ * The repo's CI workflow as one subject: where it lives, the call into the
+ * shared check.yml it makes and what that call asks for, the queue its runs
+ * share, and the three values its `database` input takes. `repo-contract.ts`
+ * reads the file once and hands it to `checkCall` and `checkConcurrency`;
+ * `live.ts` and `browser-suite.ts` name the same file in problems of their
+ * own, and `live.ts` grades what the call asks for. The rules about the file
+ * are not about a repo's manifests or its lifecycle, which is what the modules
+ * beside this one are about.
  */
 import {
+  type ConfigFile,
   type ConfigObject,
   isList,
   oneOf,
   type Problem,
-  readConfig,
   record,
 } from "../_lib/gate.ts";
 
@@ -52,26 +47,6 @@ export function notDatabaseGates(value: string): string {
 }
 
 const CHECK_CALL = /^gokayo43\/dev-config\/\.github\/workflows\/check\.yml@[0-9a-f]{40}$/;
-
-/**
- * The workflow as read once, for every rule with a question about it. Missing
- * and unreadable are different states, and the rules answer them differently:
- * only the call has anything to say about a file that is not there, and only
- * the queue — which no exemption waives — speaks for one that will not parse,
- * so an unreadable file is reported once whatever the exemptions.
- */
-export type Workflow =
-  | { readonly state: "missing" }
-  | { readonly state: "unreadable"; readonly problems: readonly Problem[] }
-  | { readonly state: "read"; readonly contents: ConfigObject };
-
-export async function readWorkflow(root: string): Promise<Workflow> {
-  if (!(await Bun.file(`${root}/${CI_WORKFLOW}`).exists())) return { state: "missing" };
-  const read = await readConfig(root, CI_WORKFLOW, "YAML");
-  return read.contents === undefined
-    ? { state: "unreadable", problems: read.problems }
-    : { state: "read", contents: read.contents };
-}
 
 /** The repo's call into the shared gate, and what is wrong with it. */
 export interface Call {
@@ -107,15 +82,8 @@ function stepsIn(jobs: ConfigObject): string[] {
  * boolean in here would put those inside a check that is not about them, and
  * hide the fact that `ci-call` waives the pin and the upgrade gate together.
  */
-export function checkCall(workflow: Workflow): Call {
-  if (workflow.state === "missing") {
-    return {
-      asked: undefined,
-      steps: [],
-      problems: [{ file: CI_WORKFLOW, message: "the repo has no CI workflow" }],
-    };
-  }
-  if (workflow.state === "unreadable") return { asked: undefined, steps: [], problems: [] };
+export function checkCall(workflow: ConfigFile): Call {
+  if (workflow.contents === undefined) return { asked: undefined, steps: [], problems: [] };
 
   const jobs = record(workflow.contents["jobs"]);
   const steps = stepsIn(jobs);
@@ -145,13 +113,13 @@ function expressionsIn(group: string): string {
 
 /**
  * The top-level `concurrency` block every repo's workflow owes, `ci-call` or
- * not: its runs queue on one self-hosted runner however the CI is written. A
- * missing file is the call's to report; an unreadable one is reported here,
- * since this is the rule no exemption reaches.
+ * not: its runs queue on one self-hosted runner however the CI is written. The
+ * exemption waives the shape of the call, not the repo's queue, so a workflow
+ * that is missing or will not parse is reported here, the rule no exemption
+ * reaches.
  */
-export function checkConcurrency(workflow: Workflow): Problem[] {
-  if (workflow.state === "missing") return [];
-  if (workflow.state === "unreadable") {
+export function checkConcurrency(workflow: ConfigFile): Problem[] {
+  if (workflow.contents === undefined) {
     return workflow.problems.map(({ message }) => ({
       file: CI_WORKFLOW,
       message: `${message}, so its top-level \`concurrency\` block cannot be read`,

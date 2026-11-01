@@ -73,7 +73,7 @@ describe("repo contract", () => {
     ["lefthook.yml", "lefthook.yml is missing"],
     ["CONTEXT.md", "domain glossary is missing"],
     ["CLAUDE.md", "CLAUDE.md is missing"],
-    [".github/workflows/ci.yml", "no CI workflow"],
+    [".github/workflows/ci.yml", ".github/workflows/ci.yml is missing"],
   ])("a repo with no %s is refused", async (path, message) => {
     expect(await contract(without(CLEAN, path))).toEqual([containing(message)]);
   });
@@ -293,21 +293,22 @@ describe("the CI workflow cancels a run a newer push replaced", () => {
     expect(await contract(withConcurrency(block))).toEqual([containing(GROUP)]);
   });
 
+  // The exemption waives the shape of the call, not the repo's queue, so a
+  // workflow the queue rule cannot read is reported under it, once. The wrong
+  // implementation leaves a missing or unreadable file to the call, whose
+  // problems the exemption drops, and an exempt repo is told nothing.
+  test.each([
+    ["is missing", without(CLEAN, ".github/workflows/ci.yml")],
+    ["will not parse", { ...CLEAN, ".github/workflows/ci.yml": "key: [unclosed\n" }],
+  ])("under ci-call, a workflow that %s is reported for the block", async (_what, tree) => {
+    expect(await contract(tree, { exemptions: ["ci-call"] })).toEqual([
+      containing("`concurrency` block cannot be read"),
+    ]);
+  });
+
   // `ci-call` waives the shape of the call into check.yml, and a repo whose CI
   // is its own jobs still queues on its one runner. The wrong implementation
   // puts the rule among the call's problems, which the exemption drops.
-  // The exemption drops the call's problems, and an unreadable file used to be
-  // only that: an exempt repo whose ci.yml will not parse was told nothing
-  // about a queue nobody could read.
-  test("under ci-call, a workflow that will not parse is reported for the block", async () => {
-    expect(
-      await contract(
-        { ...CLEAN, ".github/workflows/ci.yml": "key: [unclosed\n" },
-        { exemptions: ["ci-call"] },
-      ),
-    ).toEqual([containing("`concurrency` block cannot be read")]);
-  });
-
   test("ci-call does not waive it", async () => {
     expect(await contract(withConcurrency(""), { exemptions: ["ci-call"] })).toEqual([
       containing(CANCEL),
@@ -434,7 +435,10 @@ describe("contract exemptions", () => {
   });
 
   test("ci-call waives the pinned call, and secrets the environment", async () => {
-    const stripped = without(without(CLEAN, ".github/workflows/ci.yml"), ".env.example");
+    const stripped = {
+      ...without(CLEAN, ".env.example"),
+      ".github/workflows/ci.yml": workflow("  test:\n    runs-on: ubuntu-latest\n"),
+    };
     const root = await materialise(stripped);
     expect(
       (await repoContract(root, { ...DEFAULTS, exemptions: ["ci-call", "secrets"] })).map(
@@ -443,7 +447,7 @@ describe("contract exemptions", () => {
     ).toEqual([]);
     expect((await repoContract(root, DEFAULTS)).map(({ message }) => message)).toEqual([
       containing(".env.example must be tracked"),
-      containing("no CI workflow"),
+      containing("no job calls gokayo43/dev-config/.github/workflows/check.yml"),
     ]);
   });
 
