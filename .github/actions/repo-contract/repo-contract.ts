@@ -13,8 +13,8 @@ import {
   readConfig,
   record,
   repoFiles,
-  withoutComments,
 } from "../_lib/gate.ts";
+import { withoutComments } from "../_lib/comments.ts";
 import { checkPins, isExactVersion } from "../_lib/dependency-specs.ts";
 import { declaredIn } from "../_lib/lifecycle.ts";
 import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";

@@ -2,9 +2,9 @@ import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { changeSet } from "../_lib/change-set.ts";
+import { commentsBlanked } from "../_lib/comments.ts";
 import {
   baseRevision,
-  commentsBlanked,
   type Event,
   plural,
   type Problem,
