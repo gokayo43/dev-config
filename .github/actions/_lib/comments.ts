@@ -98,14 +98,22 @@ const WORD = /[\p{ID_Continue}$]/u;
  *
  * A scan rather than a regex. Two judgements no scan without a parser can make
  * exactly are made the usual way: a `/` begins a pattern unless what precedes
- * it ends a value (a word that is not a keyword, a `)`, a `]`, a literal), and
+ * it ends a value (a word that is not a keyword, a member whatever its name, a
+ * `)`, a `]`, a postfix `++` or `--`, a literal), and
  * a quote that reaches the end of its line ends there, so text that only looks
  * like a string — an apostrophe in JSX — costs one line rather than the rest
  * of the file.
  */
 function lexed(text: string): Span[] {
   const spans: Span[] = [];
-  const scan: Scan = { depth: 0, templates: [], last: "", word: "" };
+  const scan: Scan = {
+    depth: 0,
+    templates: [],
+    last: "",
+    word: "",
+    member: false,
+    postfix: false,
+  };
   let code = "";
   let index = 0;
   while (index < text.length) {
@@ -135,6 +143,10 @@ interface Scan {
   last: string;
   /** The word ending at `last`, when `last` ends one. */
   word: string;
+  /** Whether that word follows a `.`, which makes it a member, whatever it is named. */
+  member: boolean;
+  /** Whether `last` closes a `++` or `--`, which after a value is postfix and ends one. */
+  postfix: boolean;
 }
 
 /** What `last` holds once a literal has ended: a value, so a `/` after it divides. */
@@ -156,6 +168,7 @@ function spanAt(
   }
   if (char === '"' || char === "'" || (char === "/" && beginsPattern(scan))) {
     scan.last = LITERAL;
+    scan.postfix = false;
     return {
       kind: "literal",
       end: char === "/" ? patternEnd(text, index) : quotedEnd(text, index),
@@ -168,6 +181,7 @@ function spanAt(
     if (interrupted) scan.templates.push(scan.depth);
     // Inside `${` is the start of an expression, where a `/` opens a pattern.
     scan.last = interrupted ? "{" : LITERAL;
+    scan.postfix = false;
     return { kind: "literal", end };
   }
   return undefined;
@@ -180,14 +194,16 @@ function remember(scan: Scan, text: string, index: number): void {
   if (char === "}") scan.depth -= 1;
   if (char.trim() === "") return;
   const continues = text[index - 1] === scan.last && WORD.test(scan.last);
+  if (WORD.test(char) && !continues) scan.member = scan.last === ".";
   scan.word = WORD.test(char) ? (continues ? scan.word : "") + char : "";
+  scan.postfix = (char === "+" || char === "-") && text[index - 1] === char && !scan.postfix;
   scan.last = char;
 }
 
 /** Whether a `/` here starts a pattern: after a keyword or an operator it does, after a value it divides. */
-function beginsPattern({ last, word }: Scan): boolean {
-  if (WORD.test(last)) return BEFORE_A_PATTERN.has(word);
-  return last !== ")" && last !== "]" && last !== LITERAL;
+function beginsPattern({ last, word, member, postfix }: Scan): boolean {
+  if (WORD.test(last)) return !member && BEFORE_A_PATTERN.has(word);
+  return !postfix && last !== ")" && last !== "]" && last !== LITERAL;
 }
 
 /** Where the quoted string opening at `from` ends: after its closing quote, or at the end of its line. */
