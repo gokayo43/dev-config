@@ -14,7 +14,7 @@ import {
   type Arbitrary,
 } from "fast-check";
 
-import type { Verdict } from "../.github/actions/_lib/gate.ts";
+import { KEEP_CLONE, type Verdict } from "../.github/actions/_lib/gate.ts";
 import { duplicateCode, normalised } from "../.github/actions/duplicate-code/duplicate-code.ts";
 import { suppressionHygiene } from "../.github/actions/suppression-hygiene/suppression-hygiene.ts";
 import { check } from "../property.ts";
@@ -63,7 +63,19 @@ const pattern = array(constantFrom("a", "\\/", "[/*'\"`]", ".", "x+"), { maxLeng
 
 const number = integer({ min: 0, max: 99 }).map(String);
 
-const operand = oneof(word, number, quoted("'"), quoted('"'), template, pattern);
+/**
+ * Values that end in what reads like an operator or a keyword: a postfix `++`
+ * or `--`, and a member named like one of the words a pattern may follow.
+ */
+const ending = oneof(
+  word.map((name) => `${name}++`),
+  word.map((name) => `${name}--`),
+  tuple(word, constantFrom("in", "of", "return", "typeof", "delete")).map(
+    ([name, member]) => `${name}.${member}`,
+  ),
+);
+
+const operand = oneof(word, number, quoted("'"), quoted('"'), template, pattern, ending);
 
 const operator = constantFrom("+", "-", "*", "/", "&&", "===");
 
@@ -144,8 +156,9 @@ describe("the normaliser", () => {
   // never change a file's normalised lines. The wrong implementations it kills:
   // a scan that ends a string at a `//` inside it or misreads a pattern's `[/*]`
   // as a comment opening, one that keeps comments, one that compares lines
-  // raw, and one that drops what follows a `/` division as if it were a
-  // comment.
+  // raw, one that drops what follows a `/` division as if it were a comment,
+  // and one that reads the `/` after a postfix `++` or after a member named
+  // `in` as a pattern, which keeps the comment behind it.
   test("a comment or whitespace change never changes a file's normalised lines", () => {
     check(
       property(program, ({ plain, source }) => {
@@ -289,20 +302,19 @@ describe("the duplicate-code gate", () => {
     expect(verdict.problems).toEqual([]);
   });
 
-  // Three adjacent pastes, each a window long: every pair of them is a clone,
-  // and no reported pair overlaps itself. The wrong implementation grows a
-  // same-file match along its own repetition, and names 1-24 and 13-36 as the
-  // two places — ranges sharing half their lines.
-  test("a block pasted three times is three pairs of places, none overlapping", async () => {
+  // Three adjacent pastes, each a window long, are one self-repeating stretch:
+  // reported once, as its first two periods side by side, never as a pair of
+  // ranges overlapping each other. The wrong implementations grow a same-file
+  // match along its own repetition and name 1-24 and 13-36 as the two places,
+  // or report every pair of pastes.
+  test("a block pasted three times is one refusal naming two places apart", async () => {
     const { verdict } = await gate([
       BASE,
       { ...BASE, "src/rates.ts": block("rate", 12).repeat(3) },
     ]);
 
     expect(messages(verdict)).toEqual([
-      containing("src/rates.ts:1-12 shares with src/rates.ts:13-24"),
-      containing("src/rates.ts:1-12 shares with src/rates.ts:25-36"),
-      containing("src/rates.ts:13-24 shares with src/rates.ts:25-36"),
+      containing("src/rates.ts:1-12 shares with src/rates.ts:13-24 "),
     ]);
   });
 
@@ -370,7 +382,9 @@ describe("the duplicate-code gate", () => {
   // which leaves a clone kept with nothing said about why.
   test("a directive with no reason keeps the clone here and is refused by suppression hygiene", async () => {
     const [first = "", ...rest] = block("price", 15).split("\n");
-    const bare = `${first} // duplicate-code-allow\n${rest.join("\n")}`;
+    // Spelled through the constant, so this file's own text carries no
+    // reasonless directive for the hygiene gate to read.
+    const bare = `${first} // ${KEEP_CLONE}\n${rest.join("\n")}`;
     const { verdict, root } = await gate([BASE, { ...BASE, "src/fixture.ts": bare }]);
 
     expect(verdict.problems).toEqual([]);
@@ -519,5 +533,137 @@ describe("the duplicate-code gate", () => {
     expect(messages(verdict)).toEqual([
       containing("src/copied.ts:1-17 shares with src/prices.ts:2-18"),
     ]);
+  });
+});
+
+/** The first line of `text` with `suffix` after it, and the rest as it was. */
+function withFirstLine(text: string, suffix: string): string {
+  const [first = "", ...rest] = text.split("\n");
+  return `${first}${suffix}\n${rest.join("\n")}`;
+}
+
+describe("what the reader's own git state cannot change", () => {
+  // Each of these turns a file the branch wrote into one `git diff` prints no
+  // hunk for, which reads as a branch that changed no source. The wrong
+  // implementation is a diff that takes the repo's attributes, the file's
+  // bytes or the reader's diff driver at their word.
+  test.each([
+    ["a -diff marking the branch committed", { ".gitattributes": "src/copy.ts -diff\n" }, ""],
+    ["a NUL byte in a comment", {}, "// \0\n"],
+  ])("%s still shows the copy's lines", async (_what, extra, tail) => {
+    const { verdict } = await gate([
+      BASE,
+      { ...BASE, ...extra, "src/copy.ts": `${block("price", 15)}${tail}` },
+    ]);
+
+    expect(messages(verdict)).toEqual([containing("src/copy.ts:1-15 shares with src/prices.ts")]);
+  });
+
+  test("an external diff driver in the repo's config still shows the copy's lines", async () => {
+    const { verdict } = await gate(
+      [BASE, { ...BASE, "src/copy.ts": block("price", 15) }],
+      [["diff.external", "true"]],
+    );
+
+    expect(messages(verdict)).toEqual([containing("src/copy.ts:1-15 shares with src/prices.ts")]);
+  });
+
+  // `$GIT_DIR/info/attributes` is the reader's, never committed. The wrong
+  // implementation asks `check-attr` in the checkout, which reads it.
+  test("a generated marking in the checkout's info/attributes does not count", async () => {
+    const { root } = await history(BASE, { ...BASE, "src/copy.ts": block("price", 15) });
+    await Bun.write(join(root, ".git/info/attributes"), "src/prices.ts linguist-generated\n");
+
+    const verdict = await duplicateCode({ root, event: { baseRef: "", before: "" } });
+
+    expect(messages(verdict)).toEqual([containing("src/copy.ts:1-15 shares with src/prices.ts")]);
+  });
+});
+
+describe("what keeps a clone and what reports one", () => {
+  // The directive above a block marks where the block starts. The wrong
+  // implementation extends the run backwards past it — the line before the
+  // directive is a closing brace, and so is the line before the original — so
+  // the run starts a line early and the directive is on no line it reads.
+  test("a directive above a block counts when the line before it matches too", async () => {
+    const original = `export function first() {\n  return 1;\n}\n${block("rate", 15)}`;
+    const copy = `export function second() {\n  return 2;\n}\n// duplicate-code-allow -- the fixture mirrors the wire format\n${block("rate", 15)}`;
+    const before = { ...BASE, "src/rates.ts": original };
+    const { verdict } = await gate([before, { ...before, "src/copy.ts": copy }]);
+
+    expect(verdict.problems).toEqual([]);
+  });
+
+  // A directive the branch did not write licenses nothing new. The wrong
+  // implementation asks only whether the branch wrote any line of the side the
+  // directive sits on, so editing one line of the original and copying it is
+  // kept by somebody else's reason.
+  test("an old directive does not keep a copy of a block the branch edited", async () => {
+    const allowed = withFirstLine(
+      block("price", 15),
+      " // duplicate-code-allow -- generated from the price list",
+    );
+    const edited = allowed.replace('measure(7, "price")', 'measure(70, "price")');
+    const before = { ...BASE, "src/prices.ts": IMPORT + allowed };
+    const { verdict } = await gate([
+      before,
+      {
+        ...before,
+        "src/prices.ts": IMPORT + edited,
+        "src/again.ts": edited.replace(/ \/\/.*$/m, ""),
+      },
+    ]);
+
+    expect(messages(verdict)).toEqual([containing("src/again.ts:1-15 shares with src/prices.ts")]);
+  });
+
+  // A self-repeating block is one block. The wrong implementation reports every
+  // pair of its periods, which is quadratic in the rows.
+  test.each([10, 100])("a table of %i identical rows draws at most one refusal", async (rows) => {
+    const unit = '  {\n    kind: "row",\n    weight: 1,\n  },\n';
+    const { verdict } = await gate([
+      BASE,
+      { ...BASE, "src/rows.ts": `export const rows = [\n${unit.repeat(rows)}];\n` },
+    ]);
+
+    expect(verdict.problems.length).toBeLessThanOrEqual(1);
+  });
+
+  test("an array of 6000 identical lines draws at most one refusal, inside a second", async () => {
+    const { root } = await history(BASE, {
+      ...BASE,
+      "src/zeros.ts": `export const zeros = [\n${"  0,\n".repeat(6000)}];\n`,
+    });
+
+    const started = performance.now();
+    const verdict = await duplicateCode({ root, event: { baseRef: "", before: "" } });
+
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(verdict.problems.length).toBeLessThanOrEqual(1);
+  });
+
+  // A tracked dependency is not source, on the branch's side either.
+  test("a tracked node_modules file the branch changed is not a changed source file", async () => {
+    const unignored = { ...BASE, ".gitignore": "" };
+    const { verdict } = await gate([
+      unignored,
+      { ...unignored, "node_modules/pkg/index.js": block("price", 15) },
+    ]);
+
+    expect(verdict.note).toEqual(containing("no source file changed"));
+  });
+
+  // The reason is the repo's text and the log is the runner's stdout, where a
+  // carriage return starts what the runner may read as a command of its own.
+  test("a kept clone's reason reaches the log escaped", async () => {
+    const kept = withFirstLine(
+      block("price", 15),
+      " /* duplicate-code-allow -- why\r::warning::x */",
+    );
+    const { verdict } = await gate([BASE, { ...BASE, "src/fixture.ts": kept }]);
+
+    expect(verdict.problems).toEqual([]);
+    expect(verdict.log).not.toContain("\r");
+    expect(verdict.log).toContain("why%0D::warning::x");
   });
 });
