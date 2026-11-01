@@ -594,6 +594,23 @@ describe("what keeps a clone and what reports one", () => {
     expect(verdict.problems).toEqual([]);
   });
 
+  // The same boundary, forwards: a copied block followed by a kept one is two
+  // runs, the first refused and the second kept. The wrong implementation grows
+  // the first run across the directive, folding the kept block into a refusal.
+  test("a run does not grow across a directive into the next block", async () => {
+    const before = {
+      ".gitignore": "node_modules\n",
+      "src/both.ts": block("price", 15) + block("rate", 15),
+    };
+    const copy = `${block("price", 15)}// duplicate-code-allow -- the fixture mirrors the wire format\n${block("rate", 15)}`;
+    const { verdict } = await gate([before, { ...before, "src/copy.ts": copy }]);
+
+    expect(messages(verdict)).toEqual([
+      containing("src/copy.ts:1-15 shares with src/both.ts:1-15 "),
+    ]);
+    expect(verdict.note).toEqual(containing("1 clone kept by directive"));
+  });
+
   // A directive the branch did not write licenses nothing new. The wrong
   // implementation asks only whether the branch wrote any line of the side the
   // directive sits on, so editing one line of the original and copying it is
