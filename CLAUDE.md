@@ -101,15 +101,22 @@ a change to a rule usually lands here too.
   `lifecycle` field itself: the repo contract derives what "live" costs a repo
   and db-gate's compatibility floor asks the same word whether a route may be
   dropped, and one field read twice is two answers to whether anyone is on the
-  other end — and `change-set.ts`, the lines a branch wrote, which the mutation
+  other end — `change-set.ts`, the lines a branch wrote, which the mutation
   lane and the duplicate-code gate each hold a branch to, so both mean the same
-  thing by "this branch". What two gates of one action
-  share stays in that action's directory instead — `db-gate/database.ts`, the
-  scratch database its three data gates each build for themselves and the one
-  derivation of "these two dumps came out the same", and
-  `repo-contract/ci-workflow.ts`, the repo's CI call — the path it lives at and
-  the three values its `database` input takes — which both halves of that
-  contract have an opinion about and neither owns. Any
+  thing by "this branch", and the scratch repository both that diff and the
+  duplicate-code gate's generated marking are asked from — and `comments.ts`,
+  where a text's comments are: the repo contract reads a config past them, the
+  duplicate-code gate normalises source without them, and suppression hygiene
+  and the duplicate-code gate read their directives out of them and nowhere
+  else. What two gates of one action share stays in that action's directory
+  instead — `db-gate/database.ts`, the scratch database its three data gates
+  each build for themselves and the one derivation of "these two dumps came out
+  the same". `repo-contract/ci-workflow.ts` is the repo's CI workflow as a
+  subject of its own, read once: the path it lives at, the three values its
+  `database` input takes, `checkCall` for the call into `check.yml` and
+  `checkConcurrency` for the queue its runs share — rules about that file
+  rather than about the manifests or the lifecycle the modules beside it are
+  about. Any
   of them moves to `_lib/` when a second action reads it, and not on the
   argument that one might.
   The shell helpers beside them are `pinned-tool.sh` — the verified fetch
@@ -296,15 +303,16 @@ a change to a rule usually lands here too.
   fixture: `bunfig.toml` preloads it, so it runs before the first test file of
   every `bun test`. It takes the whole `GIT_` prefix out of the environment,
   because git hands a command it runs the location of the repository it is
-  acting on. No hook of this repo runs the suite, but `git rebase --exec 'bun
-test'` does, and so would a developer's own hook — and with `GIT_DIR` set the
-  fixtures are built inside that repository, which once rewrote a branch. Doing that to
-  `process.env` reaches only the spawn sites that pass one, since bun's `env`
-  default is the block the process launched with — so it also replaces
-  `Bun.spawn` and `Bun.spawnSync` for the whole test process. **That is the repo-wide gotcha**: a `Bun.spawn(cmd,
-{ cwd })` written in any suite here is given the environment as it stands, not
-  bun's default, and one variable rides along that bun would have left out —
-  `NODE_ENV`, which `bun test` sets after launch.
+  acting on. No hook of this repo runs the suite, but
+  `git rebase --exec 'bun test'` does, and so would a developer's own hook —
+  and with `GIT_DIR` set the fixtures are built inside that repository, which
+  once rewrote a branch. Doing that to `process.env` reaches only the spawn
+  sites that pass one, since bun's `env` default is the block the process
+  launched with — so it also replaces `Bun.spawn` and `Bun.spawnSync` for the
+  whole test process. **That is the repo-wide gotcha**: a
+  `Bun.spawn(cmd, { cwd })` written in any suite here is given the environment
+  as it stands, not bun's default, and one variable rides along that bun would
+  have left out — `NODE_ENV`, which `bun test` sets after launch.
   `git-free-environment.test.ts` holds all of it from outside, against a
   sacrificial repository it builds.
 - `docs/gates/*.md` — a reference page per gate; `docs/exports/*.md` — one per

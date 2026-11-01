@@ -2025,8 +2025,10 @@ and filing on one is how a repo collects a duplicate issue a night.
 `repo-contract`, `stack-gate`, `lint-workflows`, `suppression-hygiene`,
 `duplicate-code`, `shell-scripts`, `compose-lint`, `test-suite` and
 `mutation-lane` run in the static job; `db-gate` is the
-database job, and the capacity ramp and the route fuzzer are steps of it. Each has its page under
-[`docs/gates/`](docs/gates/), listed in the table at the top of this file.
+database job, and the capacity ramp and the route fuzzer are steps of it. Each
+but `lint-workflows` has its page under [`docs/gates/`](docs/gates/), listed in
+the table at the top of this file; `lint-workflows` is written down under
+"Gating this repo" above.
 
 ### Static sites
 
