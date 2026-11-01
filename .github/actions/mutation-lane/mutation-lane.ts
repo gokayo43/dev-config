@@ -12,6 +12,7 @@ import {
   kindOf,
   oneOf,
   plainly,
+  plural,
   type Problem,
   readConfig,
   type Verdict,
@@ -367,10 +368,6 @@ function survivorProblem(mutant: Mutant): Problem {
         ? `write the test for ${at} or drop the \`Stryker disable\` above it: ${wrote}, and a disabled ${swap} counts as one nothing caught rather than leaving the score`
         : `write the case that fails on ${swap} at ${at}: ${wrote} and the suite passes either way`;
   return { file: mutant.file, message };
-}
-
-function plural(many: number, noun: string): string {
-  return `${many} ${noun}${many === 1 ? "" : "s"}`;
 }
 
 /**

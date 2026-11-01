@@ -277,6 +277,11 @@ export function oneOf<const Name extends string>(
   return names.find((name) => name === value);
 }
 
+/** A count and the noun it counts, which takes an `s` for any count but one. */
+export function plural(many: number, noun: string): string {
+  return `${many} ${noun}${many === 1 ? "" : "s"}`;
+}
+
 /** A space-separated action input, as a list. */
 export function list(value: string): string[] {
   return value.split(/\s+/).filter((item) => item !== "");
