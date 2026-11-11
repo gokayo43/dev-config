@@ -229,9 +229,10 @@ a change to a rule usually lands here too.
   `anti-slop-env.test.ts` and
   `lint-policy.test.ts` hold every lint rule in `anti-slop/` to the same bar — a
   block of cases per rule, split where the base splits, since the rules scoped to
-  test files have a second question to answer about every case, the two the
-  suite scope turns on or off read that scope's globs off the base, the one
-  scoped away from `env.ts` and from a suite has a third, the two a directory
+  test files have a second question to answer about every case,
+  `no-chained-type-assertions` and `no-test-support-imports`, which the suite
+  scope switches on and off, read that scope's globs off the base,
+  `no-env-access`, scoped away from `env.ts` and from a suite, has a third, the two a directory
   grants or scopes have a fourth, and the ones that apply everywhere have none.
   None of them states how many there are: `anti-slop.test.ts` asks the plugin
   and the base for their rule names and requires the two sets to be equal, and
@@ -243,7 +244,7 @@ a change to a rule usually lands here too.
   disagree, both of which otherwise read as a clean tree.
   `anti-slop-upstream.test.ts` is
   upstream's own fixtures, as a differential oracle over every rule it ships
-  tests for. Three suites are not a gate's: `oxlint-base.test.ts` holds what
+  tests for. Some suites are not a gate's. `oxlint-base.test.ts` holds what
   the base config itself must — an override REPLACES a list-shaped rule rather
   than adding to it, which it proves against a config it builds itself and then
   holds every override in the base to, and that a consuming repo's own list
