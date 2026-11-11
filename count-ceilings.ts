@@ -87,7 +87,7 @@ export const command = (where: Where): string => `${MODE}=write bunx playwright 
  * Every lookup into one goes through `Object.hasOwn`, because a phase or a test
  * may be called `constructor` or `__proto__`.
  */
-// oxlint-disable-next-line typescript/no-restricted-types, anti-slop/no-unsafe-dictionary-type -- the one boundary alias this module reads through: what a person wrote in a ceilings file
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- the one boundary alias this module reads through: what a person wrote in a ceilings file
 export type Json = Record<string, unknown>;
 
 function isJson(value: unknown): value is Json {

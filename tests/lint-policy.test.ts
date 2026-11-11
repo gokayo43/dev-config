@@ -158,7 +158,7 @@ const PERF = `export function first(rows: readonly number[]): number | undefined
 }
 `;
 
-/** A console call in ordinary source, where the base's server override does not reach. */
+/** A console call in ordinary source, outside any server directory. */
 const CONSOLE = `export function note(v: string): void {
   console.log(v);
 }
@@ -588,9 +588,9 @@ describe("a perf hint", () => {
 describe("a console call", () => {
   // Promoted from `warn` for the reason the warn tier carries generally: it
   // could not fail a build, so every one of them was a line in a report. The
-  // server override that already denied it is untouched — what changed is the
-  // floor under every other file. Graded by the severity, which is the change.
-  test("denies in ordinary source, not only under the server override", () => {
+  // base states it once, at the top level, and no block raises it further for
+  // server code, so a source file anywhere is the case. Graded by the severity.
+  test("denies in ordinary source, with no server directory needed", () => {
     expect(drawnIn("src/logging.ts")).toEqual(["error eslint(no-console)"]);
   });
 });
