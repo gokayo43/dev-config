@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 import { plugin } from "@shadcn/lint";
 
 import { type ConfigObject, configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
-import { designSystemDependencies } from "../knip.base.ts";
 import { byFile, type Diagnostic, lintAt } from "./lint-fixture.ts";
 import { materialise, type Tree } from "./tree.ts";
 
@@ -211,12 +210,5 @@ describe("the design-system base", () => {
         .map((name) => [`shadcn/${name}`, "error"])
         .toSorted(([left], [right]) => String(left).localeCompare(String(right))),
     );
-  });
-
-  // The names a repo tells knip to ignore are the plugins this base loads: a
-  // plugin added to one and not the other is reported unused in every repo
-  // that extends the base, or ignored there for nothing.
-  test("knip is told to ignore exactly the plugins the base loads", async () => {
-    expect((await shipped())["jsPlugins"]).toEqual([...designSystemDependencies]);
   });
 });

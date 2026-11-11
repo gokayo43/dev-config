@@ -8,9 +8,7 @@ const config: KnipConfig = {
   // it. Splitting the entry point out of the gate module is also what lets the
   // coverage floor mean something: a module the suite drives reports its own
   // coverage, rather than carrying an entry block no test can reach.
-  // `anti-slop/index.js` is the same kind of entry from the other direction:
-  // oxlint loads it by the path in `oxlint.base.json`, which knip does not read.
-  entry: [".github/actions/*/*.main.ts", "anti-slop/index.js", "tests/*.ts"],
+  entry: [".github/actions/*/*.main.ts", "tests/*.ts"],
   project: [".github/actions/**/*.ts", "anti-slop/**/*.js", "tests/**/*.ts"],
   // The mutation lane's own two packages, which its suite drives against this
   // repo's install. The names come from the base rather than from here;
