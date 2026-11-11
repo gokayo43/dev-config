@@ -432,30 +432,22 @@ describe("the host keys the action decides against", () => {
   // StrictHostKeyChecking then refuses every clone against — a red install
   // blaming the dependency rather than the fetch. It fails where it is read.
   test("an answer with no host keys in it fails where it is read", async () => {
-    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({}) });
-    try {
-      await expect(knownHosts(server.url.href, "fixture-token")).rejects.toThrow(
-        "published no ssh_keys",
-      );
-    } finally {
-      await server.stop(true);
-    }
+    using server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({}) });
+    await expect(knownHosts(server.url.href, "fixture-token")).rejects.toThrow(
+      "published no ssh_keys",
+    );
   });
 
   // A 403 is what the unauthenticated ceiling on that endpoint looks like — 60
   // an hour per IP, which every runner on one host shares. It must say which
   // call failed rather than leave an empty known_hosts behind it.
   test("a refused answer fails where it is read, naming the status", async () => {
-    const server = Bun.serve({
+    using server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
       fetch: () => new Response("rate limited", { status: 403 }),
     });
-    try {
-      await expect(knownHosts(server.url.href, "fixture-token")).rejects.toThrow("403");
-    } finally {
-      await server.stop(true);
-    }
+    await expect(knownHosts(server.url.href, "fixture-token")).rejects.toThrow("403");
   });
 
   // The token is what keeps the call off that shared ceiling. Sending it as a

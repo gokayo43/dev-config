@@ -82,9 +82,11 @@ them to `dist/`, which is committed and held equal to a fresh build by
 stay the sources.
 
 The last two are type declarations, which a repo names in its own
-`tsconfig.json` rather than imports. They go in `types`, since a repo's own
-`types` replaces the base's and an `include` entry into `node_modules` is
-dropped by `exclude: ["node_modules"]`:
+`tsconfig.json` rather than imports. They go in `types`, since an entry there is
+loaded whatever the repo's `include` says, while an `include` entry into
+`node_modules` is dropped by `exclude: ["node_modules"]`. Setting `types` at all
+stops TypeScript loading every `@types` package by default, so the list names
+each one the repo uses:
 
 ```jsonc
 "types": ["bun", "@gokayo43/dev-config/bun-test", "@gokayo43/dev-config/css-custom-properties"]
@@ -239,7 +241,9 @@ shared state the rule cannot see), `react/react-in-jsx-scope` (the automatic JSX
 runtime imports nothing), `oxc/no-map-spread` (its advice is to mutate in place,
 wrong for the copy-on-write style these codebases are written in),
 `typescript/no-unsafe-type-assertion` (a subset of the rule below it, which is
-why it is stated only where that one is off), `eslint/no-underscore-dangle` (its
+why it is stated only where that one is off), `anti-slop/no-chained-type-assertions`
+(every chain it reports in source already draws `consistent-type-assertions`
+twice, so it is stated only in a suite), `eslint/no-underscore-dangle` (its
 fix contradicts `no-unused-vars` on `using _page = …`),
 `typescript/consistent-return` (`noImplicitReturns` already refuses a path that
 falls off, and this rule refuses the exhaustive switch and Effect's
@@ -248,11 +252,12 @@ checker answers what a default object holds), and
 `react/jsx-no-constructed-context-values` and
 `react/no-object-type-as-default-prop` (both ask for the `useMemo` the memo ban
 refuses, for an identity the React Compiler already gives). Then, in an override:
-`unicorn/consistent-function-scoping` in a test file;
-`typescript/consistent-type-assertions`,
-`typescript/no-unnecessary-type-arguments`, every React Compiler judgement and
-`anti-slop/no-unnamed-effects` in a suite; `react/rules-of-hooks` in a Playwright
-file; and `anti-slop/no-unnamed-effects` under `hooks/`. The reason in full sits beside
+`unicorn/consistent-function-scoping` in a test file; `anti-slop/no-env-access`
+in `env.ts`; `anti-slop/no-env-access`, `typescript/consistent-type-assertions`,
+`anti-slop/no-test-support-imports`, `typescript/no-unnecessary-type-arguments`,
+every React Compiler judgement and `anti-slop/no-unnamed-effects` in a suite;
+`react/rules-of-hooks` in a Playwright file; and `anti-slop/no-unnamed-effects`
+and `anti-slop/no-raw-query-hooks` under `hooks/`. The reason in full sits beside
 each entry, which is where the repo contract requires it — see
 [the repo contract](docs/gates/repo-contract.md). No count is given here on
 purpose: a number in prose is one nobody updates, and the list is the answer.
@@ -437,12 +442,12 @@ React, all 22 bail-outs are two shapes: a `try`/`finally` in a component, and an
 `await import(...)` inside one. A generator body and a logical assignment bail
 out too and occur nowhere in the fleet.
 
-Every row above is driven against a fixture in `tests/lint-policy.test.ts`,
-`incompatible-library`, `rule-suppression` and `syntax` excepted — none of the
-shapes tried here provoked those three, so each carries the row a reader who hits
-it needs and no case claiming a check nothing drives. The suite holds the two
-halves the table cannot: that the set of rules it drives plus those three is
-exactly the set the base enables, and that each of them still reports — a rule
+Every row above is driven against a fixture in `tests/lint-policy-react.test.ts`,
+`incompatible-library` and `syntax` excepted. None of the shapes tried here
+provoked those two, so each carries the row a reader who hits it needs and no
+case claiming a check nothing drives. The suite holds the two halves the table
+cannot: that the rules it drives plus those two are exactly the judgements the
+base enables, and that each driven one still reports — a rule
 that stays a name and goes quiet fails there rather than passing as a config
 switched on and answering for nothing.
 
@@ -471,8 +476,8 @@ untouched: what is banned is the name, not the module.
 decides cannot be: an override REPLACES a list-shaped rule rather than adding to
 it, so scoping one that way would take away every entry it did not restate — a
 consuming repo's [own lock](#locking-a-settled-decision) among them, wherever the
-block reached. A plugin rule's scalar `"off"` replaces only itself, so the two
-positional bans are rules of the plugin and no block in the base redefines a
+block reached. A plugin rule's scalar `"off"` replaces only itself, so every
+positional ban is a rule of the plugin and no block in the base redefines a
 list-shaped rule at all. `tests/oxlint-base.test.ts` holds it to both halves.
 
 The memo pair holds in every file and is a plugin rule anyway. As a
@@ -498,7 +503,7 @@ The two carriers differ in what they can see, and both differences are graded in
   the day a name on that list does, it is the carrier that has to change. What
   it does not see is a dynamic `await import`, which the plugin rules do.
 
-The grant is the directory, which is the limit both scoped rules carry: inside
+The grant is the directory, which is the limit the effect and query bans carry: inside
 `hooks/` every spelling of the effect trio is allowed, a barrel re-exporting it
 included, exactly as `env.ts` may re-export what `no-env-access` refuses
 everywhere else. A suite is the effect trio's second grant: a component a case
@@ -649,7 +654,7 @@ One thing to know before writing one: a rule's configuration is **replaced acros
 `extends`**, not merged, so a repo stating `no-restricted-imports` or
 `no-restricted-globals` of its own drops every entry the base states for it — the
 `bun:test`, Playwright and fast-check bans, and the three ESM globals, become
-unenforced in that repo, silently. (The memo ban and the two positional bans are
+unenforced in that repo, silently. (The memo ban and the positional bans are
 unaffected: they are rules of their own, and a repo redefining a list-shaped
 rule cannot reach them.) Restate
 the entries beside your own until

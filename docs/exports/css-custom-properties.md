@@ -12,9 +12,11 @@ any `--name` a legal key of React's `CSSProperties`. A repo names it in its own
 }
 ```
 
-It goes in `types` for the reason [the bun:test addition](bun-test.md) does: a
-repo's own `types` replaces the base's, and an `include` entry into
-`node_modules` is dropped by `exclude: ["node_modules"]`.
+It goes in `types` for the reason [the bun:test addition](bun-test.md) does: an
+entry there is loaded whatever the repo's `include` says, while an `include`
+entry into `node_modules` is dropped by `exclude: ["node_modules"]`. Setting
+`types` at all stops TypeScript loading every `@types` package by default, so the
+list names each one the repo uses.
 
 ## Why
 

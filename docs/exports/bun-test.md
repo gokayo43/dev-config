@@ -12,9 +12,11 @@ names it in its own `tsconfig.json`, beside `bun`:
 }
 ```
 
-It goes in `types` because a repo's own `types` replaces the base's rather than
-merging with it, and an `include` entry into `node_modules` is dropped by the
-`exclude: ["node_modules"]` most repos write.
+It goes in `types` because an entry there is loaded whatever the repo's
+`include` says, while an `include` entry into `node_modules` is dropped by the
+`exclude: ["node_modules"]` most repos write. Setting `types` at all stops
+TypeScript loading every `@types` package by default, so the list names each one
+the repo uses, `bun` among them.
 
 ## What it changes
 
@@ -42,6 +44,13 @@ appeared.
 
 At the first bun-types release that types these chains as awaitable itself,
 which is the `AsyncMatchers` of oven-sh/bun#44833 (on Bun's canary since
-2026-10-31). The declaration is harmless on top of it, since it only intersects
-with what bun-types declares, so a repo that moves bun-types first loses
-nothing. `tests/declarations.test.ts` grades both halves of the table above.
+2026-10-31). The declaration only intersects with what bun-types declares, and on
+2026-11-11 a probe type-checked it over bun-types `1.4.4-canary.20261111T140945`,
+which carries `AsyncMatchers`, with `skipLibCheck` on and off. No suite here
+holds that: the suite runs against the pinned `@types/bun` alone, so check it
+again when the fleet's bun-types moves.
+
+`tests/declarations.test.ts` grades the "With" column, and the "Without" column
+for the two awaited chains. The other "Without" cells were measured on
+2026-11-11 against `@types/bun` 1.4.0 with oxlint 1.80.0 and oxlint-tsgolint
+7.0.2001, and Bun 1.4.4's `bun check`, and no suite holds them.

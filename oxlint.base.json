@@ -76,8 +76,8 @@
       },
       { "name": "require", "message": "ESM project — use import (import() for dynamic)." }
     ],
-    // The imports a house pick has already answered, in the two cases that hold
-    // in every file. Each entry names what the import lost to, because the
+    // The imports a house pick has already answered, in the cases that hold in
+    // every file. Each entry names what the import lost to, because the
     // diagnostic is the only place the loser of that decision is standing.
     //
     // Only a ban with no exception can live here: an override
@@ -408,8 +408,8 @@
         "react/rules-of-hooks": "off"
       }
     },
-    // The two picks a file's position decides. Both are plugin rules rather
-    // than `no-restricted-imports` entries, because a scalar setting in an
+    // Picks a file's position decides, each a plugin rule rather than a
+    // `no-restricted-imports` entry, because a scalar setting in an
     // override replaces only itself: a list-shaped rule redefined here would
     // take away every entry it did not restate, a consuming repo's own settled
     // decisions included.
