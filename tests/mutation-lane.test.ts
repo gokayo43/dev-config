@@ -964,9 +964,9 @@ describe("the mutation lane", () => {
     "a floor of '%s' is refused rather than read as a fraction",
     async (floor) => {
       const { root } = await history(BEFORE);
-      expect(mutationLane({ root, event: { baseRef: "", before: "" }, floor })).rejects.toThrow(
-        "write it as a fraction between 0 and 1",
-      );
+      await expect(
+        mutationLane({ root, event: { baseRef: "", before: "" }, floor }),
+      ).rejects.toThrow("write it as a fraction between 0 and 1");
     },
   );
 });

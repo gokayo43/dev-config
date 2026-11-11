@@ -373,7 +373,7 @@ describe("the routes the base ref served", () => {
     ["an object", "{}", "the top level is an object"],
     ["a list of something else", '["GET /health"]', 'which is not a {"method","path"} pair'],
   ])("a base snapshot that is %s is refused rather than read as empty", async (_, at, detail) => {
-    expect(drive({ at, committed: SERVED, served: SERVED })).rejects.toThrow(detail);
+    await expect(drive({ at, committed: SERVED, served: SERVED })).rejects.toThrow(detail);
   });
 
   // The one state that must not read as an honest pass. A checkout with no
@@ -446,7 +446,7 @@ describe("the routes the base ref served", () => {
 
   test("the manifest deciding all of this is refused rather than read as dev", async () => {
     const { root } = await history({}, {});
-    expect(
+    await expect(
       routeCompat({
         root,
         event: { baseRef: "", before: "" },

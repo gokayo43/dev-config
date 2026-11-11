@@ -434,7 +434,9 @@ describe("the host keys the action decides against", () => {
   test("an answer with no host keys in it fails where it is read", async () => {
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({}) });
     try {
-      expect(knownHosts(server.url.href, "fixture-token")).rejects.toThrow("published no ssh_keys");
+      await expect(knownHosts(server.url.href, "fixture-token")).rejects.toThrow(
+        "published no ssh_keys",
+      );
     } finally {
       await server.stop(true);
     }
@@ -450,7 +452,7 @@ describe("the host keys the action decides against", () => {
       fetch: () => new Response("rate limited", { status: 403 }),
     });
     try {
-      expect(knownHosts(server.url.href, "fixture-token")).rejects.toThrow("403");
+      await expect(knownHosts(server.url.href, "fixture-token")).rejects.toThrow("403");
     } finally {
       await server.stop(true);
     }
