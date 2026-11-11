@@ -236,7 +236,14 @@
   },
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*"
+      ],
       "rules": {
         // A helper one describe uses belongs inside it, next to the cases that
         // read it. Hoisting it to module scope to satisfy this rule separates a
@@ -276,6 +283,8 @@
         "**/*.test.tsx",
         "**/*.spec.ts",
         "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*",
         "**/tests/**",
         "**/e2e/**"
       ],
