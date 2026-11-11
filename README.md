@@ -162,17 +162,18 @@ overwrites a default with `undefined`), an exact schema that refuses a key
 holding `undefined`, and a serialiser that keeps `undefined`. An option bag a repo does not own keeps its
 type, and the repo includes the field with a conditional spread.
 
-`noPropertyAccessFromIndexSignature` is deliberately absent. It catches a typo in a
-dotted read of a type that has declared keys beside an index signature, and in
-the repo measured for this release it caught none among its findings. The environment is the one such
-type that matters, and two things cover it: `anti-slop/no-env-access` keeps
-every read of it in one decoded module, and Vite's `strictImportMetaEnv` takes
-the index signature off `import.meta.env`.
+`noPropertyAccessFromIndexSignature` is deliberately absent. It catches a typo
+in a dotted read of a type that has declared keys beside an index signature, and
+in the repo measured for it, it caught none among its findings. The environment
+is the one such type that matters, and two things cover it:
+`anti-slop/no-env-access` keeps every read of it in one decoded module, and
+Vite's `strictImportMetaEnv` takes the index signature off `import.meta.env`.
 
-A repo that sets one of the base's checks back, such as `strict: false` or
-`allowUnreachableCode: true` in any `tsconfig*.json` it tracks, writes the
-reason in a comment directly above the entry. The repo contract refuses it
-otherwise, as it refuses an unexplained lint switch-off.
+A repo that sets one of the base's checks back in any `tsconfig*.json` it keeps,
+such as `strict: false`, `allowUnreachableCode: true` or
+`noUncheckedIndexedAccess: null`, writes the reason in a comment directly above
+the entry. The repo contract refuses it otherwise, as it refuses an unexplained
+lint switch-off.
 
 `noUnusedLocals` and `noUnusedParameters` are deliberately absent: unused code is
 the linter's report to make, and having both tools flag it means every dead

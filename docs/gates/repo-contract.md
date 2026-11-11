@@ -1,7 +1,7 @@
 # The repo contract
 
-Every gate above rests on a string somewhere: a `packageManager` field, an
-`extends` path, a `[test]` block, a hook definition. Each of those can be
+Every gate in this repo rests on a string somewhere: a `packageManager` field,
+an `extends` path, a `[test]` block, a hook definition. Each of those can be
 deleted, renamed or never written, and when one is, the gate it feeds does not
 fail — it stops existing. `repo-contract` reads them and says so.
 
@@ -89,10 +89,10 @@ question of what else that hand-rolled step drops is answered.
 **A switch-off carries a reason, and the reason is owed per switch-off.** What
 is graded is every entry under `rules`, under any `overrides[].rules`, under
 `categories`, and under `options` — a category switched off takes every rule in
-it, and `options.typeAware: false` takes the twelve type-aware rules the base
-sets at `error`, with no flag in `bun run lint` to put them back. Tightening a
-rule or reconfiguring it argues its case in what the rule now demands; switching
-one off argues nothing.
+it, and `options.typeAware: false` takes every type-aware rule the base sets at
+`error`, with no flag in `bun run lint` to put them back. Tightening a rule or
+reconfiguring it argues its case in what the rule now demands; switching one off
+argues nothing.
 
 A comment above a line says nothing about which of that line's entries it
 excuses, so a switch-off sharing its line with another entry a reason could be
@@ -104,20 +104,21 @@ what no comment would, and are refused at the same bar `allowlistFrom` holds a
 waiver to.
 
 **The reason covers the run of switch-offs under it, not just the first.** One
-argument routinely retires several rules at once — the paragraph explaining why
-`pedantic`, `style`, `restriction` and `nursery` are not adopted is one reason
-about four of them — and demanding a comment per line would be demanding the
-same paragraph four times, which is how a rule teaches people to write a token
-instead of an argument. So the group is the contiguous run of **switch-offs**
-under the comment, written one per line.
+argument routinely retires several rules at once: in `oxlint.base.json` one
+paragraph is the reason for switching off both
+`react/jsx-no-constructed-context-values` and
+`react/no-object-type-as-default-prop`, and demanding a comment per line would
+be demanding the same paragraph twice, which is how a rule teaches people to
+write a token instead of an argument. So the group is the contiguous run of
+**switch-offs** under the comment, written one per line.
 
 What continues that run is a switch-off and never merely an entry, which is the
 whole tightness of it: a rule left ON is a different subject, so the comment
-above _that_ is about the rule staying on and cannot be spent further down.
-`oxlint.base.json` is the case the looser reading was caught on —
-`"react/exhaustive-deps": "warn"` sits between the JSX runtime's reason and
-`oxc/no-map-spread`, and a walk counting entries handed the first's argument to
-the second in silence. A blank line closes the run as well, and so does any line
+above _that_ is about the rule staying on and cannot be spent further down. In
+`oxlint.base.json`, `no-console` and `no-empty` stay at `error` between
+`no-await-in-loop`'s reason and the switch-off of `eslint/no-underscore-dangle`:
+were the second's own reason deleted, a walk counting entries would hand it the
+first's in silence. A blank line closes the run as well, and so does any line
 carrying nothing at all: the `"rules": {` a block opens with, or a multi-line
 entry's continuation. A comment above the block's own opening line is therefore
 about the block, and cannot be spent on a switch-off inside it.
@@ -159,13 +160,13 @@ wires Tailwind into its build — `@tailwindcss/vite` among them — and a name
 rather than a prefix, since `tailwind-merge` is a class-joining helper a repo
 can carry with no Tailwind build at all. A shared component library that states
 Tailwind as a peer owes the base too: its components are written in the classes
-every rule but `no-restyle` reads, and `no-restyle` is the one a repo switches
-off inside its own components directory. No exemption waives the fact:
-`config-lineage` changes where the base may be read from, by its file name as
-for the shared base, and never whether a Tailwind repo reads it. A repo with no
-`tailwindcss` anywhere owes nothing here. What the
-base enforces, and what a repo declares beside it, is
-[README's "Design system"](../../README.md#design-system).
+the base's rules read, and README's override switches off only `no-restyle`,
+`no-arbitrary-values` and `require-static-classes` inside a repo's own
+components directory. No exemption waives the fact: `config-lineage` changes
+where the base may be read from, by its file name as for the shared base, and
+never whether a Tailwind repo reads it. A repo with no `tailwindcss` anywhere
+owes nothing here. What the base enforces, and what a repo declares beside it,
+is [README's "Design system"](../../README.md#design-system).
 
 `ignorePatterns` is deliberately not graded, and the honest reason is not that it
 is a different kind of setting — it silences every rule for the paths it names,
@@ -185,16 +186,20 @@ switch-offs, and is held to this rule by a test that strips one of its reasons
 and requires exactly that finding back.
 
 **A tsconfig that sets a check back owes the same reason.** Every
-`tsconfig*.json` the repo tracks, at the root or below it, is read on its own
-text, and a `compilerOptions` member that sets back a check the shared base
-states needs a comment directly above it, read exactly as a lint switch-off's
-is: one per line, the reason covering the run of them under it, an empty comment
-no reason, and a blank line or any other entry ending the run. One
-implementation reads the reason for both files. A check set back is a boolean
-the base states, written with the other value, such as `strict: false`,
-`allowUnreachableCode: true` or `verbatimModuleSyntax: false`. It is also a
+`tsconfig*.json` the gate lists, at the root or below it, tracked or untracked
+where git would keep it, is read on its own text, and a `compilerOptions` member
+that sets back a check the shared base states needs a comment directly above it,
+read exactly as a lint switch-off's is: one per line, the reason covering the
+run of them under it, an empty comment no reason, and a blank line or any other
+entry ending the run. One implementation reads the reason for both files. A
+check set back is a boolean the base states, written with the other value, such
+as `strict: false`, `allowUnreachableCode: true` or `verbatimModuleSyntax:
+false`. It is also a check the base states written `null`, which un-states it
+and hands it back to TypeScript's default, whatever that default is; and a
 member of TypeScript's `strict` family written `false`, since the base turns
-those on by stating `strict` alone.
+those on by stating `strict` alone (a family member written `null` is left to
+`strict`, and owes nothing). A tsconfig that will not parse is named, as every
+config the contract reads is, and the other checks still report.
 
 The checks are read from `tsconfig.base.json` as shipped at the ref the action
 runs from, so a flag added to the base or dropped from it changes the rule with
@@ -210,10 +215,10 @@ release changed. `config-lineage` does not waive it, since that exemption waives
 where a config inherits from and never what it sets back.
 
 **What this cannot catch.** No `extends` chain is followed, which leaves two
-ways to set a check back without writing the other value. An `extends` array
-whose entry after the base relaxes it is applied over the base, since
-TypeScript reads later entries over earlier ones. And a nested tsconfig that
-never extends the base drops every check without writing a `false`. Closing
+ways to set a check back without writing a weakening the gate can see. An
+`extends` array whose entry after the base relaxes it is applied over the base,
+since TypeScript reads later entries over earlier ones. And a nested tsconfig
+that never extends the base drops every check without writing a `false`. Closing
 either is a lineage rule for every tsconfig in a tree, which nobody has ruled
 on.
 
@@ -314,6 +319,11 @@ commit, made when the repo starts serving users, and it is the only thing that
 has to be remembered: everything below is derived from that word rather than
 turned on one gate at a time, because a checklist is something you can do half
 of.
+
+A field that is absent, or reads anything but those two words, is its own
+problem and the only one reported — a repo that has not said which it is gets
+graded against neither set of rules, because choosing for it is exactly what the
+field exists to prevent.
 
 | What `"live"` requires                                                   | When                                                        | Why it cannot wait                                                                                                                                              |
 | ------------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -558,11 +568,6 @@ belongs to the scaffold rather than to this gate:
 [project-template#30](https://github.com/gokayo43/project-template/issues/30)
 carries what the template owes here — the `restore-drill` unit pair (it ships
 only `backup`'s today), and the drill dropping its throwaway when it passes.
-
-A field that is absent, or reads anything but those two words, is its own
-problem and the only one reported — a repo that has not said which it is gets
-graded against neither set of rules, because choosing for it is exactly what the
-field exists to prevent.
 
 ## It only moves up
 
