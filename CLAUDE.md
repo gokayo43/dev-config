@@ -77,7 +77,8 @@ a change to a rule usually lands here too.
   something off and whether the reason sits above it, the one reading both
   `.oxlintrc.json` and every tsconfig are held to, each caller bringing its own
   vocabulary of "off";
-  `repo-contract/tsconfig-flags.ts` is a check of `tsconfig.base.json` set back
+  `repo-contract/lint-switch-offs.ts` is what "off" means in `.oxlintrc.json`,
+  and `repo-contract/tsconfig-flags.ts` is a check of `tsconfig.base.json` set back
   in a repo's tsconfig, the one rule that reads the base itself, from the
   action's own checkout; and `repo-contract/lockfile.ts` is what `bun.lock`
   resolved, as against what a manifest declares.

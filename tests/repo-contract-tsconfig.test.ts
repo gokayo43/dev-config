@@ -29,10 +29,11 @@ describe("a check of the base a tsconfig sets back", () => {
 
   // Each kind the design names: a flag the base sets `true` written `false`,
   // one of the two the base sets `false` written `true`, a member of the
-  // `strict` family the base turns on only through `strict`, and the module
-  // flags, which are checks like any other boolean the base states. The
-  // likeliest wrong implementation treats only `false` as a weakening, which
-  // the `allowUnreachableCode` case kills.
+  // `strict` family the base turns on only through `strict`, the module flags,
+  // which are checks like any other boolean the base states, and a flag the
+  // base states written `null`, which hands it back to TypeScript's default.
+  // The likeliest wrong implementation treats only `false` as a weakening,
+  // which the `allowUnreachableCode: true` and the `null` cases kill.
   test.each([
     `"strict": false`,
     `"noUncheckedIndexedAccess": false`,
@@ -44,6 +45,9 @@ describe("a check of the base a tsconfig sets back", () => {
     `"verbatimModuleSyntax": false`,
     `"isolatedModules": false`,
     `"erasableSyntaxOnly": false`,
+    `"strict": null`,
+    `"noUncheckedIndexedAccess": null`,
+    `"allowUnreachableCode": null`,
   ])("%s with no reason is refused, and passes with one", async (entry) => {
     expect(await contract(withTsconfig(`    ${entry}`))).toEqual([
       containing("sets back a check the base turns on, with no reason"),
@@ -54,7 +58,8 @@ describe("a check of the base a tsconfig sets back", () => {
   // Invariant 2 stated against the base itself rather than a list typed here:
   // every boolean the shipped base states is a check unless it is one of the
   // five that choose resolution or emit, so a boolean added to the base later
-  // is graded with nobody editing the gate.
+  // is graded with nobody editing the gate. Each is graded at its relaxing
+  // value and at `null`.
   test("every boolean the shipped base states is a check, but the five that are not", async () => {
     const decoded: unknown = await Bun.file(
       new URL("../tsconfig.base.json", import.meta.url),
@@ -70,24 +75,29 @@ describe("a check of the base a tsconfig sets back", () => {
       "skipLibCheck",
     ]);
     for (const [name, value] of options) {
-      const findings = await contract(withTsconfig(`    "${name}": ${String(!value)}`));
-      expect({ name, findings: findings.length }).toEqual({
-        name,
-        findings: notChecks.has(name) ? 0 : 1,
-      });
+      for (const written of [String(!value), "null"]) {
+        const findings = await contract(withTsconfig(`    "${name}": ${written}`));
+        expect({ name, written, findings: findings.length }).toEqual({
+          name,
+          written,
+          findings: notChecks.has(name) ? 0 : 1,
+        });
+      }
     }
   });
 
   // A flag written at the base's own value sets nothing back, and a flag the
-  // base does not state is not one of its checks: after this release that is
-  // `noPropertyAccessFromIndexSignature`, whose `false` is a dead line rather
-  // than a weakening.
+  // base does not state is not one of its checks: `noPropertyAccessFromIndexSignature`
+  // is one, whose `false` is a dead line rather than a weakening. A `strict`
+  // family member written `null` is another, since the base never states it
+  // and `null` there leaves it to `strict`, which the base does state.
   test("a flag at the base's own value, or one the base does not state, owes nothing", async () => {
     const body = [
       `    "strict": true`,
       `    "allowUnreachableCode": false`,
       `    "noPropertyAccessFromIndexSignature": false`,
       `    "noUnusedLocals": false`,
+      `    "strictNullChecks": null`,
     ].join(",\n");
     expect(await contract(withTsconfig(body))).toEqual([]);
   });
@@ -129,10 +139,13 @@ describe("a check of the base a tsconfig sets back", () => {
   // The likeliest wrong implementation reads the root `tsconfig.json` alone,
   // which every split config of a Vite or a monorepo tree walks straight past.
   test("a nested tsconfig of another name is read", async () => {
-    const tree = withTsconfig(`    "strict": false`, "apps/web/tsconfig.app.json");
-    expect(await contract(tree)).toEqual([
-      containing("apps/web/tsconfig.app.json strict: false sets back a check"),
-    ]);
+    const root = await materialise(
+      withTsconfig(`    "strict": false`, "apps/web/tsconfig.app.json"),
+      [".env.example"],
+    );
+    expect(
+      (await repoContract(root, DEFAULTS)).map(({ file, message }) => `${file ?? ""}: ${message}`),
+    ).toEqual([containing("apps/web/tsconfig.app.json: strict: false sets back a check")]);
   });
 
   // A file of another name that only carries the word is not a tsconfig.
@@ -168,5 +181,40 @@ describe("a check of the base a tsconfig sets back", () => {
       "tsconfig.json": `{\n  "extends": "${BASE}",\n  "compilerOptions": {\n    "plugins": [{ "name": "x", "strict": false }]\n  },\n  "ts-node": { "compilerOptions": { "strict": false } }\n}\n`,
     };
     expect(await contract(tree)).toEqual([]);
+  });
+
+  // A tsconfig the gate cannot read is named, as every config the contract
+  // reads is, and the rest of the contract still reports. The wrong
+  // implementation hands the text to the reason reader unparsed, which throws
+  // out of the whole contract on the first bad string with no file named.
+  test("an unparseable nested tsconfig is a named problem, never a crash of the whole contract", async () => {
+    const root = await materialise(
+      {
+        ...CLEAN,
+        "packages/x/tsconfig.json":
+          '{\n  "compilerOptions": {\n    "outDir": "dist,\n    "strict": true\n  }\n}\n',
+        "pnpm-lock.yaml": "lockfileVersion: 9\n",
+      },
+      [".env.example"],
+    );
+    const outcome = await repoContract(root, DEFAULTS).then(
+      (problems) => ({
+        problems: problems.map(({ file, message }) => `${file ?? ""}: ${message}`),
+      }),
+      (error: unknown) => ({ threw: String(error) }),
+    );
+    expect(outcome).toEqual({
+      problems: [
+        containing("pnpm-lock.yaml: bun.lock is the only lockfile"),
+        containing("packages/x/tsconfig.json: is not valid JSON with comments"),
+      ],
+    });
+  });
+
+  // The root tsconfig is read by the lineage check too, which already names it
+  // when it will not parse; one file that will not parse is one problem.
+  test("an unparseable root tsconfig is named once", async () => {
+    const tree = { ...CLEAN, "tsconfig.json": '{\n  "extends": "a\\q"\n}\n' };
+    expect(await contract(tree)).toEqual([containing("is not valid JSON with comments")]);
   });
 });

@@ -23,9 +23,9 @@ import {
   CI_WORKFLOW,
   type DatabaseGates,
 } from "./ci-workflow.ts";
+import { checkOffReasons } from "./lint-switch-offs.ts";
 import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
 import { checkTypeAwarePair } from "./lockfile.ts";
-import { skipSpace, stringAt, type Switches, unreasoned } from "./reasons.ts";
 import { checkWeakenedFlags } from "./tsconfig-flags.ts";
 import { checkTypecheck } from "./typecheck.ts";
 
@@ -98,65 +98,6 @@ async function checkLockfiles(root: string): Promise<Problem[]> {
     file,
     message: "bun.lock is the only lockfile — another package manager's lockfile drifts silently",
   }));
-}
-
-/**
- * A block whose members can silence a rule, and what silencing looks like in
- * it. The path has array indices dropped, so one entry covers every override.
- *
- * `rules` and `categories` are switched off by oxlint's `AllowWarnDeny`, whose
- * schema documents `"allow"` as the synonym of `"off"` and `0` as the number
- * that means it — each also legal as the head of an array carrying the rule's
- * options. `options` is a different vocabulary with the same effect:
- * `typeAware: false` takes every type-aware rule in the base with it, which is
- * twelve rules at `error`, and `bun run lint` passes no flag that would put
- * them back. `overrides` carries no `categories` and no `options` of its own
- * (oxlint's `OxlintOverride`).
- *
- * `globals` and a rule's own options object are why this is a path rather than
- * a key: both hold members whose value is legitimately `"off"` or `false`, and
- * neither silences anything.
- */
-const SWITCHES: Switches = new Map([
-  ["rules", silencesRule],
-  ["overrides.rules", silencesRule],
-  ["categories", silencesRule],
-  ["options", silencesOption],
-]);
-
-/** Whether the setting written at `at` switches its rule or category off. */
-function silencesRule(text: string, at: number): boolean {
-  const start = text[at] === "[" ? skipSpace(text, at + 1) : at;
-  if (text[start] === '"') {
-    const { value } = stringAt(text, start);
-    return value === "off" || value === "allow";
-  }
-  if (text[start] !== "0") return false;
-  const after = text[skipSpace(text, start + 1)] ?? "";
-  return after === "," || after === "}" || after === "]";
-}
-
-/** Whether the option written at `at` switches a body of rules off. */
-function silencesOption(text: string, at: number): boolean {
-  return text.startsWith("false", at);
-}
-
-/**
- * The reason beside every rule, category and option the config switches off.
- * Tightening a rule or reconfiguring it argues for itself in what it now
- * demands; switching one off argues nothing, and a switch-off with no reason
- * beside it is indistinguishable a year later from one added to get a run
- * green. What counts as the reason, and why a crowded line has none, is
- * `unreasoned`'s.
- */
-function checkOffReasons(oxlintrc: ConfigFile): Problem[] {
-  if (oxlintrc.text === undefined) return [];
-  return unreasoned(oxlintrc.text, SWITCHES).map(({ name, line, crowded }) => {
-    const why = crowded
-      ? "shares its line with another entry — one switch-off per line, its reason above"
-      : "is turned off with no reason — add the reason above the entry";
-    return { file: ".oxlintrc.json", line, message: `${name} ${why}` };
-  });
 }
 
 /**
