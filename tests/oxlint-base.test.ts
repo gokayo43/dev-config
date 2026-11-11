@@ -514,9 +514,8 @@ describe("a rule the base relaxes by an option", () => {
     ]);
   });
 
-  // `no-restricted-types` carried nothing but these two entries, so with them
-  // gone it is not stated at all, and the plugin rule is the one diagnostic left
-  // on the line rather than one of two.
+  // The base states no `no-restricted-types` entry for a dictionary, so the
+  // plugin rule is the one diagnostic on the line rather than one of two.
   test("refuses a dictionary of unknowns once, through the plugin rule", () => {
     expect(codesIn("src/bag.ts")).toEqual(["anti-slop(no-unsafe-dictionary-type)"]);
   });
