@@ -60,22 +60,41 @@ shape a rule takes when what it grades is only visible from inside the repo — 
 app's own route table, its own limiter, its own browser. Each is reachable
 through `files` and `exports`, and each has a page of its own:
 
-| Export                                                         | Imported by                    | What it holds                                                                                                         |
-| -------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| [`route-log`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the two floors over its route table                                                   |
-| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error, thrown error, overflow or unprompted shift on its pages                                             |
-| [`count-budget`](docs/exports/count-budget.md)                 | the Playwright specs of a job  | a job's commits, DOM mutations, requests and bytes per phase, held exactly to ceilings the write command never raises |
-| [`limiter-conformance`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                                                                   |
-| [`property`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further                                              |
-| [`interleaving`](docs/exports/interleaving.md)                 | a property over Effect fibers  | the order overlapping fibers run in, generated and replayable from a seed                                             |
-| [`response-schema`](docs/exports/response-schema.md)           | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip                                                   |
-| [`characterization-net`](docs/exports/characterization-net.md) | a golden suite and its updater | the harness rules that keep a large golden net honest                                                                 |
+| Export                                                           | Imported by                    | What it holds                                                                                                                 |
+| ---------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| [`route-log`](docs/exports/route-log.md)                         | the app, for the capacity ramp | the protocol between an app and the two floors over its route table                                                           |
+| [`invariant-sweep`](docs/exports/invariant-sweep.md)             | the Playwright specs           | no console error, thrown error, overflow or unprompted shift on its pages                                                     |
+| [`count-budget`](docs/exports/count-budget.md)                   | the Playwright specs of a job  | a job's commits, DOM mutations, requests and bytes per phase, held exactly to ceilings the write command never raises         |
+| [`limiter-conformance`](docs/exports/limiter-conformance.md)     | the rate limiter's own suite   | STACK's rate-limit rule, executable                                                                                           |
+| [`property`](docs/exports/property.md)                           | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further                                                      |
+| [`interleaving`](docs/exports/interleaving.md)                   | a property over Effect fibers  | the order overlapping fibers run in, generated and replayable from a seed                                                     |
+| [`response-schema`](docs/exports/response-schema.md)             | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip                                                           |
+| [`characterization-net`](docs/exports/characterization-net.md)   | a golden suite and its updater | the harness rules that keep a large golden net honest                                                                         |
+| [`narrowing`](docs/exports/narrowing.md)                         | any suite or spec              | `only`, `nth`, `must` and `rejectionOf`: a value the compiler could not prove present, or a throw naming what was found       |
+| [`bun-test`](docs/exports/bun-test.md)                           | `compilerOptions.types`        | `.resolves` and `.rejects` chains typed as promises, so an await of one passes `await-thenable` and a missing one is reported |
+| [`css-custom-properties`](docs/exports/css-custom-properties.md) | `compilerOptions.types`        | any `--name` as a key of React's `CSSProperties`, so a runtime value reaches `style` without a cast                           |
 
 No specifier carries an extension, and what one resolves to is this package's
-business: the first three are **built** — `bun run build` writes them to `dist/`,
-which is committed and held equal to a fresh build by `tests/dist.test.ts` — and
-the other five ship their source. `tsdown.config.ts` has why those three and no
-others. Either way the `.ts` files stay the sources.
+business: the first three and `narrowing` are **built** — `bun run build` writes
+them to `dist/`, which is committed and held equal to a fresh build by
+`tests/dist.test.ts` — and the other seven ship their source.
+`tsdown.config.ts` has why those four and no others. Either way the `.ts` files
+stay the sources.
+
+The last two are type declarations, which a repo names in its own
+`tsconfig.json` rather than imports. They go in `types`, since a repo's own
+`types` replaces the base's and an `include` entry into `node_modules` is
+dropped by `exclude: ["node_modules"]`:
+
+```jsonc
+"types": ["bun", "@gokayo43/dev-config/bun-test", "@gokayo43/dev-config/css-custom-properties"]
+```
+
+and `narrowing` is one import:
+
+```ts
+import { must, nth, only, rejectionOf } from "@gokayo43/dev-config/narrowing";
+```
 
 Gate code is deliberately **not** importable by the repos it gates — a gate in
 `node_modules` runs only if the repo's workflow remembers to, and it moves
@@ -993,6 +1012,12 @@ to the repo's own paths is the repo's, in `.oxlintrc.json`:
   there. It is a switch-off, so
   it carries its reason like any other
   ([the repo contract](docs/gates/repo-contract.md)).
+- A value known only at runtime goes through a custom property and a class
+  that reads it, `style={{ "--panel-width": … }}` with `w-(--panel-width)`.
+  React's types refuse that key, and the cast upstream documents is one the
+  oxlint base refuses, so a repo names
+  [`css-custom-properties`](docs/exports/css-custom-properties.md) in its
+  `compilerOptions.types`.
 - The theme is found rather than named: without `components.json`, it is the
   stylesheet under the package root that imports `tailwindcss` and declares the
   most colour tokens. `no-unknown-classes` asks the repo's own installed

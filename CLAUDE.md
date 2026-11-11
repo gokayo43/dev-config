@@ -139,8 +139,9 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Eight of them are **exports** it imports and
-  calls, and the two `dev-server*` files below are a bin it runs and the module
+  gates, which run over it from CI. Nine of them are **exports** it imports and
+  calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
+  `types`, and the two `dev-server*` files below are a bin it runs and the module
   that bin imports. Two more reach it only inside those, and no specifier
   exports either. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
@@ -170,7 +171,16 @@ a change to a rule usually lands here too.
   call every property test goes through, so a nightly can multiply how far each
   of them searches with no test changing; `interleaving.ts` runs an Effect
   program under a `Scheduler` whose every choice comes from fast-check data, so
-  a property generates the order overlapping fibers run in. `property.ts`,
+  a property generates the order overlapping fibers run in; `narrowing.ts` is
+  `only`, `nth`, `must` and `rejectionOf`, which hand back a value the compiler
+  could not prove present or throw naming what they found, and import no test
+  runner so a Playwright spec under node takes them too. `bun-test.d.ts` types
+  bun:test's `.resolves` and `.rejects` chains as promises, which bun-types up
+  to 1.4.4 does not, so `typescript/await-thenable` stays on in suites;
+  `css-custom-properties.d.ts` makes any `--name` a key of React's
+  `CSSProperties`, the cast-free route `shadcn/no-inline-styles` sends a
+  runtime value down. Both ship as source, and `tests/declarations.test.ts`
+  type-checks and lints a consumer's program with and without each. `property.ts`,
   `invariant-sweep.ts` and `count-budget.ts` are the three exports that read the
   environment for a value. Their pages are `docs/exports/`.
   `limiter-conformance.ts` registers tests where `response-schema.ts` answers
@@ -178,11 +188,11 @@ a change to a rule usually lands here too.
   is a value one call can grade, and a limiter is a sequence of attempts against
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
-  to is this package's business rather than a caller's: three of them are built and
-  five ship their source, and no import says which. `tsdown.config.ts` is where
+  to is this package's business rather than a caller's: four of them are built and
+  seven ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget}.{js,d.ts}`;
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing}.{js,d.ts}`;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
 - `dev-server.ts` and `dev-server-derive.ts` — one supervised dev server per git
@@ -277,8 +287,9 @@ a change to a rule usually lands here too.
   browser facts — the ceiling rule is not one, and is searched without a browser
   in `count-ceilings.test.ts` — with
   a React app among its pages that it builds in memory once per suite, for
-  production — `react` and `react-dom` are devDependencies nothing imports for
-  that reason — and its suite runs Playwright several times over one tree,
+  production — `react-dom` is a devDependency nothing imports for that reason,
+  and `react` one only `css-custom-properties.d.ts` reads, with `@types/react`
+  for `tests/declarations.test.ts` — and its suite runs Playwright several times over one tree,
   because what one run writes into a ceilings file is what the next is checked
   against. That suite also spins a process on every core for the length of 20
   runs of one page, since a count read under load is half of what it grades, and
@@ -323,7 +334,7 @@ a change to a rule usually lands here too.
 ```sh
 bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites
-bun run build   # rewrites the committed dist/ from the three built exports
+bun run build   # rewrites the committed dist/ from the four built exports
 ```
 
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
