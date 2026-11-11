@@ -65,8 +65,7 @@ function parameterName(parameter, sourceCode, written) {
  * @property {string} written How that type is spelled, for the name fallback above.
  * @property {string} description
  * @property {string} message
- * @property {string} [exemptName] The one parameter name the annotation is a convention on.
- * @property {(owner: ParameterOwner, index: number) => boolean} [exemptPosition] Where the language itself puts the type.
+ * @property {(owner: ParameterOwner, index: number, name: string) => boolean} [exempt] Where the annotation is a convention or the language's own type.
  */
 
 /**
@@ -114,12 +113,11 @@ function bannedParameterTypeRule(banned) {
       /** @param {ParameterOwner} node */
       const checkParameters = (node) => {
         for (const [index, parameter] of node.params.entries()) {
-          if (banned.exemptPosition?.(node, index) === true) continue;
           const annotation = parameterAnnotation(parameter);
           if (annotation === null || annotation === undefined) continue;
           if (!accepts(annotation.typeAnnotation, new Map(), new Set())) continue;
           const name = parameterName(parameter, context.sourceCode, banned.written);
-          if (name === banned.exemptName) continue;
+          if (banned.exempt?.(node, index, name) === true) continue;
           context.report({
             node: annotation.typeAnnotation,
             messageId: "bannedParameter",
@@ -180,8 +178,7 @@ function isRejectionReason(owner, index) {
 export const noUnknownParametersRule = bannedParameterTypeRule({
   node: "TSUnknownKeyword",
   written: "unknown",
-  exemptName: "cause",
-  exemptPosition: isRejectionReason,
+  exempt: (owner, index, name) => name === "cause" || isRejectionReason(owner, index),
   description:
     "Disallow explicitly unknown function parameters except `cause` and a rejection handler's reason; decode unknown input at its I/O boundary instead.",
   message:

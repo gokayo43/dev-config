@@ -83,10 +83,20 @@ function staticName(key, computed) {
   // a private field is a name no other object can be asked for.
   if (key.type === "Identifier") return computed ? null : key.name;
   if (key.type === "PrivateIdentifier") return null;
-  const value = computed ? unwrapAssertions(key) : key;
-  if (value.type === "Literal") return typeof value.value === "string" ? value.value : null;
-  if (value.type !== "TemplateLiteral" || value.expressions.length > 0) return null;
-  return value.quasis[0]?.value.cooked ?? null;
+  return writtenString(computed ? unwrapAssertions(key) : key);
+}
+
+/**
+ * The string a node spells as written: a string literal, or a template with
+ * nothing to substitute, which has exactly one value and it is right there.
+ * Nothing for anything else, which is a value only the run time knows.
+ * @param {ESTree.Node} node
+ * @returns {string | null}
+ */
+export function writtenString(node) {
+  if (node.type === "Literal") return typeof node.value === "string" ? node.value : null;
+  if (node.type !== "TemplateLiteral" || node.expressions.length > 0) return null;
+  return node.quasis[0]?.value.cooked ?? null;
 }
 
 /**

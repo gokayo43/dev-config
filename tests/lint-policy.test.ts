@@ -36,9 +36,13 @@ const BUDGET =
   "import the generators by name.";
 
 /** And what each plugin rule says, which is the rule's own. */
-const MEMOISATION = "The React Compiler owns memoisation";
+const MEMOISATION =
+  "The React Compiler owns memoisation: delete the wrapper and use the value directly.";
 const NAMED_HOOK = "Move this effect into a named hook under `hooks/`";
 const LOADER = "A route's data is the loader's";
+
+/** What all three say instead on a line that re-exports a module whole, which holds no use to change. */
+const BY_NAME = "re-export by name only what this barrel needs";
 
 /** Every React hook the base has an opinion about, in one import. */
 const REACT_HOOKS = `import {
@@ -208,6 +212,10 @@ export const used = react.useEffect;
   "src/barrel.ts": `export { useEffect, useLayoutEffect } from "react";
 `,
   "src/everything.ts": `export * from "react";
+`,
+  "src/default-barrel.ts": `export { default as React } from "react";
+`,
+  "src/routes/everything.ts": `export * from "@tanstack/react-query";
 `,
   "src/typed.ts": `import type { useEffect } from "react";
 import { type useLayoutEffect, useState } from "react";
@@ -437,6 +445,16 @@ describe("an effect", () => {
       "error anti-slop(no-unnamed-effects)",
     ]);
   });
+
+  // No wrapper sits on a line that hands the module on whole and no effect
+  // waits to move, so each rule says the one thing that line can change.
+  test.each(["src/everything.ts", "src/default-barrel.ts", "src/routes/everything.ts"])(
+    "and %s, which hands on the whole module, is told to re-export by name",
+    (path) => {
+      expect(reportedIn(path).length).toBeGreaterThan(0);
+      expect(adviceIn(path).every((advice) => advice.includes(BY_NAME))).toBe(true);
+    },
+  );
 
   // The one use of these names that survives the pick they lost to: a signature
   // borrowing the type without reaching the value. The plugin rule can tell,

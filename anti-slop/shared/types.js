@@ -356,16 +356,26 @@ function resolutionKey(resolved) {
 const unsafeValues = new WeakMap();
 
 /**
+ * One question's answer for a resolved type, from the table of this file's
+ * answers when it is there and worked out and stored when it is not.
+ * @template T
+ * @param {WeakMap<TypeEnvironment, Map<string, T>>} table
  * @param {TypeEnvironment} environment
- * @returns {Map<string, UnsafeDictionary["unsafeValue"] | null>}
+ * @param {ResolvedType} resolved
+ * @param {() => T} answer
+ * @returns {T}
  */
-function unsafeValueCache(environment) {
-  const known = unsafeValues.get(environment);
+function memoised(table, environment, resolved, answer) {
+  /** @type {Map<string, T>} */
+  const fresh = new Map();
+  const cache = table.get(environment) ?? fresh;
+  table.set(environment, cache);
+  const key = resolutionKey(resolved);
+  const known = cache.get(key);
   if (known !== undefined) return known;
-  /** @type {Map<string, UnsafeDictionary["unsafeValue"] | null>} */
-  const cache = new Map();
-  unsafeValues.set(environment, cache);
-  return cache;
+  const worked = answer();
+  cache.set(key, worked);
+  return worked;
 }
 
 /**
@@ -380,13 +390,9 @@ function unsafeValueCache(environment) {
  */
 function unsafeDirectValue(type, environment, substitutions, resolving) {
   const resolved = resolveType(type, environment, substitutions, resolving);
-  const cache = unsafeValueCache(environment);
-  const key = resolutionKey(resolved);
-  const known = cache.get(key);
-  if (known !== undefined) return known;
-  const answer = unsafeResolvedValue(resolved, environment);
-  cache.set(key, answer);
-  return answer;
+  return memoised(unsafeValues, environment, resolved, () =>
+    unsafeResolvedValue(resolved, environment),
+  );
 }
 
 /**
@@ -504,19 +510,6 @@ export function classifyUnsafeDictionary(type, environment) {
 const fixedKeySets = new WeakMap();
 
 /**
- * @param {TypeEnvironment} environment
- * @returns {Map<string, boolean>}
- */
-function fixedKeySetCache(environment) {
-  const known = fixedKeySets.get(environment);
-  if (known !== undefined) return known;
-  /** @type {Map<string, boolean>} */
-  const cache = new Map();
-  fixedKeySets.set(environment, cache);
-  return cache;
-}
-
-/**
  * Whether a key type is a fixed set of keys: a literal, or a union of nothing
  * else, once resolved. `string`, a template, `keyof` and a name this file does
  * not declare are not, which fails closed for a key imported from elsewhere.
@@ -528,20 +521,16 @@ function fixedKeySetCache(environment) {
  */
 function isFixedKeySet(type, environment, substitutions, resolving) {
   const resolved = resolveType(type, environment, substitutions, resolving);
-  const cache = fixedKeySetCache(environment);
-  const key = resolutionKey(resolved);
-  const known = cache.get(key);
-  if (known !== undefined) return known;
-
-  const node = resolved.type;
-  const answer =
-    node.type === "TSLiteralType" ||
-    (node.type === "TSUnionType" &&
-      node.types.every((member) =>
-        isFixedKeySet(member, environment, resolved.substitutions, resolved.resolving),
-      ));
-  cache.set(key, answer);
-  return answer;
+  return memoised(fixedKeySets, environment, resolved, () => {
+    const node = resolved.type;
+    return (
+      node.type === "TSLiteralType" ||
+      (node.type === "TSUnionType" &&
+        node.types.every((member) =>
+          isFixedKeySet(member, environment, resolved.substitutions, resolved.resolving),
+        ))
+    );
+  });
 }
 
 /**

@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { baseConfig, type Case, cases, lines, underBase } from "./lint-fixture.ts";
+import {
+  baseConfig,
+  type Case,
+  cases,
+  lines,
+  scopeOf,
+  shippedBase,
+  underBase,
+} from "./lint-fixture.ts";
 
 /**
  * The rules the base enables only over test files, because every one of
@@ -502,16 +510,15 @@ test("reads", async () => {
 
 /**
  * Every suffix the base grades as a test file, the support-file names among
- * them: a rule enabled for one and not the rest is a hole.
+ * them, read off the block that turns these rules on: a rule enabled for one
+ * and not the rest is a hole. A support name's open extension becomes `.ts`.
  */
-const IN_TEST_FILES = [
-  ".test.ts",
-  ".spec.ts",
-  ".test.tsx",
-  ".spec.tsx",
-  ".test-harness.ts",
-  ".fixture.ts",
-];
+const IN_TEST_FILES = scopeOf(await shippedBase(), "anti-slop/no-call-log-assertions", "error").map(
+  (glob) => {
+    if (!glob.startsWith("**/*.")) throw new Error(`${glob} is not a suffix glob`);
+    return glob.slice("**/*".length).replace(/\.\*$/u, ".ts");
+  },
+);
 
 /** And the ones it does not, which is the half that keeps them out of source files. */
 const NOT_TEST_FILES = [".ts", ".tsx"];
