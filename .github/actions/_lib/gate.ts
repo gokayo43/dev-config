@@ -230,7 +230,7 @@ export const DEPENDENCY_FIELDS = [
  * modelled type here would have to be every valid and invalid config in the
  * fleet at once, and would claim about the file exactly what is not checked yet.
  */
-// oxlint-disable-next-line typescript/no-restricted-types, anti-slop/no-unsafe-dictionary-type -- the one boundary this alias exists for; every gate reads config through it rather than restating it
+// oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- the one boundary this alias exists for; every gate reads config through it rather than restating it
 export type ConfigObject = Record<string, unknown>;
 
 export function record(value: unknown): ConfigObject {

@@ -192,12 +192,22 @@ The rules the base switches off: `no-await-in-loop` (a sequential loop is
 usually the correct one here, and the fan-out it asks for is a design call about
 shared state the rule cannot see), `react/react-in-jsx-scope` (the automatic JSX
 runtime imports nothing), `oxc/no-map-spread` (its advice is to mutate in place,
-wrong for the copy-on-write style these codebases are written in), and
+wrong for the copy-on-write style these codebases are written in),
 `typescript/no-unsafe-type-assertion` (a subset of the rule below it, which is
-why it is stated only where that one is off). Then, in an override:
-`unicorn/consistent-function-scoping` and
-`typescript/consistent-type-assertions` in a suite, and
-`anti-slop/no-unnamed-effects` under `hooks/`. The reason in full sits beside
+why it is stated only where that one is off), `eslint/no-underscore-dangle` (its
+fix contradicts `no-unused-vars` on `using _page = …`),
+`typescript/consistent-return` (`noImplicitReturns` already refuses a path that
+falls off, and this rule refuses the exhaustive switch and Effect's
+`return yield* Effect.fail(…)`), `import/no-named-as-default-member` (the type
+checker answers what a default object holds), and
+`react/jsx-no-constructed-context-values` and
+`react/no-object-type-as-default-prop` (both ask for the `useMemo` the memo ban
+refuses, for an identity the React Compiler already gives). Then, in an override:
+`unicorn/consistent-function-scoping` in a test file;
+`typescript/consistent-type-assertions`,
+`typescript/no-unnecessary-type-arguments`, every React Compiler judgement and
+`anti-slop/no-unnamed-effects` in a suite; `react/rules-of-hooks` in a Playwright
+file; and `anti-slop/no-unnamed-effects` under `hooks/`. The reason in full sits beside
 each entry, which is where the repo contract requires it — see
 [the repo contract](docs/gates/repo-contract.md). No count is given here on
 purpose: a number in prose is one nobody updates, and the list is the answer.
@@ -227,18 +237,18 @@ each one converts a question into silence:
 - `eslint/no-warning-comments` — `TODO`, `FIXME`, `XXX` and `HACK` anywhere in a
   comment. The register is GitHub issues in the repo the work belongs to; a
   marker in a file is invisible to anyone who is not already reading that file.
-- `typescript/no-restricted-types` — `Record<string, unknown>` and
-  `Record<string, any>`. The bag with no keys is how a shape nobody modelled
-  travels: it type-checks everywhere and asserts nothing. It is legal exactly
-  once per boundary, as a **named alias at the module that owns that boundary**,
-  carrying one disable with the why — `type ConfigObject = Record<string,
-unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
-  not own. Everything else is one of: model the shape, parse the input, or
-  delete the cast. A fleet-wide escape alias re-exported everywhere is the one
-  thing this must not become; the linter cannot see the difference, so review
-  does. Inline `{ [k: string]: unknown }` is not matched — the rule reads type
-  references, not shapes — but `anti-slop/no-unsafe-dictionary-type` below is,
-  and catches it along with aliases and mapped types.
+- `anti-slop/no-unsafe-dictionary-type` — `Record<string, unknown>`,
+  `Record<string, any>`, the inline `{ [k: string]: unknown }` and the aliases
+  and mapped types that spell the same thing. The bag with no keys is how a
+  shape nobody modelled travels: it type-checks everywhere and asserts nothing.
+  It is legal exactly once per boundary, as a **named alias at the module that
+  owns that boundary**, carrying one disable with the why: `type ConfigObject =
+Record<string, unknown>` in `_lib/gate.ts` here, for config files this repo
+  reads and does not own. Everything else is one of: model the shape, parse the
+  input, or delete the cast. A fleet-wide escape alias re-exported everywhere is
+  the one thing this must not become; the linter cannot see the difference, so
+  review does. The rule is [the plugin's](#the-anti-slop-plugin), and it is the
+  only one the base states for these types.
 - `typescript/consistent-type-assertions`, at `assertionStyle: "never"` — an
   assertion tells the compiler to stop checking at the one place the answer was
   still available. An annotation makes the same claim and is checked, and
@@ -251,9 +261,13 @@ unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
   one is on it is a second name on every disable and a reader of one cannot tell
   which fact it is about. It is therefore off at the top level and `error` in the
   suite override, where it is the whole of what still holds.
-- `no-restricted-globals` — `__dirname`, `__filename` and `require`. Every repo
-  here is ESM, where none of the three exists; the entries name the replacement
-  (`import.meta.dir`, `import.meta.url`, `import`) so the diagnostic is the fix.
+- `no-restricted-globals` — `__dirname`, `__filename` and `require`. All three
+  are CommonJS's names. Bun supplies them to an ES module as well, and Node does
+  not, so a file naming one breaks wherever Node loads it: a Playwright spec, a
+  config a Node tool reads, a file this package ships. The entries name the
+  replacement (`import.meta.dir` and `import.meta.path`, or `import.meta.dirname`
+  and `import.meta.filename` in a file Node also runs, and `import`) so the
+  diagnostic is the fix.
 - `eqeqeq`, at `always` with `{ "null": "ignore" }` — `==` coerces instead of
   deciding, and the coercion table is the thing nobody has in their head. It sits
   in `pedantic`, which this base does not take, so it is stated. `null` is the
@@ -344,6 +358,22 @@ the table's suite as a fixture so that the day upstream turns it into a real
 diagnostic, the change is visible here rather than surprising in a consuming
 repo.
 
+Every judgement in the table is off in a suite (the test suffixes, the two
+test-support names, `tests/` and `e2e/`). The judgements are about what the
+compiler may cache or reorder, and `bun test` runs no Babel, so a component a
+case renders is never compiled. `react/rules-of-hooks` and `react/exhaustive-deps`
+stay on there, since a test component still runs under React. In a Playwright
+file (`e2e/` and the `*.spec.ts(x)` suffix) `react/rules-of-hooks` is off as
+well: Playwright hands every fixture a callback named `use`, which the rule reads
+as React's `use`, and no React runs in such a file.
+
+Two of the React plugin's own rules are off everywhere for the compiler's sake:
+`react/jsx-no-constructed-context-values` and
+`react/no-object-type-as-default-prop`. Both ask for a stable identity through
+`useMemo`, which the memo ban refuses, and the compiler gives a context value and
+a default prop that identity itself. In a component the compiler skipped, the
+answer is to end the skip, which `react/todo` reports.
+
 #### The bail-outs
 
 `react/todo` is the last row and the misleading name — it has nothing to do with
@@ -420,7 +450,9 @@ The two carriers differ in what they can see, and both differences are graded in
 The grant is the directory, which is the limit both scoped rules carry: inside
 `hooks/` every spelling of the effect trio is allowed, a barrel re-exporting it
 included, exactly as `env.ts` may re-export what `no-env-access` refuses
-everywhere else.
+everywhere else. A suite is the effect trio's second grant: a component a case
+renders is the fixture's, and a named hook under `hooks/` written for it would be
+production code that one test uses.
 
 ### Overrides
 
@@ -439,15 +471,21 @@ Some facts are true of a file because of where it sits, not what it contains:
         "anti-slop/no-real-timers": "error"
       }
     },
-    { "files": ["src/server/**", "server/**", "apps/api/**"], "rules": { "no-console": "error" } },
     { "files": ["**/env.ts"], "rules": { "anti-slop/no-env-access": "off" } },
     {
       "files": ["**/*.test.ts", "**/*.spec.ts", "**/tests/**", "**/e2e/**"],
       "rules": {
         "anti-slop/no-env-access": "off",
         "typescript/consistent-type-assertions": "off",
-        "typescript/no-unsafe-type-assertion": "error"
+        "typescript/no-unsafe-type-assertion": "error",
+        "typescript/no-unnecessary-type-arguments": "off",
+        "react/purity": "off",
+        "anti-slop/no-unnamed-effects": "off"
       }
+    },
+    {
+      "files": ["**/e2e/**", "**/*.spec.ts", "**/*.spec.tsx"],
+      "rules": { "react/rules-of-hooks": "off" }
     },
     { "files": ["**/routes/**"], "rules": { "anti-slop/no-raw-query-hooks": "error" } },
     {
@@ -463,15 +501,24 @@ Some facts are true of a file because of where it sits, not what it contains:
 
 A test file is where the four scoped rules of [the plugin](#the-anti-slop-plugin)
 apply, and where a helper one `describe` uses belongs inside it rather than
-hoisted to module scope. Server code writes through the structured logger, so
-`no-console` rises from `warn` to `error` on the server globs — a one-shot CLI
-under those paths carries a file-level disable with its reason, which is the shape
-the directive rule below already requires. And `env.ts` is [the one module that
+hoisted to module scope. And `env.ts` is [the one module that
 reads the environment](#the-environment-is-read-in-one-module), while a suite is
 where a variable is set for a spawned process rather than read for its value, and
 where a case asserts about a value nothing typed — which is why that block names
 **directories** as well as suffixes: a suite's helpers are that same code one
-file over, under no suffix at all.
+file over, under no suffix at all. The same block switches off
+`typescript/no-unnecessary-type-arguments`, because bun:test ties `toBe` and
+`toEqual` to the type `expect` inferred, so `expect<unknown>(actual)` is how a
+case compares against a wider value; every React Compiler judgement, of which the
+example shows `react/purity` and the base lists all 22 (see [the
+compiler's section](#what-the-react-compiler-declines-to-optimize)); and
+`anti-slop/no-unnamed-effects`. The Playwright block after it switches off
+`react/rules-of-hooks`, for the fixture callback named `use`.
+
+`no-console` is `error` in every file, stated once at the top level. Server code
+writes through the structured logger, and a one-shot CLI carries a file-level
+disable with its reason, which is the shape the directive rule below already
+requires.
 
 The last two blocks are the [import bans](#the-imports-a-pick-has-already-answered)
 that depend on where a file sits, each a scalar on a rule of its own. `hooks/`
@@ -561,6 +608,29 @@ Denied: `typescript/no-floating-promises`, `typescript/no-misused-promises`,
 `typescript/prefer-nullish-coalescing` — `||` treats `0` and `""` as absent,
 which is a bug wherever either is a legal value, and `??` is what the code
 almost always meant. Nothing here is warned.
+
+Two of the rules that arrive through a tier carry an option:
+
+- `typescript/no-floating-promises` allows bun:test's `mock.module`, by its
+  declaration in `bun:test` (`allowForKnownSafeCalls`), under any local name.
+  bun:test types the call `void | Promise<void>`, so every module mock otherwise
+  reads as a floating promise. A local `mock` with a `module` method, and every
+  other call, are still held. The one hazard this lets through: a mock with an
+  async factory left unawaited races the import it replaces, so a case mocking
+  with one awaits the call.
+- `typescript/no-misused-spread` allows spreading a string. `[...code]` splits by
+  code point, which is what a barcode or a limit counted in code points wants;
+  the rule's case, text a person reads where a code point can be half a
+  character, is one no rule can tell from the rest. A spread of a class instance
+  or a map, which loses data outright, is still refused.
+
+`import/no-unassigned-import` allows `**/*.css`, since a stylesheet is imported
+for what loading it does. And `typescript/consistent-return` is off, because
+`noImplicitReturns` in the shared tsconfig refuses every path that falls off a
+function owing a value and reads exhaustiveness from the types, where the rule
+reads syntax and refuses the exhaustive switch `switch-exhaustiveness-check` asks
+for. In a suite `typescript/no-unnecessary-type-arguments` is off as well (see
+[the overrides](#overrides)).
 
 `no-unnecessary-condition` fires on any check TypeScript already proved
 redundant, which includes real validation at a trust boundary — a parsed JSON
@@ -657,6 +727,13 @@ already did; a fake over a module in this repo grades the fake rather than the
 module, and the real one is right there to call; and a suite that waits for real
 time is slow in proportion to how much of it it waits for and flaky in
 proportion to how loaded the runner is.
+
+What `no-call-log-assertions` accepts in place of a call log is a typed fake at
+the boundary that records the requests it received, asserted on as the whole
+list: `expect(mailer.sent).toEqual([{ to: "a@b.nl", subject: "Invoice" }])`. That
+grades what the code under test asked the outside world for, all of it, in order,
+and it fails when a request is added, dropped or changed, which a count or a
+`toHaveBeenCalledWith` on one call does not.
 
 All four recognise their subject **through the import**, never through the name
 written at the call site. `import { mock as m }`, `import * as bt from
