@@ -939,7 +939,7 @@ own theme and components:
 | Rule                            | Refuses                                                                      | The diagnostic names                                                        |
 | ------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `shadcn/no-raw-colors`          | a palette colour (`bg-pink-500`), or a colour the theme does not declare     | the nearest theme colours, or the declared list                             |
-| `shadcn/no-arbitrary-values`    | an arbitrary value (`p-[13px]`)                                              | the scale class with the same value (`p-3.25`)                              |
+| `shadcn/no-arbitrary-values`    | an arbitrary value outside layout (`p-[13px]`, `text-[11px]`)                | the scale class with the same value (`p-3.25`)                              |
 | `shadcn/no-restyle`             | a class on a shared component beyond placing it (`<Button className="p-4">`) | the component's sizes or variants, and margin or a parent's gap for spacing |
 | `shadcn/no-inline-styles`       | `style={{ … }}` and `<style>`                                                | classes, and a CSS custom property for a value known only at runtime        |
 | `shadcn/no-unknown-classes`     | a class the repo's own Tailwind cannot generate (`rounded-xll`)              | the class it most likely meant                                              |
@@ -949,7 +949,13 @@ Which rules are on, and that a page may only place a shared component, is the
 fleet's and lives in the base: `no-restyle` allows the `layout` category —
 margin, width, position, visibility — and refuses colour, typography, spacing,
 shape, effects and motion, which are the component's through its variants.
-Everything keyed to the repo's own paths is the repo's, in `.oxlintrc.json`:
+`no-arbitrary-values` allows the same category, as upstream's setup does:
+Tailwind's spacing scale is continuous, so `w-[170px]` and `w-42.5` are one
+value spelled two ways, and only the other six categories are theme tokens a
+bracket can step around. `no-inline-styles` is off in the suite scope, the same
+globs the [overrides](#overrides) give a suite's helpers: a fixture's style is
+not a screen, and a DOM test environment loads no stylesheet. Everything keyed
+to the repo's own paths is the repo's, in `.oxlintrc.json`:
 
 ```jsonc
 {
@@ -964,8 +970,11 @@ Everything keyed to the repo's own paths is the repo's, in `.oxlintrc.json`:
     {
       "files": ["src/components/ui/**"],
       "rules": {
-        // A shared component styles itself; the rule is about the pages that use it.
+        // A shared component styles itself, and may need a structural value
+        // such as ring-[3px]; these rules are about the pages that use it.
         "shadcn/no-restyle": "off",
+        "shadcn/no-arbitrary-values": "off",
+        "shadcn/require-static-classes": "off",
       },
     },
   ],
@@ -978,7 +987,11 @@ Everything keyed to the repo's own paths is the repo's, in `.oxlintrc.json`:
   `components/ui` or `src/components/ui` directory under the package root is
   recognised, and `no-restyle` and `require-static-classes` see no component
   anywhere else.
-- The override is a switch-off, so it carries its reason like any other
+- The override is upstream's own adoption setup: `no-restyle`,
+  `no-arbitrary-values` and `require-static-classes` are off where the
+  components are written, and `no-raw-colors` and `no-inline-styles` stay on
+  there. It is a switch-off, so
+  it carries its reason like any other
   ([the repo contract](docs/gates/repo-contract.md)).
 - The theme is found rather than named: without `components.json`, it is the
   stylesheet under the package root that imports `tailwindcss` and declares the
