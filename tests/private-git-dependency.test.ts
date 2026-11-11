@@ -455,7 +455,7 @@ describe("the host keys the action decides against", () => {
   // other case in this file.
   test("is read with the caller's token", async () => {
     const sent: (string | null)[] = [];
-    const server = Bun.serve({
+    using server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
       fetch: (request) => {
@@ -463,26 +463,18 @@ describe("the host keys the action decides against", () => {
         return Response.json(META);
       },
     });
-    try {
-      await knownHosts(server.url.href, "fixture-token");
-      expect(sent).toEqual(["Bearer fixture-token"]);
-    } finally {
-      await server.stop(true);
-    }
+    await knownHosts(server.url.href, "fixture-token");
+    expect(sent).toEqual(["Bearer fixture-token"]);
   });
 
   // A known_hosts line is `<host> <key>`, and both names GitHub answers on have
   // to be on it.
   test("names both endpoints on every key it writes", async () => {
-    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json(META) });
-    try {
-      const written = await knownHosts(server.url.href, "fixture-token");
-      expect(written.split("\n").filter((line) => line !== "")).toHaveLength(META.ssh_keys.length);
-      for (const key of META.ssh_keys) {
-        expect(written).toContain(`github.com,[ssh.github.com]:443 ${key}\n`);
-      }
-    } finally {
-      await server.stop(true);
+    using server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json(META) });
+    const written = await knownHosts(server.url.href, "fixture-token");
+    expect(written.split("\n").filter((line) => line !== "")).toHaveLength(META.ssh_keys.length);
+    for (const key of META.ssh_keys) {
+      expect(written).toContain(`github.com,[ssh.github.com]:443 ${key}\n`);
     }
   });
 });
