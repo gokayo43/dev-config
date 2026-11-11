@@ -156,6 +156,19 @@ function settledImportRule(settled) {
 }
 
 /**
+ * Memoisation is the React Compiler's, which every repo here builds with
+ * (STACK): it inserts the memo a hand-written one approximates, and reads the
+ * dependencies off the code rather than off a list that can disagree with it.
+ */
+export const noManualMemoizationRule = settledImportRule({
+  module: "react",
+  names: new Set(["useMemo", "useCallback"]),
+  description: "Disallow React's hand-written memo hooks, which the React Compiler replaces.",
+  message:
+    "The React Compiler owns memoisation, so drop `{{name}}`: delete the wrapper and use the value directly.",
+});
+
+/**
  * An effect belongs in a named custom hook (STACK's Effects line). The hook's
  * name is the only place that says what the effect is for; written in the
  * component it has no name, and the question of whether Query, the router or

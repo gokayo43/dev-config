@@ -128,64 +128,6 @@ const UNION_CHAIN = Array.from({ length: 26 }, (_, level) =>
 ).join("\n");
 
 const HOUSE = {
-  "no-chained-type-assertions": [
-    {
-      name: "a chain that fabricates the target type is refused",
-      source: `${USER}export const one = input as object as User;`,
-      reports: ["6:20"],
-    },
-    {
-      name: "one assertion is not a chain — the rule counts links, not assertions",
-      source: `${USER}export const one = input as User;`,
-      reports: [],
-    },
-    {
-      name: "a const-only chain is the sanctioned one",
-      source: `export const ids = ["a", "b"] as const;
-export const settings = { retries: 2 } as const;`,
-      reports: [],
-    },
-    {
-      name: "parentheses between the links do not hide the chain",
-      source: `${USER}export const one = (input as object) as User;`,
-      reports: ["6:20"],
-    },
-    {
-      name: "a three-link chain is one diagnostic, at the outermost link",
-      source: `${USER}export const one = input as object as Record<string, string> as User;`,
-      reports: ["6:20"],
-    },
-    {
-      name: "a const assertion beside a real one is still fabrication",
-      source: `${USER}export const one = input as const as User;`,
-      reports: ["6:20"],
-    },
-    {
-      name: "an angle-bracket assertion is the same assertion",
-      source: `${USER}export const one = <User>(<object>input);`,
-      reports: ["6:20"],
-    },
-    {
-      // Why this rule survived the differential against
-      // `typescript/no-unsafe-type-assertion`, which refuses every other
-      // violating case in this block: each link here widens, so the native
-      // rule has nothing unsafe to say and `no-unnecessary-type-assertion`
-      // nothing redundant. A chain up a hierarchy still discards the type it
-      // started from, and this is the only rule in the base that says so.
-      name: "a chain whose every link widens is refused by nothing else",
-      source: `interface Admin {
-  readonly id: string;
-  readonly level: number;
-}
-interface User {
-  readonly id: string;
-}
-declare const admin: Admin;
-export const one = admin as User as object;`,
-      reports: ["9:20"],
-    },
-  ],
-
   "no-known-value-widening": [
     {
       name: "a known object flowing into an open dictionary loses its keys",
@@ -261,6 +203,53 @@ export const handlers: Record<string, Handler> = { key: "start", value: startHan
       name: "an anonymous target the value has a key beyond is still a loss",
       source: `export const settings: { retries: number } = { retries: 2, verbose: true };`,
       reports: ["anonymous object"],
+    },
+    {
+      // A missing key is a compile error under the annotation, so `satisfies`
+      // checks nothing it does not: the target is a closed object type.
+      name: "a record over a fixed set of keys, written in place, through an alias or as a mapped type",
+      source: `type Flow = "pickup" | "ship";
+type Table<V> = Record<Flow, V>;
+export const words: Record<Flow, string> = { pickup: "Ophalen", ship: "Verzenden" };
+export const codes: Readonly<Record<"a" | "b", number>> = { a: 1, b: 2 };
+export const marks: { readonly [Key in Flow]: string } = { pickup: "p", ship: "s" };
+export const rows: Table<number> = { pickup: 1, ship: 2 };`,
+      reports: [],
+    },
+    {
+      name: "a key set with string in it is open, however many literals sit beside it",
+      source: `type Key = "a" | string;
+export const table: Record<Key, number> = { a: 1 };`,
+      reports: ["open dictionary"],
+    },
+    {
+      name: "a key this file cannot resolve is not guessed to be fixed",
+      source: `import type { Flow } from "./flow";
+export const words: Record<Flow, string> = { pickup: "Ophalen" };`,
+      reports: ["open dictionary"],
+    },
+    {
+      name: "a literal key chain is answered once per level, not once per branch",
+      source: `${UNION_CHAIN.replace("type L0 = string;", 'type L0 = "a";')}
+export const table: Record<L25, number> = { a: 1 };`,
+      reports: [],
+    },
+    {
+      // `satisfies` keeps only the keys written, so `labels[code]` with a
+      // `string` code stops compiling (TS7053): the annotation is the honest
+      // type of a table looked up by a value only the run time knows.
+      name: "a dictionary looked up by a key only the run time knows keeps its annotation",
+      source: `const labels: Record<string, string> = { a: "A" };
+let names: Record<string, string>;
+names = { b: "B" };
+export const label = (code: string): string | undefined => labels[code] ?? names[code];`,
+      reports: [],
+    },
+    {
+      name: "a lookup by a literal key is not that, and the headline case still reports",
+      source: `const labels: Record<string, string> = { a: "A" };
+export const first = [labels["a"], labels[\`b\`], labels.c, labels[0]];`,
+      reports: ["open dictionary"],
     },
   ],
 
@@ -557,6 +546,43 @@ export function save<Value>(x: Wrapper): void {
 }`,
       reports: ["Parameter `x`"],
     },
+    {
+      // `lib.es5.d.ts` types a rejection reason `any`, so the written
+      // `unknown` is the safe spelling, and refusing it pushes toward `any`.
+      name: "a rejection handler's reason, written in place as catch's first or then's second argument",
+      source: `declare const pending: Promise<number>;
+export const caught = pending.catch((error: unknown) => String(error));
+export const settled = pending.then(
+  (value) => value,
+  (reason: unknown) => String(reason),
+);
+export const optional = pending?.catch(function (error: unknown) {
+  return String(error);
+});`,
+      reports: [],
+    },
+    {
+      name: "a type guard is no rejection handler, and still reports",
+      source: `export const isCount = (value: unknown): value is number => typeof value === "number";`,
+      reports: ["Parameter `value`"],
+    },
+    {
+      name: "only that reason: a handler passed by name, then's first argument and a second parameter still report",
+      source: `declare const pending: Promise<unknown>;
+declare const queue: { catch(label: string, run: (error: unknown) => void): void };
+const onError = (error: unknown): string => String(error);
+export const named = pending.catch(onError);
+export const fulfilled = pending.then((value: unknown) => value);
+export const extra = pending.catch((error: unknown, more: unknown) => [error, more]);
+queue.catch("x", (failure: unknown) => void failure);`,
+      reports: [
+        "Parameter `error`",
+        "Parameter `error`",
+        "Parameter `value`",
+        "Parameter `more`",
+        "Parameter `failure`",
+      ],
+    },
   ],
 
   "no-unknown-returns": [
@@ -662,6 +688,29 @@ export function f(): string {
   return { cause: input };
 }`,
       reports: [],
+    },
+    {
+      // `() => Promise<Order>` is not assignable to `() => Promise<void>`,
+      // so a promise of `unknown` is the widest honest type of an async
+      // callback whose result the receiver ignores.
+      name: "a function type promising unknown is a callback whose result is ignored",
+      source: `type Later = Promise<unknown>;
+export type Save = () => Promise<unknown>;
+export type Retry = () => Later;
+export interface Props {
+  readonly onSave: (id: string) => PromiseLike<unknown>;
+}
+export declare function run(task: () => Promise<unknown>): void;`,
+      reports: [],
+    },
+    {
+      name: "plain unknown from a function type, a method signature's promise and an arrow's still report",
+      source: `export type Load = () => unknown;
+export interface Port {
+  load(): Promise<unknown>;
+}
+export const fetchIt = async (): Promise<unknown> => await Promise.resolve(1);`,
+      reports: ["1:26", "3:11", "5:34"],
     },
   ],
 
@@ -900,6 +949,20 @@ describe("anti-slop rules", () => {
       left.localeCompare(right),
     );
     expect(enabled).toEqual(defined);
+  });
+
+  // README states the rule set as tables, one row per rule, and a count or a
+  // list in prose is what drifted before. Held to the plugin rather than to
+  // the base, since the test above already holds those two equal.
+  test("README's anti-slop tables name every rule the plugin defines, once", async () => {
+    const readme = await Bun.file(join(REPO, "README.md")).text();
+    const section = readme.slice(
+      readme.indexOf("### The anti-slop plugin"),
+      readme.indexOf("### What the linter cannot see"),
+    );
+    const rows = [...section.matchAll(/^\| `([a-z][a-z-]*)` +\|/gmu)].map(([, name = ""]) => name);
+    const order = (left: string, right: string): number => left.localeCompare(right);
+    expect(rows.toSorted(order)).toEqual(Object.keys(antiSlop.rules).toSorted(order));
   });
 
   test("and the unscoped ones fire in an ordinary source file", async () => {

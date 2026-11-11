@@ -225,15 +225,18 @@ a change to a rule usually lands here too.
   clean one. A gate without one is a claim. `build-cache.test.ts` is the build
   action's, running `build.sh` against a fixture repository whose build records
   what the cache held when it started. `anti-slop.test.ts`,
-  `anti-slop-test-smells.test.ts`, `anti-slop-env.test.ts` and
+  `anti-slop-test-smells.test.ts`, `anti-slop-test-support.test.ts`,
+  `anti-slop-env.test.ts` and
   `lint-policy.test.ts` hold every lint rule in `anti-slop/` to the same bar — a
   block of cases per rule, split where the base splits, since the rules scoped to
-  test files have a second question to answer about every case, the one scoped
-  away from `env.ts` and from a suite has a third, the two a directory grants or
-  scopes have a fourth, and the ones that apply everywhere have none. None of
-  them states how many there are: `anti-slop.test.ts` asks the plugin and the
-  base for their rule names and requires the two sets to be equal, which is the
-  check a count would replace with a number to forget. All of them run through
+  test files have a second question to answer about every case, the two the
+  suite scope turns on or off read that scope's globs off the base, the one
+  scoped away from `env.ts` and from a suite has a third, the two a directory
+  grants or scopes have a fourth, and the ones that apply everywhere have none.
+  None of them states how many there are: `anti-slop.test.ts` asks the plugin
+  and the base for their rule names and requires the two sets to be equal, and
+  README's anti-slop tables to name the same set, which is the check a count
+  would replace with a number to forget. All of them run through
   `lint-fixture.ts`,
   which owns the case shape and lints a whole block in one oxlint spawn, and
   refuses a run whose plugin threw or whose exit status and diagnostics

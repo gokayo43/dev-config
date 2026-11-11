@@ -83,13 +83,12 @@
     // Only a ban with no exception can live here: an override
     // REPLACES the whole list for the files it matches — a consuming repo's own
     // entries included — so a ban a file's position decides is a plugin rule
-    // instead, whose scalar setting replaces only itself. `no-unnamed-effects`
-    // and `no-raw-query-hooks` below are the two that needed it.
+    // instead, whose scalar setting replaces only itself. `no-unnamed-effects`,
+    // `no-raw-query-hooks` and `no-test-support-imports` below are the ones that
+    // needed it.
     //
-    // Memoisation is the React Compiler's, which every repo here builds with
-    // (STACK): it inserts the memo a hand-written one approximates, and reads
-    // the dependencies off the code rather than off a list that can disagree
-    // with it. Each name gets its own entry so each carries its own message.
+    // The memo pair is not here either, though it holds in every file:
+    // `anti-slop/no-manual-memoization` below carries it, and says why.
     //
     // `bun:test`'s per-case hooks are the setup nothing in the case names (the
     // testing rules' per-case-setup line): a reader has to hold a hook written
@@ -98,15 +97,10 @@
     // `afterAll` stay: an expensive resource no case mutates is what they are
     // for.
     //
-    // Both entries refuse a type-only import of the name as well, which this
-    // rule gives no way to allow. Neither name has a use as a type.
+    // Every entry refuses a type-only import of its name as well, which this
+    // rule gives no way to allow. None of these names has a use as a type.
     "no-restricted-imports": [
       "error",
-      {
-        "name": "react",
-        "importNames": ["useMemo", "useCallback"],
-        "message": "React Compiler owns memoisation — delete the wrapper and use the value directly."
-      },
       {
         "name": "bun:test",
         "importNames": ["beforeEach", "afterEach"],
@@ -255,12 +249,22 @@
     "typescript/no-unsafe-member-access": "error",
     "typescript/no-unsafe-return": "error",
     "typescript/prefer-nullish-coalescing": "error",
-    "anti-slop/no-chained-type-assertions": "error",
+    // `typescript/consistent-type-assertions` above refuses every assertion in
+    // source, so every chain this rule would report there is already two
+    // diagnostics of that rule. It is stated in the suite override below, where
+    // that rule is off and a chain whose every link widens is otherwise unseen.
+    "anti-slop/no-chained-type-assertions": "off",
     "anti-slop/no-env-access": "error",
     "anti-slop/no-known-value-widening": "error",
+    // Everywhere, and a plugin rule although no position decides it: as a
+    // `no-restricted-imports` entry it refused `import * as React from "react"`
+    // before anything was read off it, which is how shadcn's components import
+    // React, and it had no way to let a type-only import through.
+    "anti-slop/no-manual-memoization": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-test-support-imports": "error",
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
@@ -343,6 +347,15 @@
         // or narrows unsafely is still a hole, and this is the only scope where
         // saying so does not repeat the rule above.
         "typescript/no-unsafe-type-assertion": "error",
+
+        // The one chain the rule above does not see, every link of which
+        // widens (`admin as User as object`); a chain with a narrowing link
+        // draws both, since telling the two apart needs the type checker.
+        "anti-slop/no-chained-type-assertions": "error",
+
+        // A suite and its support files are where a harness or a fixture is
+        // imported; the rule is for code that ships.
+        "anti-slop/no-test-support-imports": "off",
 
         // bun:test types `expect` as `<T = unknown>(actual: T)` and its `toBe`
         // and `toEqual` as taking that same `T`, so a case comparing a value

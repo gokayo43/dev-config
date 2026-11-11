@@ -453,14 +453,14 @@ this is where they stop being a thing to remember. Each diagnostic names **what
 the import lost to**, because it is the only place the loser of that decision is
 standing:
 
-| Import                                                 | From                    | Where                 | Instead                                                             | Carrier                        |
-| ------------------------------------------------------ | ----------------------- | --------------------- | ------------------------------------------------------------------- | ------------------------------ |
-| `useMemo`, `useCallback`                               | `react`                 | everywhere            | the React Compiler inserts the memo; delete the wrapper             | `no-restricted-imports`        |
-| `beforeEach`, `afterEach`                              | `bun:test`              | everywhere            | a call the case makes itself, and `await using`                     | `no-restricted-imports`        |
-| `test`                                                 | `@playwright/test`      | everywhere            | the invariant sweep's `test`, which sweeps each page in its context | `no-restricted-imports`        |
-| `assert`, the default export                           | `fast-check`            | everywhere            | the property budget's `check`, which the run can turn up            | `no-restricted-imports`        |
-| `useEffect`, `useLayoutEffect`, `useSyncExternalStore` | `react`                 | outside `**/hooks/**` | a named hook whose name says what it subscribes to                  | `anti-slop/no-unnamed-effects` |
-| `useQuery`, `useInfiniteQuery`                         | `@tanstack/react-query` | under `**/routes/**`  | the loader's `ensureQueryData` and `useSuspenseQuery`               | `anti-slop/no-raw-query-hooks` |
+| Import                                                 | From                    | Where                 | Instead                                                             | Carrier                           |
+| ------------------------------------------------------ | ----------------------- | --------------------- | ------------------------------------------------------------------- | --------------------------------- |
+| `useMemo`, `useCallback`                               | `react`                 | everywhere            | the React Compiler inserts the memo; delete the wrapper             | `anti-slop/no-manual-memoization` |
+| `beforeEach`, `afterEach`                              | `bun:test`              | everywhere            | a call the case makes itself, and `await using`                     | `no-restricted-imports`           |
+| `test`                                                 | `@playwright/test`      | everywhere            | the invariant sweep's `test`, which sweeps each page in its context | `no-restricted-imports`           |
+| `assert`, the default export                           | `fast-check`            | everywhere            | the property budget's `check`, which the run can turn up            | `no-restricted-imports`           |
+| `useEffect`, `useLayoutEffect`, `useSyncExternalStore` | `react`                 | outside `**/hooks/**` | a named hook whose name says what it subscribes to                  | `anti-slop/no-unnamed-effects`    |
+| `useQuery`, `useInfiniteQuery`                         | `@tanstack/react-query` | under `**/routes/**`  | the loader's `ensureQueryData` and `useSuspenseQuery`               | `anti-slop/no-raw-query-hooks`    |
 
 The suspense pair, `beforeAll`/`afterAll`, Playwright's `expect` and
 `defineConfig`, fast-check's generators, and every other React hook are
@@ -475,6 +475,12 @@ block reached. A plugin rule's scalar `"off"` replaces only itself, so the two
 positional bans are rules of the plugin and no block in the base redefines a
 list-shaped rule at all. `tests/oxlint-base.test.ts` holds it to both halves.
 
+The memo pair holds in every file and is a plugin rule anyway. As a
+`no-restricted-imports` entry it refused `import * as React from "react"`
+before anything was read off it, which is how shadcn's components import React,
+and it refused a type-only import of either name. The plugin rule refuses
+`React.useMemo` and lets the bare namespace import through.
+
 The two carriers differ in what they can see, and both differences are graded in
 `tests/lint-policy.test.ts`:
 
@@ -487,8 +493,8 @@ The two carriers differ in what they can see, and both differences are graded in
 - `no-restricted-imports` refuses a namespace import and a renamed one, a
   default import where the list names `default`, and a re-export through a
   barrel. It refuses a type-only import as well, which it gives no way to
-  allow: none of `useMemo`, `beforeEach`, Playwright's `test` and
-  fast-check's `assert` has a use as a type, so that costs nothing here — and
+  allow: none of `beforeEach`, Playwright's `test` and fast-check's `assert`
+  has a use as a type, so that costs nothing here — and
   the day a name on that list does, it is the carrier that has to change. What
   it does not see is a dynamic `await import`, which the plugin rules do.
 
@@ -507,7 +513,14 @@ Some facts are true of a file because of where it sits, not what it contains:
 {
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*"
+      ],
       "rules": {
         "unicorn/consistent-function-scoping": "off",
         "anti-slop/no-call-log-assertions": "error",
@@ -518,11 +531,22 @@ Some facts are true of a file because of where it sits, not what it contains:
     },
     { "files": ["**/env.ts"], "rules": { "anti-slop/no-env-access": "off" } },
     {
-      "files": ["**/*.test.ts", "**/*.spec.ts", "**/tests/**", "**/e2e/**"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*",
+        "**/tests/**",
+        "**/e2e/**"
+      ],
       "rules": {
         "anti-slop/no-env-access": "off",
         "typescript/consistent-type-assertions": "off",
         "typescript/no-unsafe-type-assertion": "error",
+        "anti-slop/no-chained-type-assertions": "error",
+        "anti-slop/no-test-support-imports": "off",
         "typescript/no-unnecessary-type-arguments": "off",
         "react/purity": "off",
         "anti-slop/no-unnamed-effects": "off"
@@ -544,9 +568,15 @@ Some facts are true of a file because of where it sits, not what it contains:
 }
 ```
 
-A test file is where the four scoped rules of [the plugin](#the-anti-slop-plugin)
+A test file is where the plugin's [test-smell rules](#the-anti-slop-plugin)
 apply, and where a helper one `describe` uses belongs inside it rather than
-hoisted to module scope. And `env.ts` is [the one module that
+hoisted to module scope. A test-support file, `*.test-harness.*` or
+`*.fixture.*`, is in both test blocks wherever it lives, so a harness or a
+fixture is graded as the test code it is, and
+`anti-slop/no-test-support-imports` refuses an import of one from any file
+outside the suite block: production, and a story or a seed script too. A repo
+that wants one of those to import a fixture switches the rule off for that glob
+in its own config, with its reason. And `env.ts` is [the one module that
 reads the environment](#the-environment-is-read-in-one-module), while a suite is
 where a variable is set for a spawned process rather than read for its value, and
 where a case asserts about a value nothing typed — which is why that block names
@@ -557,8 +587,11 @@ file over, under no suffix at all. The same block switches off
 case compares against a wider value; every React Compiler judgement, of which the
 example shows `react/purity` and the base lists all 22 (see [the
 compiler's section](#what-the-react-compiler-declines-to-optimize)); and
-`anti-slop/no-unnamed-effects`. The Playwright block after it switches off
-`react/rules-of-hooks`, for the fixture callback named `use`.
+`anti-slop/no-unnamed-effects`. It is also the one place
+`anti-slop/no-chained-type-assertions` is on, since everywhere else
+`consistent-type-assertions` already refuses each link of a chain. The
+Playwright block after it switches off `react/rules-of-hooks`, for the fixture
+callback named `use`.
 
 `no-console` is `error` in every file, stated once at the top level. Server code
 writes through the structured logger, and a one-shot CLI carries a file-level
@@ -615,9 +648,10 @@ nobody in the consuming repo asked.
 One thing to know before writing one: a rule's configuration is **replaced across
 `extends`**, not merged, so a repo stating `no-restricted-imports` or
 `no-restricted-globals` of its own drops every entry the base states for it — the
-memoisation and `bun:test` bans, and the three ESM globals, become unenforced in
-that repo, silently. (The two positional bans are unaffected: they are rules of
-their own, and a repo redefining a list-shaped rule cannot reach them.) Restate
+`bun:test`, Playwright and fast-check bans, and the three ESM globals, become
+unenforced in that repo, silently. (The memo ban and the two positional bans are
+unaffected: they are rules of their own, and a repo redefining a list-shaped
+rule cannot reach them.) Restate
 the entries beside your own until
 [dev-config#86](https://github.com/gokayo43/dev-config/issues/86) makes that a
 gate rather than a thing to remember. What the base does carry is the other kind —
@@ -709,41 +743,75 @@ function that hands `unknown` back, and a `Record<string, unknown>` value
 contract all pass a fully type-aware run — and assertion laundering is precisely
 the move an agent makes to silence the rules above. These rules close that,
 shipped in this package as an oxlint JS plugin and enabled at `error` by the
-base:
+base, everywhere but the first, which is on in the suite scope alone:
 
-| Rule                         | What it rejects                                                        |
-| ---------------------------- | ---------------------------------------------------------------------- |
-| `no-chained-type-assertions` | `x as object as User` — nested assertions that fabricate evidence      |
-| `no-known-value-widening`    | a broad annotation over a known initializer; use `satisfies`           |
-| `no-unsafe-dictionary-type`  | dictionary contracts whose value type is `unknown`/`any`/`object`/`{}` |
-| `no-unknown-type-aliases`    | an alias that only renames `unknown`                                   |
-| `no-object-parameters`       | the broad `object` type on an input                                    |
-| `no-unknown-parameters`      | an `unknown` parameter, except the `cause` convention                  |
-| `no-unknown-returns`         | a declared return of `unknown` or `Promise<unknown>`                   |
-| `no-reflect-apply`           | `Reflect.apply`, which launders past a typed call                      |
-| `no-reflect-get`             | `Reflect.get`, which answers `any` for a property read                 |
+| Rule                         | What it rejects                                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| `no-chained-type-assertions` | `x as object as User` — nested assertions that fabricate evidence                 |
+| `no-known-value-widening`    | a broad annotation over a known initializer; use `satisfies`                      |
+| `no-unsafe-dictionary-type`  | dictionary contracts whose value type is `unknown`/`any`/`object`/`{}`            |
+| `no-unknown-type-aliases`    | an alias that only renames `unknown`                                              |
+| `no-object-parameters`       | the broad `object` type on an input                                               |
+| `no-unknown-parameters`      | an `unknown` parameter, except the `cause` convention and a rejection reason      |
+| `no-unknown-returns`         | a declared return of `unknown` or `Promise<unknown>`, except a callback's promise |
+| `no-reflect-apply`           | `Reflect.apply`, which launders past a typed call                                 |
+| `no-reflect-get`             | `Reflect.get`, which answers `any` for a property read                            |
+
+Three exemptions keep these rules off code that is already correct, each in the
+narrowest form that covers it:
+
+- `no-unknown-parameters` leaves the first parameter of a rejection handler
+  written in place: a function passed directly as `.catch`'s first argument or
+  `.then`'s second. TypeScript types a rejection reason `any`, so `unknown` is
+  the safe spelling there. A handler held in a variable and passed by name, a
+  further parameter of the handler, and a type guard still report: a guard is
+  an unchecked claim, and the stack's answer is a schema's own guard.
+- `no-unknown-returns` leaves a function type (`() => Promise<unknown>`, or
+  `PromiseLike`) whose return is a promise of `unknown`: that is the widest
+  honest type of an async callback whose result the receiver ignores, since
+  TypeScript will not take `() => Promise<Order>` where `() => Promise<void>` is
+  asked for. A function type returning plain `unknown` still reports, because
+  `() => void` is its honest spelling, and so does a method signature, which is
+  how a port declares what it hands back.
+- `no-known-value-widening` leaves a record over a fixed set of keys
+  (`Record<"a" | "b", V>`, the same through an alias, or a mapped type over one),
+  whose annotation checks exactly what `satisfies` would. It also leaves a
+  dictionary binding looked up somewhere in the file by a key only the run time
+  knows (`labels[code]`): `satisfies` keeps only the keys written, so that
+  lookup stops compiling (TS7053). A key the file imports rather than declares
+  is not known to be fixed and still reports, as does a table indexed only in
+  another module.
 
 Where a ported rule overlapped oxlint's own `typescript/no-unsafe-type-assertion`
 both were run over the same fixtures and only the stronger one kept.
 
-Two more rules are this repo's own, and answer a different question again — not
-what a type says, but which import a settled pick already answered:
+These are this repo's own, and answer a different question again — not what a
+type says, but which import is already answered:
 
-| Rule                 | What it rejects                                                            |
-| -------------------- | -------------------------------------------------------------------------- |
-| `no-unnamed-effects` | React's effect trio outside `hooks/`, where the hook's name states the job |
-| `no-raw-query-hooks` | `useQuery`/`useInfiniteQuery` in a route, whose data the loader owns       |
+| Rule                      | What it rejects                                                              |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `no-manual-memoization`   | `useMemo`/`useCallback`, whose memo the React Compiler inserts               |
+| `no-unnamed-effects`      | React's effect trio outside `hooks/`, where the hook's name states the job   |
+| `no-raw-query-hooks`      | `useQuery`/`useInfiniteQuery` in a route, whose data the loader owns         |
+| `no-test-support-imports` | an import of a `*.test-harness.*` or `*.fixture.*` file from outside a suite |
 
-They are rules rather than `no-restricted-imports` entries because their answer
-depends on where the file sits — see [the two
-carriers](#the-imports-a-pick-has-already-answered) for why that decides it — and
+The first three are rules rather than `no-restricted-imports` entries for the
+reasons [the two carriers](#the-imports-a-pick-has-already-answered) gives, and
 each follows its names through every spelling that reaches the value without
 importing it, a re-exporting barrel included, while leaving a type-only import
-alone.
+alone. `no-test-support-imports` reads the specifier instead: its last path
+segment carrying `.test-harness` or `.fixture` as a dot-separated part
+(`./order.fixture`, `./order.fixture.ts`, `@/tests/page.test-harness`), in an
+import, a re-export, a dynamic import or an import type, type-only ones
+included.
 
-`no-chained-type-assertions` is the one that overlaps and stays. The native
-rule covers every chain that fabricates a type, because such a chain has a
-narrowing link in it for the checker to refuse. A chain whose every link widens
+`no-chained-type-assertions` is the one that overlaps and stays, in the suite
+scope alone: in source `consistent-type-assertions` refuses every link of every
+chain, so this rule would only repeat it. In a suite the native rule that is
+left, `no-unsafe-type-assertion`, covers every chain that fabricates a type,
+because such a chain has a narrowing link in it for the checker to refuse, and
+such a chain draws both rules, since telling it apart from the next shape needs
+type information the plugin does not have. A chain whose every link widens
 has none: `admin as User as object` draws nothing from the native rule, nothing
 from `no-unnecessary-type-assertion`, and nothing else in the base says the type
 it started from was discarded. Widening a binding and asserting it back needs no
@@ -751,8 +819,10 @@ rule of its own — that is an assertion to a narrower type by construction, whi
 is the whole of what the native rule reads, and `oxlint-base.test.ts` grades the
 base on those shapes directly.
 
-Four more are enabled only over `*.test.ts`, `*.test.tsx`, `*.spec.ts` and
-`*.spec.tsx`, because every one of them is ordinary code anywhere else: a source
+The test-smell rules below are enabled only over test files (`*.test.ts`,
+`*.test.tsx`, `*.spec.ts`, `*.spec.tsx`, and the support files
+`*.test-harness.*` and `*.fixture.*`), because every one of them is ordinary
+code anywhere else: a source
 file counts calls, sleeps, reaches into a module of its own and hands a function
 to `expect` in a helper, and none of that is a smell until it is a test's whole
 evidence.
@@ -761,7 +831,7 @@ evidence.
 | ------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `no-call-log-assertions` | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what |
 | `no-mock-assertions`     | `expect()` on a stand-in, or on anything read through one                                            |
-| `no-local-module-mocks`  | `mock.module()` or `spyOn()` over a relative import                                                  |
+| `no-local-module-mocks`  | `mock.module()` or `spyOn()` over a relative or aliased import                                       |
 | `no-real-timers`         | the timer globals, `Bun.sleep`, and the `node:timers` modules                                        |
 
 What they have in common is that each of them passes against an implementation
@@ -780,7 +850,7 @@ grades what the code under test asked the outside world for, all of it, in order
 and it fails when a request is added, dropped or changed, which a count or a
 `toHaveBeenCalledWith` on one call does not.
 
-All four recognise their subject **through the import**, never through the name
+All of them recognise their subject **through the import**, never through the name
 written at the call site. `import { mock as m }`, `import * as bt from
 "bun:test"`, `import bt from "bun:test"` — a default import is the same object
 under Bun's CJS interop — and vitest's or jest's spelling of the same call are
@@ -799,13 +869,20 @@ spelling behind forever. Calling the stand-in is the other side of that line:
 thing about a stand-in worth asserting on, and an object of the test's own with
 a `mock` property on it is not a stand-in at all. For `no-local-module-mocks`
 the line is the specifier: a package is a true external boundary, so
-`mock.module("stripe", …)` is not what that rule is about.
+`mock.module("stripe", …)` is not what that rule is about. A specifier starting
+`./`, `../`, `@/`, `~/` or `#` is this repo's own; a scoped package
+(`@scope/pkg`) and a `node:` or `bun:` builtin are not. The rule reads one file
+and no config, so an alias a repo spells another way is not seen, and a `#`
+subpath import that `package.json` maps to an external package is read as ours.
 
 #### The environment is read in one module
 
 `no-env-access` answers a different question from the rules above: where
-configuration comes from. It refuses `process.env`, `Bun.env` and
-`import.meta.env` everywhere except `**/env.ts` and a suite.
+configuration comes from.
+
+| Rule            | What it rejects                                                                |
+| --------------- | ------------------------------------------------------------------------------ |
+| `no-env-access` | `process.env`, `Bun.env` and `import.meta.env` outside `**/env.ts` and a suite |
 
 | Where           | What it is                                                              |
 | --------------- | ----------------------------------------------------------------------- |
@@ -931,13 +1008,21 @@ the choke rules above stay per-repo. There is nowhere else for it to go
 either. The base enables every rule this plugin defines, and the suite requires
 those two sets to be equal, so the plugin has no opt-in half to put it in.
 
-One rule answers differently from upstream, because a rule at `error` across
+These rules answer differently from upstream, because a rule at `error` across
 the fleet must refuse something the author can change:
 
 - **`no-known-value-widening`** does not call an anonymous object type a
   widening when it names exactly the keys of the literal below it. Upstream
   does, and its only escapes are deleting the return type or inventing a name
-  for it — the opposite of what this repo asks for everywhere else.
+  for it — the opposite of what this repo asks for everywhere else. Nor does it
+  call a record over a fixed set of keys one, or a dictionary looked up by a
+  run-time key, for the reasons in the exemptions above.
+- **`no-unknown-parameters`** leaves a rejection handler's reason, and
+  **`no-unknown-returns`** a function type's promise of `unknown`, both above.
+
+Upstream ships no fixture for the newer three shapes, so
+`tests/anti-slop-upstream.test.ts` still runs every upstream case unchanged and
+records only the anonymous-object one.
 
 Two facts about how it is wired, both load-bearing:
 
@@ -957,11 +1042,18 @@ upstream's own fixtures for the six rules it ships tests for, run as a
 differential oracle against this port. It also asks the plugin and the base for
 their rule names and requires them to match: a rule the base does not enable is
 a rule no repo runs, and a name in the base the plugin does not define is a rule
-nobody notices is missing.
+nobody notices is missing. And it requires the tables in this section to name
+the plugin's rules, each once, so no count or list in prose can drift from them.
 
-`tests/anti-slop-test-smells.test.ts` is the other four, which have a second
+`tests/anti-slop-test-support.test.ts` is the two rules the suite scope
+decides, `no-chained-type-assertions` and `no-test-support-imports`. It reads
+that scope's globs off the base and grades a file under each of them as test
+code, a source file, a story and a seed script as code that ships, and an
+import of each support-file name the base carries as refused.
+
+`tests/anti-slop-test-smells.test.ts` is the test-smell rules, which have a second
 question to answer about every case — the base has to catch them in a
-`.test.ts`, a `.spec.ts` and both `.tsx` spellings, and to say nothing about the
+`.test.ts`, a `.spec.ts`, both `.tsx` spellings and both support-file names, and to say nothing about the
 same source in a `.ts` or a `.tsx`, since a rule that fired everywhere is one
 every repo would turn off. Most of its cases are the spellings that would
 otherwise turn a rule off: an `as` on an import, a namespace, an optional link,

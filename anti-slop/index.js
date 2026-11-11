@@ -23,7 +23,12 @@ import { noKnownValueWideningRule } from "./rules/no-known-value-widening.js";
 import { noRealTimersRule } from "./rules/no-real-timers.js";
 import { noObjectParametersRule, noUnknownParametersRule } from "./rules/parameter-types.js";
 import { noReflectApplyRule, noReflectGetRule } from "./rules/reflect.js";
-import { noRawQueryHooksRule, noUnnamedEffectsRule } from "./rules/settled-imports.js";
+import {
+  noManualMemoizationRule,
+  noRawQueryHooksRule,
+  noUnnamedEffectsRule,
+} from "./rules/settled-imports.js";
+import { noTestSupportImportsRule } from "./rules/no-test-support-imports.js";
 import { noUnknownReturnsRule } from "./rules/no-unknown-returns.js";
 import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases.js";
 import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.js";
@@ -37,12 +42,14 @@ const antiSlop = {
     "no-env-access": noEnvAccessRule,
     "no-known-value-widening": noKnownValueWideningRule,
     "no-local-module-mocks": noLocalModuleMocksRule,
+    "no-manual-memoization": noManualMemoizationRule,
     "no-mock-assertions": noMockAssertionsRule,
     "no-object-parameters": noObjectParametersRule,
     "no-raw-query-hooks": noRawQueryHooksRule,
     "no-real-timers": noRealTimersRule,
     "no-reflect-apply": noReflectApplyRule,
     "no-reflect-get": noReflectGetRule,
+    "no-test-support-imports": noTestSupportImportsRule,
     "no-unknown-parameters": noUnknownParametersRule,
     "no-unknown-returns": noUnknownReturnsRule,
     "no-unknown-type-aliases": noUnknownTypeAliasesRule,

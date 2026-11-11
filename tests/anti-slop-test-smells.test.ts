@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { baseConfig, type Case, cases, lines, underBase } from "./lint-fixture.ts";
 
 /**
- * The four rules the base enables only over test files, because every one of
+ * The rules the base enables only over test files, because every one of
  * them is ordinary code anywhere else: a source file counts calls, sleeps,
  * reads a `.mock` property off something of its own and passes a function to
  * `expect` in a helper, and none of that is a smell until it is a test's whole
@@ -369,6 +369,27 @@ spyOn(target, "run");`,
       reports: ["4:1"],
     },
     {
+      // The fleet's path aliases for its own source, and `package.json`'s
+      // subpath imports: each names a module of this repo as surely as `./`.
+      name: "an aliased specifier is ours as much as a relative one, on both forms",
+      source: `import { mock, spyOn } from "bun:test";
+import * as service from "@/service";
+mock.module("@/service", () => ({ run: () => 1 }));
+mock.module("~/db/client", () => ({ query: () => [] }));
+mock.module("#config", () => ({ port: 1 }));
+spyOn(service, "run");`,
+      reports: ["3:1", "4:1", "5:1", "6:1"],
+    },
+    {
+      name: "a scoped package starts with @ too, and is still a package",
+      source: `import { mock, spyOn } from "bun:test";
+import * as stripe from "@stripe/stripe-js";
+mock.module("@scope/pkg", () => ({ run: () => 1 }));
+mock.module("bun:sqlite", () => ({ Database: class {} }));
+spyOn(stripe, "loadStripe");`,
+      reports: [],
+    },
+    {
       name: "a spy over a package's namespace stays at the boundary",
       source: `import { spyOn } from "bun:test";
 import * as fs from "node:fs";
@@ -479,19 +500,29 @@ test("reads", async () => {
   ],
 } satisfies Record<string, readonly Case[]>;
 
-/** Every suffix the base grades as a test file — a rule enabled for one and not the rest is a hole. */
-const IN_TEST_FILES = [".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx"];
+/**
+ * Every suffix the base grades as a test file, the support-file names among
+ * them: a rule enabled for one and not the rest is a hole.
+ */
+const IN_TEST_FILES = [
+  ".test.ts",
+  ".spec.ts",
+  ".test.tsx",
+  ".spec.tsx",
+  ".test-harness.ts",
+  ".fixture.ts",
+];
 
-/** And the ones it does not, which is the half that keeps the four out of source files. */
+/** And the ones it does not, which is the half that keeps them out of source files. */
 const NOT_TEST_FILES = [".ts", ".tsx"];
 
 describe("the test-smell rules", () => {
   for (const [rule, list] of Object.entries(IN_TESTS)) cases(rule, list);
 
-  // Per suffix rather than over all four at once: the base names them one by
+  // Per suffix rather than over all of them at once: the base names them one by
   // one, so a rule reaching `.test.ts` and not `.spec.tsx` is a hole a single
   // pooled assertion would report as covered.
-  test.each(IN_TEST_FILES)("the base enables all four in a %s", async (suffix) => {
+  test.each(IN_TEST_FILES)("the base enables every one in a %s", async (suffix) => {
     const wired = (await lines(underBase(suffix, IN_TESTS))).join("\n");
     for (const rule of Object.keys(IN_TESTS)) {
       expect(wired).toContain(`anti-slop(${rule})`);
