@@ -1,6 +1,7 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
 /** @import { Substitutions, TypeEnvironment } from "../shared/types.js" */
 
+import { memberName } from "../shared/syntax.js";
 import { createTypeEnvironment, resolveType } from "../shared/types.js";
 
 /** @typedef {ESTree.ParamPattern} Parameter */
@@ -65,6 +66,7 @@ function parameterName(parameter, sourceCode, written) {
  * @property {string} description
  * @property {string} message
  * @property {string} [exemptName] The one parameter name the annotation is a convention on.
+ * @property {(owner: ParameterOwner, index: number) => boolean} [exemptPosition] Where the language itself puts the type.
  */
 
 /**
@@ -111,7 +113,8 @@ function bannedParameterTypeRule(banned) {
 
       /** @param {ParameterOwner} node */
       const checkParameters = (node) => {
-        for (const parameter of node.params) {
+        for (const [index, parameter] of node.params.entries()) {
+          if (banned.exemptPosition?.(node, index) === true) continue;
           const annotation = parameterAnnotation(parameter);
           if (annotation === null || annotation === undefined) continue;
           if (!accepts(annotation.typeAnnotation, new Map(), new Set())) continue;
@@ -154,13 +157,33 @@ export const noObjectParametersRule = bannedParameterTypeRule({
     "Parameter `{{parameter}}` accepts the broad `object` type. Use the expected owner type or decode the external input at its boundary.",
 });
 
-/** Disallow unknown inputs except explicitly named error-cause enrichment. */
+/**
+ * Whether a parameter is the reason of a rejection handler written in place:
+ * the first parameter of a function passed directly as `.catch`'s first
+ * argument or `.then`'s second. TypeScript types that reason `any`
+ * (`lib.es5.d.ts`), so `unknown` there is the safe spelling rather than an
+ * undecoded input. A handler held in a variable and passed by name is a
+ * function of its own, and still reports.
+ * @param {ParameterOwner} owner
+ * @param {number} index
+ * @returns {boolean}
+ */
+function isRejectionReason(owner, index) {
+  const call = owner.parent;
+  if (index !== 0 || call.type !== "CallExpression") return false;
+  const method = memberName(call.callee);
+  const position = call.arguments.findIndex((argument) => argument === owner);
+  return (method === "catch" && position === 0) || (method === "then" && position === 1);
+}
+
+/** Disallow unknown inputs except explicitly named error-cause enrichment and a rejection reason. */
 export const noUnknownParametersRule = bannedParameterTypeRule({
   node: "TSUnknownKeyword",
   written: "unknown",
   exemptName: "cause",
+  exemptPosition: isRejectionReason,
   description:
-    "Disallow explicitly unknown function parameters except `cause`; decode unknown input at its I/O boundary instead.",
+    "Disallow explicitly unknown function parameters except `cause` and a rejection handler's reason; decode unknown input at its I/O boundary instead.",
   message:
     "Parameter `{{parameter}}` accepts `unknown` without establishing its contract. Define the expected schema or parser so the value becomes a strongly typed domain type at the earliest possible point, as close as possible to the I/O boundary where the data originated.",
 });

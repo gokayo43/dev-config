@@ -361,13 +361,22 @@ function moduleNamed(sourceCode, expression, seen) {
 }
 
 /**
+ * The prefixes a specifier of this repo's own starts with: the two relative
+ * ones, and the path aliases the fleet writes for its own source (`@/`, `~/`)
+ * and `package.json`'s `#` subpath imports. A scoped package is `@scope/`,
+ * which `@/` never matches. An alias spelled any other way is not seen, since
+ * this reads one file and no tsconfig.
+ */
+const OWN_PREFIXES = ["./", "../", "@/", "~/", "#"];
+
+/**
  * A specifier that can only be a file of ours; a bare one is a package, and a
  * package is the true external boundary a fake belongs at.
  * @param {string} specifier
  * @returns {boolean}
  */
 function isOurs(specifier) {
-  return specifier.startsWith("./") || specifier.startsWith("../");
+  return OWN_PREFIXES.some((prefix) => specifier.startsWith(prefix));
 }
 
 /**
@@ -398,7 +407,7 @@ export const noLocalModuleMocksRule = {
     type: "problem",
     docs: {
       description:
-        "Disallow mock.module() and spyOn() over a relative import — our own code rather than a package.",
+        "Disallow mock.module() and spyOn() over a relative or aliased import — our own code rather than a package.",
     },
     messages: {
       localMock:

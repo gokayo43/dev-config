@@ -7,6 +7,7 @@ import {
   enclosingFunction,
   isKnownEvidenceExpression,
   propertyKeyName,
+  readOutOf,
   unwrapAssertions,
 } from "../shared/syntax.js";
 import { classifyWideningTarget, createTypeEnvironment } from "../shared/types.js";
@@ -110,6 +111,23 @@ function discardsProperties(expression, target, sourceCode) {
 }
 
 /**
+ * Whether a dictionary binding is looked up by a key only the run time knows
+ * anywhere in this file. There the annotation is the honest type: `satisfies`
+ * keeps only the keys written, so `table[code]` with `code: string` stops
+ * compiling (TS7053) and the author is pushed to an assertion instead.
+ * @param {Variable} variable
+ * @returns {boolean}
+ */
+function isIndexedByValue(variable) {
+  return variable.references.some(({ identifier }) => {
+    const member = readOutOf(identifier);
+    if (member === null || !member.computed) return false;
+    const key = unwrapAssertions(member.property);
+    return key.type !== "Literal" && (key.type !== "TemplateLiteral" || key.expressions.length > 0);
+  });
+}
+
+/**
  * @param {ESTree.Node} node
  * @returns {boolean}
  */
@@ -141,10 +159,14 @@ export const noKnownValueWideningRule = {
      * @param {ESTree.Expression} expression
      * @param {WideningTarget | null} destination
      * @param {string} subject
+     * @param {Variable | null} [binding] The variable the target annotates, when it annotates one.
      */
-    const reportFlow = (expression, destination, subject) => {
+    const reportFlow = (expression, destination, subject, binding = null) => {
       if (destination === null) return;
-      if (isDictionaryAccumulatorTarget(destination) && isEmptyObjectExpression(expression)) return;
+      if (isDictionaryAccumulatorTarget(destination)) {
+        if (isEmptyObjectExpression(expression)) return;
+        if (binding !== null && isIndexedByValue(binding)) return;
+      }
       if (
         destination.kind === "anonymous object" &&
         !discardsProperties(expression, destination.type, context.sourceCode)
@@ -173,6 +195,7 @@ export const noKnownValueWideningRule = {
           node.init,
           targetFromAnnotation(node.id.typeAnnotation),
           `binding \`${node.id.name}\``,
+          context.sourceCode.getDeclaredVariables(node)[0] ?? null,
         );
       },
       PropertyDefinition(node) {
@@ -201,6 +224,7 @@ export const noKnownValueWideningRule = {
           node.right,
           targetFromAnnotation(declarator.id.typeAnnotation),
           `binding \`${declarator.id.name}\``,
+          variable,
         );
       },
       ReturnStatement(node) {

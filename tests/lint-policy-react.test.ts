@@ -476,7 +476,7 @@ describe("what the React Compiler declines to optimize", () => {
   // memo that survives a disable carrying its reason.
   test("and a hand-written memo is graded, not only refused", () => {
     expect(drawnIn(pathOf("preserve-manual-memoization"))).toContain(
-      "error eslint(no-restricted-imports)",
+      "error anti-slop(no-manual-memoization)",
     );
   });
 });

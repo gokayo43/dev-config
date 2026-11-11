@@ -497,6 +497,79 @@ export function classifyUnsafeDictionary(type, environment) {
 }
 
 /**
+ * The fixed-key answers already worked out for this file, for the reason
+ * `unsafeValues` above gives: `type K1 = K0 | K0` doubles the work per level.
+ * @type {WeakMap<TypeEnvironment, Map<string, boolean>>}
+ */
+const fixedKeySets = new WeakMap();
+
+/**
+ * @param {TypeEnvironment} environment
+ * @returns {Map<string, boolean>}
+ */
+function fixedKeySetCache(environment) {
+  const known = fixedKeySets.get(environment);
+  if (known !== undefined) return known;
+  /** @type {Map<string, boolean>} */
+  const cache = new Map();
+  fixedKeySets.set(environment, cache);
+  return cache;
+}
+
+/**
+ * Whether a key type is a fixed set of keys: a literal, or a union of nothing
+ * else, once resolved. `string`, a template, `keyof` and a name this file does
+ * not declare are not, which fails closed for a key imported from elsewhere.
+ * @param {ESTree.TSType} type
+ * @param {TypeEnvironment} environment
+ * @param {Substitutions} substitutions
+ * @param {ReadonlySet<string>} resolving
+ * @returns {boolean}
+ */
+function isFixedKeySet(type, environment, substitutions, resolving) {
+  const resolved = resolveType(type, environment, substitutions, resolving);
+  const cache = fixedKeySetCache(environment);
+  const key = resolutionKey(resolved);
+  const known = cache.get(key);
+  if (known !== undefined) return known;
+
+  const node = resolved.type;
+  const answer =
+    node.type === "TSLiteralType" ||
+    (node.type === "TSUnionType" &&
+      node.types.every((member) =>
+        isFixedKeySet(member, environment, resolved.substitutions, resolved.resolving),
+      ));
+  cache.set(key, answer);
+  return answer;
+}
+
+/**
+ * Whether a dictionary shape names every key it holds: a built-in `Record` or a
+ * mapped type over a fixed set of keys. Such a target is a closed object type
+ * whose missing key is a compile error, so `satisfies` would check exactly what
+ * the annotation does and the annotation discards nothing.
+ * @param {ResolvedType} resolved
+ * @param {TypeEnvironment} environment
+ * @returns {boolean}
+ */
+function isClosedRecord(resolved, environment) {
+  const node = resolved.type;
+  /** @param {ESTree.TSType | undefined} key */
+  const fixed = (key) =>
+    key !== undefined &&
+    isFixedKeySet(key, environment, resolved.substitutions, resolved.resolving);
+
+  if (node.type === "TSMappedType") return node.nameType === null && fixed(node.constraint);
+  return (
+    node.type === "TSTypeReference" &&
+    typeReferenceName(node) === "Record" &&
+    isBuiltIn("Record", environment, node) &&
+    fixed(node.typeArguments?.params[0])
+  );
+}
+
+/**
  * @param {ESTree.TSTypeLiteral} type
  * @returns {WideningTarget | null}
  */
@@ -525,6 +598,8 @@ function aliasTarget(alias, reference, name, environment) {
   const resolving = new Set([name]);
 
   if ((alias.typeParameters?.params.length ?? 0) > 0) {
+    const body = resolveType(alias.typeAnnotation, environment, substitutions, resolving);
+    if (isClosedRecord(body, environment)) return null;
     return dictionaryValueTypes(alias.typeAnnotation, environment, substitutions, resolving)
       .length > 0
       ? { kind: "generic container", type: reference }
@@ -549,6 +624,9 @@ export function classifyWideningTarget(type, environment) {
   if (node.type === "TSUnknownKeyword") return { kind: "unknown", type: node };
   if (node.type === "TSObjectKeyword") return { kind: "object", type: node };
   if (node.type === "TSTypeLiteral") return literalTarget(node);
+  if (isClosedRecord({ type: node, substitutions: new Map(), resolving: new Set() }, environment)) {
+    return null;
+  }
   if (node.type === "TSMappedType") return { kind: "open dictionary", type: node };
   if (node.type !== "TSTypeReference") return null;
   const name = typeReferenceName(node);
