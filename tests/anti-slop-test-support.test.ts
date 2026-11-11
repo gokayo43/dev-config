@@ -1,10 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dirname } from "node:path";
-
-import { configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
-import { type Case, cases, gradedByBase } from "./lint-fixture.ts";
-
-const REPO = dirname(import.meta.dir);
+import { type Case, cases, gradedByBase, scopeOf, shippedBase } from "./lint-fixture.ts";
 
 /**
  * The two plugin rules the suite scope decides, and the files that scope is
@@ -111,6 +106,14 @@ export type Held = Order;`,
       reports: ["1:", "2:", "3:", "4:", "5:"],
     },
     {
+      // The rule reads one file and no config, so an alias and a package look
+      // alike; README states this limit and the disable that answers it.
+      name: "a package's own file named like a fixture is refused too, the rule's known limit",
+      source: `import helper from "some-pkg/lib/x.fixture.js";
+export const used = helper;`,
+      reports: ["`some-pkg/lib/x.fixture.js`"],
+    },
+    {
       name: "a name that only contains the word is not a support file",
       source: `import { a } from "./fixture";
 import { b } from "./fixtures/order";
@@ -124,17 +127,7 @@ export const used = [a, b, c, d, e];`,
 } satisfies Record<string, readonly Case[]>;
 
 /** The base's suite-scope globs, read from the block that switches the native assertion rule off. */
-const SUITE_GLOBS = await (async (): Promise<string[]> => {
-  const base = record(
-    (await configObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
-  );
-  const overrides = isList(base["overrides"]) ? base["overrides"] : [];
-  const suite = overrides
-    .map(record)
-    .find((block) => record(block["rules"])["typescript/consistent-type-assertions"] === "off");
-  const files = suite?.["files"];
-  return isList(files) ? files.filter((glob) => typeof glob === "string") : [];
-})();
+const SUITE_GLOBS = scopeOf(await shippedBase(), "typescript/consistent-type-assertions");
 
 // The support-file names among them, each the `<name>` of a glob shaped
 // `**/*.<name>.*`: a name graded as test code in any directory.

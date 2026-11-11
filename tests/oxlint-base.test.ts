@@ -2,21 +2,22 @@ import { describe, expect, test } from "bun:test";
 import { symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { type ConfigObject, configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
-import { BASE, baseConfig, byFile, type Diagnostic, lintAt, oxlint } from "./lint-fixture.ts";
+import { type ConfigObject, isList, record } from "../.github/actions/_lib/gate.ts";
+import {
+  BASE,
+  baseConfig,
+  byFile,
+  type Diagnostic,
+  lintAt,
+  oxlint,
+  shippedBase,
+} from "./lint-fixture.ts";
 import { CLEAN, contract, withoutReasonFor } from "./repo-contract-fixture.ts";
 import { materialise } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
 
-/**
- * The base itself, read through the gates' own JSONC decoder — it carries the
- * reason for every entry in it as a comment, which is the thing the README
- * asks every repo to write and `JSON.parse` refuses.
- */
-const base = record(
-  (await configObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
-);
+const base = await shippedBase();
 
 /**
  * The rules whose configuration is a list of entries rather than one options

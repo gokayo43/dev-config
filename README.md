@@ -803,7 +803,16 @@ alone. `no-test-support-imports` reads the specifier instead: its last path
 segment carrying `.test-harness` or `.fixture` as a dot-separated part
 (`./order.fixture`, `./order.fixture.ts`, `@/tests/page.test-harness`), in an
 import, a re-export, a dynamic import or an import type, type-only ones
-included.
+included. A line that re-exports a module whole (`export * from "react"`,
+`export { default as React } from "react"`) draws a message of its own from the
+first three, since it holds no use of a refused name to change: re-export by
+name only what the barrel needs.
+
+`no-test-support-imports` reads one file and no config, so it cannot tell a
+path alias from a package: a package's own file named like a fixture
+(`some-pkg/lib/x.fixture.js`) is refused too. Missing an alias would be the
+worse error, so the rule keeps that limit, and a line that does import such a
+package file carries a disable naming the rule and its reason.
 
 `no-chained-type-assertions` is the one that overlaps and stays, in the suite
 scope alone: in source `consistent-type-assertions` refuses every link of every
@@ -1020,9 +1029,10 @@ the fleet must refuse something the author can change:
 - **`no-unknown-parameters`** leaves a rejection handler's reason, and
   **`no-unknown-returns`** a function type's promise of `unknown`, both above.
 
-Upstream ships no fixture for the newer three shapes, so
-`tests/anti-slop-upstream.test.ts` still runs every upstream case unchanged and
-records only the anonymous-object one.
+Upstream ships no fixture for a fixed-key record, a run-time-indexed
+dictionary, a rejection reason or a function type's promise of `unknown`, so
+`tests/anti-slop-upstream.test.ts` runs every upstream case unchanged and
+records only the anonymous-object difference.
 
 Two facts about how it is wired, both load-bearing:
 
@@ -1037,16 +1047,20 @@ Two facts about how it is wired, both load-bearing:
 `tests/anti-slop.test.ts` drives the unscoped rules with the real binary: a block of cases
 per rule — alias chains, shadowed built-ins, type parameters bound by default,
 permuted between two aliases and named for the aliases they shadow, the scope a
-binding resolves in, and the clean tree each of those has to leave alone — plus
-upstream's own fixtures for the six rules it ships tests for, run as a
-differential oracle against this port. It also asks the plugin and the base for
+binding resolves in, and the clean tree each of those has to leave alone.
+Upstream's own fixtures, for the six rules it ships tests for, run as a
+differential oracle against this port in `tests/anti-slop-upstream.test.ts`.
+`tests/anti-slop.test.ts` also asks the plugin and the base for
 their rule names and requires them to match: a rule the base does not enable is
 a rule no repo runs, and a name in the base the plugin does not define is a rule
 nobody notices is missing. And it requires the tables in this section to name
 the plugin's rules, each once, so no count or list in prose can drift from them.
 
-`tests/anti-slop-test-support.test.ts` is the two rules the suite scope
-decides, `no-chained-type-assertions` and `no-test-support-imports`. It reads
+`tests/anti-slop-test-support.test.ts` is the two rules of this plugin that the
+suite scope turns on or off and no other suite grades there,
+`no-chained-type-assertions` and `no-test-support-imports`; the scope's
+switch-offs of `no-env-access` and `no-unnamed-effects` are graded with those
+rules, in `tests/anti-slop-env.test.ts` and `tests/oxlint-base.test.ts`. It reads
 that scope's globs off the base and grades a file under each of them as test
 code, a source file, a story and a seed script as code that ships, and an
 import of each support-file name the base carries as refused.

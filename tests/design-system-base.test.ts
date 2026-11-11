@@ -4,8 +4,8 @@ import { dirname, join } from "node:path";
 
 import { plugin } from "@shadcn/lint";
 
-import { type ConfigObject, configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
-import { byFile, type Diagnostic, lintAt } from "./lint-fixture.ts";
+import { isList, record } from "../.github/actions/_lib/gate.ts";
+import { byFile, type Diagnostic, lintAt, scopeOf, shippedBase } from "./lint-fixture.ts";
 import { materialise, type Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -13,8 +13,8 @@ const REPO = dirname(import.meta.dir);
 /**
  * The wiring README documents, written the way a repo writes it: both bases by
  * their `node_modules` path, the components named through `settings.shadcn`
- * with no `components.json`, and `no-restyle` switched off where the components
- * are defined.
+ * with no `components.json`, and the three rules about a page's own styling
+ * switched off where the components are defined.
  */
 const OXLINTRC = `{
   "extends": [
@@ -172,18 +172,6 @@ const STYLED_IN_A_SUITE = pageOf(
   `<p className="bg-pink-500" style={{ overflowY: "auto" }}>Hello</p>`,
 );
 
-/** The `files` of the one override in `config` that switches `rule` off. */
-function scopeOf(config: ConfigObject, rule: string): readonly string[] {
-  const overrides = config["overrides"];
-  const switching = (isList(overrides) ? overrides : []).filter(
-    (override) => record(record(override)["rules"])[rule] === "off",
-  );
-  expect(switching).toHaveLength(1);
-  const files = record(switching[0])["files"];
-  if (!isList(files)) throw new Error(`the override switching ${rule} off names no files list`);
-  return files.map(String);
-}
-
 /** What the two bases are made of, as `files` ships them. */
 const SHIPPED = ["package.json", "oxlint.base.json", "design-system.base.json", "anti-slop"];
 
@@ -206,11 +194,6 @@ async function linted(tree: Tree): Promise<ReadonlyMap<string, readonly Diagnost
   await symlink(join(REPO, "node_modules", "@shadcn", "lint"), join(modules, "@shadcn", "lint"));
   await symlink(join(REPO, "node_modules", "tailwindcss"), join(modules, "tailwindcss"));
   return byFile(await lintAt(root));
-}
-
-/** A base as this package ships it, comments and all. */
-async function shipped(base = "design-system.base.json"): Promise<ConfigObject> {
-  return record((await configObjects(REPO, [base], "JSON with comments")).read[0]?.value);
 }
 
 // Each oxlint run here loads the plugin and the project's Tailwind, which takes
@@ -285,16 +268,16 @@ describe("the design-system base", () => {
   // a test-support spelling added to one list and not the other is a support
   // file one base grades as a suite and the other as a screen.
   test("no-inline-styles is off in exactly the oxlint base's suite scope", async () => {
-    expect(scopeOf(await shipped(), "shadcn/no-inline-styles")).toEqual(
-      scopeOf(await shipped("oxlint.base.json"), "typescript/consistent-type-assertions"),
-    );
+    expect(
+      scopeOf(await shippedBase("design-system.base.json"), "shadcn/no-inline-styles"),
+    ).toEqual(scopeOf(await shippedBase(), "typescript/consistent-type-assertions"));
   });
 
   // Asked of the plugin and the base rather than of a fixture: a rule the
   // plugin ships that the base leaves off is drift nobody is told about, and a
   // version that adds one fails here, on the bump that has to decide it.
   test("the base enables every rule the plugin defines, each at error", async () => {
-    const base = await shipped();
+    const base = await shippedBase("design-system.base.json");
     const rules = Object.entries(record(base["rules"])).map(([name, setting]) => [
       name,
       isList(setting) ? setting[0] : setting,

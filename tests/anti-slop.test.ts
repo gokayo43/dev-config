@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 
-import { configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
+import { isList, record } from "../.github/actions/_lib/gate.ts";
 import antiSlop from "../anti-slop/index.js";
-import { type Case, cases, lines, oxlint, underBase } from "./lint-fixture.ts";
+import { type Case, cases, lines, oxlint, shippedBase, underBase } from "./lint-fixture.ts";
 import type { Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -924,9 +924,7 @@ function isOff(configured: unknown): boolean {
  * nowhere on is a rule no repo runs however many blocks name it.
  */
 const enabled = await (async (): Promise<string[]> => {
-  const base = record(
-    (await configObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
-  );
+  const base = await shippedBase();
   const overrides = Array.isArray(base["overrides"]) ? base["overrides"] : [];
   const blocks = [record(base["rules"]), ...overrides.map((each) => record(record(each)["rules"]))];
   const names = blocks.flatMap((block) =>

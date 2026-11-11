@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 
-import { type ConfigObject, isList, record } from "../.github/actions/_lib/gate.ts";
+import { type ConfigObject, isList, readConfig, record } from "../.github/actions/_lib/gate.ts";
 import { materialise, type Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -9,6 +9,42 @@ const OXLINT = join(REPO, "node_modules/.bin/oxlint");
 /** The shipped base, which is what a scoping case has to be graded against rather than a copy. */
 export const BASE = join(REPO, "oxlint.base.json");
 const PLUGIN = join(REPO, "anti-slop/index.js");
+
+/**
+ * A base as this package ships it, read through the gates' JSONC decoder: the
+ * base carries a reason above its entries as a comment, which `JSON.parse`
+ * refuses. An unreadable base throws, because an empty object in its place
+ * empties every rule set a suite derives from it and passes each case.
+ */
+export async function shippedBase(name = "oxlint.base.json"): Promise<ConfigObject> {
+  const read = await readConfig(REPO, name);
+  if (read.contents === undefined) throw new Error(read.problems[0]?.message ?? `${name} unread`);
+  return read.contents;
+}
+
+/**
+ * The one override in a config that sets `rule` to `setting`, which is how a
+ * suite names a scope of the base: by what the scope decides, rather than by a
+ * glob it happens to hold. More than one such block, or none, throws.
+ */
+export function overrideSetting(config: ConfigObject, rule: string, setting = "off"): ConfigObject {
+  const overrides = config["overrides"];
+  const matching = (isList(overrides) ? overrides : [])
+    .map(record)
+    .filter((override) => record(override["rules"])[rule] === setting);
+  const [only] = matching;
+  if (only === undefined || matching.length > 1) {
+    throw new Error(`${matching.length} overrides set ${rule} to ${setting}, not one`);
+  }
+  return only;
+}
+
+/** The `files` of that override: the scope itself. */
+export function scopeOf(config: ConfigObject, rule: string, setting = "off"): readonly string[] {
+  const files = overrideSetting(config, rule, setting)["files"];
+  if (!isList(files)) throw new Error(`the override setting ${rule} to ${setting} names no files`);
+  return files.map(String);
+}
 
 /** One diagnostic, as much of the JSON report as a case reads. */
 export interface Diagnostic {

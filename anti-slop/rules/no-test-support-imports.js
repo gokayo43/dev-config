@@ -1,5 +1,7 @@
 /** @import { ESTree, Rule } from "@oxlint/plugins" */
 
+import { writtenString } from "../shared/syntax.js";
+
 /**
  * The names the base grades as test code wherever the file sits, beside the
  * suite suffixes. `tests/anti-slop-test-support.test.ts` derives one import per
@@ -21,20 +23,6 @@ function isSupportFile(specifier) {
     .split(".")
     .slice(1)
     .some((part) => SUPPORT_PARTS.has(part));
-}
-
-/**
- * The specifier an expression spells, when it spells one: a string, or a
- * template with nothing to substitute.
- * @param {ESTree.Expression} expression
- * @returns {string | null}
- */
-function written(expression) {
-  if (expression.type === "Literal") {
-    return typeof expression.value === "string" ? expression.value : null;
-  }
-  if (expression.type !== "TemplateLiteral" || expression.expressions.length > 0) return null;
-  return expression.quasis[0]?.value.cooked ?? null;
 }
 
 /**
@@ -79,7 +67,7 @@ export const noTestSupportImportsRule = {
         check(node.source, node.source.value);
       },
       ImportExpression(node) {
-        check(node.source, written(node.source));
+        check(node.source, writtenString(node.source));
       },
       TSImportType(node) {
         check(node.source, node.source.value);

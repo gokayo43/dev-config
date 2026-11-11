@@ -7,7 +7,7 @@ import {
   settledValue,
   writesThroughMember,
 } from "../shared/bindings.js";
-import { memberName, propertyKeyName, unwrapAssertions } from "../shared/syntax.js";
+import { memberName, propertyKeyName, unwrapAssertions, writtenString } from "../shared/syntax.js";
 
 /**
  * The modules a stand-in comes out of. Recognition goes through the import
@@ -351,11 +351,7 @@ function moduleNamed(sourceCode, expression, seen) {
   const value = unwrapAssertions(expression);
   if (seen.has(value)) return null;
   seen.add(value);
-  if (value.type === "Literal") return typeof value.value === "string" ? value.value : null;
-  if (value.type === "TemplateLiteral") {
-    return value.expressions.length === 0 ? (value.quasis[0]?.value.cooked ?? null) : null;
-  }
-  if (value.type !== "Identifier") return null;
+  if (value.type !== "Identifier") return writtenString(value);
   const held = settledValue(sourceCode, value);
   return held === null ? null : moduleNamed(sourceCode, held, seen);
 }

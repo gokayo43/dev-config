@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { basename, dirname } from "node:path";
-
-import { readConfig, record } from "../.github/actions/_lib/gate.ts";
-import { BASE, type Diagnostic, gradedByBase } from "./lint-fixture.ts";
+import { record } from "../.github/actions/_lib/gate.ts";
+import { type Diagnostic, gradedByBase, overrideSetting, shippedBase } from "./lint-fixture.ts";
 
 /**
  * The React half of the base's lint policy: the React Compiler's judgements,
@@ -282,17 +280,9 @@ const COMPILER_RULES = Object.entries(REACT)
   .filter(([, graded]) => !("elsewhere" in graded))
   .map(([rule]) => rule);
 
-/**
- * The base's own `react/*` names, read through the gates' JSONC decoder — the
- * base carries the reason for every entry as a comment, which `JSON.parse`
- * refuses. `readConfig` rather than a decode of its own: an unreadable base
- * answers with a problem instead of an empty object, and an empty object here
- * would empty the rule set and pass every case in this file.
- */
+/** The base's own `react/*` names. */
 async function statedRules(): Promise<string[]> {
-  const base = await readConfig(dirname(BASE), basename(BASE));
-  if (base.contents === undefined) throw new Error(base.problems[0]?.message ?? "base unreadable");
-  return Object.keys(record(record(base.contents)["rules"]))
+  return Object.keys(record((await shippedBase())["rules"]))
     .filter((name) => name.startsWith("react/"))
     .map((name) => name.slice("react/".length))
     .toSorted();
@@ -510,14 +500,8 @@ describe("a component a suite renders", () => {
   // The two no fixture provokes are held by the config instead: the suite
   // scope switches off every rule this table marks as the compiler's.
   test("is out of reach of every judgement, the undriven ones included", async () => {
-    const base = await readConfig(dirname(BASE), basename(BASE));
-    if (base.contents === undefined)
-      throw new Error(base.problems[0]?.message ?? "base unreadable");
-    const overrides = record(base.contents)["overrides"];
-    const suite = (Array.isArray(overrides) ? overrides : [])
-      .map((each) => record(each))
-      .find((each) => JSON.stringify(each["files"]).includes("**/tests/**"));
-    const rules = record(suite?.["rules"]);
+    const suite = overrideSetting(await shippedBase(), "typescript/consistent-type-assertions");
+    const rules = record(suite["rules"]);
     expect(COMPILER_RULES.filter((rule) => rules[`react/${rule}`] !== "off")).toEqual([]);
   });
 });
