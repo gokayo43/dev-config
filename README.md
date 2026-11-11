@@ -113,6 +113,13 @@ and a `packageManager` of `bun@1.4.4` or later. A repo adds `typescript` only
 for a tool that calls its API; this one does, because tsdown's declaration pass
 builds the `.d.ts` files in `dist/` with it.
 
+A repo whose types are partly generated runs the generator inside `typecheck`,
+ahead of the checker, because `bun check` checks only the files on disk. For
+Next.js that is `next typegen && bun check --no-script`, since Next writes the
+route types its pages are checked against only when it generates them. The
+contract reads the script as commands joined by `&&`, so the generator ahead of
+the checker passes.
+
 `tsconfig.base.json` resolves through Node module resolution, so it is referenced
 by package name:
 
@@ -138,13 +145,32 @@ turns on:
 
 - `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`
 - `noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch`
-- `noPropertyAccessFromIndexSignature` — index-signature reads use `obj["key"]`,
-  so a typo in a dotted read stays a type error instead of silently widening
 - `noUncheckedSideEffectImports` — a bare `import "./thing"` must resolve
 - `allowUnreachableCode: false`, `allowUnusedLabels: false`
 - `verbatimModuleSyntax`, `isolatedModules`, `erasableSyntaxOnly` — enums,
-  parameter properties and namespaces are errors, because Bun and Vite strip
-  types rather than compile them
+  parameter properties and namespaces are errors. Bun runs them, but Node's type
+  stripping refuses them, so a `.ts` file that plain `node` loads fails at run
+  time on any of the three (probed, Bun 1.4.4 and Node 24.22)
+
+`exactOptionalPropertyTypes` makes `field?: T` mean the key is absent or holds a
+`T`, never `undefined`. A repo's own type is widened to `field?: T | undefined`
+only where no reader can tell an absent key from one holding `undefined`. The
+readers that can are `in`, `Object.keys` and `Object.entries`, a spread (which
+overwrites a default with `undefined`), an exact schema that refuses a key
+holding `undefined`, and a serialiser that keeps `undefined`. An option bag a repo does not own keeps its
+type, and the repo includes the field with a conditional spread.
+
+`noPropertyAccessFromIndexSignature` is deliberately absent. It catches a typo in a
+dotted read of a type that has declared keys beside an index signature, and in
+the repo measured for this release it caught none among its findings. The environment is the one such
+type that matters, and two things cover it: `anti-slop/no-env-access` keeps
+every read of it in one decoded module, and Vite's `strictImportMetaEnv` takes
+the index signature off `import.meta.env`.
+
+A repo that sets one of the base's checks back, such as `strict: false` or
+`allowUnreachableCode: true` in any `tsconfig*.json` it tracks, writes the
+reason in a comment directly above the entry. The repo contract refuses it
+otherwise, as it refuses an unexplained lint switch-off.
 
 `noUnusedLocals` and `noUnusedParameters` are deliberately absent: unused code is
 the linter's report to make, and having both tools flag it means every dead
@@ -1109,8 +1135,7 @@ The base names the plugin by a bare specifier, so it resolves from the repo's
 own install: `@shadcn/lint` goes in the devDependencies of the manifest that
 declares this package, and it needs oxlint 1.80 or later. A repo extending the
 base without the plugin installed fails to load its config rather than linting
-without the rules. knip reads `jsPlugins` from the repo's own config only, so
-the repo also spreads `designSystemDependencies` ([knip](#knip)).
+without the rules.
 
 Whether a repo owes the base is not its call: the repo contract refuses a tree
 with `tailwindcss` in any manifest whose `.oxlintrc.json` does not extend it.
@@ -1156,10 +1181,12 @@ because `treatConfigHintsAsErrors` makes an ignore matching no declared
 dependency an error — carrying it in the base would fail knip in every repo that
 does not run the lane.
 
-`designSystemDependencies` is the same shape for a repo extending
-[the design-system base](#design-system): the base names `@shadcn/lint` in its
-`jsPlugins`, and knip reads `jsPlugins` out of the repo's own `.oxlintrc.json`
-without following `extends`, so it reports the package as unused.
+The knip peer range starts at 6.38, the first release that follows
+`.oxlintrc.json`'s `extends` into this package. From there knip counts the
+package as used, and with it the `@shadcn/lint` the package declares as a peer,
+so a repo extending [the design-system base](#design-system) ignores nothing for
+it, and an ignore of it is a configuration hint (probed, knip 6.37.0 and
+6.38.0).
 
 ## Tests and coverage
 
@@ -1212,11 +1239,15 @@ release-age window, opens a vulnerability fix at once
 digest updates into one automerging PR, opens majors as plain PRs to read, keeps
 lockfile maintenance on, and pins GitHub Action digests.
 
-Two families move as a unit rather than as packages. Every `expo*`,
+Three families move as a unit rather than as packages. Every `expo*`,
 `@expo/*` and `react-native*` pin belongs to one Expo SDK release, and a partial
 bump builds and then fails on a device, so they group into one "Expo SDK" PR that
 is never automerged. `better-auth` and its `@better-auth/*` plugins are versioned
-in lockstep, and a plugin ahead of its core fails at import.
+in lockstep, and a plugin ahead of its core fails at import. `oxlint`,
+`@oxlint/plugins` and `oxlint-tsgolint` move in one "oxlint" PR: each oxlint
+release declares the tsgolint range it runs, bun installs a pair outside that
+range without a warning, and the repo contract refuses such a pair in
+`bun.lock`.
 
 The file is named `default.json` because that is the name Renovate resolves for a
 bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.

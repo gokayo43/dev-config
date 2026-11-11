@@ -88,7 +88,7 @@
     "effect": "3.22.0",
     "elysia": "1.4.29",
     "fast-check": "4.9.0",
-    "knip": "6.32.2",
+    "knip": "6.38.0",
     "lefthook": "2.1.10",
     "oxfmt": "0.63.0",
     "oxlint": "1.80.0",
@@ -106,7 +106,7 @@
     "eslint-import-resolver-typescript": ">=4",
     "eslint-plugin-boundaries": ">=7",
     "fast-check": ">=4",
-    "knip": ">=6",
+    "knip": ">=6.38",
     "oxfmt": ">=0.63",
     "oxlint": ">=1.80",
     "oxlint-tsgolint": ">=7"

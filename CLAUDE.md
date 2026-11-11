@@ -68,11 +68,19 @@ a change to a rule usually lands here too.
   second subject reached through the one field;
   `repo-contract/typecheck.ts` is what CI type-checks with — the script
   check.yml's typecheck lane reaches and the Bun `packageManager` names, one
-  fact seen from both ends; and
+  fact seen from both ends;
   `repo-contract/package-scripts.ts` is what a workflow step ends up running
   once the package scripts it goes through are followed, since reading a command
   for the program it runs is a subject of its own and neither rule that asks the
-  question is about it.
+  question is about it;
+  `repo-contract/reasons.ts` is where a commented JSON config switches
+  something off and whether the reason sits above it, the one reading both
+  `.oxlintrc.json` and every tsconfig are held to, each caller bringing its own
+  vocabulary of "off";
+  `repo-contract/tsconfig-flags.ts` is a check of `tsconfig.base.json` set back
+  in a repo's tsconfig, the one rule that reads the base itself, from the
+  action's own checkout; and `repo-contract/lockfile.ts` is what `bun.lock`
+  resolved, as against what a manifest declares.
   Of what `db-gate` holds beside its replay, six need their reason stated:
   `semantic-fixtures.ts`, since what
   the base ref's replay proves about a _schema_ and what it proves about the
@@ -255,8 +263,12 @@ a change to a rule usually lands here too.
   rather than in either), how a dependency spec is read in
   `repo-contract-pins.test.ts`, the git hooks in `repo-contract-lefthook.test.ts`,
   the bunfig's release-age window and its exclusions in
-  `repo-contract-release-age.test.ts`, and what CI type-checks with in
-  `repo-contract-typecheck.test.ts` (mirroring `typecheck.ts`);
+  `repo-contract-release-age.test.ts`, what CI type-checks with in
+  `repo-contract-typecheck.test.ts` (mirroring `typecheck.ts`), a tsconfig's
+  weakened flags in `repo-contract-tsconfig.test.ts` and the lock in
+  `repo-contract-lockfile.test.ts` (each mirroring its module), the second over
+  the `bun-lock-*.lock` files beside it, which are locks `bun install` wrote
+  rather than ones typed by hand;
   `journalled-migrator.ts`, `replaying-migrator.ts` and
   `schema-migrator.ts` are the three `db:migrate` shapes the database gates are
   written for — a journalled one, a hand-rolled runner with no journal, and the

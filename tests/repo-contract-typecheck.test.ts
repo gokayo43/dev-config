@@ -79,6 +79,16 @@ describe("the typecheck script", () => {
       "runs bun check without --no-script beside a check script",
       { typecheck: "bun check", check: "bun run lint && bun run typecheck" },
     ],
+    // A type generator ahead of the checker leaves the checker's own rule as it
+    // was: the flag is still owed, and words behind `echo` still run nothing.
+    [
+      "runs a type generator and then bun check without --no-script",
+      { typecheck: "next typegen && bun check", check: "bun run lint && bun run typecheck" },
+    ],
+    [
+      "runs a type generator and then only prints the command",
+      { typecheck: "next typegen && echo bun check --no-script" },
+    ],
   ])("is refused where it %s", async (_what, scripts) => {
     expect(await contract(typecheckWith(scripts))).toEqual([containing(RUN_BUN_CHECK)]);
   });
@@ -88,6 +98,14 @@ describe("the typecheck script", () => {
       delete contents.scripts?.["typecheck"];
     });
     expect(await contract(tree)).toEqual([containing(RUN_BUN_CHECK)]);
+  });
+
+  // A repo with a type generator runs it inside `typecheck`, because bun check
+  // reads the types the generator writes: Next.js's route types are the case.
+  test("passes where a type generator runs first and bun check after it", async () => {
+    expect(
+      await contract(typecheckWith({ typecheck: "next typegen && bun check --no-script" })),
+    ).toEqual([]);
   });
 
   test("passes where it reaches bun check through another script", async () => {

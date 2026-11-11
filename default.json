@@ -56,8 +56,8 @@
       "groupName": "Better Auth"
     },
     {
-      "description": "@oxlint/plugins publishes one version per oxlint release and describes that release's AST. The anti-slop rules are typed against it, so the two move together or this repo's typecheck grades the plugin against an AST oxlint is not handing it.",
-      "matchPackageNames": ["oxlint", "@oxlint/plugins"],
+      "description": "@oxlint/plugins publishes one version per oxlint release and describes that release's AST. The anti-slop rules are typed against it, so the two move together or this repo's typecheck grades the plugin against an AST oxlint is not handing it. oxlint-tsgolint moves with them because each oxlint declares the tsgolint range it runs, bun installs a pair outside it without a word, and the repo contract refuses that pair in bun.lock.",
+      "matchPackageNames": ["oxlint", "@oxlint/plugins", "oxlint-tsgolint"],
       "groupName": "oxlint"
     }
   ],

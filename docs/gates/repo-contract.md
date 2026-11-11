@@ -13,9 +13,11 @@ fail — it stops existing. `repo-contract` reads them and says so.
 | Every `peerDependencies` range refuses some version                                                                                                                      | a range that accepts everything says what declaring no peer says, and `bun add` writes one                                                                   |
 | `bun run typecheck` reaches `bun check --no-script`, directly or through package scripts                                                                                 | it is check.yml's typecheck lane; without the flag `bun check` runs the repo's own `check` script, which runs `typecheck`                                    |
 | `oxlint-tsgolint` present, when `.oxlintrc.json` extends `oxlint.base.json`                                                                                              | without it oxlint runs the base's type-aware rules over nothing and reports clean                                                                            |
+| `bun.lock` resolves an `oxlint-tsgolint` inside the range every resolved `oxlint` declares for it                                                                        | bun installs a pair outside that range without a warning, and the type-aware rules run on a binary that oxlint release was not built against                 |
 | `tsconfig.json` extends this repo, `.oxlintrc.json` extends this repo, the knip config imports `knip.base.ts`                                                            | a repo that stopped inheriting stops inheriting silently                                                                                                     |
 | `bunfig.toml` declares a window of 3 days or more, exact exclusions, `exact`, and a coverage floor a run can fail                                                        | the supply-chain window and the coverage floor are per-repo copies with no `extends` to hold them                                                            |
 | every rule, category and option `.oxlintrc.json` switches off carries a reason above it                                                                                  | a switch-off nobody wrote a reason for reads the same as one added to get a run green                                                                        |
+| every check of `tsconfig.base.json` a tracked `tsconfig*.json` sets back carries a reason above it                                                                       | a check set back with no reason reads the same as one set back to get a build green                                                                          |
 | `.oxlintrc.json` `extends` the shared bases and nothing else, each once, and no oxlint config sits below the root                                                        | a second config is read after the root's and wins over it, in a file this gate never opens                                                                   |
 | `.oxlintrc.json` extends `design-system.base.json`, when any manifest depends on `tailwindcss`                                                                           | without it a page using a raw colour, an arbitrary value or a restyled shared component passes lint                                                          |
 | `lefthook.yml` scans staged files with gitleaks pre-commit, runs nothing pre-push, and nothing merges into it                                                            | a committed key is burned, the chain runs once on the state that lands, at landing or in CI, and the gate reads only that file                               |
@@ -181,6 +183,52 @@ walk of that text: the walk carries the path it is inside, which is what tells a
 different vocabulary. `oxlint.base.json` follows the same convention for its own
 switch-offs, and is held to this rule by a test that strips one of its reasons
 and requires exactly that finding back.
+
+**A tsconfig that sets a check back owes the same reason.** Every
+`tsconfig*.json` the repo tracks, at the root or below it, is read on its own
+text, and a `compilerOptions` member that sets back a check the shared base
+states needs a comment directly above it, read exactly as a lint switch-off's
+is: one per line, the reason covering the run of them under it, an empty comment
+no reason, and a blank line or any other entry ending the run. One
+implementation reads the reason for both files. A check set back is a boolean
+the base states, written with the other value, such as `strict: false`,
+`allowUnreachableCode: true` or `verbatimModuleSyntax: false`. It is also a
+member of TypeScript's `strict` family written `false`, since the base turns
+those on by stating `strict` alone.
+
+The checks are read from `tsconfig.base.json` as shipped at the ref the action
+runs from, so a flag added to the base or dropped from it changes the rule with
+no list here to edit. Every boolean the base states is a check except five that
+choose resolution or emit rather than what the checker refuses:
+`allowImportingTsExtensions`, `esModuleInterop`, `resolveJsonModule`, `noEmit`
+and `skipLibCheck`. A boolean added to the base later is a check until someone
+names it there, which is the safe direction. A flag the base does not state owes
+nothing, and nor does a flag written at the base's own value. The base is read
+at the action's ref while the repo extends the package's: a repo moves both pins
+in one pull request, and between two releases the bases differ only by what a
+release changed. `config-lineage` does not waive it, since that exemption waives
+where a config inherits from and never what it sets back.
+
+**What this cannot catch.** No `extends` chain is followed, which leaves two
+ways to set a check back without writing the other value. An `extends` array
+whose entry after the base relaxes it is applied over the base, since
+TypeScript reads later entries over earlier ones. And a nested tsconfig that
+never extends the base drops every check without writing a `false`. Closing
+either is a lineage rule for every tsconfig in a tree, which nobody has ruled
+on.
+
+**The type-aware pair is read out of `bun.lock`.** Each `oxlint` release
+declares the range of `oxlint-tsgolint` it runs as an optional peer
+(`>=7.0.2001` in 1.80.0, `>=7.0.2003` in 1.88.0), and bun installs a pair
+outside it without a warning. The lock records each resolved package's
+`peerDependencies` beside the version it resolved, so the gate holds every
+resolved `oxlint-tsgolint` to the range of every resolved `oxlint` with no
+install, which an action never has. It reads the lock alone, because the
+manifest's spec says what was asked for and the lock says what landed. Nothing
+is held where the repo has no `bun.lock`, where the lock resolves no
+`oxlint-tsgolint` (the manifest check above owns a missing one), or where an
+`oxlint` declares no range for it. A lock that will not parse is named rather
+than passed.
 
 The knip case is the one that reads as arbitrary and is not: knip resolves
 `knip.json` before `knip.ts`, and a JSON config cannot import anything. A repo
@@ -426,7 +474,10 @@ workspace's script names that workspace's script, not the root's. Two more facts
 decide its verdicts. A required flag may sit anywhere after the argument, so
 `bun check -p . --no-script` passes. And a bare `bun check` is read as what Bun
 does with it, a run of the repo's own `check` script, which in this fleet runs
-`typecheck` again: it reaches the type checker only if that script does.
+`typecheck` again: it reaches the type checker only if that script does. A repo
+with a type generator runs it inside `typecheck`, ahead of the checker, as in
+`next typegen && bun check --no-script`. That script passes, since the reading
+splits it into commands and the second has `bun check` at its head.
 
 ### A scheduled job is three files
 
