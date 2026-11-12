@@ -30,6 +30,12 @@
       "automerge": true
     },
     {
+      "description": "No PR limit holds a patch, minor, pin or digest update, whichever group it lands in and whether its PR merges itself or waits for a reader, so PRs left open never stop one being opened. prConcurrentLimit and prHourlyLimit hold every other update, majors and lock file maintenance most often.",
+      "matchUpdateTypes": ["patch", "minor", "pin", "digest"],
+      "prConcurrentLimit": 0,
+      "prHourlyLimit": 0
+    },
+    {
       "description": "Majors are read before they are merged.",
       "matchUpdateTypes": ["major"],
       "automerge": false
@@ -40,8 +46,9 @@
       "minimumReleaseAge": null
     },
     {
-      "description": "dev-config's and dev-config-db's pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody.",
+      "description": "dev-config's and dev-config-db's pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody. They get a group of their own because a grouped PR automerges only when every update in it does, so a pin left in the non-major group would stop that group merging itself.",
       "matchPackageNames": ["gokayo43/dev-config", "gokayo43/dev-config-db"],
+      "groupName": "dev-config",
       "automerge": false
     },
     {
@@ -76,7 +83,7 @@
     },
     {
       "customType": "regex",
-      "description": "The same gitleaks pin appears unhashed in this repo's local install instructions.",
+      "description": "A GITLEAKS_VERSION= line in any README.md, at any depth, is read as the gitleaks pin. dev-config's own README carries one, unhashed, in its local install instructions.",
       "managerFilePatterns": ["/(^|/)README\\.md$/"],
       "matchStrings": ["GITLEAKS_VERSION=(?<currentValue>v\\S+)"],
       "depNameTemplate": "gitleaks/gitleaks",
