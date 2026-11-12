@@ -60,22 +60,43 @@ shape a rule takes when what it grades is only visible from inside the repo — 
 app's own route table, its own limiter, its own browser. Each is reachable
 through `files` and `exports`, and each has a page of its own:
 
-| Export                                                         | Imported by                    | What it holds                                                                                                         |
-| -------------------------------------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| [`route-log`](docs/exports/route-log.md)                       | the app, for the capacity ramp | the protocol between an app and the two floors over its route table                                                   |
-| [`invariant-sweep`](docs/exports/invariant-sweep.md)           | the Playwright specs           | no console error, thrown error, overflow or unprompted shift on its pages                                             |
-| [`count-budget`](docs/exports/count-budget.md)                 | the Playwright specs of a job  | a job's commits, DOM mutations, requests and bytes per phase, held exactly to ceilings the write command never raises |
-| [`limiter-conformance`](docs/exports/limiter-conformance.md)   | the rate limiter's own suite   | STACK's rate-limit rule, executable                                                                                   |
-| [`property`](docs/exports/property.md)                         | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further                                              |
-| [`interleaving`](docs/exports/interleaving.md)                 | a property over Effect fibers  | the order overlapping fibers run in, generated and replayable from a seed                                             |
-| [`response-schema`](docs/exports/response-schema.md)           | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip                                                   |
-| [`characterization-net`](docs/exports/characterization-net.md) | a golden suite and its updater | the harness rules that keep a large golden net honest                                                                 |
+| Export                                                           | Imported by                    | What it holds                                                                                                                 |
+| ---------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| [`route-log`](docs/exports/route-log.md)                         | the app, for the capacity ramp | the protocol between an app and the two floors over its route table                                                           |
+| [`invariant-sweep`](docs/exports/invariant-sweep.md)             | the Playwright specs           | no console error, thrown error, overflow or unprompted shift on its pages                                                     |
+| [`count-budget`](docs/exports/count-budget.md)                   | the Playwright specs of a job  | a job's commits, DOM mutations, requests and bytes per phase, held exactly to ceilings the write command never raises         |
+| [`limiter-conformance`](docs/exports/limiter-conformance.md)     | the rate limiter's own suite   | STACK's rate-limit rule, executable                                                                                           |
+| [`property`](docs/exports/property.md)                           | every property test            | `fc.assert` with the run's budget applied, so a nightly searches further                                                      |
+| [`interleaving`](docs/exports/interleaving.md)                   | a property over Effect fibers  | the order overlapping fibers run in, generated and replayable from a seed                                                     |
+| [`response-schema`](docs/exports/response-schema.md)             | the API's own suite            | every Elysia route declares a `response` schema, or is a named skip                                                           |
+| [`characterization-net`](docs/exports/characterization-net.md)   | a golden suite and its updater | the harness rules that keep a large golden net honest                                                                         |
+| [`narrowing`](docs/exports/narrowing.md)                         | any suite or spec              | `only`, `nth`, `must` and `rejectionOf`: a value the compiler could not prove present, or a throw naming what was found       |
+| [`bun-test`](docs/exports/bun-test.md)                           | `compilerOptions.types`        | `.resolves` and `.rejects` chains typed as promises, so an await of one passes `await-thenable` and a missing one is reported |
+| [`css-custom-properties`](docs/exports/css-custom-properties.md) | `compilerOptions.types`        | any `--name` as a key of React's `CSSProperties`, so a runtime value reaches `style` without a cast                           |
 
 No specifier carries an extension, and what one resolves to is this package's
-business: the first three are **built** — `bun run build` writes them to `dist/`,
-which is committed and held equal to a fresh build by `tests/dist.test.ts` — and
-the other five ship their source. `tsdown.config.ts` has why those three and no
-others. Either way the `.ts` files stay the sources.
+business: the first three and `narrowing` are **built** — `bun run build` writes
+them to `dist/`, which is committed and held equal to a fresh build by
+`tests/dist.test.ts` — and the other seven ship their source.
+`tsdown.config.ts` has why those four and no others. Either way the `.ts` files
+stay the sources.
+
+The last two are type declarations, which a repo names in its own
+`tsconfig.json` rather than imports. They go in `types`, since an entry there is
+loaded whatever the repo's `include` says, while an `include` entry into
+`node_modules` is dropped by `exclude: ["node_modules"]`. Setting `types` at all
+stops TypeScript loading every `@types` package by default, so the list names
+each one the repo uses:
+
+```jsonc
+"types": ["bun", "@gokayo43/dev-config/bun-test", "@gokayo43/dev-config/css-custom-properties"]
+```
+
+and `narrowing` is one import:
+
+```ts
+import { must, nth, only, rejectionOf } from "@gokayo43/dev-config/narrowing";
+```
 
 Gate code is deliberately **not** importable by the repos it gates — a gate in
 `node_modules` runs only if the repo's workflow remembers to, and it moves
@@ -93,6 +114,13 @@ installs no `typescript` to type-check, and the repo contract holds the script
 and a `packageManager` of `bun@1.4.4` or later. A repo adds `typescript` only
 for a tool that calls its API; this one does, because tsdown's declaration pass
 builds the `.d.ts` files in `dist/` with it.
+
+A repo whose types are partly generated runs the generator inside `typecheck`,
+ahead of the checker, because `bun check` checks only the files on disk. For
+Next.js that is `next typegen && bun check --no-script`, since Next writes the
+route types its pages are checked against only when it generates them. The
+contract reads the script as commands joined by `&&`, so the generator ahead of
+the checker passes.
 
 `tsconfig.base.json` resolves through Node module resolution, so it is referenced
 by package name:
@@ -119,13 +147,33 @@ turns on:
 
 - `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`
 - `noImplicitOverride`, `noImplicitReturns`, `noFallthroughCasesInSwitch`
-- `noPropertyAccessFromIndexSignature` — index-signature reads use `obj["key"]`,
-  so a typo in a dotted read stays a type error instead of silently widening
 - `noUncheckedSideEffectImports` — a bare `import "./thing"` must resolve
 - `allowUnreachableCode: false`, `allowUnusedLabels: false`
 - `verbatimModuleSyntax`, `isolatedModules`, `erasableSyntaxOnly` — enums,
-  parameter properties and namespaces are errors, because Bun and Vite strip
-  types rather than compile them
+  parameter properties and namespaces are errors. Bun runs them, but Node's type
+  stripping refuses them, so a `.ts` file that plain `node` loads fails at run
+  time on any of the three (probed, Bun 1.4.4 and Node 24.22)
+
+`exactOptionalPropertyTypes` makes `field?: T` mean the key is absent or holds a
+`T`, never `undefined`. A repo's own type is widened to `field?: T | undefined`
+only where no reader can tell an absent key from one holding `undefined`. The
+readers that can are `in`, `Object.keys` and `Object.entries`, a spread (which
+overwrites a default with `undefined`), an exact schema that refuses a key
+holding `undefined`, and a serialiser that keeps `undefined`. An option bag a repo does not own keeps its
+type, and the repo includes the field with a conditional spread.
+
+`noPropertyAccessFromIndexSignature` is deliberately absent. It catches a typo
+in a dotted read of a type that has declared keys beside an index signature, and
+in the repo measured for it, it caught none among its findings. The environment
+is the one such type that matters, and two things cover it:
+`anti-slop/no-env-access` keeps every read of it in one decoded module, and
+Vite's `strictImportMetaEnv` takes the index signature off `import.meta.env`.
+
+A repo that sets one of the base's checks back in any `tsconfig*.json` it keeps,
+such as `strict: false`, `allowUnreachableCode: true` or
+`noUncheckedIndexedAccess: null`, writes the reason in a comment directly above
+the entry. The repo contract refuses it otherwise, as it refuses an unexplained
+lint switch-off.
 
 `noUnusedLocals` and `noUnusedParameters` are deliberately absent: unused code is
 the linter's report to make, and having both tools flag it means every dead
@@ -192,12 +240,25 @@ The rules the base switches off: `no-await-in-loop` (a sequential loop is
 usually the correct one here, and the fan-out it asks for is a design call about
 shared state the rule cannot see), `react/react-in-jsx-scope` (the automatic JSX
 runtime imports nothing), `oxc/no-map-spread` (its advice is to mutate in place,
-wrong for the copy-on-write style these codebases are written in), and
+wrong for the copy-on-write style these codebases are written in),
 `typescript/no-unsafe-type-assertion` (a subset of the rule below it, which is
-why it is stated only where that one is off). Then, in an override:
-`unicorn/consistent-function-scoping` and
-`typescript/consistent-type-assertions` in a suite, and
-`anti-slop/no-unnamed-effects` under `hooks/`. The reason in full sits beside
+why it is stated only where that one is off), `anti-slop/no-chained-type-assertions`
+(every chain it reports in source already draws `consistent-type-assertions`
+twice, so it is stated only in a suite), `eslint/no-underscore-dangle` (its
+fix contradicts `no-unused-vars` on `using _page = …`),
+`typescript/consistent-return` (`noImplicitReturns` already refuses a path that
+falls off, and this rule refuses the exhaustive switch and Effect's
+`return yield* Effect.fail(…)`), `import/no-named-as-default-member` (the type
+checker answers what a default object holds), and
+`react/jsx-no-constructed-context-values` and
+`react/no-object-type-as-default-prop` (both ask for the `useMemo` the memo ban
+refuses, for an identity the React Compiler already gives). Then, in an override:
+`unicorn/consistent-function-scoping` in a test file; `anti-slop/no-env-access`
+in `env.ts`; `anti-slop/no-env-access`, `typescript/consistent-type-assertions`,
+`anti-slop/no-test-support-imports`, `typescript/no-unnecessary-type-arguments`,
+every React Compiler judgement and `anti-slop/no-unnamed-effects` in a suite;
+`react/rules-of-hooks` in a Playwright file; and `anti-slop/no-unnamed-effects`
+and `anti-slop/no-raw-query-hooks` under `hooks/`. The reason in full sits beside
 each entry, which is where the repo contract requires it — see
 [the repo contract](docs/gates/repo-contract.md). No count is given here on
 purpose: a number in prose is one nobody updates, and the list is the answer.
@@ -227,18 +288,18 @@ each one converts a question into silence:
 - `eslint/no-warning-comments` — `TODO`, `FIXME`, `XXX` and `HACK` anywhere in a
   comment. The register is GitHub issues in the repo the work belongs to; a
   marker in a file is invisible to anyone who is not already reading that file.
-- `typescript/no-restricted-types` — `Record<string, unknown>` and
-  `Record<string, any>`. The bag with no keys is how a shape nobody modelled
-  travels: it type-checks everywhere and asserts nothing. It is legal exactly
-  once per boundary, as a **named alias at the module that owns that boundary**,
-  carrying one disable with the why — `type ConfigObject = Record<string,
-unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
-  not own. Everything else is one of: model the shape, parse the input, or
-  delete the cast. A fleet-wide escape alias re-exported everywhere is the one
-  thing this must not become; the linter cannot see the difference, so review
-  does. Inline `{ [k: string]: unknown }` is not matched — the rule reads type
-  references, not shapes — but `anti-slop/no-unsafe-dictionary-type` below is,
-  and catches it along with aliases and mapped types.
+- `anti-slop/no-unsafe-dictionary-type` — `Record<string, unknown>`,
+  `Record<string, any>`, the inline `{ [k: string]: unknown }` and the aliases
+  and mapped types that spell the same thing. The bag with no keys is how a
+  shape nobody modelled travels: it type-checks everywhere and asserts nothing.
+  It is legal exactly once per boundary, as a **named alias at the module that
+  owns that boundary**, carrying one disable with the why: `type ConfigObject =
+Record<string, unknown>` in `_lib/gate.ts` here, for config files this repo
+  reads and does not own. Everything else is one of: model the shape, parse the
+  input, or delete the cast. A fleet-wide escape alias re-exported everywhere is
+  the one thing this must not become; the linter cannot see the difference, so
+  review does. The rule is [the plugin's](#the-anti-slop-plugin), and it is the
+  only one the base states for these types.
 - `typescript/consistent-type-assertions`, at `assertionStyle: "never"` — an
   assertion tells the compiler to stop checking at the one place the answer was
   still available. An annotation makes the same claim and is checked, and
@@ -251,9 +312,13 @@ unknown>` in `_lib/gate.ts` here, for config files this repo reads and does
   one is on it is a second name on every disable and a reader of one cannot tell
   which fact it is about. It is therefore off at the top level and `error` in the
   suite override, where it is the whole of what still holds.
-- `no-restricted-globals` — `__dirname`, `__filename` and `require`. Every repo
-  here is ESM, where none of the three exists; the entries name the replacement
-  (`import.meta.dir`, `import.meta.url`, `import`) so the diagnostic is the fix.
+- `no-restricted-globals` — `__dirname`, `__filename` and `require`. All three
+  are CommonJS's names. Bun supplies them to an ES module as well, and Node does
+  not, so a file naming one breaks wherever Node loads it: a Playwright spec, a
+  config a Node tool reads, a file this package ships. The entries name the
+  replacement (`import.meta.dir` and `import.meta.path`, or `import.meta.dirname`
+  and `import.meta.filename` in a file Node also runs, and `import`) so the
+  diagnostic is the fix.
 - `eqeqeq`, at `always` with `{ "null": "ignore" }` — `==` coerces instead of
   deciding, and the coercion table is the thing nobody has in their head. It sits
   in `pedantic`, which this base does not take, so it is stated. `null` is the
@@ -344,6 +409,22 @@ the table's suite as a fixture so that the day upstream turns it into a real
 diagnostic, the change is visible here rather than surprising in a consuming
 repo.
 
+Every judgement in the table is off in a suite (the test suffixes, the two
+test-support names, `tests/` and `e2e/`). The judgements are about what the
+compiler may cache or reorder, and `bun test` runs no Babel, so a component a
+case renders is never compiled. `react/rules-of-hooks` and `react/exhaustive-deps`
+stay on there, since a test component still runs under React. In a Playwright
+file (`e2e/` and the `*.spec.ts(x)` suffix) `react/rules-of-hooks` is off as
+well: Playwright hands every fixture a callback named `use`, which the rule reads
+as React's `use`, and no React runs in such a file.
+
+Two of the React plugin's own rules are off everywhere for the compiler's sake:
+`react/jsx-no-constructed-context-values` and
+`react/no-object-type-as-default-prop`. Both ask for a stable identity through
+`useMemo`, which the memo ban refuses, and the compiler gives a context value and
+a default prop that identity itself. In a component the compiler skipped, the
+answer is to end the skip, which `react/todo` reports.
+
 #### The bail-outs
 
 `react/todo` is the last row and the misleading name — it has nothing to do with
@@ -362,12 +443,12 @@ React, all 22 bail-outs are two shapes: a `try`/`finally` in a component, and an
 `await import(...)` inside one. A generator body and a logical assignment bail
 out too and occur nowhere in the fleet.
 
-Every row above is driven against a fixture in `tests/lint-policy.test.ts`,
-`incompatible-library`, `rule-suppression` and `syntax` excepted — none of the
-shapes tried here provoked those three, so each carries the row a reader who hits
-it needs and no case claiming a check nothing drives. The suite holds the two
-halves the table cannot: that the set of rules it drives plus those three is
-exactly the set the base enables, and that each of them still reports — a rule
+Every row above is driven against a fixture in `tests/lint-policy-react.test.ts`,
+`incompatible-library` and `syntax` excepted. None of the shapes tried here
+provoked those two, so each carries the row a reader who hits it needs and no
+case claiming a check nothing drives. The suite holds the two halves the table
+cannot: that the rules it drives plus those two are exactly the judgements the
+base enables, and that each driven one still reports — a rule
 that stays a name and goes quiet fails there rather than passing as a config
 switched on and answering for nothing.
 
@@ -378,14 +459,14 @@ this is where they stop being a thing to remember. Each diagnostic names **what
 the import lost to**, because it is the only place the loser of that decision is
 standing:
 
-| Import                                                 | From                    | Where                 | Instead                                                             | Carrier                        |
-| ------------------------------------------------------ | ----------------------- | --------------------- | ------------------------------------------------------------------- | ------------------------------ |
-| `useMemo`, `useCallback`                               | `react`                 | everywhere            | the React Compiler inserts the memo; delete the wrapper             | `no-restricted-imports`        |
-| `beforeEach`, `afterEach`                              | `bun:test`              | everywhere            | a call the case makes itself, and `await using`                     | `no-restricted-imports`        |
-| `test`                                                 | `@playwright/test`      | everywhere            | the invariant sweep's `test`, which sweeps each page in its context | `no-restricted-imports`        |
-| `assert`, the default export                           | `fast-check`            | everywhere            | the property budget's `check`, which the run can turn up            | `no-restricted-imports`        |
-| `useEffect`, `useLayoutEffect`, `useSyncExternalStore` | `react`                 | outside `**/hooks/**` | a named hook whose name says what it subscribes to                  | `anti-slop/no-unnamed-effects` |
-| `useQuery`, `useInfiniteQuery`                         | `@tanstack/react-query` | under `**/routes/**`  | the loader's `ensureQueryData` and `useSuspenseQuery`               | `anti-slop/no-raw-query-hooks` |
+| Import                                                 | From                    | Where                 | Instead                                                             | Carrier                           |
+| ------------------------------------------------------ | ----------------------- | --------------------- | ------------------------------------------------------------------- | --------------------------------- |
+| `useMemo`, `useCallback`                               | `react`                 | everywhere            | the React Compiler inserts the memo; delete the wrapper             | `anti-slop/no-manual-memoization` |
+| `beforeEach`, `afterEach`                              | `bun:test`              | everywhere            | a call the case makes itself, and `await using`                     | `no-restricted-imports`           |
+| `test`                                                 | `@playwright/test`      | everywhere            | the invariant sweep's `test`, which sweeps each page in its context | `no-restricted-imports`           |
+| `assert`, the default export                           | `fast-check`            | everywhere            | the property budget's `check`, which the run can turn up            | `no-restricted-imports`           |
+| `useEffect`, `useLayoutEffect`, `useSyncExternalStore` | `react`                 | outside `**/hooks/**` | a named hook whose name says what it subscribes to                  | `anti-slop/no-unnamed-effects`    |
+| `useQuery`, `useInfiniteQuery`                         | `@tanstack/react-query` | under `**/routes/**`  | the loader's `ensureQueryData` and `useSuspenseQuery`               | `anti-slop/no-raw-query-hooks`    |
 
 The suspense pair, `beforeAll`/`afterAll`, Playwright's `expect` and
 `defineConfig`, fast-check's generators, and every other React hook are
@@ -396,9 +477,15 @@ untouched: what is banned is the name, not the module.
 decides cannot be: an override REPLACES a list-shaped rule rather than adding to
 it, so scoping one that way would take away every entry it did not restate — a
 consuming repo's [own lock](#locking-a-settled-decision) among them, wherever the
-block reached. A plugin rule's scalar `"off"` replaces only itself, so the two
-positional bans are rules of the plugin and no block in the base redefines a
+block reached. A plugin rule's scalar `"off"` replaces only itself, so every
+positional ban is a rule of the plugin and no block in the base redefines a
 list-shaped rule at all. `tests/oxlint-base.test.ts` holds it to both halves.
+
+The memo pair holds in every file and is a plugin rule anyway. As a
+`no-restricted-imports` entry it refused `import * as React from "react"`
+before anything was read off it, which is how shadcn's components import React,
+and it refused a type-only import of either name. The plugin rule refuses
+`React.useMemo` and lets the bare namespace import through.
 
 The two carriers differ in what they can see, and both differences are graded in
 `tests/lint-policy.test.ts`:
@@ -412,15 +499,17 @@ The two carriers differ in what they can see, and both differences are graded in
 - `no-restricted-imports` refuses a namespace import and a renamed one, a
   default import where the list names `default`, and a re-export through a
   barrel. It refuses a type-only import as well, which it gives no way to
-  allow: none of `useMemo`, `beforeEach`, Playwright's `test` and
-  fast-check's `assert` has a use as a type, so that costs nothing here — and
+  allow: none of `beforeEach`, Playwright's `test` and fast-check's `assert`
+  has a use as a type, so that costs nothing here — and
   the day a name on that list does, it is the carrier that has to change. What
   it does not see is a dynamic `await import`, which the plugin rules do.
 
-The grant is the directory, which is the limit both scoped rules carry: inside
+The grant is the directory, which is the limit the effect and query bans carry: inside
 `hooks/` every spelling of the effect trio is allowed, a barrel re-exporting it
 included, exactly as `env.ts` may re-export what `no-env-access` refuses
-everywhere else.
+everywhere else. A suite is the effect trio's second grant: a component a case
+renders is the fixture's, and a named hook under `hooks/` written for it would be
+production code that one test uses.
 
 ### Overrides
 
@@ -430,7 +519,14 @@ Some facts are true of a file because of where it sits, not what it contains:
 {
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*"
+      ],
       "rules": {
         "unicorn/consistent-function-scoping": "off",
         "anti-slop/no-call-log-assertions": "error",
@@ -439,15 +535,32 @@ Some facts are true of a file because of where it sits, not what it contains:
         "anti-slop/no-real-timers": "error"
       }
     },
-    { "files": ["src/server/**", "server/**", "apps/api/**"], "rules": { "no-console": "error" } },
     { "files": ["**/env.ts"], "rules": { "anti-slop/no-env-access": "off" } },
     {
-      "files": ["**/*.test.ts", "**/*.spec.ts", "**/tests/**", "**/e2e/**"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*",
+        "**/tests/**",
+        "**/e2e/**"
+      ],
       "rules": {
         "anti-slop/no-env-access": "off",
         "typescript/consistent-type-assertions": "off",
-        "typescript/no-unsafe-type-assertion": "error"
+        "typescript/no-unsafe-type-assertion": "error",
+        "anti-slop/no-chained-type-assertions": "error",
+        "anti-slop/no-test-support-imports": "off",
+        "typescript/no-unnecessary-type-arguments": "off",
+        "react/purity": "off",
+        "anti-slop/no-unnamed-effects": "off"
       }
+    },
+    {
+      "files": ["**/e2e/**", "**/*.spec.ts", "**/*.spec.tsx"],
+      "rules": { "react/rules-of-hooks": "off" }
     },
     { "files": ["**/routes/**"], "rules": { "anti-slop/no-raw-query-hooks": "error" } },
     {
@@ -461,17 +574,35 @@ Some facts are true of a file because of where it sits, not what it contains:
 }
 ```
 
-A test file is where the four scoped rules of [the plugin](#the-anti-slop-plugin)
+A test file is where the plugin's [test-smell rules](#the-anti-slop-plugin)
 apply, and where a helper one `describe` uses belongs inside it rather than
-hoisted to module scope. Server code writes through the structured logger, so
-`no-console` rises from `warn` to `error` on the server globs — a one-shot CLI
-under those paths carries a file-level disable with its reason, which is the shape
-the directive rule below already requires. And `env.ts` is [the one module that
+hoisted to module scope. A test-support file, `*.test-harness.*` or
+`*.fixture.*`, is in both test blocks wherever it lives, so a harness or a
+fixture is graded as the test code it is, and
+`anti-slop/no-test-support-imports` refuses an import of one from any file
+outside the suite block: production, and a story or a seed script too. A repo
+that wants one of those to import a fixture switches the rule off for that glob
+in its own config, with its reason. And `env.ts` is [the one module that
 reads the environment](#the-environment-is-read-in-one-module), while a suite is
 where a variable is set for a spawned process rather than read for its value, and
 where a case asserts about a value nothing typed — which is why that block names
 **directories** as well as suffixes: a suite's helpers are that same code one
-file over, under no suffix at all.
+file over, under no suffix at all. The same block switches off
+`typescript/no-unnecessary-type-arguments`, because bun:test ties `toBe` and
+`toEqual` to the type `expect` inferred, so `expect<unknown>(actual)` is how a
+case compares against a wider value; every React Compiler judgement, of which the
+example shows `react/purity` and the base lists all 22 (see [the
+compiler's section](#what-the-react-compiler-declines-to-optimize)); and
+`anti-slop/no-unnamed-effects`. It is also the one place
+`anti-slop/no-chained-type-assertions` is on, since everywhere else
+`consistent-type-assertions` already refuses each link of a chain. The
+Playwright block after it switches off `react/rules-of-hooks`, for the fixture
+callback named `use`.
+
+`no-console` is `error` in every file, stated once at the top level. Server code
+writes through the structured logger, and a one-shot CLI carries a file-level
+disable with its reason, which is the shape the directive rule below already
+requires.
 
 The last two blocks are the [import bans](#the-imports-a-pick-has-already-answered)
 that depend on where a file sits, each a scalar on a rule of its own. `hooks/`
@@ -523,9 +654,10 @@ nobody in the consuming repo asked.
 One thing to know before writing one: a rule's configuration is **replaced across
 `extends`**, not merged, so a repo stating `no-restricted-imports` or
 `no-restricted-globals` of its own drops every entry the base states for it — the
-memoisation and `bun:test` bans, and the three ESM globals, become unenforced in
-that repo, silently. (The two positional bans are unaffected: they are rules of
-their own, and a repo redefining a list-shaped rule cannot reach them.) Restate
+`bun:test`, Playwright and fast-check bans, and the three ESM globals, become
+unenforced in that repo, silently. (The memo ban and the positional bans are
+unaffected: they are rules of their own, and a repo redefining a list-shaped
+rule cannot reach them.) Restate
 the entries beside your own until
 [dev-config#86](https://github.com/gokayo43/dev-config/issues/86) makes that a
 gate rather than a thing to remember. What the base does carry is the other kind —
@@ -562,6 +694,29 @@ Denied: `typescript/no-floating-promises`, `typescript/no-misused-promises`,
 which is a bug wherever either is a legal value, and `??` is what the code
 almost always meant. Nothing here is warned.
 
+Two of the rules that arrive through a tier carry an option:
+
+- `typescript/no-floating-promises` allows bun:test's `mock.module`, by its
+  declaration in `bun:test` (`allowForKnownSafeCalls`), under any local name.
+  bun:test types the call `void | Promise<void>`, so every module mock otherwise
+  reads as a floating promise. A local `mock` with a `module` method, and every
+  other call, are still held. The one hazard this lets through: a mock with an
+  async factory left unawaited races the import it replaces, so a case mocking
+  with one awaits the call.
+- `typescript/no-misused-spread` allows spreading a string. `[...code]` splits by
+  code point, which is what a barcode or a limit counted in code points wants;
+  the rule's case, text a person reads where a code point can be half a
+  character, is one no rule can tell from the rest. A spread of a class instance
+  or a map, which loses data outright, is still refused.
+
+`import/no-unassigned-import` allows `**/*.css`, since a stylesheet is imported
+for what loading it does. And `typescript/consistent-return` is off, because
+`noImplicitReturns` in the shared tsconfig refuses every path that falls off a
+function owing a value and reads exhaustiveness from the types, where the rule
+reads syntax and refuses the exhaustive switch `switch-exhaustiveness-check` asks
+for. In a suite `typescript/no-unnecessary-type-arguments` is off as well (see
+[the overrides](#overrides)).
+
 `no-unnecessary-condition` fires on any check TypeScript already proved
 redundant, which includes real validation at a trust boundary — a parsed JSON
 body, a `process.env` read, a value crossing the FFI edge — where the declared
@@ -594,41 +749,84 @@ function that hands `unknown` back, and a `Record<string, unknown>` value
 contract all pass a fully type-aware run — and assertion laundering is precisely
 the move an agent makes to silence the rules above. These rules close that,
 shipped in this package as an oxlint JS plugin and enabled at `error` by the
-base:
+base, everywhere but the first, which is on in the suite scope alone:
 
-| Rule                         | What it rejects                                                        |
-| ---------------------------- | ---------------------------------------------------------------------- |
-| `no-chained-type-assertions` | `x as object as User` — nested assertions that fabricate evidence      |
-| `no-known-value-widening`    | a broad annotation over a known initializer; use `satisfies`           |
-| `no-unsafe-dictionary-type`  | dictionary contracts whose value type is `unknown`/`any`/`object`/`{}` |
-| `no-unknown-type-aliases`    | an alias that only renames `unknown`                                   |
-| `no-object-parameters`       | the broad `object` type on an input                                    |
-| `no-unknown-parameters`      | an `unknown` parameter, except the `cause` convention                  |
-| `no-unknown-returns`         | a declared return of `unknown` or `Promise<unknown>`                   |
-| `no-reflect-apply`           | `Reflect.apply`, which launders past a typed call                      |
-| `no-reflect-get`             | `Reflect.get`, which answers `any` for a property read                 |
+| Rule                         | What it rejects                                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| `no-chained-type-assertions` | `x as object as User` — nested assertions that fabricate evidence                 |
+| `no-known-value-widening`    | a broad annotation over a known initializer; use `satisfies`                      |
+| `no-unsafe-dictionary-type`  | dictionary contracts whose value type is `unknown`/`any`/`object`/`{}`            |
+| `no-unknown-type-aliases`    | an alias that only renames `unknown`                                              |
+| `no-object-parameters`       | the broad `object` type on an input                                               |
+| `no-unknown-parameters`      | an `unknown` parameter, except the `cause` convention and a rejection reason      |
+| `no-unknown-returns`         | a declared return of `unknown` or `Promise<unknown>`, except a callback's promise |
+| `no-reflect-apply`           | `Reflect.apply`, which launders past a typed call                                 |
+| `no-reflect-get`             | `Reflect.get`, which answers `any` for a property read                            |
+
+Three exemptions keep these rules off code that is already correct, each in the
+narrowest form that covers it:
+
+- `no-unknown-parameters` leaves the first parameter of a rejection handler
+  written in place: a function passed directly as `.catch`'s first argument or
+  `.then`'s second. TypeScript types a rejection reason `any`, so `unknown` is
+  the safe spelling there. A handler held in a variable and passed by name, a
+  further parameter of the handler, and a type guard still report: a guard is
+  an unchecked claim, and the stack's answer is a schema's own guard.
+- `no-unknown-returns` leaves a function type (`() => Promise<unknown>`, or
+  `PromiseLike`) whose return is a promise of `unknown`: that is the widest
+  honest type of an async callback whose result the receiver ignores, since
+  TypeScript will not take `() => Promise<Order>` where `() => Promise<void>` is
+  asked for. A function type returning plain `unknown` still reports, because
+  `() => void` is its honest spelling, and so does a method signature, which is
+  how a port declares what it hands back.
+- `no-known-value-widening` leaves a record over a fixed set of keys
+  (`Record<"a" | "b", V>`, the same through an alias, or a mapped type over one),
+  whose annotation checks exactly what `satisfies` would. It also leaves a
+  dictionary binding looked up somewhere in the file by a key only the run time
+  knows (`labels[code]`): `satisfies` keeps only the keys written, so that
+  lookup stops compiling (TS7053). A key the file imports rather than declares
+  is not known to be fixed and still reports, as does a table indexed only in
+  another module.
 
 Where a ported rule overlapped oxlint's own `typescript/no-unsafe-type-assertion`
 both were run over the same fixtures and only the stronger one kept.
 
-Two more rules are this repo's own, and answer a different question again — not
-what a type says, but which import a settled pick already answered:
+These are this repo's own, and answer a different question again — not what a
+type says, but which import is already answered:
 
-| Rule                 | What it rejects                                                            |
-| -------------------- | -------------------------------------------------------------------------- |
-| `no-unnamed-effects` | React's effect trio outside `hooks/`, where the hook's name states the job |
-| `no-raw-query-hooks` | `useQuery`/`useInfiniteQuery` in a route, whose data the loader owns       |
+| Rule                      | What it rejects                                                              |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `no-manual-memoization`   | `useMemo`/`useCallback`, whose memo the React Compiler inserts               |
+| `no-unnamed-effects`      | React's effect trio outside `hooks/`, where the hook's name states the job   |
+| `no-raw-query-hooks`      | `useQuery`/`useInfiniteQuery` in a route, whose data the loader owns         |
+| `no-test-support-imports` | an import of a `*.test-harness.*` or `*.fixture.*` file from outside a suite |
 
-They are rules rather than `no-restricted-imports` entries because their answer
-depends on where the file sits — see [the two
-carriers](#the-imports-a-pick-has-already-answered) for why that decides it — and
+The first three are rules rather than `no-restricted-imports` entries for the
+reasons [the two carriers](#the-imports-a-pick-has-already-answered) gives, and
 each follows its names through every spelling that reaches the value without
 importing it, a re-exporting barrel included, while leaving a type-only import
-alone.
+alone. `no-test-support-imports` reads the specifier instead: its last path
+segment carrying `.test-harness` or `.fixture` as a dot-separated part
+(`./order.fixture`, `./order.fixture.ts`, `@/tests/page.test-harness`), in an
+import, a re-export, a dynamic import or an import type, type-only ones
+included. A line that re-exports a module whole (`export * from "react"`,
+`export { default as React } from "react"`) draws a message of its own from the
+first three, since it holds no use of a refused name to change: re-export by
+name only what the barrel needs.
 
-`no-chained-type-assertions` is the one that overlaps and stays. The native
-rule covers every chain that fabricates a type, because such a chain has a
-narrowing link in it for the checker to refuse. A chain whose every link widens
+`no-test-support-imports` reads one file and no config, so it cannot tell a
+path alias from a package: a package's own file named like a fixture
+(`some-pkg/lib/x.fixture.js`) is refused too. Missing an alias would be the
+worse error, so the rule keeps that limit, and a line that does import such a
+package file carries a disable naming the rule and its reason.
+
+`no-chained-type-assertions` is the one that overlaps and stays, in the suite
+scope alone: in source `consistent-type-assertions` refuses every link of every
+chain, so this rule would only repeat it. In a suite the native rule that is
+left, `no-unsafe-type-assertion`, covers every chain that fabricates a type,
+because such a chain has a narrowing link in it for the checker to refuse, and
+such a chain draws both rules, since telling it apart from the next shape needs
+type information the plugin does not have. A chain whose every link widens
 has none: `admin as User as object` draws nothing from the native rule, nothing
 from `no-unnecessary-type-assertion`, and nothing else in the base says the type
 it started from was discarded. Widening a binding and asserting it back needs no
@@ -636,8 +834,10 @@ rule of its own — that is an assertion to a narrower type by construction, whi
 is the whole of what the native rule reads, and `oxlint-base.test.ts` grades the
 base on those shapes directly.
 
-Four more are enabled only over `*.test.ts`, `*.test.tsx`, `*.spec.ts` and
-`*.spec.tsx`, because every one of them is ordinary code anywhere else: a source
+The test-smell rules below are enabled only over test files (`*.test.ts`,
+`*.test.tsx`, `*.spec.ts`, `*.spec.tsx`, and the support files
+`*.test-harness.*` and `*.fixture.*`), because every one of them is ordinary
+code anywhere else: a source
 file counts calls, sleeps, reaches into a module of its own and hands a function
 to `expect` in a helper, and none of that is a smell until it is a test's whole
 evidence.
@@ -646,7 +846,7 @@ evidence.
 | ------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `no-call-log-assertions` | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what |
 | `no-mock-assertions`     | `expect()` on a stand-in, or on anything read through one                                            |
-| `no-local-module-mocks`  | `mock.module()` or `spyOn()` over a relative import                                                  |
+| `no-local-module-mocks`  | `mock.module()` or `spyOn()` over a relative or aliased import                                       |
 | `no-real-timers`         | the timer globals, `Bun.sleep`, and the `node:timers` modules                                        |
 
 What they have in common is that each of them passes against an implementation
@@ -658,7 +858,14 @@ module, and the real one is right there to call; and a suite that waits for real
 time is slow in proportion to how much of it it waits for and flaky in
 proportion to how loaded the runner is.
 
-All four recognise their subject **through the import**, never through the name
+What `no-call-log-assertions` accepts in place of a call log is a typed fake at
+the boundary that records the requests it received, asserted on as the whole
+list: `expect(mailer.sent).toEqual([{ to: "a@b.nl", subject: "Invoice" }])`. That
+grades what the code under test asked the outside world for, all of it, in order,
+and it fails when a request is added, dropped or changed, which a count or a
+`toHaveBeenCalledWith` on one call does not.
+
+All of them recognise their subject **through the import**, never through the name
 written at the call site. `import { mock as m }`, `import * as bt from
 "bun:test"`, `import bt from "bun:test"` — a default import is the same object
 under Bun's CJS interop — and vitest's or jest's spelling of the same call are
@@ -677,13 +884,20 @@ spelling behind forever. Calling the stand-in is the other side of that line:
 thing about a stand-in worth asserting on, and an object of the test's own with
 a `mock` property on it is not a stand-in at all. For `no-local-module-mocks`
 the line is the specifier: a package is a true external boundary, so
-`mock.module("stripe", …)` is not what that rule is about.
+`mock.module("stripe", …)` is not what that rule is about. A specifier starting
+`./`, `../`, `@/`, `~/` or `#` is this repo's own; a scoped package
+(`@scope/pkg`) and a `node:` or `bun:` builtin are not. The rule reads one file
+and no config, so an alias a repo spells another way is not seen, and a `#`
+subpath import that `package.json` maps to an external package is read as ours.
 
 #### The environment is read in one module
 
 `no-env-access` answers a different question from the rules above: where
-configuration comes from. It refuses `process.env`, `Bun.env` and
-`import.meta.env` everywhere except `**/env.ts` and a suite.
+configuration comes from.
+
+| Rule            | What it rejects                                                                |
+| --------------- | ------------------------------------------------------------------------------ |
+| `no-env-access` | `process.env`, `Bun.env` and `import.meta.env` outside `**/env.ts` and a suite |
 
 | Where           | What it is                                                              |
 | --------------- | ----------------------------------------------------------------------- |
@@ -809,13 +1023,22 @@ the choke rules above stay per-repo. There is nowhere else for it to go
 either. The base enables every rule this plugin defines, and the suite requires
 those two sets to be equal, so the plugin has no opt-in half to put it in.
 
-One rule answers differently from upstream, because a rule at `error` across
+These rules answer differently from upstream, because a rule at `error` across
 the fleet must refuse something the author can change:
 
 - **`no-known-value-widening`** does not call an anonymous object type a
   widening when it names exactly the keys of the literal below it. Upstream
   does, and its only escapes are deleting the return type or inventing a name
-  for it — the opposite of what this repo asks for everywhere else.
+  for it — the opposite of what this repo asks for everywhere else. Nor does it
+  call a record over a fixed set of keys one, or a dictionary looked up by a
+  run-time key, for the reasons in the exemptions above.
+- **`no-unknown-parameters`** leaves a rejection handler's reason, and
+  **`no-unknown-returns`** a function type's promise of `unknown`, both above.
+
+Upstream ships no fixture for a fixed-key record, a run-time-indexed
+dictionary, a rejection reason or a function type's promise of `unknown`, so
+`tests/anti-slop-upstream.test.ts` runs every upstream case unchanged and
+records only the anonymous-object difference.
 
 Two facts about how it is wired, both load-bearing:
 
@@ -830,16 +1053,27 @@ Two facts about how it is wired, both load-bearing:
 `tests/anti-slop.test.ts` drives the unscoped rules with the real binary: a block of cases
 per rule — alias chains, shadowed built-ins, type parameters bound by default,
 permuted between two aliases and named for the aliases they shadow, the scope a
-binding resolves in, and the clean tree each of those has to leave alone — plus
-upstream's own fixtures for the six rules it ships tests for, run as a
-differential oracle against this port. It also asks the plugin and the base for
+binding resolves in, and the clean tree each of those has to leave alone.
+Upstream's own fixtures, for the six rules it ships tests for, run as a
+differential oracle against this port in `tests/anti-slop-upstream.test.ts`.
+`tests/anti-slop.test.ts` also asks the plugin and the base for
 their rule names and requires them to match: a rule the base does not enable is
 a rule no repo runs, and a name in the base the plugin does not define is a rule
-nobody notices is missing.
+nobody notices is missing. And it requires the tables in this section to name
+the plugin's rules, each once, so no count or list in prose can drift from them.
 
-`tests/anti-slop-test-smells.test.ts` is the other four, which have a second
+`tests/anti-slop-test-support.test.ts` is the two rules of this plugin that the
+suite scope turns on or off and no other suite grades there,
+`no-chained-type-assertions` and `no-test-support-imports`; the scope's
+switch-offs of `no-env-access` and `no-unnamed-effects` are graded with those
+rules, in `tests/anti-slop-env.test.ts` and `tests/oxlint-base.test.ts`. It reads
+that scope's globs off the base and grades a file under each of them as test
+code, a source file, a story and a seed script as code that ships, and an
+import of each support-file name the base carries as refused.
+
+`tests/anti-slop-test-smells.test.ts` is the test-smell rules, which have a second
 question to answer about every case — the base has to catch them in a
-`.test.ts`, a `.spec.ts` and both `.tsx` spellings, and to say nothing about the
+`.test.ts`, a `.spec.ts`, both `.tsx` spellings and both support-file names, and to say nothing about the
 same source in a `.ts` or a `.tsx`, since a rule that fired everywhere is one
 every repo would turn off. Most of its cases are the spellings that would
 otherwise turn a rule off: an `as` on an import, a namespace, an optional link,
@@ -939,7 +1173,7 @@ own theme and components:
 | Rule                            | Refuses                                                                      | The diagnostic names                                                        |
 | ------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `shadcn/no-raw-colors`          | a palette colour (`bg-pink-500`), or a colour the theme does not declare     | the nearest theme colours, or the declared list                             |
-| `shadcn/no-arbitrary-values`    | an arbitrary value (`p-[13px]`)                                              | the scale class with the same value (`p-3.25`)                              |
+| `shadcn/no-arbitrary-values`    | an arbitrary value outside layout (`p-[13px]`, `text-[11px]`)                | the scale class with the same value (`p-3.25`)                              |
 | `shadcn/no-restyle`             | a class on a shared component beyond placing it (`<Button className="p-4">`) | the component's sizes or variants, and margin or a parent's gap for spacing |
 | `shadcn/no-inline-styles`       | `style={{ … }}` and `<style>`                                                | classes, and a CSS custom property for a value known only at runtime        |
 | `shadcn/no-unknown-classes`     | a class the repo's own Tailwind cannot generate (`rounded-xll`)              | the class it most likely meant                                              |
@@ -949,7 +1183,13 @@ Which rules are on, and that a page may only place a shared component, is the
 fleet's and lives in the base: `no-restyle` allows the `layout` category —
 margin, width, position, visibility — and refuses colour, typography, spacing,
 shape, effects and motion, which are the component's through its variants.
-Everything keyed to the repo's own paths is the repo's, in `.oxlintrc.json`:
+`no-arbitrary-values` allows the same category, as upstream's setup does:
+Tailwind's spacing scale is continuous, so `w-[170px]` and `w-42.5` are one
+value spelled two ways, and only the other six categories are theme tokens a
+bracket can step around. `no-inline-styles` is off in the suite scope, the same
+globs the [overrides](#overrides) give a suite's helpers: a fixture's style is
+not a screen, and a DOM test environment loads no stylesheet. Everything keyed
+to the repo's own paths is the repo's, in `.oxlintrc.json`:
 
 ```jsonc
 {
@@ -964,8 +1204,11 @@ Everything keyed to the repo's own paths is the repo's, in `.oxlintrc.json`:
     {
       "files": ["src/components/ui/**"],
       "rules": {
-        // A shared component styles itself; the rule is about the pages that use it.
+        // A shared component styles itself, and may need a structural value
+        // such as ring-[3px]; these rules are about the pages that use it.
         "shadcn/no-restyle": "off",
+        "shadcn/no-arbitrary-values": "off",
+        "shadcn/require-static-classes": "off",
       },
     },
   ],
@@ -978,8 +1221,18 @@ Everything keyed to the repo's own paths is the repo's, in `.oxlintrc.json`:
   `components/ui` or `src/components/ui` directory under the package root is
   recognised, and `no-restyle` and `require-static-classes` see no component
   anywhere else.
-- The override is a switch-off, so it carries its reason like any other
+- The override is upstream's own adoption setup: `no-restyle`,
+  `no-arbitrary-values` and `require-static-classes` are off where the
+  components are written, and `no-raw-colors` and `no-inline-styles` stay on
+  there. It is a switch-off, so
+  it carries its reason like any other
   ([the repo contract](docs/gates/repo-contract.md)).
+- A value known only at runtime goes through a custom property and a class
+  that reads it, `style={{ "--panel-width": … }}` with `w-(--panel-width)`.
+  React's types refuse that key, and the cast upstream documents is one the
+  oxlint base refuses, so a repo names
+  [`css-custom-properties`](docs/exports/css-custom-properties.md) in its
+  `compilerOptions.types`.
 - The theme is found rather than named: without `components.json`, it is the
   stylesheet under the package root that imports `tailwindcss` and declares the
   most colour tokens. `no-unknown-classes` asks the repo's own installed
@@ -994,8 +1247,7 @@ The base names the plugin by a bare specifier, so it resolves from the repo's
 own install: `@shadcn/lint` goes in the devDependencies of the manifest that
 declares this package, and it needs oxlint 1.80 or later. A repo extending the
 base without the plugin installed fails to load its config rather than linting
-without the rules. knip reads `jsPlugins` from the repo's own config only, so
-the repo also spreads `designSystemDependencies` ([knip](#knip)).
+without the rules.
 
 Whether a repo owes the base is not its call: the repo contract refuses a tree
 with `tailwindcss` in any manifest whose `.oxlintrc.json` does not extend it.
@@ -1041,10 +1293,12 @@ because `treatConfigHintsAsErrors` makes an ignore matching no declared
 dependency an error — carrying it in the base would fail knip in every repo that
 does not run the lane.
 
-`designSystemDependencies` is the same shape for a repo extending
-[the design-system base](#design-system): the base names `@shadcn/lint` in its
-`jsPlugins`, and knip reads `jsPlugins` out of the repo's own `.oxlintrc.json`
-without following `extends`, so it reports the package as unused.
+The knip peer range starts at 6.38, the first release that follows
+`.oxlintrc.json`'s `extends` into this package. From there knip counts the
+package as used, and with it the `@shadcn/lint` the package declares as a peer,
+so a repo extending [the design-system base](#design-system) ignores nothing for
+it, and an ignore of it is a configuration hint (probed, knip 6.37.0 and
+6.38.0).
 
 ## Tests and coverage
 
@@ -1097,11 +1351,15 @@ release-age window, opens a vulnerability fix at once
 digest updates into one automerging PR, opens majors as plain PRs to read, keeps
 lockfile maintenance on, and pins GitHub Action digests.
 
-Two families move as a unit rather than as packages. Every `expo*`,
+Three families move as a unit rather than as packages. Every `expo*`,
 `@expo/*` and `react-native*` pin belongs to one Expo SDK release, and a partial
 bump builds and then fails on a device, so they group into one "Expo SDK" PR that
 is never automerged. `better-auth` and its `@better-auth/*` plugins are versioned
-in lockstep, and a plugin ahead of its core fails at import.
+in lockstep, and a plugin ahead of its core fails at import. `oxlint`,
+`@oxlint/plugins` and `oxlint-tsgolint` move in one "oxlint" PR: each oxlint
+release declares the tsgolint range it runs, bun installs a pair outside that
+range without a warning, and the repo contract refuses such a pair in
+`bun.lock`.
 
 The file is named `default.json` because that is the name Renovate resolves for a
 bare `github>owner/repo`; `renovate.json` as a preset name is deprecated.

@@ -79,11 +79,29 @@ export const noUnknownReturnsRule = {
       );
     };
 
+    /**
+     * A function type answering a promise of `unknown` is the widest honest
+     * type for an async callback whose result the receiver ignores: TypeScript
+     * will not take `() => Promise<Order>` where `() => Promise<void>` is
+     * asked for, as it takes `() => number` for `() => void`. So that one shape
+     * hands nothing to a caller. A method signature is a port's own return
+     * contract, and stays reported.
+     * @param {ReturnTypeOwner} node
+     * @param {ESTree.TSType} type
+     * @returns {boolean}
+     */
+    const isIgnoredAsyncResult = (node, type) => {
+      if (environment === null || node.type !== "TSFunctionType") return false;
+      const resolved = resolveType(type, environment).type;
+      return resolved.type === "TSTypeReference" && isGlobalPromise(typeReferenceName(resolved));
+    };
+
     /** @param {ReturnTypeOwner} node */
     const checkReturnType = (node) => {
       const annotation = node.returnType;
       if (annotation === null || annotation === undefined) return;
       if (!answersUnknown(annotation.typeAnnotation, new Map(), new Set())) return;
+      if (isIgnoredAsyncResult(node, annotation.typeAnnotation)) return;
       context.report({ node: annotation.typeAnnotation, messageId: "unknownReturn" });
     };
 

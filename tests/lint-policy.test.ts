@@ -22,8 +22,6 @@ import { type Diagnostic, gradedByBase } from "./lint-fixture.ts";
  */
 
 /** What each ban carried as a list entry says instead, which is the config's own text. */
-const MEMOISATION =
-  "React Compiler owns memoisation — delete the wrapper and use the value directly.";
 const CASE_SETUP =
   "Set a case up with a call it makes itself, and tear it down with `await using` — " +
   "beforeAll/afterAll stay for shared immutable resources.";
@@ -38,8 +36,13 @@ const BUDGET =
   "import the generators by name.";
 
 /** And what each plugin rule says, which is the rule's own. */
+const MEMOISATION =
+  "The React Compiler owns memoisation: delete the wrapper and use the value directly.";
 const NAMED_HOOK = "Move this effect into a named hook under `hooks/`";
 const LOADER = "A route's data is the loader's";
+
+/** What all three say instead on a line that re-exports a module whole, which holds no use to change. */
+const BY_NAME = "re-export by name only what this barrel needs";
 
 /** Every React hook the base has an opinion about, in one import. */
 const REACT_HOOKS = `import {
@@ -158,7 +161,7 @@ const PERF = `export function first(rows: readonly number[]): number | undefined
 }
 `;
 
-/** A console call in ordinary source, where the base's server override does not reach. */
+/** A console call in ordinary source, outside any server directory. */
 const CONSOLE = `export function note(v: string): void {
   console.log(v);
 }
@@ -210,6 +213,10 @@ export const used = react.useEffect;
 `,
   "src/everything.ts": `export * from "react";
 `,
+  "src/default-barrel.ts": `export { default as React } from "react";
+`,
+  "src/routes/everything.ts": `export * from "@tanstack/react-query";
+`,
   "src/typed.ts": `import type { useEffect } from "react";
 import { type useLayoutEffect, useState } from "react";
 export type Effect = typeof useEffect;
@@ -218,6 +225,17 @@ export const held = useState;
 `,
   "src/typed-memo.ts": `import type { useMemo } from "react";
 export type Memo = typeof useMemo;
+`,
+  "src/namespace-only.ts": `import * as React from "react";
+export const element = React.createElement;
+`,
+  "src/memo-spellings.ts": `import { useCallback as stable } from "react";
+import React from "react";
+const { useMemo } = React;
+const later = await import("react");
+export const used = [stable, useMemo, later.useCallback];
+`,
+  "src/memo-barrel.ts": `export { useMemo } from "react";
 `,
 
   "src/routes/index.ts": `${QUERY_HOOKS}${REACT_HOOKS_AGAIN}`,
@@ -344,33 +362,43 @@ describe("memoisation", () => {
   test("is the compiler's, in ordinary source", () => {
     expect(refusedIn("src/panel.ts")).toContain("useCallback");
     expect(refusedIn("src/panel.ts")).toContain("useMemo");
-    expect(adviceIn("src/panel.ts")).toContain(MEMOISATION);
+    expect(saidIn("src/panel.ts", MEMOISATION)).toBe(true);
   });
 
-  // The ban with no exception is the one that can be carried as a list entry,
-  // and this is what "no exception" means: a hand-written memo inside a hook is
-  // the same memo the compiler already inserted.
+  // A ban with no exception: a hand-written memo inside a hook is the same memo
+  // the compiler already inserted.
   test("and is still the compiler's inside a hook, at any depth", () => {
     expect(refusedIn("src/hooks/use-panel.ts")).toEqual(["useCallback", "useMemo"]);
     expect(refusedIn("hooks/use-root.ts")).toEqual(["useCallback", "useMemo"]);
   });
 
   // A rule reading only named specifiers is one spelling away from off.
-  test("through a namespace import, which names no specifier at all", () => {
-    expect(refusedIn("src/namespaced.ts")).toContain("useMemo, useCallback");
+  test("through a namespace import, at the read rather than at the import", () => {
+    expect(refusedIn("src/namespaced.ts")).toContain("useMemo");
     expect(saidIn("src/namespaced.ts", MEMOISATION)).toBe(true);
+  });
+
+  // How shadcn's components import React, and the reason the ban left
+  // `no-restricted-imports`, which refused the import before anything was read.
+  test("while a namespace import with no memo read off it draws nothing", () => {
+    expect(drawnIn("src/namespace-only.ts")).toEqual([]);
+  });
+
+  test.each([
+    ["src/memo-spellings.ts", ["useCallback", "useMemo", "useCallback"]],
+    ["src/memo-barrel.ts", ["useMemo"]],
+  ])("and through every other spelling that reaches it, in %s", (path, names) => {
+    expect(refusedIn(path)).toEqual(names);
   });
 
   test("while the hooks React owns outright are left alone", () => {
     expect(refusedIn("src/panel.ts")).not.toContain("useState");
   });
 
-  // The price of the list carrier, pinned rather than left as folklore:
-  // `no-restricted-imports` has no way to allow a type-only import of a name it
-  // refuses. Neither of these two has a use as a type, so the cost is nothing —
-  // and the day one does, this case is what says the carrier has to change.
-  test("and a type-only import of one is refused too, which this carrier cannot allow", () => {
-    expect(refusedIn("src/typed-memo.ts")).toEqual(["useMemo"]);
+  // `typeof useMemo` in a signature borrows the type without reaching the
+  // value, which the list carrier this ban left could not tell apart.
+  test("and a type-only import of one is not a memo at all", () => {
+    expect(drawnIn("src/typed-memo.ts")).toEqual([]);
   });
 });
 
@@ -410,10 +438,23 @@ describe("an effect", () => {
   // cannot follow — silent at both ends unless it is refused at this one.
   test("and at a barrel that re-exports it, by name or by star", () => {
     expect(refusedIn("src/barrel.ts")).toEqual(["useEffect", "useLayoutEffect"]);
-    // `export *` carries the memo pair too, which is the other carrier saying
-    // the same thing about the same line.
-    expect(refusedIn("src/everything.ts")).toContain("everything");
+    // `export *` carries the memo pair too, so the memo rule refuses the same
+    // line, one diagnostic each.
+    expect(drawnIn("src/everything.ts").toSorted()).toEqual([
+      "error anti-slop(no-manual-memoization)",
+      "error anti-slop(no-unnamed-effects)",
+    ]);
   });
+
+  // No wrapper sits on a line that hands the module on whole and no effect
+  // waits to move, so each rule says the one thing that line can change.
+  test.each(["src/everything.ts", "src/default-barrel.ts", "src/routes/everything.ts"])(
+    "and %s, which hands on the whole module, is told to re-export by name",
+    (path) => {
+      expect(reportedIn(path).length).toBeGreaterThan(0);
+      expect(adviceIn(path).every((advice) => advice.includes(BY_NAME))).toBe(true);
+    },
+  );
 
   // The one use of these names that survives the pick they lost to: a signature
   // borrowing the type without reaching the value. The plugin rule can tell,
@@ -588,9 +629,9 @@ describe("a perf hint", () => {
 describe("a console call", () => {
   // Promoted from `warn` for the reason the warn tier carries generally: it
   // could not fail a build, so every one of them was a line in a report. The
-  // server override that already denied it is untouched — what changed is the
-  // floor under every other file. Graded by the severity, which is the change.
-  test("denies in ordinary source, not only under the server override", () => {
+  // base states it once, at the top level, and no block raises it further for
+  // server code, so a source file anywhere is the case. Graded by the severity.
+  test("denies in ordinary source, with no server directory needed", () => {
     expect(drawnIn("src/logging.ts")).toEqual(["error eslint(no-console)"]);
   });
 });

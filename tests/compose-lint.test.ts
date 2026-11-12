@@ -147,7 +147,9 @@ describe("compose lint", () => {
   // The definition of "a test" is oxlint.base.json's own test override rather
   // than a second opinion in the gate: the fleet lints by that list, and a
   // waiver graded against a different one would refuse a file every other tool
-  // here calls a test.
+  // here calls a test. The override's two test-support names are the one
+  // difference: a harness or a fixture is test code that asserts nothing, so
+  // the base grades it as a suite's and a waiver cannot name it.
   test("what counts as a test is the base's own list", async () => {
     // Through the gates' own reader, since the base is JSON with comments —
     // README asks for the reason for an override beside it.
@@ -158,7 +160,7 @@ describe("compose lint", () => {
       .filter(isList)
       .find((files) => files.includes("**/*.test.ts"));
 
-    expect(testOverride).toEqual(TEST_FILES);
+    expect(testOverride).toEqual([...TEST_FILES, "**/*.test-harness.*", "**/*.fixture.*"]);
   });
 
   // The reason is not optional, for the reason it is not optional on any hatch

@@ -1,6 +1,6 @@
 {
   "name": "@gokayo43/dev-config",
-  "version": "0.71.1",
+  "version": "0.72.1",
   "description": "Shared TypeScript, oxlint, oxfmt, knip, Renovate and Lighthouse configuration for Bun projects.",
   "license": "MIT",
   "repository": {
@@ -25,6 +25,8 @@
     "interleaving.ts",
     "response-schema.ts",
     "characterization-net.ts",
+    "bun-test.d.ts",
+    "css-custom-properties.d.ts",
     "anti-slop"
   ],
   "type": "module",
@@ -46,11 +48,21 @@
       "types": "./dist/count-budget.d.ts",
       "default": "./dist/count-budget.js"
     },
+    "./narrowing": {
+      "types": "./dist/narrowing.d.ts",
+      "default": "./dist/narrowing.js"
+    },
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
     "./interleaving": "./interleaving.ts",
     "./response-schema": "./response-schema.ts",
-    "./characterization-net": "./characterization-net.ts"
+    "./characterization-net": "./characterization-net.ts",
+    "./bun-test": {
+      "types": "./bun-test.d.ts"
+    },
+    "./css-custom-properties": {
+      "types": "./css-custom-properties.d.ts"
+    }
   },
   "scripts": {
     "build": "tsdown",
@@ -71,11 +83,12 @@
     "@sinclair/typebox": "0.34.52",
     "@stryker-mutator/core": "9.6.1",
     "@types/bun": "1.4.0",
+    "@types/react": "19.3.0",
     "drizzle-orm": "0.45.2",
     "effect": "3.22.0",
     "elysia": "1.4.29",
     "fast-check": "4.9.0",
-    "knip": "6.32.2",
+    "knip": "6.38.0",
     "lefthook": "2.1.10",
     "oxfmt": "0.63.0",
     "oxlint": "1.80.0",
@@ -93,7 +106,7 @@
     "eslint-import-resolver-typescript": ">=4",
     "eslint-plugin-boundaries": ">=7",
     "fast-check": ">=4",
-    "knip": ">=6",
+    "knip": ">=6.38",
     "oxfmt": ">=0.63",
     "oxlint": ">=1.80",
     "oxlint-tsgolint": ">=7"

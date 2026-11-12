@@ -1,8 +1,8 @@
 /**
- * Why these three entries, and why no others.
+ * Why these four entries, and why no others.
  *
- * `count-budget.ts`, `invariant-sweep.ts` and `route-log.ts` are imported by a
- * repo's Playwright specs. Playwright's runner is node, and node refuses to
+ * `count-budget.ts`, `invariant-sweep.ts`, `narrowing.ts` and `route-log.ts`
+ * are imported by a repo's Playwright specs. Playwright's runner is node, and node refuses to
  * strip types from anything under `node_modules` — `--experimental-strip-types`
  * excludes that directory outright, which is where every consumer has this
  * package — so a specifier resolving to a `.ts` there cannot load at all
@@ -23,7 +23,7 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-  entry: ["count-budget.ts", "invariant-sweep.ts", "route-log.ts"],
+  entry: ["count-budget.ts", "invariant-sweep.ts", "narrowing.ts", "route-log.ts"],
   platform: "neutral",
   dts: true,
   deps: { neverBundle: [/^node:/], dts: { neverBundle: true } },

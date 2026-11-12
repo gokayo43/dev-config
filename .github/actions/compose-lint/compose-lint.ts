@@ -13,10 +13,13 @@ const OPT_OUT = "x-no-healthcheck";
 const HOST_NETWORK_OPT_OUT = "x-host-network";
 
 /**
- * What counts as a test file, which is `oxlint.base.json`'s own test override —
- * the one definition the fleet already lints by. `tests/compose-lint.test.ts`
- * holds the two lists equal, so this is a copy that cannot drift rather than a
- * second opinion.
+ * What counts as a test file, which is the test suffixes of `oxlint.base.json`'s
+ * own test override — the one definition the fleet already lints by. That
+ * override also names the test-support files (`*.test-harness.*`,
+ * `*.fixture.*`), which are test code and assert nothing, so a waiver cannot
+ * point at one. `tests/compose-lint.test.ts` holds the base's list equal to
+ * this one plus those two names, so this is a copy that cannot drift rather
+ * than a second opinion.
  */
 export const TEST_FILES = ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"];
 

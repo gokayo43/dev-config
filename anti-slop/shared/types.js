@@ -356,16 +356,26 @@ function resolutionKey(resolved) {
 const unsafeValues = new WeakMap();
 
 /**
+ * One question's answer for a resolved type, from the table of this file's
+ * answers when it is there and worked out and stored when it is not.
+ * @template T
+ * @param {WeakMap<TypeEnvironment, Map<string, T>>} table
  * @param {TypeEnvironment} environment
- * @returns {Map<string, UnsafeDictionary["unsafeValue"] | null>}
+ * @param {ResolvedType} resolved
+ * @param {() => T} answer
+ * @returns {T}
  */
-function unsafeValueCache(environment) {
-  const known = unsafeValues.get(environment);
+function memoised(table, environment, resolved, answer) {
+  /** @type {Map<string, T>} */
+  const fresh = new Map();
+  const cache = table.get(environment) ?? fresh;
+  table.set(environment, cache);
+  const key = resolutionKey(resolved);
+  const known = cache.get(key);
   if (known !== undefined) return known;
-  /** @type {Map<string, UnsafeDictionary["unsafeValue"] | null>} */
-  const cache = new Map();
-  unsafeValues.set(environment, cache);
-  return cache;
+  const worked = answer();
+  cache.set(key, worked);
+  return worked;
 }
 
 /**
@@ -380,13 +390,9 @@ function unsafeValueCache(environment) {
  */
 function unsafeDirectValue(type, environment, substitutions, resolving) {
   const resolved = resolveType(type, environment, substitutions, resolving);
-  const cache = unsafeValueCache(environment);
-  const key = resolutionKey(resolved);
-  const known = cache.get(key);
-  if (known !== undefined) return known;
-  const answer = unsafeResolvedValue(resolved, environment);
-  cache.set(key, answer);
-  return answer;
+  return memoised(unsafeValues, environment, resolved, () =>
+    unsafeResolvedValue(resolved, environment),
+  );
 }
 
 /**
@@ -497,6 +503,62 @@ export function classifyUnsafeDictionary(type, environment) {
 }
 
 /**
+ * The fixed-key answers already worked out for this file, for the reason
+ * `unsafeValues` above gives: `type K1 = K0 | K0` doubles the work per level.
+ * @type {WeakMap<TypeEnvironment, Map<string, boolean>>}
+ */
+const fixedKeySets = new WeakMap();
+
+/**
+ * Whether a key type is a fixed set of keys: a literal, or a union of nothing
+ * else, once resolved. `string`, a template, `keyof` and a name this file does
+ * not declare are not, which fails closed for a key imported from elsewhere.
+ * @param {ESTree.TSType} type
+ * @param {TypeEnvironment} environment
+ * @param {Substitutions} substitutions
+ * @param {ReadonlySet<string>} resolving
+ * @returns {boolean}
+ */
+function isFixedKeySet(type, environment, substitutions, resolving) {
+  const resolved = resolveType(type, environment, substitutions, resolving);
+  return memoised(fixedKeySets, environment, resolved, () => {
+    const node = resolved.type;
+    return (
+      node.type === "TSLiteralType" ||
+      (node.type === "TSUnionType" &&
+        node.types.every((member) =>
+          isFixedKeySet(member, environment, resolved.substitutions, resolved.resolving),
+        ))
+    );
+  });
+}
+
+/**
+ * Whether a dictionary shape names every key it holds: a built-in `Record` or a
+ * mapped type over a fixed set of keys. Such a target is a closed object type
+ * whose missing key is a compile error, so `satisfies` would check exactly what
+ * the annotation does and the annotation discards nothing.
+ * @param {ResolvedType} resolved
+ * @param {TypeEnvironment} environment
+ * @returns {boolean}
+ */
+function isClosedRecord(resolved, environment) {
+  const node = resolved.type;
+  /** @param {ESTree.TSType | undefined} key */
+  const fixed = (key) =>
+    key !== undefined &&
+    isFixedKeySet(key, environment, resolved.substitutions, resolved.resolving);
+
+  if (node.type === "TSMappedType") return node.nameType === null && fixed(node.constraint);
+  return (
+    node.type === "TSTypeReference" &&
+    typeReferenceName(node) === "Record" &&
+    isBuiltIn("Record", environment, node) &&
+    fixed(node.typeArguments?.params[0])
+  );
+}
+
+/**
  * @param {ESTree.TSTypeLiteral} type
  * @returns {WideningTarget | null}
  */
@@ -525,6 +587,8 @@ function aliasTarget(alias, reference, name, environment) {
   const resolving = new Set([name]);
 
   if ((alias.typeParameters?.params.length ?? 0) > 0) {
+    const body = resolveType(alias.typeAnnotation, environment, substitutions, resolving);
+    if (isClosedRecord(body, environment)) return null;
     return dictionaryValueTypes(alias.typeAnnotation, environment, substitutions, resolving)
       .length > 0
       ? { kind: "generic container", type: reference }
@@ -549,6 +613,9 @@ export function classifyWideningTarget(type, environment) {
   if (node.type === "TSUnknownKeyword") return { kind: "unknown", type: node };
   if (node.type === "TSObjectKeyword") return { kind: "object", type: node };
   if (node.type === "TSTypeLiteral") return literalTarget(node);
+  if (isClosedRecord({ type: node, substitutions: new Map(), resolving: new Set() }, environment)) {
+    return null;
+  }
   if (node.type === "TSMappedType") return { kind: "open dictionary", type: node };
   if (node.type !== "TSTypeReference") return null;
   const name = typeReferenceName(node);

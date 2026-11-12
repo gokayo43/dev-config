@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { basename, dirname } from "node:path";
-
-import { readConfig, record } from "../.github/actions/_lib/gate.ts";
-import { BASE, type Diagnostic, gradedByBase } from "./lint-fixture.ts";
+import { record } from "../.github/actions/_lib/gate.ts";
+import { type Diagnostic, gradedByBase, overrideSetting, shippedBase } from "./lint-fixture.ts";
 
 /**
  * The React half of the base's lint policy: the React Compiler's judgements,
@@ -33,11 +31,10 @@ import { BASE, type Diagnostic, gradedByBase } from "./lint-fixture.ts";
  *   would otherwise satisfy a key-set comparison while grading nothing about
  *   the rule it is named for.
  * - `undriven` — a compiler rule no shape tried here provokes, with the reason.
- * - `elsewhere` — a `react/*` rule that is not the compiler's. These report
- *   under `react-hooks(…)` rather than `react(…)`, and the cases that grade
- *   them are the two at the bottom of this file. A classification rather than
- *   an omission, so that the day the base states another one, it is a decision
- *   here instead of a rule silently read as the compiler's.
+ * - `elsewhere` — a `react/*` rule that is not the compiler's, with where it is
+ *   graded instead. A classification rather than an omission, so that the day
+ *   the base states another one, it is a decision here instead of a rule
+ *   silently read as the compiler's.
  *
  * `draws` is a list because the key names the rule a fixture is written for and
  * not a promise that it is the only one to fire: the compiler reaches one
@@ -266,6 +263,14 @@ export function Panel(props: { readonly n: number }) {
   "react-in-jsx-scope": {
     elsewhere: "the classic-runtime import rule, off in this base and reported under react-hooks",
   },
+  "jsx-no-constructed-context-values": {
+    elsewhere:
+      "the React plugin's own memo advice, off in this base and graded in oxlint-base.test.ts",
+  },
+  "no-object-type-as-default-prop": {
+    elsewhere:
+      "the React plugin's own memo advice, off in this base and graded in oxlint-base.test.ts",
+  },
   "rules-of-hooks": { elsewhere: "graded by the uncompiled-caller case below" },
   "exhaustive-deps": { elsewhere: "graded by the uncompiled-caller case below" },
 } satisfies Record<string, Graded>;
@@ -275,17 +280,9 @@ const COMPILER_RULES = Object.entries(REACT)
   .filter(([, graded]) => !("elsewhere" in graded))
   .map(([rule]) => rule);
 
-/**
- * The base's own `react/*` names, read through the gates' JSONC decoder — the
- * base carries the reason for every entry as a comment, which `JSON.parse`
- * refuses. `readConfig` rather than a decode of its own: an unreadable base
- * answers with a problem instead of an empty object, and an empty object here
- * would empty the rule set and pass every case in this file.
- */
+/** The base's own `react/*` names. */
 async function statedRules(): Promise<string[]> {
-  const base = await readConfig(dirname(BASE), basename(BASE));
-  if (base.contents === undefined) throw new Error(base.problems[0]?.message ?? "base unreadable");
-  return Object.keys(record(record(base.contents)["rules"]))
+  return Object.keys(record((await shippedBase())["rules"]))
     .filter((name) => name.startsWith("react/"))
     .map((name) => name.slice("react/".length))
     .toSorted();
@@ -317,6 +314,11 @@ async function documentedRules(): Promise<string[]> {
  */
 function pathOf(rule: string): string {
   return `src/hooks/${rule}.tsx`;
+}
+
+/** The same fixture where a suite keeps it, which no compiler ever reads. */
+function suitePathOf(rule: string): string {
+  return `tests/${rule}.tsx`;
 }
 
 /** A hook called from a function that is neither a component nor a hook. */
@@ -368,6 +370,11 @@ const TREE = {
       .filter(([, graded]) => "source" in graded)
       .map(([rule, graded]) => [pathOf(rule), "source" in graded ? graded.source : ""]),
   ),
+  ...Object.fromEntries(
+    Object.entries(REACT)
+      .filter(([, graded]) => "source" in graded)
+      .map(([rule, graded]) => [suitePathOf(rule), "source" in graded ? graded.source : ""]),
+  ),
   "src/probe.tsx": PROBE,
   "src/hooks/non-component.ts": NON_COMPONENT,
   "src/hooks/non-component-effect.ts": NON_COMPONENT_EFFECT,
@@ -375,6 +382,11 @@ const TREE = {
 } satisfies Record<string, string>;
 
 const REPORTED = await gradedByBase(TREE);
+
+/** Every rule a fixture provokes, with the judgements its fixture draws. */
+const driven = Object.entries(REACT).flatMap(([rule, graded]) =>
+  "source" in graded ? [[rule, graded.draws] as const] : [],
+);
 
 function reportedIn(file: string): readonly Diagnostic[] {
   return REPORTED.get(file) ?? [];
@@ -428,10 +440,6 @@ describe("what the React Compiler declines to optimize", () => {
   // case that tolerated extra diagnostics would pass on a rule that had begun
   // reporting the same code twice, which is the shape this base refuses
   // everywhere else.
-  const driven = Object.entries(REACT).flatMap(([rule, graded]) =>
-    "source" in graded ? [[rule, graded.draws] as const] : [],
-  );
-
   test.each(driven)("%s", (rule, draws) => {
     expect(judgedIn(pathOf(rule))).toEqual(draws.map((each) => `error ${each}`).toSorted());
   });
@@ -476,8 +484,25 @@ describe("what the React Compiler declines to optimize", () => {
   // memo that survives a disable carrying its reason.
   test("and a hand-written memo is graded, not only refused", () => {
     expect(drawnIn(pathOf("preserve-manual-memoization"))).toContain(
-      "error eslint(no-restricted-imports)",
+      "error anti-slop(no-manual-memoization)",
     );
+  });
+});
+
+describe("a component a suite renders", () => {
+  // bun:test runs no Babel, so a suite is never compiled and a judgement about
+  // what the compiler may cache or reorder has nothing to be about there. Every
+  // fixture above, moved under `tests/`, draws none of them.
+  test.each(driven)("draws no %s judgement", (rule) => {
+    expect(judgedIn(suitePathOf(rule))).toEqual([]);
+  });
+
+  // The two no fixture provokes are held by the config instead: the suite
+  // scope switches off every rule this table marks as the compiler's.
+  test("is out of reach of every judgement, the undriven ones included", async () => {
+    const suite = overrideSetting(await shippedBase(), "typescript/consistent-type-assertions");
+    const rules = record(suite["rules"]);
+    expect(COMPILER_RULES.filter((rule) => rules[`react/${rule}`] !== "off")).toEqual([]);
   });
 });
 

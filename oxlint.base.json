@@ -36,6 +36,12 @@
     "no-await-in-loop": "off",
     "no-console": "error",
     "no-empty": "error",
+    // Its one fix is to drop the underscore, and the underscore is what
+    // `no-unused-vars` asks for on a binding held only to be disposed of
+    // (`using _page = …`). Two rules making opposite demands of one line leave a
+    // disable on it whichever way it is written, and the unused-variable rule is
+    // the one of the two that finds bugs.
+    "eslint/no-underscore-dangle": "off",
     "eslint/no-warning-comments": [
       "error",
       { "terms": ["todo", "fixme", "xxx", "hack"], "location": "anywhere" }
@@ -58,39 +64,31 @@
     // suite override below, where a case asserts about a value nothing typed
     // and this rule is the whole of what still holds there.
     "typescript/no-unsafe-type-assertion": "off",
-    "typescript/no-restricted-types": [
-      "error",
-      {
-        "types": {
-          "Record<string, unknown>": {
-            "message": "define a boundary-specific alias with a reasoned suppression at its owning module, or model/parse the shape."
-          },
-          "Record<string, any>": {
-            "message": "define a boundary-specific alias with a reasoned suppression at its owning module, or model/parse the shape. `any` also defeats every type-aware rule below."
-          }
-        }
-      }
-    ],
     "no-restricted-globals": [
       "error",
-      { "name": "__dirname", "message": "Not defined in ESM — use import.meta.dir/url." },
-      { "name": "__filename", "message": "Not defined in ESM — use import.meta.url/path." },
+      {
+        "name": "__dirname",
+        "message": "CommonJS's name, which Bun supplies to an ES module and Node does not, so a file naming it breaks wherever Node loads it. Use import.meta.dir, or import.meta.dirname in a file Node also runs."
+      },
+      {
+        "name": "__filename",
+        "message": "CommonJS's name, which Bun supplies to an ES module and Node does not, so a file naming it breaks wherever Node loads it. Use import.meta.path, or import.meta.filename in a file Node also runs."
+      },
       { "name": "require", "message": "ESM project — use import (import() for dynamic)." }
     ],
-    // The imports a house pick has already answered, in the two cases that hold
-    // in every file. Each entry names what the import lost to, because the
+    // The imports a house pick has already answered, in the cases that hold in
+    // every file. Each entry names what the import lost to, because the
     // diagnostic is the only place the loser of that decision is standing.
     //
     // Only a ban with no exception can live here: an override
     // REPLACES the whole list for the files it matches — a consuming repo's own
     // entries included — so a ban a file's position decides is a plugin rule
-    // instead, whose scalar setting replaces only itself. `no-unnamed-effects`
-    // and `no-raw-query-hooks` below are the two that needed it.
+    // instead, whose scalar setting replaces only itself. `no-unnamed-effects`,
+    // `no-raw-query-hooks` and `no-test-support-imports` below are the ones that
+    // needed it.
     //
-    // Memoisation is the React Compiler's, which every repo here builds with
-    // (STACK): it inserts the memo a hand-written one approximates, and reads
-    // the dependencies off the code rather than off a list that can disagree
-    // with it. Each name gets its own entry so each carries its own message.
+    // The memo pair is not here either, though it holds in every file:
+    // `anti-slop/no-manual-memoization` below carries it, and says why.
     //
     // `bun:test`'s per-case hooks are the setup nothing in the case names (the
     // testing rules' per-case-setup line): a reader has to hold a hook written
@@ -99,15 +97,10 @@
     // `afterAll` stay: an expensive resource no case mutates is what they are
     // for.
     //
-    // Both entries refuse a type-only import of the name as well, which this
-    // rule gives no way to allow. Neither name has a use as a type.
+    // Every entry refuses a type-only import of its name as well, which this
+    // rule gives no way to allow. None of these names has a use as a type.
     "no-restricted-imports": [
       "error",
-      {
-        "name": "react",
-        "importNames": ["useMemo", "useCallback"],
-        "message": "React Compiler owns memoisation — delete the wrapper and use the value directly."
-      },
       {
         "name": "bun:test",
         "importNames": ["beforeEach", "afterEach"],
@@ -141,11 +134,28 @@
     // answered at all.
     "complexity": ["error", { "max": 20, "variant": "modified" }],
     "import/no-cycle": "error",
+    // Reading a named export off the default object is a question about what
+    // that object holds, and the type checker answers it from the declarations:
+    // a member the default does not carry is a type error. The rule answers from
+    // the export names alone, so it refuses a module that offers a function both
+    // ways, by name and on its default object, which is correct code.
+    "import/no-named-as-default-member": "off",
+    // A stylesheet is imported for what loading it does, and has nothing to
+    // bind. Every other import with no binding is still refused, since a module
+    // run for its side effects is a dependency nothing names.
+    "import/no-unassigned-import": ["error", { "allow": ["**/*.css"] }],
     // The automatic JSX runtime compiles JSX with no React binding in scope, so
     // there is nothing here for the rule to ask to be imported. A repo on the
     // classic runtime is the one that needs it, and is the one that would turn
     // it back on for itself.
     "react/react-in-jsx-scope": "off",
+    // Both ask for a value whose identity holds across renders, and both name
+    // `useMemo` as the way to get one, which the memo ban refuses. The
+    // React Compiler gives the context value and the default prop that identity
+    // itself, so in a compiled component neither finding is true, and in one the
+    // compiler skipped the answer is to end the skip (`react/todo` names it).
+    "react/jsx-no-constructed-context-values": "off",
+    "react/no-object-type-as-default-prop": "off",
     "react/rules-of-hooks": "error",
     "react/exhaustive-deps": "error",
     // The React Compiler's judgements, one rule per judgement. None of them
@@ -206,11 +216,32 @@
     // per step is what makes the step safe to reason about.
     "oxc/no-map-spread": "off",
     "typescript/await-thenable": "error",
-    "typescript/no-floating-promises": "error",
+    // bun:test types `mock.module` as `void | Promise<void>`, the promise being
+    // what an async factory returns, so every module mock in a suite reads as a
+    // floating promise. Allowed by its declaration in `bun:test`, which a local
+    // `mock` or another `module` method does not share. The one hazard it lets
+    // through: an async factory left unawaited races the import it replaces, so
+    // a case mocking with one awaits the call itself.
+    "typescript/no-floating-promises": [
+      "error",
+      { "allowForKnownSafeCalls": [{ "from": "package", "package": "bun:test", "name": "module" }] }
+    ],
     "typescript/no-misused-promises": "error",
+    // Spreading a string splits it by code point, which is exactly what a
+    // barcode or a length limit counted in code points wants. The rule's case is
+    // text a person reads, where a code point can be half a character, and no
+    // rule can tell that text from the rest. A spread that loses data outright,
+    // a class instance's prototype or a map's entries, is still refused.
+    "typescript/no-misused-spread": ["error", { "allow": [{ "from": "lib", "name": "string" }] }],
     "typescript/no-unnecessary-condition": "error",
     "typescript/no-unnecessary-type-assertion": "error",
     "typescript/switch-exhaustiveness-check": "error",
+    // `noImplicitReturns` in the shared tsconfig refuses every path that falls
+    // off a function owing a value, and reads exhaustiveness from the types. This
+    // rule reads the syntax, so it refuses what the checker proves total: the
+    // exhaustive switch the rule above asks for, and an Effect generator ending
+    // after `return yield* Effect.fail(…)`.
+    "typescript/consistent-return": "off",
     "typescript/no-unsafe-argument": "error",
     "typescript/no-unsafe-assignment": "error",
     "typescript/no-unsafe-call": "error",
@@ -218,12 +249,22 @@
     "typescript/no-unsafe-member-access": "error",
     "typescript/no-unsafe-return": "error",
     "typescript/prefer-nullish-coalescing": "error",
-    "anti-slop/no-chained-type-assertions": "error",
+    // `typescript/consistent-type-assertions` above refuses every assertion in
+    // source, so every chain this rule would report there is already two
+    // diagnostics of that rule. It is stated in the suite override below, where
+    // that rule is off and a chain whose every link widens is otherwise unseen.
+    "anti-slop/no-chained-type-assertions": "off",
     "anti-slop/no-env-access": "error",
     "anti-slop/no-known-value-widening": "error",
+    // Everywhere, and a plugin rule although no position decides it: as a
+    // `no-restricted-imports` entry it refused `import * as React from "react"`
+    // before anything was read off it, which is how shadcn's components import
+    // React, and it had no way to let a type-only import through.
+    "anti-slop/no-manual-memoization": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-test-support-imports": "error",
     "anti-slop/no-unknown-parameters": "error",
     "anti-slop/no-unknown-returns": "error",
     "anti-slop/no-unknown-type-aliases": "error",
@@ -236,7 +277,14 @@
   },
   "overrides": [
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*"
+      ],
       "rules": {
         // A helper one describe uses belongs inside it, next to the cases that
         // read it. Hoisting it to module scope to satisfy this rule separates a
@@ -251,12 +299,6 @@
         "anti-slop/no-local-module-mocks": "error",
         "anti-slop/no-mock-assertions": "error",
         "anti-slop/no-real-timers": "error"
-      }
-    },
-    {
-      "files": ["src/server/**", "server/**", "apps/api/**"],
-      "rules": {
-        "no-console": "error"
       }
     },
     {
@@ -276,6 +318,8 @@
         "**/*.test.tsx",
         "**/*.spec.ts",
         "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*",
         "**/tests/**",
         "**/e2e/**"
       ],
@@ -302,11 +346,70 @@
         // case makes about a value it decoded is the claim, but one that widens
         // or narrows unsafely is still a hole, and this is the only scope where
         // saying so does not repeat the rule above.
-        "typescript/no-unsafe-type-assertion": "error"
+        "typescript/no-unsafe-type-assertion": "error",
+
+        // The one chain the rule above does not see, every link of which
+        // widens (`admin as User as object`); a chain with a narrowing link
+        // draws both, since telling the two apart needs the type checker.
+        "anti-slop/no-chained-type-assertions": "error",
+
+        // A suite and its support files are where a harness or a fixture is
+        // imported; the rule is for code that ships.
+        "anti-slop/no-test-support-imports": "off",
+
+        // bun:test types `expect` as `<T = unknown>(actual: T)` and its `toBe`
+        // and `toEqual` as taking that same `T`, so a case comparing a value
+        // with an expected one of a wider type writes `expect<unknown>(actual)`.
+        // The argument equals the default and changes the inference, and this
+        // rule reads only the first of those, so in a suite every one it reports
+        // is that line and its fix breaks the compile.
+        "typescript/no-unnecessary-type-arguments": "off",
+
+        // The React Compiler's judgements are about what the compiler may cache
+        // or reorder, and a suite is never compiled: bun:test runs no Babel, so a
+        // component a case renders is a fixture nothing optimizes. The hooks
+        // rules stay, since a test component still runs under React.
+        "react/capitalized-calls": "off",
+        "react/error-boundaries": "off",
+        "react/exhaustive-effect-dependencies": "off",
+        "react/globals": "off",
+        "react/hooks": "off",
+        "react/immutability": "off",
+        "react/incompatible-library": "off",
+        "react/invariant": "off",
+        "react/memo-dependencies": "off",
+        "react/no-deriving-state-in-effects": "off",
+        "react/preserve-manual-memoization": "off",
+        "react/purity": "off",
+        "react/refs": "off",
+        "react/rule-suppression": "off",
+        "react/set-state-in-effect": "off",
+        "react/set-state-in-render": "off",
+        "react/static-components": "off",
+        "react/syntax": "off",
+        "react/todo": "off",
+        "react/unsupported-syntax": "off",
+        "react/use-memo": "off",
+        "react/void-use-memo": "off",
+
+        // An effect in a component a case renders is the fixture's, and a named
+        // hook under `hooks/` would be production code written for one test.
+        "anti-slop/no-unnamed-effects": "off"
       }
     },
-    // The two picks a file's position decides. Both are plugin rules rather
-    // than `no-restricted-imports` entries, because a scalar setting in an
+    {
+      // Playwright's files: the specs, by the suffix this house gives an E2E
+      // spec, and what sits beside them under `e2e/`.
+      "files": ["**/e2e/**", "**/*.spec.ts", "**/*.spec.tsx"],
+      "rules": {
+        // Playwright hands every fixture a callback named `use`, which this rule
+        // reads as React's `use` called outside a component. No React runs in a
+        // Playwright file, so the name is the whole of what it sees.
+        "react/rules-of-hooks": "off"
+      }
+    },
+    // Picks a file's position decides, each a plugin rule rather than a
+    // `no-restricted-imports` entry, because a scalar setting in an
     // override replaces only itself: a list-shaped rule redefined here would
     // take away every entry it did not restate, a consuming repo's own settled
     // decisions included.

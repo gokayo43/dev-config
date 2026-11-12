@@ -2,21 +2,22 @@ import { describe, expect, test } from "bun:test";
 import { symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { type ConfigObject, configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
-import { BASE, baseConfig, lintAt, oxlint } from "./lint-fixture.ts";
+import { type ConfigObject, isList, record } from "../.github/actions/_lib/gate.ts";
+import {
+  BASE,
+  baseConfig,
+  byFile,
+  type Diagnostic,
+  lintAt,
+  oxlint,
+  shippedBase,
+} from "./lint-fixture.ts";
 import { CLEAN, contract, withoutReasonFor } from "./repo-contract-fixture.ts";
 import { materialise } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
 
-/**
- * The base itself, read through the gates' own JSONC decoder — it carries the
- * reason for every entry in it as a comment, which is the thing the README
- * asks every repo to write and `JSON.parse` refuses.
- */
-const base = record(
-  (await configObjects(REPO, ["oxlint.base.json"], "JSON with comments")).read[0]?.value,
-);
+const base = await shippedBase();
 
 /**
  * The rules whose configuration is a list of entries rather than one options
@@ -172,6 +173,39 @@ export const id = randomUUID;
 });
 
 /**
+ * A tree linted by the shipped base with type-aware rules on, grouped by path.
+ * None of the base's own type-aware rules answer otherwise: the analysis runs in
+ * `oxlint-tsgolint`, so the tree gets this repo's install to resolve it out of,
+ * and a tsconfig for the checker to read.
+ */
+async function typeAware(
+  files: Record<string, string>,
+): Promise<ReadonlyMap<string, readonly Diagnostic[]>> {
+  const root = await materialise({
+    ".oxlintrc.json": JSON.stringify({
+      extends: [BASE],
+      ignorePatterns: ["node_modules/**"],
+    }),
+    "tsconfig.json": JSON.stringify({
+      compilerOptions: {
+        target: "esnext",
+        module: "preserve",
+        moduleResolution: "bundler",
+        jsx: "react-jsx",
+        types: ["bun"],
+        strict: true,
+        noEmit: true,
+        skipLibCheck: true,
+      },
+      include: ["**/*.ts", "**/*.tsx"],
+    }),
+    ...files,
+  });
+  await symlink(join(REPO, "node_modules"), join(root, "node_modules"));
+  return byFile(await lintAt(root));
+}
+
+/**
  * What the base says about a widened binding asserted back to what it was.
  *
  * This repo shipped a rule for exactly that and deleted it, because oxlint's
@@ -185,10 +219,6 @@ export const id = randomUUID;
  * under the stronger `consistent-type-assertions`, which refuses these shapes
  * for being assertions at all rather than for what they assert — the case after
  * the block is that half.
- *
- * Type-aware, because none of the base's own rules answer otherwise: the
- * analysis runs in `oxlint-tsgolint`, so the tree gets this repo's install to
- * resolve it out of, and a tsconfig for the checker to read.
  */
 describe("the widened bindings the base still refuses", () => {
   const USER = `interface User {
@@ -227,26 +257,8 @@ export function round(value: User): User {
    * answer.
    */
   async function drawnOver(source: string, path: string): Promise<string[]> {
-    const root = await materialise({
-      ".oxlintrc.json": JSON.stringify({
-        extends: [BASE],
-        ignorePatterns: ["node_modules/**"],
-      }),
-      "tsconfig.json": JSON.stringify({
-        compilerOptions: {
-          target: "esnext",
-          module: "preserve",
-          moduleResolution: "bundler",
-          strict: true,
-          noEmit: true,
-          skipLibCheck: true,
-        },
-        include: ["*.ts"],
-      }),
-      [path]: `${source}\n`,
-    });
-    await symlink(join(REPO, "node_modules"), join(root, "node_modules"));
-    return (await lintAt(root)).map(({ severity, code }) => `${severity} ${code}`);
+    const reported = await typeAware({ [path]: `${source}\n` });
+    return (reported.get(path) ?? []).map(({ severity, code }) => `${severity} ${code}`);
   }
 
   test.each(Object.entries(WIDENED))("%s", async (_name, source) => {
@@ -306,5 +318,242 @@ describe("the base against the rule it makes every repo keep", () => {
     expect(problems.filter((message) => message.includes("turned off"))).toEqual([
       "oxc/no-map-spread is turned off with no reason — add the reason above the entry",
     ]);
+  });
+});
+
+/**
+ * The settings the base relaxes, each graded on both sides of the change: the
+ * correct code a rule stopped refusing draws nothing from it, and the nearest
+ * code it still has to refuse, or the same code where the relaxation does not
+ * reach, still draws it. One type-aware run over one tree, a file per case,
+ * because half of these rules answer only with the checker on.
+ */
+const DISPOSED = `declare function open(): Disposable;
+export function visit(): number {
+  using _page = open();
+  return 1;
+}
+`;
+
+/** Playwright's fixture shape: the callback a fixture hands its value to is called `use`. */
+const FIXTURE = `type Use<T> = (value: T) => Promise<void>;
+export const fixtures = {
+  page: async (_: { readonly name: string }, use: Use<string>): Promise<void> => {
+    await use("ready");
+  },
+};
+`;
+
+/** A component with an effect, which is what a case renders. */
+const RENDERED = `import { useEffect } from "react";
+export function Probe(props: { readonly n: number }) {
+  useEffect(() => {
+    globalThis.reportError(new Error(String(props.n)));
+  }, [props.n]);
+  return <p>{props.n}</p>;
+}
+`;
+
+/** A comparison whose expected value is wider than the actual, which bun:test types refuse without the argument. */
+const COMPARED = `import { expect, test } from "bun:test";
+test("compares", () => {
+  const actual: "a" | "b" = "a";
+  expect<unknown>(actual).toEqual("a");
+});
+`;
+
+const RELAXED = await typeAware({
+  "src/disposal.ts": DISPOSED,
+  "src/disposal-named.ts": DISPOSED.replace("_page", "page"),
+
+  "src/label.ts": `type Kind = "a" | "b";
+export function label(kind: Kind): string {
+  switch (kind) {
+    case "a":
+      return "A";
+    case "b":
+      return "B";
+  }
+}
+`,
+  "src/put-away.ts": `import { Effect } from "effect";
+declare const event: string | undefined;
+export const putAway = Effect.gen(function* () {
+  if (event === undefined) return yield* Effect.fail("unknown event");
+  yield* Effect.log(event);
+});
+`,
+
+  "src/tools.ts": `export function helper(): number {
+  return 1;
+}
+const tools = { helper };
+export default tools;
+`,
+  "src/defaulted.ts": `import tools from "./tools";
+export const value = tools.helper();
+`,
+
+  "src/provider.tsx": `import { createContext, useState } from "react";
+const Count = createContext({ n: 0, set: (_: number): void => {} });
+export function Provider(props: { readonly children: unknown }) {
+  const [n, set] = useState(0);
+  return <Count.Provider value={{ n, set }}>{String(props.children)}</Count.Provider>;
+}
+export function List({ items = [] }: { readonly items?: readonly string[] }) {
+  return <p>{items.length}</p>;
+}
+`,
+
+  "src/mocked.test.ts": `import { mock, mock as stand } from "bun:test";
+mock.module("stripe", () => ({ default: 1 }));
+stand.module("resend", () => ({ default: 2 }));
+`,
+  "src/floating.test.ts": `declare const mock: { module(id: string): Promise<void> };
+declare function refresh(): Promise<void>;
+mock.module("stripe");
+refresh();
+`,
+
+  "src/styled.ts": `import "./theme.css";
+import "./polyfill";
+export const styled = true;
+`,
+  "src/theme.css": "p {}\n",
+  "src/polyfill.ts": "export const ready = true;\n",
+
+  "src/chars.ts": `export function chars(code: string): string[] {
+  return [...code];
+}
+`,
+  "src/spreads.ts": `class Box {
+  readonly value = 1;
+  get doubled(): number {
+    return this.value * 2;
+  }
+}
+export const fromBox = { ...new Box() };
+export const fromMap = { ...new Map<string, number>() };
+`,
+
+  "src/bag.ts": "export type Bag = Record<string, unknown>;\n",
+
+  "src/compare.test.ts": COMPARED,
+  "tests/compare.ts": COMPARED,
+  "src/wrap.ts": `function wrap<T = unknown>(value: T): T {
+  return value;
+}
+export const wrapped = wrap<unknown>(1);
+`,
+
+  "tests/render.tsx": RENDERED,
+  "src/render.test.tsx": RENDERED,
+  "src/render.tsx": RENDERED,
+
+  "e2e/fixtures.ts": FIXTURE,
+  "checkout.spec.ts": FIXTURE,
+  "src/fixture.ts": FIXTURE,
+});
+
+/** The rules a file drew, as their codes, in source order. */
+function codesIn(file: string): string[] {
+  return (RELAXED.get(file) ?? []).map(({ code }) => code);
+}
+
+describe("a rule the base switches off everywhere", () => {
+  test("lets a binding held for its disposal carry the underscore the unused-variable rule asks for", () => {
+    expect(codesIn("src/disposal.ts")).toEqual([]);
+    expect(codesIn("src/disposal-named.ts")).toEqual(["eslint(no-unused-vars)"]);
+  });
+
+  // The switch-off rests on the checker refusing what falls off a function
+  // owing a value, so the flag it rests on is held here with it.
+  test("lets an exhaustive switch and an Effect failure end a function, which the checker proves total", async () => {
+    expect(codesIn("src/label.ts")).toEqual([]);
+    expect(codesIn("src/put-away.ts")).toEqual([]);
+    const shared = record(await Bun.file(join(REPO, "tsconfig.base.json")).json());
+    expect(record(shared["compilerOptions"])["noImplicitReturns"]).toBe(true);
+  });
+
+  test("lets a default object's member be read when the module also exports it by name", () => {
+    expect(codesIn("src/defaulted.ts")).toEqual([]);
+  });
+
+  test("leaves a constructed context value and an object default prop to the compiler", () => {
+    expect(codesIn("src/provider.tsx")).not.toContain("react(jsx-no-constructed-context-values)");
+    expect(codesIn("src/provider.tsx")).not.toContain("react(no-object-type-as-default-prop)");
+  });
+});
+
+describe("a rule the base relaxes by an option", () => {
+  test("lets bun:test's module mock float, under any local name", () => {
+    expect(codesIn("src/mocked.test.ts")).toEqual([]);
+  });
+
+  // The allowance is the declaration in `bun:test`, not the spelling: a local
+  // `mock` with a `module` method and any other unawaited call still float.
+  test("and no other floating call, a local `mock.module` included", () => {
+    expect(codesIn("src/floating.test.ts")).toEqual([
+      "typescript(no-floating-promises)",
+      "typescript(no-floating-promises)",
+    ]);
+  });
+
+  test("lets a stylesheet be imported for its effect, and no other module", () => {
+    const refused = RELAXED.get("src/styled.ts") ?? [];
+    expect(refused.map(({ code, line }) => `${line} ${code}`)).toEqual([
+      "2 import(no-unassigned-import)",
+    ]);
+  });
+
+  test("lets a string be spread, and still refuses a spread that loses data", () => {
+    expect(codesIn("src/chars.ts")).toEqual([]);
+    expect(codesIn("src/spreads.ts")).toEqual([
+      "typescript(no-misused-spread)",
+      "typescript(no-misused-spread)",
+    ]);
+  });
+
+  // The base states no `no-restricted-types` entry for a dictionary, so the
+  // plugin rule is the one diagnostic on the line rather than one of two.
+  test("refuses a dictionary of unknowns once, through the plugin rule", () => {
+    expect(codesIn("src/bag.ts")).toEqual(["anti-slop(no-unsafe-dictionary-type)"]);
+  });
+});
+
+describe("a rule the base switches off in a suite", () => {
+  test.each(["src/compare.test.ts", "tests/compare.ts"])(
+    "lets %s widen what it compares with `expect<unknown>`",
+    (file) => {
+      expect(codesIn(file)).toEqual([]);
+    },
+  );
+
+  test("and still refuses a type argument equal to its default in source", () => {
+    expect(codesIn("src/wrap.ts")).toEqual(["typescript(no-unnecessary-type-arguments)"]);
+  });
+
+  test.each(["tests/render.tsx", "src/render.test.tsx"])(
+    "lets %s render a component with an effect in it",
+    (file) => {
+      expect(codesIn(file)).not.toContain("anti-slop(no-unnamed-effects)");
+    },
+  );
+
+  test("and still refuses that effect in a component outside a suite", () => {
+    expect(codesIn("src/render.tsx")).toContain("anti-slop(no-unnamed-effects)");
+  });
+});
+
+describe("a Playwright file", () => {
+  test.each(["e2e/fixtures.ts", "checkout.spec.ts"])(
+    "lets %s call the `use` a fixture is handed",
+    (file) => {
+      expect(codesIn(file)).toEqual([]);
+    },
+  );
+
+  test("while a function outside one calling a `use` is still read as a hook", () => {
+    expect(codesIn("src/fixture.ts")).toEqual(["react-hooks(rules-of-hooks)"]);
   });
 });

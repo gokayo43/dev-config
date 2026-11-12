@@ -4,9 +4,39 @@
   "rules": {
     "shadcn/no-restyle": ["error", { "allow": ["layout"] }],
     "shadcn/no-raw-colors": "error",
-    "shadcn/no-arbitrary-values": "error",
+    // Layout values (margin, width, position, visibility) are allowed, the same
+    // category `no-restyle` above lets a caller put on a shared component, since
+    // placing an element is the caller's. Tailwind's spacing scale is
+    // continuous, so every width, height, margin or position has a scale
+    // spelling (`w-[170px]` is `w-42.5`), and holding a layout value to the
+    // scale only changes how it is written. Colour, type, spacing, shape,
+    // effects and motion are the theme's tokens, and the rule still refuses an
+    // arbitrary one.
+    "shadcn/no-arbitrary-values": ["error", { "allow": ["layout"] }],
     "shadcn/no-inline-styles": "error",
     "shadcn/no-unknown-classes": "error",
     "shadcn/require-static-classes": "error"
-  }
+  },
+  "overrides": [
+    {
+      // The oxlint base's suite scope, restated because one base cannot read
+      // another's globs (a test holds the two lists equal). A fixture's style
+      // is not a screen: a case that reads `getComputedStyle` sets the style it
+      // reads on the element, and a DOM test environment loads no stylesheet a
+      // class could reach it through.
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.spec.ts",
+        "**/*.spec.tsx",
+        "**/*.test-harness.*",
+        "**/*.fixture.*",
+        "**/tests/**",
+        "**/e2e/**"
+      ],
+      "rules": {
+        "shadcn/no-inline-styles": "off"
+      }
+    }
+  ]
 }

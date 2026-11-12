@@ -7,7 +7,7 @@ import {
   settledValue,
   writesThroughMember,
 } from "../shared/bindings.js";
-import { memberName, propertyKeyName, unwrapAssertions } from "../shared/syntax.js";
+import { memberName, propertyKeyName, unwrapAssertions, writtenString } from "../shared/syntax.js";
 
 /**
  * The modules a stand-in comes out of. Recognition goes through the import
@@ -351,14 +351,19 @@ function moduleNamed(sourceCode, expression, seen) {
   const value = unwrapAssertions(expression);
   if (seen.has(value)) return null;
   seen.add(value);
-  if (value.type === "Literal") return typeof value.value === "string" ? value.value : null;
-  if (value.type === "TemplateLiteral") {
-    return value.expressions.length === 0 ? (value.quasis[0]?.value.cooked ?? null) : null;
-  }
-  if (value.type !== "Identifier") return null;
+  if (value.type !== "Identifier") return writtenString(value);
   const held = settledValue(sourceCode, value);
   return held === null ? null : moduleNamed(sourceCode, held, seen);
 }
+
+/**
+ * The prefixes a specifier of this repo's own starts with: the two relative
+ * ones, and the path aliases the fleet writes for its own source (`@/`, `~/`)
+ * and `package.json`'s `#` subpath imports. A scoped package is `@scope/`,
+ * which `@/` never matches. An alias spelled any other way is not seen, since
+ * this reads one file and no tsconfig.
+ */
+const OWN_PREFIXES = ["./", "../", "@/", "~/", "#"];
 
 /**
  * A specifier that can only be a file of ours; a bare one is a package, and a
@@ -367,7 +372,7 @@ function moduleNamed(sourceCode, expression, seen) {
  * @returns {boolean}
  */
 function isOurs(specifier) {
-  return specifier.startsWith("./") || specifier.startsWith("../");
+  return OWN_PREFIXES.some((prefix) => specifier.startsWith(prefix));
 }
 
 /**
@@ -398,7 +403,7 @@ export const noLocalModuleMocksRule = {
     type: "problem",
     docs: {
       description:
-        "Disallow mock.module() and spyOn() over a relative import — our own code rather than a package.",
+        "Disallow mock.module() and spyOn() over a relative or aliased import — our own code rather than a package.",
     },
     messages: {
       localMock:

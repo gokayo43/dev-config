@@ -61,7 +61,7 @@ function denotesModule(sourceCode, expression, module) {
 
 /**
  * A rule refusing a named set of one module's exports, however a file reaches
- * them. The two below are the same decision over a different module and a
+ * them. The rules below are the same decision over a different module and a
  * different list, and the ways round a rule that read only the import statement
  * are the same ways every time: rename it, take the namespace, take it later
  * with `await import`, or re-export it from a barrel and import that instead.
@@ -79,7 +79,13 @@ function settledImportRule(settled) {
     meta: {
       type: "problem",
       docs: { description: settled.description },
-      messages: { settledImport: settled.message },
+      messages: {
+        settledImport: settled.message,
+        // The rule's own message tells a reader what to do with the name; a
+        // line handing on the whole module holds no use of it to change.
+        wholeModule:
+          "This line re-exports `{{name}}`, which carries {{refused}} with it: re-export by name only what this barrel needs.",
+      },
     },
     create(context) {
       const { sourceCode } = context;
@@ -95,6 +101,17 @@ function settledImportRule(settled) {
 
       /** The name as this file reached it, which is what the diagnostic quotes. */
       const from = (/** @type {string} */ name) => `${name} from ${module}`;
+
+      const refused = [...names].map((name) => `\`${name}\``).join(", ");
+
+      /**
+       * @param {ESTree.Node} node
+       * @param {string} whole How the line names the module taken whole.
+       * @returns {void}
+       */
+      const refuseWhole = (node, whole) => {
+        context.report({ node, messageId: "wholeModule", data: { name: from(whole), refused } });
+      };
 
       return {
         /** The import as written, under whatever local name — the name that crosses is the key. */
@@ -141,19 +158,33 @@ function settledImportRule(settled) {
             const name = moduleExportName(specifier.local);
             // The module itself as well as its names: `export { default as React }`
             // hands the far side every one of them, one specifier further out.
-            if (names.has(name) || name === "default") refuse(specifier, from(name));
+            if (name === "default") refuseWhole(specifier, name);
+            else if (names.has(name)) refuse(specifier, from(name));
           }
         },
 
         /** And `export * from` carries the whole list by definition. */
         ExportAllDeclaration(node) {
           if (node.exportKind === "type" || !isModule(node.source, module)) return;
-          refuse(node, from("everything"));
+          refuseWhole(node, "everything");
         },
       };
     },
   };
 }
+
+/**
+ * Memoisation is the React Compiler's, which every repo here builds with
+ * (STACK): it inserts the memo a hand-written one approximates, and reads the
+ * dependencies off the code rather than off a list that can disagree with it.
+ */
+export const noManualMemoizationRule = settledImportRule({
+  module: "react",
+  names: new Set(["useMemo", "useCallback"]),
+  description: "Disallow React's hand-written memo hooks, which the React Compiler replaces.",
+  message:
+    "`{{name}}` is a hand-written memo. The React Compiler owns memoisation: delete the wrapper and use the value directly.",
+});
 
 /**
  * An effect belongs in a named custom hook (STACK's Effects line). The hook's

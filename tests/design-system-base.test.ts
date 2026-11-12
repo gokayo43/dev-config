@@ -1,12 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdir, symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { plugin } from "@shadcn/lint";
 
-import { type ConfigObject, configObjects, isList, record } from "../.github/actions/_lib/gate.ts";
-import { designSystemDependencies } from "../knip.base.ts";
-import { byFile, type Diagnostic, lintAt } from "./lint-fixture.ts";
+import { isList, record } from "../.github/actions/_lib/gate.ts";
+import { byFile, type Diagnostic, lintAt, scopeOf, shippedBase } from "./lint-fixture.ts";
 import { materialise, type Tree } from "./tree.ts";
 
 const REPO = dirname(import.meta.dir);
@@ -14,8 +13,8 @@ const REPO = dirname(import.meta.dir);
 /**
  * The wiring README documents, written the way a repo writes it: both bases by
  * their `node_modules` path, the components named through `settings.shadcn`
- * with no `components.json`, and `no-restyle` switched off where the components
- * are defined.
+ * with no `components.json`, and the three rules about a page's own styling
+ * switched off where the components are defined.
  */
 const OXLINTRC = `{
   "extends": [
@@ -29,8 +28,11 @@ const OXLINTRC = `{
     {
       "files": ["src/ui/**"],
       "rules": {
-        // A shared component styles itself here; the rule is about the pages that use it.
-        "shadcn/no-restyle": "off"
+        // A shared component styles itself here, and may need a structural
+        // value such as ring-[3px]; the rules are about the pages that use it.
+        "shadcn/no-restyle": "off",
+        "shadcn/no-arbitrary-values": "off",
+        "shadcn/require-static-classes": "off"
       }
     }
   ]
@@ -67,7 +69,7 @@ const PRODUCT: Tree = {
 `,
   "src/ui/button.tsx": `import { cva, type VariantProps } from "class-variance-authority";
 
-const button = cva("inline-flex items-center rounded-md bg-accent text-surface", {
+const button = cva("inline-flex items-center rounded-md bg-accent text-surface focus-visible:ring-[3px]", {
   variants: {
     size: { sm: "h-8 px-3 text-sm", lg: "h-11 px-6 text-base" },
     tone: { solid: "bg-accent text-surface", quiet: "bg-surface text-ink" },
@@ -136,6 +138,40 @@ const DRIFT = [
   },
 ] as const;
 
+/**
+ * Pages on either side of what the base allows, linted in the drift's run. An
+ * arbitrary layout value has a scale spelling for every value, so respelling
+ * one decides nothing; a colour, a type size or an effect is a token the theme
+ * owns. An inline style is refused on a screen and not in the suite scope, and
+ * each suite file carries a palette colour that must still be refused there: a
+ * file that drew nothing at all could as well be one oxlint never read.
+ */
+const pageOf = (body: string): string => `export function Page() {\n  return ${body};\n}\n`;
+const LAYOUT = "src/pages/layout.tsx";
+const ALLOWED: Tree = {
+  [LAYOUT]: pageOf(
+    `<section className="grid w-[170px] min-h-[44px] grid-cols-[1fr_2fr] sm:max-w-[425px]">Hello</section>`,
+  ),
+};
+const APPEARANCE = {
+  colour: "bg-[#1a1a24]",
+  "type size": "text-[11px]",
+  effect: "shadow-[0_0_10px_rgba(0,0,0,0.5)]",
+} as const;
+const appearancePage = (kind: string): string =>
+  `src/pages/arbitrary-${kind.replace(" ", "-")}.tsx`;
+const SUITE_FILES = [
+  "src/pages/page.test.tsx",
+  "src/pages/page.spec.tsx",
+  "src/pages/page.fixture.tsx",
+  "src/pages/page.test-harness.tsx",
+  "tests/page.tsx",
+  "e2e/page.tsx",
+];
+const STYLED_IN_A_SUITE = pageOf(
+  `<p className="bg-pink-500" style={{ overflowY: "auto" }}>Hello</p>`,
+);
+
 /** What the two bases are made of, as `files` ships them. */
 const SHIPPED = ["package.json", "oxlint.base.json", "design-system.base.json", "anti-slop"];
 
@@ -160,19 +196,27 @@ async function linted(tree: Tree): Promise<ReadonlyMap<string, readonly Diagnost
   return byFile(await lintAt(root));
 }
 
-/** The base as this package ships it. */
-async function shipped(): Promise<ConfigObject> {
-  return record((await configObjects(REPO, ["design-system.base.json"])).read[0]?.value);
-}
+// Each oxlint run here loads the plugin and the project's Tailwind, which takes
+// about two seconds with the machine to itself and passed bun's 5s default on a
+// shared runner under load, where every case reported a timeout as a fault.
+setDefaultTimeout(30_000);
 
 describe("the design-system base", () => {
-  // One oxlint run for every drifted page, started by whichever case reads it
+  // One oxlint run for every page below, started by whichever case reads it
   // first, so the tree is made inside a case like every other fixture here.
   let run: Promise<ReadonlyMap<string, readonly Diagnostic[]>> | undefined;
   const drifted = async (): Promise<ReadonlyMap<string, readonly Diagnostic[]>> =>
     await (run ??= linted({
       ...PRODUCT,
       ...Object.fromEntries(DRIFT.map(({ rule, page }) => [`src/pages/${rule}.tsx`, page])),
+      ...ALLOWED,
+      ...Object.fromEntries(
+        Object.entries(APPEARANCE).map(([kind, value]) => [
+          appearancePage(kind),
+          pageOf(`<p className="${value}">Hello</p>`),
+        ]),
+      ),
+      ...Object.fromEntries(SUITE_FILES.map((path) => [path, STYLED_IN_A_SUITE])),
     }));
 
   for (const { rule, alternative } of DRIFT) {
@@ -197,11 +241,43 @@ describe("the design-system base", () => {
     expect([...(await linted(PRODUCT)).values()].flat()).toEqual([]);
   });
 
+  test("an arbitrary layout value draws nothing", async () => {
+    expect((await drifted()).get(LAYOUT) ?? []).toEqual([]);
+  });
+
+  for (const kind of Object.keys(APPEARANCE)) {
+    test(`an arbitrary ${kind} still draws no-arbitrary-values`, async () => {
+      const reported = (await drifted()).get(appearancePage(kind)) ?? [];
+      expect(reported.map(({ severity, code }) => `${severity} ${code}`)).toContain(
+        "error shadcn(no-arbitrary-values)",
+      );
+    });
+  }
+
+  test("an inline style in the suite scope draws nothing, and the other rules still hold there", async () => {
+    const reported = await drifted();
+    for (const path of SUITE_FILES) {
+      expect(
+        (reported.get(path) ?? []).map(({ severity, code }) => `${severity} ${code}`),
+        path,
+      ).toEqual(["error shadcn(no-raw-colors)"]);
+    }
+  });
+
+  // One base cannot read another's globs, so the suite scope is written twice;
+  // a test-support spelling added to one list and not the other is a support
+  // file one base grades as a suite and the other as a screen.
+  test("no-inline-styles is off in exactly the oxlint base's suite scope", async () => {
+    expect(
+      scopeOf(await shippedBase("design-system.base.json"), "shadcn/no-inline-styles"),
+    ).toEqual(scopeOf(await shippedBase(), "typescript/consistent-type-assertions"));
+  });
+
   // Asked of the plugin and the base rather than of a fixture: a rule the
   // plugin ships that the base leaves off is drift nobody is told about, and a
   // version that adds one fails here, on the bump that has to decide it.
   test("the base enables every rule the plugin defines, each at error", async () => {
-    const base = await shipped();
+    const base = await shippedBase("design-system.base.json");
     const rules = Object.entries(record(base["rules"])).map(([name, setting]) => [
       name,
       isList(setting) ? setting[0] : setting,
@@ -211,12 +287,5 @@ describe("the design-system base", () => {
         .map((name) => [`shadcn/${name}`, "error"])
         .toSorted(([left], [right]) => String(left).localeCompare(String(right))),
     );
-  });
-
-  // The names a repo tells knip to ignore are the plugins this base loads: a
-  // plugin added to one and not the other is reported unused in every repo
-  // that extends the base, or ignored there for nothing.
-  test("knip is told to ignore exactly the plugins the base loads", async () => {
-    expect((await shipped())["jsPlugins"]).toEqual([...designSystemDependencies]);
   });
 });

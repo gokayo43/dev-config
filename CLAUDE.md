@@ -68,11 +68,20 @@ a change to a rule usually lands here too.
   second subject reached through the one field;
   `repo-contract/typecheck.ts` is what CI type-checks with — the script
   check.yml's typecheck lane reaches and the Bun `packageManager` names, one
-  fact seen from both ends; and
+  fact seen from both ends;
   `repo-contract/package-scripts.ts` is what a workflow step ends up running
   once the package scripts it goes through are followed, since reading a command
   for the program it runs is a subject of its own and neither rule that asks the
-  question is about it.
+  question is about it;
+  `repo-contract/reasons.ts` is where a commented JSON config switches
+  something off and whether the reason sits above it, the one reading both
+  `.oxlintrc.json` and every tsconfig are held to, each caller bringing its own
+  vocabulary of "off";
+  `repo-contract/lint-switch-offs.ts` is what "off" means in `.oxlintrc.json`,
+  and `repo-contract/tsconfig-flags.ts` is a check of `tsconfig.base.json` set back
+  in a repo's tsconfig, the one rule that reads the base itself, from the
+  action's own checkout; and `repo-contract/lockfile.ts` is what `bun.lock`
+  resolved, as against what a manifest declares.
   Of what `db-gate` holds beside its replay, six need their reason stated:
   `semantic-fixtures.ts`, since what
   the base ref's replay proves about a _schema_ and what it proves about the
@@ -139,8 +148,9 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Eight of them are **exports** it imports and
-  calls, and the two `dev-server*` files below are a bin it runs and the module
+  gates, which run over it from CI. Nine of them are **exports** it imports and
+  calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
+  `types`, and the two `dev-server*` files below are a bin it runs and the module
   that bin imports. Two more reach it only inside those, and no specifier
   exports either. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
@@ -170,7 +180,16 @@ a change to a rule usually lands here too.
   call every property test goes through, so a nightly can multiply how far each
   of them searches with no test changing; `interleaving.ts` runs an Effect
   program under a `Scheduler` whose every choice comes from fast-check data, so
-  a property generates the order overlapping fibers run in. `property.ts`,
+  a property generates the order overlapping fibers run in; `narrowing.ts` is
+  `only`, `nth`, `must` and `rejectionOf`, which hand back a value the compiler
+  could not prove present or throw naming what they found, and import no test
+  runner so a Playwright spec under node takes them too. `bun-test.d.ts` types
+  bun:test's `.resolves` and `.rejects` chains as promises, which bun-types up
+  to 1.4.4 does not, so `typescript/await-thenable` stays on in suites;
+  `css-custom-properties.d.ts` makes any `--name` a key of React's
+  `CSSProperties`, the cast-free route `shadcn/no-inline-styles` sends a
+  runtime value down. Both ship as source, and `tests/declarations.test.ts`
+  type-checks and lints a consumer's program with and without each. `property.ts`,
   `invariant-sweep.ts` and `count-budget.ts` are the three exports that read the
   environment for a value. Their pages are `docs/exports/`.
   `limiter-conformance.ts` registers tests where `response-schema.ts` answers
@@ -178,11 +197,11 @@ a change to a rule usually lands here too.
   is a value one call can grade, and a limiter is a sequence of attempts against
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
-  to is this package's business rather than a caller's: three of them are built and
-  five ship their source, and no import says which. `tsdown.config.ts` is where
+  to is this package's business rather than a caller's: four of them are built and
+  seven ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget}.{js,d.ts}`;
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing}.{js,d.ts}`;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
 - `dev-server.ts` and `dev-server-derive.ts` — one supervised dev server per git
@@ -207,22 +226,26 @@ a change to a rule usually lands here too.
   clean one. A gate without one is a claim. `build-cache.test.ts` is the build
   action's, running `build.sh` against a fixture repository whose build records
   what the cache held when it started. `anti-slop.test.ts`,
-  `anti-slop-test-smells.test.ts`, `anti-slop-env.test.ts` and
+  `anti-slop-test-smells.test.ts`, `anti-slop-test-support.test.ts`,
+  `anti-slop-env.test.ts` and
   `lint-policy.test.ts` hold every lint rule in `anti-slop/` to the same bar — a
   block of cases per rule, split where the base splits, since the rules scoped to
-  test files have a second question to answer about every case, the one scoped
-  away from `env.ts` and from a suite has a third, the two a directory grants or
-  scopes have a fourth, and the ones that apply everywhere have none. None of
-  them states how many there are: `anti-slop.test.ts` asks the plugin and the
-  base for their rule names and requires the two sets to be equal, which is the
-  check a count would replace with a number to forget. All of them run through
+  test files have a second question to answer about every case,
+  `no-chained-type-assertions` and `no-test-support-imports`, which the suite
+  scope switches on and off, read that scope's globs off the base,
+  `no-env-access`, scoped away from `env.ts` and from a suite, has a third, the two a directory
+  grants or scopes have a fourth, and the ones that apply everywhere have none.
+  None of them states how many there are: `anti-slop.test.ts` asks the plugin
+  and the base for their rule names and requires the two sets to be equal, and
+  README's anti-slop tables to name the same set, which is the check a count
+  would replace with a number to forget. All of them run through
   `lint-fixture.ts`,
   which owns the case shape and lints a whole block in one oxlint spawn, and
   refuses a run whose plugin threw or whose exit status and diagnostics
   disagree, both of which otherwise read as a clean tree.
   `anti-slop-upstream.test.ts` is
   upstream's own fixtures, as a differential oracle over every rule it ships
-  tests for. Three suites are not a gate's: `oxlint-base.test.ts` holds what
+  tests for. Some suites are not a gate's. `oxlint-base.test.ts` holds what
   the base config itself must — an override REPLACES a list-shaped rule rather
   than adding to it, which it proves against a config it builds itself and then
   holds every override in the base to, and that a consuming repo's own list
@@ -245,8 +268,12 @@ a change to a rule usually lands here too.
   rather than in either), how a dependency spec is read in
   `repo-contract-pins.test.ts`, the git hooks in `repo-contract-lefthook.test.ts`,
   the bunfig's release-age window and its exclusions in
-  `repo-contract-release-age.test.ts`, and what CI type-checks with in
-  `repo-contract-typecheck.test.ts` (mirroring `typecheck.ts`);
+  `repo-contract-release-age.test.ts`, what CI type-checks with in
+  `repo-contract-typecheck.test.ts` (mirroring `typecheck.ts`), a tsconfig's
+  weakened flags in `repo-contract-tsconfig.test.ts` and the lock in
+  `repo-contract-lockfile.test.ts` (each mirroring its module), the second over
+  the `bun-lock-*.lock` files beside it, which are locks `bun install` wrote
+  rather than ones typed by hand;
   `journalled-migrator.ts`, `replaying-migrator.ts` and
   `schema-migrator.ts` are the three `db:migrate` shapes the database gates are
   written for — a journalled one, a hand-rolled runner with no journal, and the
@@ -277,8 +304,9 @@ a change to a rule usually lands here too.
   browser facts — the ceiling rule is not one, and is searched without a browser
   in `count-ceilings.test.ts` — with
   a React app among its pages that it builds in memory once per suite, for
-  production — `react` and `react-dom` are devDependencies nothing imports for
-  that reason — and its suite runs Playwright several times over one tree,
+  production — `react-dom` is a devDependency nothing imports for that reason,
+  and `react` one only `css-custom-properties.d.ts` reads, with `@types/react`
+  for `tests/declarations.test.ts` — and its suite runs Playwright several times over one tree,
   because what one run writes into a ceilings file is what the next is checked
   against. That suite also spins a process on every core for the length of 20
   runs of one page, since a count read under load is half of what it grades, and
@@ -323,7 +351,7 @@ a change to a rule usually lands here too.
 ```sh
 bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites
-bun run build   # rewrites the committed dist/ from the three built exports
+bun run build   # rewrites the committed dist/ from the four built exports
 ```
 
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
