@@ -24,10 +24,14 @@
   },
   "packageRules": [
     {
-      "description": "Non-major updates land as one automerged PR per week. No PR limit holds a patch, minor, pin or digest update, whether its PR merges itself or waits for a reader, so PRs left open never stop one being opened; prConcurrentLimit and prHourlyLimit hold only majors and lock file maintenance.",
+      "description": "Non-major updates land as one automerged PR per week.",
       "matchUpdateTypes": ["patch", "minor", "pin", "digest"],
       "groupName": "non-major dependencies",
-      "automerge": true,
+      "automerge": true
+    },
+    {
+      "description": "No PR limit holds a patch, minor, pin or digest update, whichever group it lands in and whether its PR merges itself or waits for a reader, so PRs left open never stop one being opened. prConcurrentLimit and prHourlyLimit hold every other update, majors and lock file maintenance most often.",
+      "matchUpdateTypes": ["patch", "minor", "pin", "digest"],
       "prConcurrentLimit": 0,
       "prHourlyLimit": 0
     },
@@ -79,7 +83,7 @@
     },
     {
       "customType": "regex",
-      "description": "The same gitleaks pin appears unhashed in this repo's local install instructions.",
+      "description": "A GITLEAKS_VERSION= line in any README.md, at any depth, is read as the gitleaks pin. dev-config's own README carries one, unhashed, in its local install instructions.",
       "managerFilePatterns": ["/(^|/)README\\.md$/"],
       "matchStrings": ["GITLEAKS_VERSION=(?<currentValue>v\\S+)"],
       "depNameTemplate": "gitleaks/gitleaks",
