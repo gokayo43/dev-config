@@ -1362,20 +1362,23 @@ release declares the tsgolint range it runs, bun installs a pair outside that
 range without a warning, and the repo contract refuses such a pair in
 `bun.lock`.
 
-The `gokayo43/dev-config` and `gokayo43/dev-config-db` pins move in one PR of
-their own, on the branch `renovate/dev-config`, which never merges itself: a
-pin carries gate code, and moving it is that repo's own change under its own
-gates. That PR waits for whoever moves the pin, who either takes its
-branch as the start of the change or moves the pin on a branch of their own,
-after which Renovate closes it.
+The `gokayo43/dev-config` and `gokayo43/dev-config-db` pins move in a
+"dev-config" PR of their own, never in the week's group: the branch
+`renovate/dev-config` for every move but a major, which gets a branch of its
+own. Neither merges itself: a pin carries gate code, and moving it is that
+repo's own change under its own gates. Each waits for whoever moves the pin,
+who either takes its branch as the start of the change or moves the pin on a
+branch of their own, after which Renovate closes it.
 
-The limit of three open PRs (`prConcurrentLimit`), and of two opened per hour,
-holds majors, one PR each and so the PRs that can multiply, and the lockfile
-maintenance PR. It never holds a patch, minor, pin or digest update, whether its
-PR merges itself or waits for a reader: three majors left unread would
-otherwise stop the week's group, the Expo SDK PR or the dev-config PR from
-being opened at all. The exempt PRs still count toward the three that a major
-is held to.
+The limit of three open PRs (`prConcurrentLimit`), and of two opened per hour
+(`prHourlyLimit`), never holds a patch, minor, pin or digest update, whichever
+group it lands in and whether its PR merges itself or waits for a reader: three
+PRs left unread would otherwise stop the week's group, or the non-major moves
+of the Expo SDK and dev-config groups, from being opened at all. It holds every
+other update, majors and lockfile maintenance most often, so an Expo SDK
+release, which is a major of `expo`, and a major of a dev-config pin open only
+while fewer than three PRs are open. The exempt PRs still count toward those
+three.
 
 A repo's own `renovate.json` that switches self-merge off for a package
 (`"automerge": false`) gives that package a `groupName` of its own. Renovate
@@ -1449,7 +1452,9 @@ cover the next tool without touching the preset.
 
 One pin does live in this README and is managed: the `GITLEAKS_VERSION=` line in
 the local install snippet below, which carries no checksum and has a second,
-tiny manager of its own.
+tiny manager of its own. That manager is in the preset, so it reads a
+`GITLEAKS_VERSION=` line in every `README.md`, at any depth, of every repo that
+extends it.
 
 The datasource is what makes this safe. `github-releases` would move the version
 and leave the checksum, and a version bumped past a stale `sha256sum -c` fails
