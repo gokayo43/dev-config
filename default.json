@@ -24,10 +24,12 @@
   },
   "packageRules": [
     {
-      "description": "Non-major updates land as one automerged PR per week.",
+      "description": "Non-major updates land as one automerged PR per week. No PR limit holds a patch, minor, pin or digest update, whether its PR merges itself or waits for a reader, so PRs left open never stop one being opened; prConcurrentLimit and prHourlyLimit hold only majors and lock file maintenance.",
       "matchUpdateTypes": ["patch", "minor", "pin", "digest"],
       "groupName": "non-major dependencies",
-      "automerge": true
+      "automerge": true,
+      "prConcurrentLimit": 0,
+      "prHourlyLimit": 0
     },
     {
       "description": "Majors are read before they are merged.",
@@ -40,8 +42,9 @@
       "minimumReleaseAge": null
     },
     {
-      "description": "dev-config's and dev-config-db's pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody.",
+      "description": "dev-config's and dev-config-db's pins carry executable gate code. Automerging one would land a gate that the adopting PR never showed anybody. They get a group of their own because a grouped PR automerges only when every update in it does, so a pin left in the non-major group would stop that group merging itself.",
       "matchPackageNames": ["gokayo43/dev-config", "gokayo43/dev-config-db"],
+      "groupName": "dev-config",
       "automerge": false
     },
     {
