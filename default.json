@@ -15,7 +15,7 @@
   ],
   "internalChecksFilter": "strict",
   "rangeStrategy": "pin",
-  "dependencyDashboard": true,
+  "dependencyDashboard": { "enabled": true },
   "prConcurrentLimit": 3,
   "platformAutomerge": true,
   "lockFileMaintenance": {
