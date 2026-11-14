@@ -90,9 +90,9 @@ function skipAt(sourceCode, parent, child) {
 
 /**
  * What can keep `node` from running whenever `top` does, nearest first, or
- * nothing when it always runs with it. `top` is a branch when the question is
- * whether one of its arms always asserts, and absent when it is whether the
- * assertion can be skipped at all.
+ * nothing when it always runs with it. `top` is a branch, or the block around
+ * it, when the question is whether the other path past that branch always
+ * asserts, and absent when it is whether the assertion can be skipped at all.
  * @param {SourceCode} sourceCode
  * @param {ESTree.Node} node
  * @param {ESTree.Node | null} top
