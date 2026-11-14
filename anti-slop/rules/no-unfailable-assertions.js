@@ -269,8 +269,7 @@ function skipAt(file, parent, child) {
  * answers a caller the rule cannot see, such as a polling helper retrying on
  * `false`; and one in an array method's callback ends one element's turn, as
  * `continue` does in a loop. Nor is a guard whose condition reads a name an
- * assertion before it in the block already asserts on, since that assertion
- * fails before the return can be taken.
+ * assertion before it in the block already asserts on (`pinnedBefore`).
  * @param {File} file
  * @param {readonly ESTree.Node[]} statements
  * @param {ESTree.Node} child
