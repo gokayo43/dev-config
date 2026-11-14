@@ -111,8 +111,10 @@ function skipBetween(sourceCode, node, top) {
 }
 
 /**
- * Whether the arm beside `child` asserts on every path through it — the case
- * where one of the two always runs, so neither is a skipped assertion.
+ * Whether the other path past a branch asserts on every run through it — the
+ * case where one of the two always runs, so neither is a skipped assertion.
+ * The other path is the other arm, or, beside an arm that always leaves
+ * (`return`, `continue`, `break`, `throw`), the statements after the branch.
  * @param {SourceCode} sourceCode
  * @param {ESTree.IfStatement | ESTree.ConditionalExpression} branch
  * @param {ESTree.Node} child
@@ -120,11 +122,58 @@ function skipBetween(sourceCode, node, top) {
  */
 function otherArmAsserts(sourceCode, branch, child) {
   const other = child === branch.consequent ? branch.alternate : branch.consequent;
-  if (other === null) return false;
   // Climbed to the branch rather than to the arm, so an arm that is itself a
   // branch (`else if`) is asked about its own arms on the way.
-  return assertionsIn(sourceCode, other).some(
-    (opening) => skipBetween(sourceCode, opening, branch) === null,
+  if (other !== null) return assertsOnEveryPath(sourceCode, [other], branch);
+  const block = branch.parent;
+  const statements = statementsOf(block);
+  if (statements === null || !alwaysLeaves(child)) return false;
+  const after = statements.slice(statements.findIndex((each) => each === branch) + 1);
+  return assertsOnEveryPath(sourceCode, after, block);
+}
+
+/**
+ * The statement list a node holds, where it holds one.
+ * @param {ESTree.Node} node
+ * @returns {readonly ESTree.Node[] | null}
+ */
+function statementsOf(node) {
+  if (node.type === "BlockStatement" || node.type === "Program" || node.type === "StaticBlock") {
+    return node.body;
+  }
+  return node.type === "SwitchCase" ? node.consequent : null;
+}
+
+/**
+ * Whether some assertion among `nodes` runs whenever `top` does.
+ * @param {SourceCode} sourceCode
+ * @param {readonly ESTree.Node[]} nodes
+ * @param {ESTree.Node} top
+ * @returns {boolean}
+ */
+function assertsOnEveryPath(sourceCode, nodes, top) {
+  return nodes.some((node) =>
+    assertionsIn(sourceCode, node).some(
+      (opening) => skipBetween(sourceCode, opening, top) === null,
+    ),
+  );
+}
+
+/**
+ * Whether a statement never falls through to the one after it.
+ * @param {ESTree.Node} statement
+ * @returns {boolean}
+ */
+function alwaysLeaves(statement) {
+  if (statement.type === "BlockStatement") {
+    const last = statement.body.at(-1);
+    return last !== undefined && alwaysLeaves(last);
+  }
+  return (
+    statement.type === "ReturnStatement" ||
+    statement.type === "ThrowStatement" ||
+    statement.type === "ContinueStatement" ||
+    statement.type === "BreakStatement"
   );
 }
 

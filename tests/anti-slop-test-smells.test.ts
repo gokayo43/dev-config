@@ -609,6 +609,38 @@ test("reads", () => {
       reports: ["5:5", "7:20"],
     },
     {
+      name: "an arm that leaves has the statements after the branch as its other path",
+      source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  for (const value of [0.2, 0.8]) {
+    if (value > 0.5) {
+      expect(value).toBeGreaterThan(0.5);
+      continue;
+    }
+    expect(value).toBeLessThanOrEqual(0.5);
+  }
+  const value = Math.random();
+  if (value > 0.5) {
+    expect(value).toBeGreaterThan(0.5);
+    return;
+  }
+  console.log(value);
+});`,
+      reports: ["12:5"],
+    },
+    {
+      name: "an arm that falls through has no other path, whatever follows the branch",
+      source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const value = Math.random();
+  if (value > 0.5) {
+    expect(value).toBeGreaterThan(0.5);
+  }
+  expect(value).toBeLessThan(1);
+});`,
+      reports: ["5:5"],
+    },
+    {
       name: "an assertion in a catch runs only when something throws",
       source: `import { expect, test } from "bun:test";
 function run(): void {
