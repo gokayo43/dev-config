@@ -281,6 +281,6 @@ describe("a route log that will not read", () => {
   });
 
   test("a payload that is not JSON at all throws rather than covering nothing", () => {
-    expect(() => read("not json")).toThrow();
+    expect(() => read("not json")).toThrow("the route log is not JSON");
   });
 });

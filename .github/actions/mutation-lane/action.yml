@@ -4,7 +4,7 @@ description: >-
   lines left undetected, on a run whose suite was already failing before anything
   was mutated, or on one that graded only part of what it mutated, publishing the
   score over those files to the run summary. Why it is selective, where the domain
-  is read from, which mutants count, which suite the run loads and what the floor
+  is read from, which mutants count, which tests the run loads and what the floor
   means: docs/gates/mutation-lane.md, which is the one place any of that is
   argued.
 
@@ -18,6 +18,14 @@ inputs:
       between 0 and 1 — the way bunfig.toml writes coverageThreshold. Empty
       publishes the score and bounds nothing; every refusal this lane makes without
       one it still makes. A floor, not a target: docs/gates/mutation-lane.md.
+    default: ""
+  mutation-tests:
+    description: >-
+      The test files that grade the pure domain, as glob patterns relative to the
+      working directory, one per line. The run hands exactly the files they name
+      to bun test; a pattern that names nothing, reaches outside the working
+      directory or names a file bunfig.toml ignores is refused. Empty lets the
+      runner walk the project for every test file. docs/gates/mutation-lane.md.
     default: ""
 
 runs:
@@ -33,6 +41,7 @@ runs:
       env:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
+        INPUT_MUTATION_TESTS: ${{ inputs['mutation-tests'] }}
         INPUT_BASE_REF: ${{ github.base_ref }}
         INPUT_BEFORE: ${{ github.event.before }}
       run: |

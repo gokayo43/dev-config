@@ -108,7 +108,7 @@ describe("capacity table", () => {
   });
 
   test("a summary that is not JSON at all throws rather than measuring nothing", () => {
-    expect(() => parseSummary("not json")).toThrow();
+    expect(() => parseSummary("not json")).toThrow(SyntaxError);
   });
 
   // Each of these used to narrow silently to an empty metrics map, which the

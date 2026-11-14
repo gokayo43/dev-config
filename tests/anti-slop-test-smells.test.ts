@@ -9,6 +9,7 @@ import {
   shippedBase,
   underBase,
 } from "./lint-fixture.ts";
+import { UNFAILABLE_ASSERTIONS } from "./unfailable-assertions-cases.ts";
 
 /**
  * The rules the base enables only over test files, because every one of
@@ -506,6 +507,7 @@ test("reads", async () => {
       reports: [],
     },
   ],
+  "no-unfailable-assertions": UNFAILABLE_ASSERTIONS,
 } satisfies Record<string, readonly Case[]>;
 
 /**

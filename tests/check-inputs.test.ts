@@ -70,6 +70,7 @@ const NOTHING_SET = {
   PROBE_TIMEOUT: "",
   MUTATION_LANE: "false",
   MUTATION_FLOOR: "",
+  MUTATION_TESTS: "",
   BUILD: "false",
   BUILD_CACHE: "",
   AFFECTED: "false",
@@ -228,6 +229,25 @@ describe("what a caller may pass, and what the jobs do with it", () => {
         ...NOTHING_SET,
         BUILD: "true",
         BUILD_CACHE: ".next/cache",
+      }),
+    ).toMatchObject({ status: 0 });
+  });
+
+  // Wrong implementation: no guard, so a caller naming the tests that grade its
+  // domain and never turning the lane on is green with nothing mutated.
+  test("named tests with no mutation lane to run them are refused, and pass beside one", async () => {
+    const tests = "src/domain/**/*.test.ts";
+    const without = await ran(VALIDATION, MONOREPO, { ...NOTHING_SET, MUTATION_TESTS: tests });
+    expect(without.output).toContain(
+      "::error::mutation-tests needs mutation-lane: true — the tests it names are run by that step",
+    );
+    expect(without.status).not.toBe(0);
+
+    expect(
+      await ran(VALIDATION, MONOREPO, {
+        ...NOTHING_SET,
+        MUTATION_LANE: "true",
+        MUTATION_TESTS: tests,
       }),
     ).toMatchObject({ status: 0 });
   });

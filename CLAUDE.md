@@ -27,9 +27,10 @@ a change to a rule usually lands here too.
 - `anti-slop/` — the oxlint JS plugin `oxlint.base.json` names in `jsPlugins`,
   ported from dmmulroy/anti-slop, plus the house rules that carry a pick a file's
   position decides (README has the rule tables and the credit).
-  `shared/` holds the three questions more than one rule asks: `syntax.js` what
+  `shared/` holds the four questions more than one rule asks: `syntax.js` what
   was written, `bindings.js` what a name stands for and whether it can change,
-  and `types.js` what a type finally means — `resolveType` is the one walk
+  `runner.js` which of a test runner's API an expression names, and `types.js`
+  what a type finally means — `resolveType` is the one walk
   through parentheses, type arguments, transparent built-ins and aliases, and
   every classification is a switch over the node it stops at.
   Its specifier is relative to the base config, so consuming repos need no line
@@ -240,7 +241,8 @@ a change to a rule usually lands here too.
   README's anti-slop tables to name the same set, which is the check a count
   would replace with a number to forget. All of them run through
   `lint-fixture.ts`,
-  which owns the case shape and lints a whole block in one oxlint spawn, and
+  which owns the case shape (`unfailable-assertions-cases.ts` holds the one
+  rule's table that outgrew its suite, which runs it with the rest) and lints a whole block in one oxlint spawn, and
   refuses a run whose plugin threw or whose exit status and diagnostics
   disagree, both of which otherwise read as a clean tree.
   `anti-slop-upstream.test.ts` is
@@ -279,7 +281,10 @@ a change to a rule usually lands here too.
   written for — a journalled one, a hand-rolled runner with no journal, and the
   per-lineage journals a repo with more than one lineage has to have; and `mutation-lane.test.ts` links this repo's own `node_modules` into
   each fixture and runs Stryker for real — a stubbed mutation run would prove
-  nothing about the tool that gate exists to drive. `test-suite.test.ts` is the
+  nothing about the tool that gate exists to drive. `mutation-lane-tests.test.ts`
+  is the same over which tests a run loads when a repo names them, a subject of
+  its own, and `mutation-lane-fixture.ts` is the fixture repository and the run
+  both suites share. `test-suite.test.ts` is the
   same argument one level down: that gate is a shell script rather than a
   module, so the suite extracts the step out of the shipped `action.yml` and
   runs it over fixture suites of its own. It needs passwordless sudo, because

@@ -55,7 +55,13 @@ of them reaches a directory at all. Both would otherwise leave the lane grading
 a domain of no files and reporting a clean pass.
 
 Under those folders the lane mutates `.ts`, `.tsx`, `.mts` and `.cts`, and never
-a `.d.ts` or a `*.test.*` / `*.spec.*` file.
+a `.d.ts`, a `*.test.*` / `*.spec.*` file, or a file the lint base's test
+override names as test code (a `*.test-harness.*` or `*.fixture.*` beside a
+suite). The lane reads that override out of the base in its own checkout, so the
+linter and the lane mean one set by "test code", and matches each of its globs
+against a file's name. A glob there that still holds a folder once its leading
+`**/` is dropped cannot be matched that way, and the lane refuses the run naming
+it rather than mutating the test code it was meant to keep out.
 
 ## The one failure this gate cannot afford
 
@@ -145,20 +151,20 @@ tree to the same rule whichever tool reads it. Stryker honours the reason in any
 of its three spellings — bare, `: reason` and ` -- reason` — so carrying one
 costs the directive nothing.
 
-## Which suite the run loads, and whether it passed
+## Which tests the run loads, and whether it passed
 
-`@hughescr/stryker-bun-runner` finds the tests itself. It walks the project for
-every file whose name ends `.test.` or `.spec.` followed by `ts`, `tsx`, `js`,
-`jsx`, `mts` or `mjs` — skipping `node_modules`, `dist`, `build`, `.stryker-tmp`
-and `.git` — and hands that list to `bun test`. Its `bun.testFiles` option would
-override the walk, and this lane does not set it: which files in a repo are its
-unit suite is not something a gate can work out from outside, and the repo
-already says so in `bunfig.toml`. So a browser suite sitting in the tree is
-loaded whatever else is supposed to run it, and a Playwright spec throws where it
-stands: _Playwright Test did not expect test() to be called here._
+Two ways, and the repo picks.
 
-What scopes the run is the repo's own `bunfig.toml`, which the runner forwards
-into the sandbox it builds:
+**Walked, the default.** `@hughescr/stryker-bun-runner` finds the tests itself.
+It walks the project for every file whose name ends `.test.` or `.spec.`
+followed by `ts`, `tsx`, `js`, `jsx`, `mts` or `mjs`, skipping `node_modules`,
+`dist`, `build`, `.stryker-tmp` and `.git`, and hands that list to one plain
+`bun test`. A suite in the tree that was never meant for a plain `bun test` is
+loaded whatever else is supposed to run it: a Playwright spec throws where it
+stands (_Playwright Test did not expect test() to be called here_), and a suite
+that needs a database, or that passes only under the repo's own wrapper, fails.
+The repo's own `bunfig.toml`, which the runner forwards into the sandbox it
+builds, keeps such a suite out:
 
 ```toml
 [test]
@@ -169,6 +175,44 @@ Bun honours that key even for a file named on the command line, which is how it
 reaches a list the runner built rather than one a flag selected. On fec-program
 it turned a run of 121 mutants, every one of them `RuntimeError`, into 115
 Killed, 4 Timeout, 1 Survived and 1 static `RuntimeError`.
+
+**Named, with `mutation-tests`.** Where the domain's tests are a small part of a
+large suite, the repo names them instead: glob patterns relative to the working
+directory, one per line.
+
+```yaml
+with:
+  mutation-lane: true
+  mutation-tests: |
+    src/domain/**/*.test.ts
+    tests/pricing/*.test.ts
+```
+
+The lane resolves the patterns to files and hands exactly those to the runner's
+`bun.testFiles`, each as a path beginning `./`. The prefix is load-bearing: bun
+reads a bare relative path as a substring filter, so `lib/a.test.ts` also runs
+`other/lib/a.test.ts` and `lib/a.test.tsx`. An absolute path is no better, since
+it points the runner at the original files rather than the sandbox copy it
+mutates. Bun's glob takes the extglob form, so a pattern can leave a kind of
+suite out: `app/lib/**/!(*.db|*.dom).test.ts`.
+
+Where the domain's tests live is a fact only the repo holds, which is why it is
+an input and not a rule the lane derives from the layout. Each of these is
+refused by name before Stryker starts, because each would grade the domain with
+fewer tests than the repo meant and publish the score anyway:
+
+- a pattern that matches no file;
+- a pattern that is absolute or climbs out with `..`, since the sandbox copies
+  only the working directory;
+- a blank line between patterns (the newline a YAML block ends with is not one);
+- a named file `bunfig.toml`'s `[test] pathIgnorePatterns` matches, which bun
+  would skip even though it is named.
+
+Naming fewer tests never turns a missed mutant into a pass. A mutant on the
+branch's own lines that the named tests leave `Survived` or `NoCoverage` fails
+the branch as it would walked, so a domain file whose only test sits outside the
+patterns fails until that test is named or written beside it. The note says how
+many test files the patterns named.
 
 **Until that is done, nothing in the report means anything**, and Stryker will
 not say so: its dry run over a suite with a throwing spec in it logs
@@ -183,7 +227,10 @@ test(s), but no failing test could be identified from inspector or console data.
 ```
 
 That line present, the lane refuses the run and quotes the stderr the runner kept
-— which is what names the file that would not load. It is read on **every** exit,
+— which is what names the file that would not load — and says which way the
+tests were chosen: walked, it points at `mutation-tests` and
+`pathIgnorePatterns`; named, at the named file that passes only under the repo's
+own script. It is read on **every** exit,
 before the report is opened, for the reason the unresolved-pattern check is: the
 run it belongs to is otherwise green.
 
@@ -227,9 +274,9 @@ with:
   mutation-floor: "0.7"
 ```
 
-`mutation-floor` without `mutation-lane: true` fails the run rather than being
-ignored, for the reason the database inputs do: a bound nobody notices is off is
-a bound nobody has.
+`mutation-floor` or `mutation-tests` without `mutation-lane: true` fails the
+run rather than being ignored, for the reason the database inputs do: a bound
+nobody notices is off is a bound nobody has.
 
 The repo declares `@stryker-mutator/core` and `@hughescr/stryker-bun-runner`
 among its devDependencies — the lane runs the repo's own install, so the

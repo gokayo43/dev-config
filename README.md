@@ -532,7 +532,8 @@ Some facts are true of a file because of where it sits, not what it contains:
         "anti-slop/no-call-log-assertions": "error",
         "anti-slop/no-local-module-mocks": "error",
         "anti-slop/no-mock-assertions": "error",
-        "anti-slop/no-real-timers": "error"
+        "anti-slop/no-real-timers": "error",
+        "anti-slop/no-unfailable-assertions": "error"
       }
     },
     { "files": ["**/env.ts"], "rules": { "anti-slop/no-env-access": "off" } },
@@ -842,12 +843,13 @@ file counts calls, sleeps, reaches into a module of its own and hands a function
 to `expect` in a helper, and none of that is a smell until it is a test's whole
 evidence.
 
-| Rule                     | What it rejects                                                                                      |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `no-call-log-assertions` | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what |
-| `no-mock-assertions`     | `expect()` on a stand-in, or on anything read through one                                            |
-| `no-local-module-mocks`  | `mock.module()` or `spyOn()` over a relative or aliased import                                       |
-| `no-real-timers`         | the timer globals, `Bun.sleep`, and the `node:timers` modules                                        |
+| Rule                       | What it rejects                                                                                                       |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `no-call-log-assertions`   | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what                  |
+| `no-mock-assertions`       | `expect()` on a stand-in, or on anything read through one                                                             |
+| `no-local-module-mocks`    | `mock.module()` or `spyOn()` over a relative or aliased import                                                        |
+| `no-real-timers`           | the timer globals, `Bun.sleep`, and the `node:timers` modules                                                         |
+| `no-unfailable-assertions` | an `expect()` a branch, a returning guard, a `catch` or an event callback can skip, and `.toThrow()` with no argument |
 
 What they have in common is that each of them passes against an implementation
 nobody would ship. A call log grades the collaborator calls an implementation
@@ -856,7 +858,81 @@ is the test's own object, so an assertion about it is about what the test
 already did; a fake over a module in this repo grades the fake rather than the
 module, and the real one is right there to call; and a suite that waits for real
 time is slow in proportion to how much of it it waits for and flaky in
-proportion to how loaded the runner is.
+proportion to how loaded the runner is. An assertion a run can skip, or one any
+error satisfies, passes against every implementation, the broken one included.
+
+`no-unfailable-assertions` reports an assertion a passing run can go without,
+in five shapes, each with what to write instead:
+
+- an `expect(…)` that runs only when a condition holds: in an arm of an `if` or
+  a `?:`, on the right of `&&`, `||` or `??`, or in a `switch` case;
+- an `expect(…)` below a guard that returns: an `if` earlier in the same block
+  with an arm that can take a bare `return;` and asserts nothing on the way,
+  such as `if (!found) return;` above `expect(found)`. A `return <value>` is no
+  guard, since it answers a caller the rule cannot see (a polling helper
+  retries on `false`), and neither is a guard pinned by an earlier assertion:
+  one in the same block whose subject is read out of a name the condition
+  reads (`found` in `expect(found.size)` and `if (!found)`), a property name
+  never counting as one;
+- an `expect(…)` in a `catch` clause or in a promise's rejection handler (a
+  function passed to `.catch`, or as `.then`'s second argument), which runs
+  only when something throws;
+- an `expect(…)` in a callback handed to an event registration (`on`, `once`,
+  `addEventListener`, `subscribe`), which nothing in the test waits for;
+- `.toThrow()` or `.toThrowError()` with no argument, on `expect(…)` or after
+  `.rejects`. `.not.toThrow()` with no argument is what it should be and is
+  left alone.
+
+An assertion in a branch is not reported when every passing run down the other
+path asserts too. That path is the other arm of the `if` or `?:`, an `else if`
+chain included when it ends in an `else` that asserts. An other arm counts as
+asserting when every path through it throws, since no run through it passes, an
+`else if` chain whose every arm throws included, and so a guard that throws
+(`if (!found) throw …;`) is no guard. When no path through the arm holding the
+assertion runs on (each leaves by `return`, `continue`, `break` or `throw`), the
+statements after the branch are on the other path too, as long as no path
+through the other arm leaves first: `if (late) { expect(late)…; return; }
+expect(onTime)…` asserts on every path. An arm that runs on has no other path of
+its own, so an assertion after the branch does not excuse one inside it. The
+paths are read through blocks, `if`s and loops, where a loop may run no turn,
+so a `return` inside it is a path that leaves and the loop may still run on.
+
+A loop, and a function handed to an array method, `.then`, `.finally`, a retry
+or polling helper or a property, run what they are given, so an assertion there
+is as skippable as the call it is handed to and no more. A function handed to
+the runner (`test`, `describe`, `test.each(…)(…)`, `mock`) is not judged by
+what surrounds that call: a test registered on some runs only is a skipped
+test, which the run's own report counts. An un-awaited `.resolves` or `.rejects` is
+`typescript/no-floating-promises`'s, and a case with no assertion at all is the
+test-suite gate's JUnit check's. A report the rule gets wrong takes
+`// oxlint-disable-next-line anti-slop/no-unfailable-assertions -- <reason>` on
+its line.
+
+What it does not see:
+
+- a guard that ends one element's turn: `continue` or `break` in a loop, or a
+  `return` in an array method's callback (`forEach`, `map` and the rest), above
+  an assertion, and a loop over a collection that turns out empty;
+- an arm it cannot read: one holding a `switch` or a `try` with a `return` or a
+  `throw` inside, whose fall-through cases and `finally` decide which of them
+  happens. Nothing that rests on such an arm is reported, whether it is the
+  other arm, the arm holding the assertion or a guard's arm;
+- a guard written inside a nested block rather than as an `if` of the block the
+  assertion sits in;
+- whether a pin holds: the pin is a match on a name, and does not prove the
+  earlier assertion fails on every run the guard would return on, so
+  `expect(r).toBeDefined(); if (!r.ok) return;` is silent;
+- an array method's name called on something that is not an array
+  (`opt.map(…)`), whose callback is read as one element's turn all the same;
+- a callback handed to a function of the repo's own that never calls it;
+- a handler passed by reference (`emitter.on("done", seen)`), whose body is
+  written elsewhere in the file;
+- an assertion inside a timer or microtask callback (`setTimeout`,
+  `queueMicrotask`), which a test that advances its clock or drains the queue
+  does run.
+
+Each of those is a fact about values or about code written somewhere else, and
+the rule answers only for where an assertion is written.
 
 What `no-call-log-assertions` accepts in place of a call log is a typed fake at
 the boundary that records the requests it received, asserted on as the whole
@@ -1108,11 +1184,15 @@ suite: they key off imports from `jest`/`vitest`, and these repos import from
 `bun:test`. Turning them on produces a config that reports nothing and looks like
 coverage.
 
-So the properties those rules would have checked — that a test asserted
-something, that nothing was skipped — are enforced by the JUnit greps in the
-`test-suite` action instead, on the report of a run that actually happened. That
-is the correct layer and the only one available: do not "improve" the gate by
-moving it into the linter.
+So the properties those rules would have checked — that a case asserted
+something at all, that nothing was skipped — are enforced by the JUnit greps in
+the `test-suite` action instead, on the report of a run that actually happened.
+That is the correct layer and the only one available for them. What the JUnit
+counts cannot see is an assertion that is written and still cannot fail: one a
+branch, a returning guard, a `catch` or an event can keep from running, which counts as an
+assertion on every run that reaches it, and a `.toThrow()` any error passes.
+Where an assertion sits is a fact of the syntax, so that half is the linter's,
+in `no-unfailable-assertions` above.
 
 ## Architecture boundaries
 
@@ -1332,6 +1412,16 @@ What coverage cannot say is whether the suite would have noticed had the line
 been wrong. [The mutation lane](docs/gates/mutation-lane.md) asks that, over the
 domain files a branch changed, and `mutation-floor` is the same paragraph again
 for the number it publishes.
+
+**Page tests in a real browser** run under Vitest's browser mode, beside
+`bun test` for everything else. The stack denylist denies `vitest` because
+`bun test` is the runner, so a repo with such tests names it in its
+`stack-allowlist` with that as the reason: `vitest -- page tests run in a real
+browser`. Those tests never reach the test-suite gate's JUnit and coverage
+checks, so the repo's own browser job holds them, failing on a case that fails,
+is skipped or asserts nothing. The repo also sets `mutation-tests`, because the
+mutation lane's walk of the project would otherwise load its browser test files
+into a plain `bun test`.
 
 ## Renovate
 
@@ -1842,6 +1932,7 @@ it runs. Effect says which, per input.
 | `compose`             | `false`  | Holds `docker-compose.yml` to the deployment shape.                                                                                                                                                                                                                                                                                                                                                                                       |
 | `mutation-lane`       | `false`  | Mutates the domain files this branch changed and fails on a mutant its own lines left undetected, on a run whose suite was already failing unmutated, or on one that graded only part of what it mutated. Reads the pure domain from the `boundaries/elements` entry typed `domain`; needs `@stryker-mutator/core` and `@hughescr/stryker-bun-runner` among the repo's devDependencies.                                                   |
 | `mutation-floor`      | `""`     | The mutation score the changed domain files must hold, as a fraction between 0 and 1. Empty publishes the score and enforces nothing. Needs `mutation-lane: true`.                                                                                                                                                                                                                                                                        |
+| `mutation-tests`      | `""`     | The test files that grade the pure domain, as glob patterns relative to the working directory, one per line; the lane runs exactly the files they name instead of every test file in the project. A pattern that names nothing, reaches outside the working directory or names a file `bunfig.toml` ignores is refused. Needs `mutation-lane: true`.                                                                                      |
 | `duplicate-code`      | `false`  | Fails on a run of twelve or more lines, comments and whitespace aside, that this branch wrote and that also appears elsewhere in the repo's source. Kept by `// duplicate-code-allow -- <reason>` on the clone's first line or the line above; a file `.gitattributes` marks `linguist-generated` is not read. Needs the base ref, which `fetch-depth: 0` gives it.                                                                       |
 | `upgrade-gate`        | `false`  | Also proves that a database upgraded from the base ref's migrations reaches the schema a fresh one gets. Needs `database: postgres`; for repos whose database is deployed.                                                                                                                                                                                                                                                                |
 | `semantic-fixtures`   | `""`     | A directory of the repo's own holding the rows a deployed database already has, as base-compatible SQL, each with the assertion the current contract makes about them: written into the base ref's replay and graded after this branch's migrations run over them. Needs `upgrade-gate: true`. Needs `database: postgres`.                                                                                                                |
@@ -1934,8 +2025,9 @@ them ride on another input rather
 than on the job, and are asked a second question for the same reason:
 `semantic-fixtures` is refused without `upgrade-gate: true`, since the rows go
 into the replay that input adds, and `probe-timeout` is refused without
-`probe-command`, since on its own it bounds nothing. `mutation-floor` is refused
-without `mutation-lane: true` on the same argument, and `build-cache` without
+`probe-command`, since on its own it bounds nothing. `mutation-floor` and
+`mutation-tests` are refused without `mutation-lane: true` on the same argument,
+and `build-cache` without
 `build: true`, since the paths it names are kept around that build.
 
 The call is pinned by commit SHA with the release as the trailing comment — the

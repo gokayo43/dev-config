@@ -545,6 +545,7 @@ describe("how a run ends", () => {
   test.each([
     [
       "parked",
+      false,
       (log: string[]) =>
         Effect.scoped(
           Effect.addFinalizer(() => note(log, "released")).pipe(
@@ -555,6 +556,7 @@ describe("how a run ends", () => {
     ],
     [
       "finished, leaving a daemon waiting",
+      false,
       (log: string[]) =>
         Deferred.make<void>().pipe(
           Effect.flatMap(Deferred.await),
@@ -564,20 +566,21 @@ describe("how a run ends", () => {
     ],
     [
       "stopped at the limit",
+      true,
       (log: string[]) =>
         Effect.forever(Effect.void).pipe(Effect.onInterrupt(() => note(log, "released"))),
     ],
   ] as const)(
     "a run %s leaves nothing behind: its fibers are interrupted and released",
-    (_ending, program) => {
+    (_ending, stopped, program) => {
       const before = roots();
       for (let run = 0; run < 10; run++) {
         const log: string[] = [];
-        try {
+        const simulated = (): void => {
           simulate(program(log), unpreempted, { maxOps: 20_000 });
-        } catch (error) {
-          expect(String(error)).toContain("did not finish within 20000 ops");
-        }
+        };
+        if (stopped) expect(simulated).toThrow("did not finish within 20000 ops");
+        else expect(simulated).not.toThrow();
         expect(log).toEqual(["released"]);
       }
       expect(roots()).toBe(before);
