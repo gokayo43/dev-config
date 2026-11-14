@@ -91,6 +91,14 @@ on:
           and enforces nothing. Set it with mutation-lane or not at all.
         type: string
         default: ""
+      mutation-tests:
+        description: >-
+          The test files that grade the pure domain, as glob patterns relative to the
+          working directory, one per line; the mutation lane runs exactly the files they
+          name. Empty lets the runner walk the project for every test file. Set it with
+          mutation-lane or not at all.
+        type: string
+        default: ""
       duplicate-code:
         description: >-
           Fail on a run of twelve or more lines, comments and whitespace aside, that this
@@ -321,7 +329,8 @@ jobs:
       # other — `semantic-fixtures` needs the replay `upgrade-gate` adds, and
       # `probe-timeout` bounds a `probe-command` — so each is asked twice,
       # once about the job and once about the input it rides on. Then the mutation
-      # lane's floor, which bounds a score only that step measures, the build
+      # lane's floor and tests, which bound a score and name a run only that step
+      # makes, the build
       # cache, which is kept around a build only `build: true` runs, and
       # `affected`, which needs a turbo to hand the flag to — the one condition
       # here that is a fact about the tree rather than about the inputs, which
@@ -353,6 +362,7 @@ jobs:
           PROBE_TIMEOUT: ${{ inputs['probe-timeout'] }}
           MUTATION_LANE: ${{ inputs['mutation-lane'] }}
           MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
+          MUTATION_TESTS: ${{ inputs['mutation-tests'] }}
           BUILD: ${{ inputs.build }}
           BUILD_CACHE: ${{ inputs['build-cache'] }}
           AFFECTED: ${{ inputs.affected }}
@@ -434,6 +444,9 @@ jobs:
           fi
           if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_FLOOR" ]; then
             refuse "mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
+          fi
+          if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_TESTS" ]; then
+            refuse "mutation-tests needs mutation-lane: true — the tests it names are run by that step"
           fi
           if [ "$BUILD" != true ] && [ -n "$BUILD_CACHE" ]; then
             refuse "build-cache needs build: true; the paths it names are kept around the build that input runs"
@@ -529,6 +542,7 @@ jobs:
         uses: gokayo43/dev-config/.github/actions/mutation-lane@0eac703548f4418d726599227ab00b253e6627db # v0.72.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
+          mutation-tests: ${{ inputs['mutation-tests'] }}
 
   database:
     if: inputs.database == 'postgres'
