@@ -867,8 +867,11 @@ in five shapes, each with what to write instead:
 - an `expect(…)` that runs only when a condition holds: in an arm of an `if` or
   a `?:`, on the right of `&&`, `||` or `??`, or in a `switch` case;
 - an `expect(…)` below a guard that returns: an `if` earlier in the same block
-  with an arm that ends in `return` and asserts nothing on the way, such as
-  `if (!found) return;` above `expect(found)`;
+  with an arm that can take a bare `return;` and asserts nothing on the way,
+  such as `if (!found) return;` above `expect(found)`. A `return <value>` is no
+  guard, since it answers a caller the rule cannot see (a polling helper
+  retries on `false`), and neither is a guard whose condition reads a name an
+  assertion earlier in the block asserts on, since that assertion fails first;
 - an `expect(…)` in a `catch` clause or in a promise's rejection handler (a
   function passed to `.catch`, or as `.then`'s second argument), which runs
   only when something throws;
@@ -880,14 +883,17 @@ in five shapes, each with what to write instead:
 
 An assertion in a branch is not reported when every passing run down the other
 path asserts too. That path is the other arm of the `if` or `?:`, an `else if`
-chain included when it ends in an `else` that asserts. An other arm that always
-throws counts as asserting, since no run through it passes, and so a guard that
-throws (`if (!found) throw …;`) is no guard. When the arm holding the assertion
-always leaves (it ends in `return`, `continue`, `break` or `throw`), the
-statements after the branch are on the other path too, unless the other arm
-leaves as well: `if (late) { expect(late)…; return; } expect(onTime)…` asserts
-on every path. An arm that falls through has no other path of its own, so an
-assertion after the branch does not excuse one inside it.
+chain included when it ends in an `else` that asserts. An other arm counts as
+asserting when every path through it throws, since no run through it passes, an
+`else if` chain whose every arm throws included, and so a guard that throws
+(`if (!found) throw …;`) is no guard. When no path through the arm holding the
+assertion runs on (each leaves by `return`, `continue`, `break` or `throw`), the
+statements after the branch are on the other path too, as long as no path
+through the other arm leaves first: `if (late) { expect(late)…; return; }
+expect(onTime)…` asserts on every path. An arm that runs on has no other path of
+its own, so an assertion after the branch does not excuse one inside it. The
+paths are read through blocks and `if`s; any other statement in an arm (a loop,
+a `switch`, a `try`) is read as one that runs on.
 
 A loop, and a function handed to an array method, `.then`, `.finally`, a retry
 or polling helper or a property, run what they are given, so an assertion there
@@ -902,8 +908,11 @@ its line.
 
 What it does not see:
 
-- a guard that leaves a loop's turn with `continue` or `break` above an
-  assertion, and a loop over a collection that turns out empty;
+- a guard that ends one element's turn: `continue` or `break` in a loop, or a
+  `return` in an array method's callback (`forEach`, `map` and the rest), above
+  an assertion, and a loop over a collection that turns out empty;
+- a guard's `return` written inside a `switch` case, a `try` or a nested block
+  rather than in an arm of the `if` itself, which is read as running on;
 - a callback handed to a function of the repo's own that never calls it;
 - a handler passed by reference (`emitter.on("done", seen)`), whose body is
   written elsewhere in the file;

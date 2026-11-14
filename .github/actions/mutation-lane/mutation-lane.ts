@@ -151,14 +151,8 @@ const TEST_OVERRIDE_RULE = "anti-slop/no-unfailable-assertions";
  * Each glob is matched against a basename, the way the override's `**\/`
  * prefix reaches a file at any depth.
  */
-async function testCodeNames(): Promise<readonly string[]> {
-  const base = await readConfig(ACTION_CHECKOUT, LINT_BASE);
-  if (base.contents === undefined) {
-    throw new Error(
-      `the action's own ${LINT_BASE} did not read: ${base.problems.map((problem) => problem.message).join("; ")}`,
-    );
-  }
-  const overrides = isList(base.contents["overrides"]) ? base.contents["overrides"] : [];
+export function testCodeNames(base: ConfigObject): Answer<readonly string[]> {
+  const overrides = isList(base["overrides"]) ? base["overrides"] : [];
   const found = overrides
     .filter(isObject)
     .filter(
@@ -171,7 +165,29 @@ async function testCodeNames(): Promise<readonly string[]> {
       `the action's own ${LINT_BASE} has ${found.length} overrides naming ${TEST_OVERRIDE_RULE}, not one`,
     );
   }
-  return strings(override["files"]).map((glob) => glob.replace(/^\*\*\//, ""));
+  const names = strings(override["files"]).map((glob) => glob.replace(/^\*\*\//, ""));
+  // A glob with a folder in it would be matched against a basename and match
+  // nothing, so the lane would mutate that test code and say nothing.
+  const folders = names.filter((name) => name.includes("/"));
+  if (folders.length > 0) {
+    return {
+      problems: folders.map((name) => ({
+        message: `the lint base's test override names \`${name}\`, which holds a folder where the lane reads a file-name pattern — write it in ${LINT_BASE} as \`**/\` and a file name, such as \`**/*.e2e.ts\`, so the lane can keep that test code out of what it mutates`,
+      })),
+    };
+  }
+  return { value: names };
+}
+
+/** The lint base as shipped in the action's own checkout, which the lane reads its test code from. */
+async function shippedLintBase(): Promise<ConfigObject> {
+  const base = await readConfig(ACTION_CHECKOUT, LINT_BASE);
+  if (base.contents === undefined) {
+    throw new Error(
+      `the action's own ${LINT_BASE} did not read: ${base.problems.map((problem) => problem.message).join("; ")}`,
+    );
+  }
+  return base.contents;
 }
 
 /**
@@ -700,10 +716,15 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
   // single wildcard stops at a slash and a double one does not — a bare
   // pathspec crosses slashes on either, so a workspace's element would classify
   // a project nested deeper than any workspace declares.
+  const testCode = testCodeNames(await shippedLintBase());
+  if ("problems" in testCode) {
+    return { note: "the lint base's test code cannot be read", problems: [...testCode.problems] };
+  }
+
   const change = await branchChange(root, event, {
     why: READS_THE_BASE_REF,
     pathspecs: domain.value.map((glob) => `:(glob)${glob}/**`),
-    keeps: mutableBeside(await testCodeNames()),
+    keeps: mutableBeside(testCode.value),
     noun: "domain file",
     nothing: `nothing to mutate${testsNoted(run)}`,
   });

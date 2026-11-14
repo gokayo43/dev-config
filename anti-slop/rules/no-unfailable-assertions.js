@@ -1,7 +1,7 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
 
 import { assertionOpening, opensAssertion, runnerApi } from "../shared/runner.js";
-import { memberName, unwrapAssertions } from "../shared/syntax.js";
+import { enclosingFunction, memberName, unwrapAssertions } from "../shared/syntax.js";
 
 /**
  * The registrations whose callback an emitter calls when the event fires.
@@ -13,15 +13,92 @@ const EVENT_REGISTRATIONS = new Set(["on", "once", "addEventListener", "subscrib
 /** The matchers any error satisfies when they are given nothing to compare it with. */
 const THROW_MATCHERS = new Set(["toThrow", "toThrowError"]);
 
-/** The statements after which nothing in the same block runs. */
-const LEAVES = new Set([
-  "ReturnStatement",
-  "ThrowStatement",
-  "ContinueStatement",
-  "BreakStatement",
+/**
+ * The array methods that call what they are given once per element. A `return`
+ * in that callback ends one element's turn, as `continue` does in a loop, and
+ * neither is reported: whether the collection reaches the assertion is a fact
+ * about its values.
+ */
+const ITERATIONS = new Set([
+  "every",
+  "filter",
+  "find",
+  "findIndex",
+  "findLast",
+  "findLastIndex",
+  "flatMap",
+  "forEach",
+  "map",
+  "reduce",
+  "reduceRight",
+  "some",
 ]);
-const THROWS = new Set(["ThrowStatement"]);
-const RETURNS = new Set(["ReturnStatement"]);
+
+/**
+ * How a statement can end: by running on to the next one, by a bare `return;`,
+ * by leaving any other way (`return <value>`, `continue`, `break`), or by
+ * throwing. Read through blocks and `if`s; any other statement (a loop, a
+ * `switch`, a `try`) is read as one that runs on, so the rule says nothing
+ * about the paths inside it rather than guessing.
+ * @typedef {{ readonly fallsThrough: boolean, readonly returnsBare: boolean, readonly leavesOtherwise: boolean, readonly throws: boolean }} Ends
+ */
+
+/** @type {Ends} */
+const RUNS_ON = { fallsThrough: true, returnsBare: false, leavesOtherwise: false, throws: false };
+
+/**
+ * @param {Ends} left
+ * @param {Ends} right
+ * @returns {Ends}
+ */
+function either(left, right) {
+  return {
+    fallsThrough: left.fallsThrough || right.fallsThrough,
+    returnsBare: left.returnsBare || right.returnsBare,
+    leavesOtherwise: left.leavesOtherwise || right.leavesOtherwise,
+    throws: left.throws || right.throws,
+  };
+}
+
+/**
+ * @param {ESTree.Node} statement
+ * @returns {Ends}
+ */
+function endsOf(statement) {
+  if (statement.type === "ReturnStatement") {
+    return statement.argument === null
+      ? { ...RUNS_ON, fallsThrough: false, returnsBare: true }
+      : { ...RUNS_ON, fallsThrough: false, leavesOtherwise: true };
+  }
+  if (statement.type === "ContinueStatement" || statement.type === "BreakStatement") {
+    return { ...RUNS_ON, fallsThrough: false, leavesOtherwise: true };
+  }
+  if (statement.type === "ThrowStatement") return { ...RUNS_ON, fallsThrough: false, throws: true };
+  if (statement.type === "IfStatement") {
+    return either(
+      endsOf(statement.consequent),
+      statement.alternate === null ? RUNS_ON : endsOf(statement.alternate),
+    );
+  }
+  if (statement.type !== "BlockStatement") return RUNS_ON;
+  let ends = RUNS_ON;
+  for (const each of statement.body) {
+    const next = endsOf(each);
+    ends = { ...either(ends, next), fallsThrough: next.fallsThrough };
+    if (!next.fallsThrough) break;
+  }
+  return ends;
+}
+
+/**
+ * Whether every path through a statement throws, so no run through it passes.
+ * @param {ESTree.Node} statement
+ * @returns {boolean}
+ */
+function alwaysThrows(statement) {
+  const ends = endsOf(statement);
+  return ends.throws && !ends.fallsThrough && !ends.returnsBare && !ends.leavesOtherwise;
+}
 
 /**
  * Where an assertion stops being one every passing run reaches, named by what
@@ -108,28 +185,95 @@ function skipAt(file, parent, child) {
 }
 
 /**
- * Whether a branch earlier in the block returns on one of its arms without
- * asserting there: `if (!found) return;` above an `expect(found)` lets every
- * run that takes the guard pass without the assertion. A guard that throws
- * fails the run instead, so it is no guard here.
+ * Whether a branch earlier in the block can take a bare `return;` without
+ * asserting on the way: `if (!found) return;` above an `expect(found)` lets
+ * every run that takes the guard pass without the assertion. Three shapes are
+ * no guard here: one that throws fails the run instead; a `return <value>`
+ * answers a caller the rule cannot see, such as a polling helper retrying on
+ * `false`; and one in an array method's callback ends one element's turn, as
+ * `continue` does in a loop. Nor is a guard whose condition reads a name an
+ * assertion before it in the block already asserts on, since that assertion
+ * fails before the return can be taken.
  * @param {File} file
  * @param {readonly ESTree.Node[]} statements
  * @param {ESTree.Node} child
  * @returns {boolean}
  */
 function guardedBefore(file, statements, child) {
-  const earlier = statements.slice(
-    0,
-    statements.findIndex((each) => each === child),
+  if (inIterationCallback(child)) return false;
+  const at = statements.findIndex((each) => each === child);
+  return statements
+    .slice(0, at)
+    .some(
+      (statement, index) =>
+        statement.type === "IfStatement" &&
+        [statement.consequent, statement.alternate].some(
+          (arm) =>
+            arm !== null && endsOf(arm).returnsBare && !assertsOnEveryPath(file, [arm], statement),
+        ) &&
+        !pinnedBefore(file, statements.slice(0, index), statement.test),
+    );
+}
+
+/**
+ * Whether the nearest function around a node is a callback handed to an array method.
+ * @param {ESTree.Node} node
+ * @returns {boolean}
+ */
+function inIterationCallback(node) {
+  const fn = enclosingFunction(node);
+  if (fn === null) return false;
+  const call = fn.parent;
+  if (call.type !== "CallExpression" || !call.arguments.some((each) => each === fn)) return false;
+  const name = memberName(unwrapAssertions(call.callee));
+  return name !== null && ITERATIONS.has(name);
+}
+
+/**
+ * Whether an assertion every run reaches among `earlier` takes a subject that
+ * reads one of the names the condition reads.
+ * @param {File} file
+ * @param {readonly ESTree.Node[]} earlier
+ * @param {ESTree.Expression} condition
+ * @returns {boolean}
+ */
+function pinnedBefore(file, earlier, condition) {
+  const names = identifiers(file.sourceCode, condition);
+  return earlier.some((statement) =>
+    file.openings.some((opening) => {
+      const [subject] = opening.arguments;
+      return (
+        subject !== undefined &&
+        within(opening, statement) &&
+        skipBetween(file, opening, statement.parent) === null &&
+        [...identifiers(file.sourceCode, subject)].some((name) => names.has(name))
+      );
+    }),
   );
-  return earlier.some(
-    (statement) =>
-      statement.type === "IfStatement" &&
-      [statement.consequent, statement.alternate].some(
-        (arm) =>
-          arm !== null && endsIn(arm, RETURNS) && !assertsOnEveryPath(file, [arm], statement),
-      ),
+}
+
+/**
+ * The identifier names written in a node, read off its tokens.
+ * @param {SourceCode} sourceCode
+ * @param {ESTree.Node} node
+ * @returns {Set<string>}
+ */
+function identifiers(sourceCode, node) {
+  return new Set(
+    sourceCode
+      .getTokens(node)
+      .filter((token) => token.type === "Identifier")
+      .map((token) => token.value),
   );
+}
+
+/**
+ * @param {ESTree.Node} inner
+ * @param {ESTree.Node} outer
+ * @returns {boolean}
+ */
+function within(inner, outer) {
+  return inner.range[0] >= outer.range[0] && inner.range[1] <= outer.range[1];
 }
 
 /**
@@ -158,10 +302,11 @@ function skipBetween(file, node, top) {
 /**
  * Whether every passing run down the other path past a branch asserts — the
  * case where the assertion beside it is not one a passing run can do without.
- * The other path is the other arm, which also counts when it always throws,
- * since no run through it passes. Beside an arm that always leaves (`return`,
- * `continue`, `break`, `throw`), the statements after the branch are on the
- * other path too, unless the other arm leaves as well.
+ * The other path is the other arm, which also counts when every path through
+ * it throws, since no run through it passes. Beside an arm no path through
+ * which runs on (each leaves by `return`, `continue`, `break` or `throw`), the
+ * statements after the branch are on the other path too, as long as no path
+ * through the other arm leaves before reaching them.
  * @param {File} file
  * @param {ESTree.IfStatement | ESTree.ConditionalExpression} branch
  * @param {ESTree.Node} child
@@ -171,10 +316,14 @@ function otherPathAsserts(file, branch, child) {
   const other = child === branch.consequent ? branch.alternate : branch.consequent;
   // Climbed to the branch rather than to the arm, so an arm that is itself a
   // branch (`else if`) is asked about its own arms on the way.
-  if (other !== null && (endsIn(other, THROWS) || assertsOnEveryPath(file, [other], branch))) {
+  if (other !== null && (alwaysThrows(other) || assertsOnEveryPath(file, [other], branch))) {
     return true;
   }
-  if (!endsIn(child, LEAVES) || (other !== null && endsIn(other, LEAVES))) return false;
+  if (endsOf(child).fallsThrough) return false;
+  if (other !== null) {
+    const ends = endsOf(other);
+    if (ends.returnsBare || ends.leavesOtherwise) return false;
+  }
   const block = branch.parent;
   const statements = statementsOf(block);
   if (statements === null) return false;
@@ -205,26 +354,9 @@ function statementsOf(node) {
 function assertsOnEveryPath(file, nodes, top) {
   return nodes.some((node) =>
     file.openings.some(
-      (opening) =>
-        opening.range[0] >= node.range[0] &&
-        opening.range[1] <= node.range[1] &&
-        skipBetween(file, opening, top) === null,
+      (opening) => within(opening, node) && skipBetween(file, opening, top) === null,
     ),
   );
-}
-
-/**
- * Whether a statement, or the last statement of a block, is one of `kinds`.
- * @param {ESTree.Node} statement
- * @param {ReadonlySet<string>} kinds
- * @returns {boolean}
- */
-function endsIn(statement, kinds) {
-  if (statement.type === "BlockStatement") {
-    const last = statement.body.at(-1);
-    return last !== undefined && endsIn(last, kinds);
-  }
-  return kinds.has(statement.type);
 }
 
 /**

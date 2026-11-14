@@ -241,7 +241,8 @@ a change to a rule usually lands here too.
   README's anti-slop tables to name the same set, which is the check a count
   would replace with a number to forget. All of them run through
   `lint-fixture.ts`,
-  which owns the case shape and lints a whole block in one oxlint spawn, and
+  which owns the case shape (`unfailable-assertions-cases.ts` holds the one
+  rule's table that outgrew its suite, which runs it with the rest) and lints a whole block in one oxlint spawn, and
   refuses a run whose plugin threw or whose exit status and diagnostics
   disagree, both of which otherwise read as a clean tree.
   `anti-slop-upstream.test.ts` is

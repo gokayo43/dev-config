@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import manifest from "../package.json";
 
-import { mutationLane } from "../.github/actions/mutation-lane/mutation-lane.ts";
+import { mutationLane, testCodeNames } from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { containing } from "./matchers.ts";
 import {
   BEFORE,
@@ -565,6 +565,24 @@ describe("the mutation lane", () => {
     ]);
 
     expect(verdict.note).toEqual(containing("no domain file changed"));
+  });
+
+  // The lane matches the override's names against a basename, so a name with
+  // a folder in it would match nothing and the test code under it would be
+  // mutated with nothing said.
+  test("a test-code glob the lane cannot read as a file-name pattern is named, not passed over", () => {
+    const base = {
+      overrides: [
+        {
+          files: ["**/*.test.ts", "e2e/**/*.ts"],
+          rules: { "anti-slop/no-unfailable-assertions": "error" },
+        },
+      ],
+    };
+
+    expect<unknown>(testCodeNames(base)).toEqual({
+      problems: [{ message: containing("`e2e/**/*.ts`") }],
+    });
   });
 
   test("a changed domain file that carries no mutants is a pass that says so", async () => {
