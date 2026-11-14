@@ -328,13 +328,12 @@ jobs:
       # plainly that it expects a ramp. Two of those are also aimed at each
       # other — `semantic-fixtures` needs the replay `upgrade-gate` adds, and
       # `probe-timeout` bounds a `probe-command` — so each is asked twice,
-      # once about the job and once about the input it rides on. Then the mutation
-      # lane's floor and tests, which bound a score and name a run only that step
-      # makes, the build
-      # cache, which is kept around a build only `build: true` runs, and
-      # `affected`, which needs a turbo to hand the flag to — the one condition
-      # here that is a fact about the tree rather than about the inputs, which
-      # is why the step runs after the checkout.
+      # once about the job and once about the input it rides on. Then the
+      # mutation lane's floor and tests, which bound a score and name a run only
+      # that step makes, the build cache, which is kept around a build only
+      # `build: true` runs, and `affected`, which needs a turbo to hand the flag
+      # to — the one condition here that is a fact about the tree rather than
+      # about the inputs, which is why the step runs after the checkout.
       #
       # The step has no `if:`. It had one, restating every condition its body
       # tests, and two statements of one rule is two places for it to be wrong:

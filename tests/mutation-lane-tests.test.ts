@@ -1,6 +1,5 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 
-import { strykerConfig } from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { containing } from "./matchers.ts";
 import {
   BEFORE,
@@ -25,20 +24,6 @@ describe("the tests a repo names in mutation-tests", () => {
   // which the runner reports as a baseline nothing can be read off.
   const TRAP = { "other/tests/pricing.test.ts": BROWSER_SPEC };
 
-  test("a repo that names no tests is handed the config every repo had before", () => {
-    // Captured from the lane before the input existed: no `bun` block, so the
-    // runner walks the project exactly as it did.
-    expect(
-      strykerConfig(
-        ["src/domain/pricing.ts", "src/domain/[[]id[]].ts"],
-        "/tmp/r/mutation.json",
-        "/tmp/r/sandbox",
-      ),
-    ).toBe(
-      '{"testRunner":"bun","coverageAnalysis":"perTest","plugins":["@hughescr/stryker-bun-runner"],"mutate":["src/domain/pricing.ts","src/domain/[[]id[]].ts"],"reporters":["json"],"jsonReporter":{"fileName":"/tmp/r/mutation.json"},"thresholds":{"break":null},"tempDirName":"/tmp/r/sandbox","cleanTempDir":"always","tsconfigFile":""}',
-    );
-  });
-
   test("the run takes exactly the named file, not the neighbour its path is a substring of", async () => {
     const trees = [
       repo({ ...TRAP, "src/domain/pricing.ts": PRICING, "tests/pricing.test.ts": TOTAL_TEST }),
@@ -54,7 +39,7 @@ describe("the tests a repo names in mutation-tests", () => {
     const named = await lane(trees, { tests: "tests/pricing.test.ts\n" });
     expect(messages(named)).toEqual([]);
     expect(named.note).toBe(
-      "mutation score 100.0% over 1 changed domain file, graded by the 1 test file mutation-tests names",
+      "mutation score 100.0% over 1 changed domain file; mutation-tests names 1 test file",
     );
 
     // The same repo walked: the neighbour runs, and the baseline is refused.
@@ -102,6 +87,33 @@ describe("the tests a repo names in mutation-tests", () => {
     expect(messages(await lane(trees))).toEqual([]);
   });
 
+  // A pattern written from `./` scans to paths that keep the prefix, so a
+  // file named both ways would be counted, and handed to bun, twice.
+  test("one file named in two spellings is one named file", async () => {
+    const verdict = await lane(
+      [
+        BEFORE,
+        repo({ "src/domain/pricing.ts": PRICING + WITH_FEE, "tests/pricing.test.ts": FEE_TEST }),
+      ],
+      { tests: "tests/pricing.test.ts\n./tests/pricing.test.ts" },
+    );
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe(
+      "mutation score 100.0% over 1 changed domain file; mutation-tests names 1 test file",
+    );
+  });
+
+  test("a branch that changes no domain file still says how many tests are named", async () => {
+    const verdict = await lane([BEFORE, { ...BEFORE, "README.md": "# a repo\n" }], {
+      tests: "tests/pricing.test.ts",
+      installed: false,
+    });
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toEqual(containing("nothing to mutate; mutation-tests names 1 test file"));
+  });
+
   // Each of these would leave a test the repo meant to run out of the run,
   // with a score published over the rest. Refused before Stryker starts,
   // which is why none of these runs needs the runner installed.
@@ -133,6 +145,15 @@ describe("the tests a repo names in mutation-tests", () => {
     [
       "a named file bunfig.toml keeps bun from running",
       "tests/*.test.ts",
+      {
+        "bunfig.toml": '[test]\npathIgnorePatterns = ["tests/slow.*"]\n',
+        "tests/slow.test.ts": TOTAL_TEST,
+      },
+      "bunfig.toml: take tests/slow.test.ts out of mutation-tests, or `tests/slow.*` out of [test] pathIgnorePatterns",
+    ],
+    [
+      "a pattern written from ./ that names a file bunfig.toml keeps bun from running",
+      "./tests/*.test.ts",
       {
         "bunfig.toml": '[test]\npathIgnorePatterns = ["tests/slow.*"]\n',
         "tests/slow.test.ts": TOTAL_TEST,

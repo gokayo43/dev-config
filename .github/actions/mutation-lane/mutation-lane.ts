@@ -1,6 +1,7 @@
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, posix } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { branchChange } from "../_lib/change-set.ts";
 import {
@@ -116,19 +117,75 @@ function worthOf(status: Status, own: boolean): Worth {
 const OXLINTRC = ".oxlintrc.json";
 const DOMAIN = "domain";
 
-/** Files Stryker is pointed at: source in the domain, never a declaration file and never a test. */
-function isMutable(path: string): boolean {
-  const name = path.slice(path.lastIndexOf("/") + 1);
-  if (!/\.(?:ts|tsx|mts|cts)$/.test(name)) return false;
-  return !name.endsWith(".d.ts") && !/\.(?:test|spec)\./.test(name);
+/**
+ * What a read gave, or what to tell the repo instead — the two kept apart the
+ * way `Base` in `_lib/gate.ts` keeps them, because "here it is" and "there is
+ * none to give you" are not one value with a hole in it.
+ */
+type Answer<T> = { readonly value: T } | { readonly problems: readonly Problem[] };
+
+/** A setting written as one string or a list of them, as both configs read here allow. */
+function strings(value: unknown): string[] {
+  return (isList(value) ? value : [value]).filter(
+    (each): each is string => typeof each === "string",
+  );
 }
 
 /**
- * The domain folders, or what to tell the repo instead — the two kept apart the
- * way `Base` in `_lib/gate.ts` keeps them, because "here are the folders" and
- * "there are none to give you" are not one value with a hole in it.
+ * The checkout the action runs from, which holds the lint base as shipped at
+ * the ref the consumer pinned — the same base its `.oxlintrc.json` extends.
  */
-type Domain = { readonly globs: string[] } | { readonly problems: readonly Problem[] };
+const ACTION_CHECKOUT = fileURLToPath(new URL("../../..", import.meta.url));
+const LINT_BASE = "oxlint.base.json";
+
+/**
+ * A rule the base turns on in its test override and nowhere else, which is how
+ * that override is found: by what it decides, not by a glob it happens to hold.
+ */
+const TEST_OVERRIDE_RULE = "anti-slop/no-unfailable-assertions";
+
+/**
+ * The names of the files the lint base treats as test code — the suites and
+ * the harnesses and fixtures beside them — read off its test override, so the
+ * lane and the linter mean one set by "test code" and the set has one home.
+ * Each glob is matched against a basename, the way the override's `**\/`
+ * prefix reaches a file at any depth.
+ */
+async function testCodeNames(): Promise<readonly string[]> {
+  const base = await readConfig(ACTION_CHECKOUT, LINT_BASE);
+  if (base.contents === undefined) {
+    throw new Error(
+      `the action's own ${LINT_BASE} did not read: ${base.problems.map((problem) => problem.message).join("; ")}`,
+    );
+  }
+  const overrides = isList(base.contents["overrides"]) ? base.contents["overrides"] : [];
+  const found = overrides
+    .filter(isObject)
+    .filter(
+      (override) =>
+        isObject(override["rules"]) && override["rules"][TEST_OVERRIDE_RULE] !== undefined,
+    );
+  const [override, ...rest] = found;
+  if (override === undefined || rest.length > 0) {
+    throw new Error(
+      `the action's own ${LINT_BASE} has ${found.length} overrides naming ${TEST_OVERRIDE_RULE}, not one`,
+    );
+  }
+  return strings(override["files"]).map((glob) => glob.replace(/^\*\*\//, ""));
+}
+
+/**
+ * Files Stryker is pointed at: source in the domain, never a declaration file,
+ * never a test and never what the lint base treats as test code.
+ */
+function mutableBeside(testCode: readonly string[]): (path: string) => boolean {
+  return (path) => {
+    const name = path.slice(path.lastIndexOf("/") + 1);
+    if (!/\.(?:ts|tsx|mts|cts)$/.test(name)) return false;
+    if (name.endsWith(".d.ts") || /\.(?:test|spec)\./.test(name)) return false;
+    return !testCode.some((glob) => new Bun.Glob(glob).match(name));
+  };
+}
 
 /**
  * A `pattern` as eslint-plugin-boundaries reads it: one folder or several. The
@@ -137,9 +194,7 @@ type Domain = { readonly globs: string[] } | { readonly problems: readonly Probl
  * a monorepo and say nothing about the other half.
  */
 function patternsIn(element: ConfigObject): string[] {
-  const pattern = element["pattern"];
-  const listed = isList(pattern) ? pattern : [pattern];
-  return listed.filter((each): each is string => typeof each === "string");
+  return strings(element["pattern"]);
 }
 
 /**
@@ -149,7 +204,7 @@ function patternsIn(element: ConfigObject): string[] {
  * diagnostics of this gate's own are for the file that reads fine: one that
  * names no domain, and one whose pattern names something that is not a folder.
  */
-async function domainGlobs(root: string): Promise<Domain> {
+async function domainGlobs(root: string): Promise<Answer<string[]>> {
   const { contents, problems } = await readConfig(root, OXLINTRC);
   if (contents === undefined) return { problems };
 
@@ -180,7 +235,7 @@ async function domainGlobs(root: string): Promise<Domain> {
   const named = globs.filter((_, index) => reach[index] === "a file").map(fileProblem);
   if (named.length > 0) return { problems: named };
   if (!reach.includes("a folder")) return { problems: [noFolderProblem(globs)] };
-  return { globs };
+  return { value: globs };
 }
 
 /**
@@ -391,13 +446,9 @@ function dirtyBaseline(wrote: string): string | undefined {
  * suite failed unmutated, and the exit that fixes it most often is not something
  * the report can confirm.
  */
-function baselineProblem(kept: string, selected: readonly string[] | undefined): Problem {
-  const cause =
-    selected === undefined
-      ? `The run loads the test and spec files it finds by walking the project rather than the ones the repo's own script selects, so the usual cause is a suite in the tree that was never meant for a plain \`bun test\`: name the files that grade the domain in \`${TESTS_INPUT}\`, or keep that suite out with \`[test] pathIgnorePatterns\` in \`bunfig.toml\`.`
-      : `The run loads exactly the ${plural(selected.length, "test file")} \`${TESTS_INPUT}\` names, as one plain \`bun test\` without the repo's own script, so the usual cause is a named file that passes only under that script: take it out of the patterns, or make it pass on its own.`;
+function baselineProblem(kept: string, tests: Tests): Problem {
   return {
-    message: `make the suite this lane runs pass before reading anything into the mutants: the unmutated run already failed, and the runner could not attribute that failure to any test it ran — so no status in the report means what it says, a kill least of all. What the runner kept of that run's stderr: ${span(kept)}. ${cause}`,
+    message: `make the suite this lane runs pass before reading anything into the mutants: the unmutated run already failed, and the runner could not attribute that failure to any test it ran — so no status in the report means what it says, a kill least of all. What the runner kept of that run's stderr: ${span(kept)}. ${testsCause(tests)}`,
   };
 }
 
@@ -438,33 +489,57 @@ function literal(path: string): string {
   return path.replace(/[*?[\]()+@|]/g, (mark) => `[${mark}]`);
 }
 
-/**
- * The test files a repo names to grade its domain, or what to tell it instead.
- * Absent when the input is empty, which leaves the runner's own walk of the
- * project as the selection — every repo that names none is graded as before.
- */
-type Named = { readonly files: readonly string[] } | { readonly problems: readonly Problem[] };
-
 const TESTS_INPUT = "mutation-tests";
 const BUNFIG = "bunfig.toml";
 
 /**
- * The files the `mutation-tests` patterns name, each as the relative path
- * beginning `./` the runner hands `bun test`. Bun reads a bare relative path as
- * a substring filter, so `lib/a.test.ts` also runs `other/lib/a.test.ts`; the
- * `./` is what makes it one file. An absolute path would point the runner at
- * the original files rather than the sandbox copy it mutates.
+ * Which tests the run loads: every test file the runner finds by walking the
+ * project, or exactly the files a repo names in `mutation-tests`. The one value
+ * the config, the dirty-baseline cause and the note each read.
+ */
+type Tests =
+  | { readonly kind: "walked" }
+  | { readonly kind: "named"; readonly files: readonly string[] };
+
+/** What the runner is told: nothing for a walk, so its own walk runs; the named files otherwise. */
+function testsConfig(tests: Tests): { readonly bun?: { readonly testFiles: readonly string[] } } {
+  return tests.kind === "walked" ? {} : { bun: { testFiles: tests.files } };
+}
+
+/** The usual cause of a run that failed unmutated, which depends on how its tests were chosen. */
+function testsCause(tests: Tests): string {
+  return tests.kind === "walked"
+    ? `The run loads the test and spec files it finds by walking the project rather than the ones the repo's own script selects, so the usual cause is a suite in the tree that was never meant for a plain \`bun test\`: name the files that grade the domain in \`${TESTS_INPUT}\`, or keep that suite out with \`[test] pathIgnorePatterns\` in \`bunfig.toml\`.`
+    : `The run loads exactly the ${plural(tests.files.length, "test file")} \`${TESTS_INPUT}\` names, as one plain \`bun test\` without the repo's own script, so the usual cause is a named file that passes only under that script: take it out of the patterns, or make it pass on its own.`;
+}
+
+/** What a note says of the tests, wherever the run got far enough to say anything about them. */
+function testsNoted(tests: Tests): string {
+  return tests.kind === "walked"
+    ? ""
+    : `; ${TESTS_INPUT} names ${plural(tests.files.length, "test file")}`;
+}
+
+/**
+ * The tests a repo names, each as the relative path beginning `./` the runner
+ * hands `bun test`. Bun reads a bare relative path as a substring filter, so
+ * `lib/a.test.ts` also runs `other/lib/a.test.ts`; the `./` is what makes it
+ * one file. An absolute path would point the runner at the original files
+ * rather than the sandbox copy it mutates. Every path is normalised before
+ * anything is asked of it, because a pattern written `./lib/*.test.ts` scans
+ * to `./lib/a.test.ts`, which no ignore pattern matches and which bun, handed
+ * `././lib/a.test.ts`, skips.
  *
  * Every refusal here is one that would otherwise leave a named test out of the
  * run with nothing said: a pattern that names nothing, one that reaches outside
  * the project the sandbox copies, a blank line between patterns, and a file
  * `bun test` itself skips because `bunfig.toml` ignores its path.
  */
-async function namedTests(root: string, value: string): Promise<Named | undefined> {
+async function testsFrom(root: string, value: string): Promise<Answer<Tests>> {
   // The whole value is trimmed first, so the newline a YAML block scalar ends
   // with is not read as a blank line of the repo's.
   const written = value.trim();
-  if (written === "") return undefined;
+  if (written === "") return { value: { kind: "walked" } };
 
   const problems: Problem[] = [];
   const files = new Set<string>();
@@ -484,9 +559,9 @@ async function namedTests(root: string, value: string): Promise<Named | undefine
     }
     // `node_modules` is the one directory a `**` pattern would otherwise walk
     // into, and nothing under it is the repo's own test.
-    const found = [...new Bun.Glob(pattern).scanSync({ cwd: root })].filter(
-      (file) => !file.split("/").includes("node_modules"),
-    );
+    const found = [...new Bun.Glob(pattern).scanSync({ cwd: root })]
+      .map((file) => posix.normalize(file))
+      .filter((file) => !file.split("/").includes("node_modules"));
     if (found.length === 0) {
       problems.push({
         message: `fix ${TESTS_INPUT}'s \`${pattern}\` so it names a test file: it matches none, and a pattern that names nothing grades the domain with fewer tests than the repo meant`,
@@ -498,7 +573,7 @@ async function namedTests(root: string, value: string): Promise<Named | undefine
   const ignored = await ignoredByBunfig(root);
   if ("problems" in ignored) return ignored;
   for (const file of files) {
-    const by = ignored.patterns.find((each) => new Bun.Glob(each).match(file));
+    const by = ignored.value.find((each) => new Bun.Glob(each).match(file));
     if (by !== undefined) {
       problems.push({
         file: BUNFIG,
@@ -508,7 +583,7 @@ async function namedTests(root: string, value: string): Promise<Named | undefine
   }
 
   if (problems.length > 0) return { problems };
-  return { files: [...files].toSorted().map((file) => `./${file}`) };
+  return { value: { kind: "named", files: [...files].toSorted().map((file) => `./${file}`) } };
 }
 
 /**
@@ -516,28 +591,12 @@ async function namedTests(root: string, value: string): Promise<Named | undefine
  * on its command line as much as to one it found. No bunfig, or one without the
  * key, ignores nothing.
  */
-async function ignoredByBunfig(
-  root: string,
-): Promise<{ readonly patterns: readonly string[] } | { readonly problems: readonly Problem[] }> {
-  const file = Bun.file(join(root, BUNFIG));
-  if (!(await file.exists())) return { patterns: [] };
-  let parsed: unknown;
-  try {
-    parsed = Bun.TOML.parse(await file.text());
-  } catch (error) {
-    return {
-      problems: [
-        {
-          file: BUNFIG,
-          message: `fix ${BUNFIG} so it parses: the lane reads its [test] pathIgnorePatterns to know which named tests bun would skip, and it reads as ${error instanceof Error ? error.message : String(error)}`,
-        },
-      ],
-    };
-  }
-  const test = isObject(parsed) ? parsed["test"] : undefined;
-  const patterns = isObject(test) ? test["pathIgnorePatterns"] : undefined;
-  const listed = isList(patterns) ? patterns : [patterns];
-  return { patterns: listed.filter((each): each is string => typeof each === "string") };
+async function ignoredByBunfig(root: string): Promise<Answer<readonly string[]>> {
+  if (!(await Bun.file(join(root, BUNFIG)).exists())) return { value: [] };
+  const bunfig = await readConfig(root, BUNFIG, "TOML");
+  if (bunfig.contents === undefined) return { problems: bunfig.problems };
+  const test = bunfig.contents["test"];
+  return { value: isObject(test) ? strings(test["pathIgnorePatterns"]) : [] };
 }
 
 /** What Stryker says, once per `mutate` entry it could not resolve to a file. */
@@ -548,11 +607,11 @@ const UNRESOLVED = /Glob pattern "([^"]*)" did not result in any files\./g;
  * with exactly the named tests when a repo names them. With none named the
  * config carries no `bun` block, and the runner walks the project.
  */
-export function strykerConfig(
+function strykerConfig(
   mutate: readonly string[],
   report: string,
   sandbox: string,
-  tests?: readonly string[],
+  tests: Tests,
 ): string {
   return JSON.stringify({
     testRunner: "bun",
@@ -584,7 +643,7 @@ export function strykerConfig(
     // file in the project — the only value the option's schema accepts that
     // reaches nothing.
     tsconfigFile: "",
-    ...(tests === undefined ? {} : { bun: { testFiles: tests } }),
+    ...testsConfig(tests),
   });
 }
 
@@ -623,17 +682,17 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
 
   // Before the domain and the change, so a pattern that names nothing is
   // refused on every run rather than only on one that changed a domain file.
-  const named = await namedTests(root, tests);
-  if (named !== undefined && "problems" in named) {
+  const chosen = await testsFrom(root, tests);
+  if ("problems" in chosen) {
     return {
       note: `${TESTS_INPUT} does not name the tests it was meant to`,
-      problems: [...named.problems],
+      problems: [...chosen.problems],
     };
   }
-  const selected = named?.files;
+  const run = chosen.value;
 
   const domain = await domainGlobs(root);
-  if (!("globs" in domain)) {
+  if (!("value" in domain)) {
     return { note: "the pure domain is not declared", problems: [...domain.problems] };
   }
 
@@ -643,10 +702,10 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
   // a project nested deeper than any workspace declares.
   const change = await branchChange(root, event, {
     why: READS_THE_BASE_REF,
-    pathspecs: domain.globs.map((glob) => `:(glob)${glob}/**`),
-    keeps: isMutable,
+    pathspecs: domain.value.map((glob) => `:(glob)${glob}/**`),
+    keeps: mutableBeside(await testCodeNames()),
     noun: "domain file",
-    nothing: "nothing to mutate",
+    nothing: `nothing to mutate${testsNoted(run)}`,
   });
   if (change.kind === "settled") return change.verdict;
   const { changed } = change;
@@ -671,7 +730,7 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
     const requested = new Map([...changed.keys()].map((file) => [literal(file), file]));
     await Bun.write(
       config,
-      strykerConfig([...requested.keys()], report, join(scratch, "sandbox"), selected),
+      strykerConfig([...requested.keys()], report, join(scratch, "sandbox"), run),
     );
 
     const proc = Bun.spawn([stryker, "run", config], {
@@ -707,7 +766,7 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
       return {
         note: "the suite this run mutated does not pass unmutated",
         log: wrote,
-        problems: [baselineProblem(kept, selected)],
+        problems: [baselineProblem(kept, run)],
       };
     }
 
@@ -723,13 +782,7 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
       };
     }
 
-    const graded = verdict(await Bun.file(report).text(), changed, bound, wrote);
-    return selected === undefined
-      ? graded
-      : {
-          ...graded,
-          note: `${graded.note ?? ""}, graded by the ${plural(selected.length, "test file")} ${TESTS_INPUT} names`,
-        };
+    return verdict(await Bun.file(report).text(), changed, bound, run, wrote);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -776,6 +829,7 @@ function verdict(
   text: string,
   changed: ReadonlyMap<string, ReadonlySet<number>>,
   bound: number | undefined,
+  tests: Tests,
   wrote: string,
 ): Verdict {
   const mutants = parseReport(text);
@@ -798,7 +852,7 @@ function verdict(
   // did get a verdict is a claim about a campaign that did not happen.
   if (ungraded.length > 0) {
     return {
-      note: `part of the run over ${files} was never graded`,
+      note: `part of the run over ${files} was never graded${testsNoted(tests)}`,
       log: wrote,
       problems: [ungradedProblem(ungraded)],
     };
@@ -807,7 +861,10 @@ function verdict(
   const counted = tally(graded);
   if (counted === undefined) {
     const outside = graded.filter((each) => each.worth === "outside").length;
-    return { note: heldNothing(mutants.length, noVerdict.length, outside, files), problems: [] };
+    return {
+      note: `${heldNothing(mutants.length, noVerdict.length, outside, files)}${testsNoted(tests)}`,
+      problems: [],
+    };
   }
 
   const surviving = graded
@@ -822,7 +879,7 @@ function verdict(
   }
 
   return {
-    note: `mutation score ${percent(counted.score)} over ${files}`,
+    note: `mutation score ${percent(counted.score)} over ${files}${testsNoted(tests)}`,
     table: table(counted, surviving, noVerdict.length, bound),
     problems,
   };

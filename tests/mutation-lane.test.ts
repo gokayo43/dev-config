@@ -549,17 +549,23 @@ describe("the mutation lane", () => {
     expect(verdict.table).not.toEqual(containing("→ `cents - `x`.length` ("));
   });
 
-  test.each(["pricing.d.ts", "pricing.test.ts", "pricing.md"])(
-    "a changed %s under the domain is not a file to mutate",
-    async (name) => {
-      const verdict = await lane([
-        BEFORE,
-        { ...BEFORE, [`src/domain/${name}`]: "export type Cents = number;\n" },
-      ]);
+  // The harnesses and fixtures beside a suite are test code to the lint base,
+  // and so to the lane: a mutant in one grades the test helper, not the domain.
+  test.each([
+    "pricing.d.ts",
+    "pricing.test.ts",
+    "pricing.md",
+    "pricing.test-harness.ts",
+    "pricing.test-harness.tsx",
+    "pricing.fixture.ts",
+  ])("a changed %s under the domain is not a file to mutate", async (name) => {
+    const verdict = await lane([
+      BEFORE,
+      { ...BEFORE, [`src/domain/${name}`]: "export type Cents = number;\n" },
+    ]);
 
-      expect(verdict.note).toEqual(containing("no domain file changed"));
-    },
-  );
+    expect(verdict.note).toEqual(containing("no domain file changed"));
+  });
 
   test("a changed domain file that carries no mutants is a pass that says so", async () => {
     const verdict = await lane([BEFORE, { ...BEFORE, "src/domain/kind.ts": KIND }]);

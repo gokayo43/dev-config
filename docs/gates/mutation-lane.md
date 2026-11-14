@@ -55,7 +55,10 @@ of them reaches a directory at all. Both would otherwise leave the lane grading
 a domain of no files and reporting a clean pass.
 
 Under those folders the lane mutates `.ts`, `.tsx`, `.mts` and `.cts`, and never
-a `.d.ts` or a `*.test.*` / `*.spec.*` file.
+a `.d.ts`, a `*.test.*` / `*.spec.*` file, or a file the lint base's test
+override names as test code (a `*.test-harness.*` or `*.fixture.*` beside a
+suite). The lane reads that override out of the base in its own checkout, so the
+linter and the lane mean one set by "test code".
 
 ## The one failure this gate cannot afford
 
