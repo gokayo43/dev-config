@@ -11,6 +11,7 @@ import {
   nat,
   oneof,
   option,
+  pre,
   property,
   record as shaped,
   string,
@@ -255,7 +256,9 @@ describe("the check", () => {
   test("passes only when every count equals its ceiling", () => {
     check(
       property(entryAndMeasure, ([entry, measured]) => {
-        if (lowered(sealed(entry), measured, BROWSER).changes.length > 0) return;
+        // A precondition rather than a return: fast-check fails a property whose
+        // inputs never meet it, where a return passes having checked nothing.
+        pre(lowered(sealed(entry), measured, BROWSER).changes.length === 0);
         expect([...measured.keys()].toSorted()).toEqual([...entry.phases.keys()].toSorted());
         for (const [phase, held] of measured) {
           for (const count of COUNTS) {

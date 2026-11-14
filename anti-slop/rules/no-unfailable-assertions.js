@@ -1,6 +1,6 @@
 /** @import { ESTree, Rule, SourceCode } from "@oxlint/plugins" */
 
-import { assertionOpening, EXPECTS, runnerApi } from "../shared/runner.js";
+import { assertionOpening, opensAssertion, runnerApi } from "../shared/runner.js";
 import { memberName, unwrapAssertions } from "../shared/syntax.js";
 
 /**
@@ -13,12 +13,29 @@ const EVENT_REGISTRATIONS = new Set(["on", "once", "addEventListener", "subscrib
 /** The matchers any error satisfies when they are given nothing to compare it with. */
 const THROW_MATCHERS = new Set(["toThrow", "toThrowError"]);
 
+/** The statements after which nothing in the same block runs. */
+const LEAVES = new Set([
+  "ReturnStatement",
+  "ThrowStatement",
+  "ContinueStatement",
+  "BreakStatement",
+]);
+const THROWS = new Set(["ThrowStatement"]);
+const RETURNS = new Set(["ReturnStatement"]);
+
 /**
- * Where an assertion stops being one that always runs, named by what makes it
- * skippable. `detached` is a function this file cannot see called — a
- * declaration, a stand-in's implementation, a runner's callback — which bounds
- * the question rather than answering it.
- * @typedef {"branch" | "catch" | "event" | "detached"} Skip
+ * Where an assertion stops being one every passing run reaches, named by what
+ * lets a run pass without it. `detached` is a function this file cannot see
+ * called — a declaration, a stand-in's implementation, a runner's callback —
+ * which bounds the question rather than answering it.
+ * @typedef {"branch" | "guard" | "catch" | "event" | "detached"} Skip
+ */
+
+/**
+ * What the rule knows of one file: its source, and every assertion opening in
+ * it, which its own visitor collected and whose containment answers "the
+ * assertions inside this node".
+ * @typedef {{ readonly sourceCode: SourceCode, readonly openings: readonly ESTree.CallExpression[] }} File
  */
 
 /**
@@ -64,45 +81,73 @@ function callbackUse(sourceCode, fn) {
 }
 
 /**
- * What one step of the climb, from `child` into `parent`, adds to what can keep
- * an assertion from running.
- * @param {SourceCode} sourceCode
+ * What one step of the climb, from `child` into `parent`, adds to what can let
+ * a passing run go without the assertion.
+ * @param {File} file
  * @param {ESTree.Node} parent
  * @param {ESTree.Node} child
  * @returns {Skip | null}
  */
-function skipAt(sourceCode, parent, child) {
+function skipAt(file, parent, child) {
   if (parent.type === "IfStatement" || parent.type === "ConditionalExpression") {
-    return child === parent.test || otherArmAsserts(sourceCode, parent, child) ? null : "branch";
+    return child === parent.test || otherPathAsserts(file, parent, child) ? null : "branch";
   }
   if (parent.type === "LogicalExpression") return child === parent.right ? "branch" : null;
-  if (parent.type === "SwitchCase") return child === parent.test ? null : "branch";
+  if (parent.type === "SwitchCase" && child === parent.test) return null;
+  if (parent.type === "SwitchCase") return "branch";
   if (parent.type === "CatchClause") return "catch";
   if (
     parent.type === "ArrowFunctionExpression" ||
     parent.type === "FunctionExpression" ||
     parent.type === "FunctionDeclaration"
   ) {
-    return callbackUse(sourceCode, parent);
+    return callbackUse(file.sourceCode, parent);
   }
-  return null;
+  const statements = statementsOf(parent);
+  return statements !== null && guardedBefore(file, statements, child) ? "guard" : null;
 }
 
 /**
- * What can keep `node` from running whenever `top` does, nearest first, or
- * nothing when it always runs with it. `top` is a branch, or the block around
- * it, when the question is whether the other path past that branch always
- * asserts, and absent when it is whether the assertion can be skipped at all.
- * @param {SourceCode} sourceCode
+ * Whether a branch earlier in the block returns on one of its arms without
+ * asserting there: `if (!found) return;` above an `expect(found)` lets every
+ * run that takes the guard pass without the assertion. A guard that throws
+ * fails the run instead, so it is no guard here.
+ * @param {File} file
+ * @param {readonly ESTree.Node[]} statements
+ * @param {ESTree.Node} child
+ * @returns {boolean}
+ */
+function guardedBefore(file, statements, child) {
+  const earlier = statements.slice(
+    0,
+    statements.findIndex((each) => each === child),
+  );
+  return earlier.some(
+    (statement) =>
+      statement.type === "IfStatement" &&
+      [statement.consequent, statement.alternate].some(
+        (arm) =>
+          arm !== null && endsIn(arm, RETURNS) && !assertsOnEveryPath(file, [arm], statement),
+      ),
+  );
+}
+
+/**
+ * What can let a passing run go without `node`, nearest first, or nothing when
+ * every passing run that reaches `top` reaches it too. `top` is a branch, or
+ * the block around it, when the question is whether the other path past that
+ * branch always asserts, and absent when it is whether the assertion can be
+ * skipped at all.
+ * @param {File} file
  * @param {ESTree.Node} node
  * @param {ESTree.Node | null} top
  * @returns {Skip | null}
  */
-function skipBetween(sourceCode, node, top) {
+function skipBetween(file, node, top) {
   let child = node;
   let parent = node.parent;
   while (parent !== null && parent !== top) {
-    const skip = skipAt(sourceCode, parent, child);
+    const skip = skipAt(file, parent, child);
     if (skip !== null) return skip;
     child = parent;
     parent = parent.parent;
@@ -111,25 +156,30 @@ function skipBetween(sourceCode, node, top) {
 }
 
 /**
- * Whether the other path past a branch asserts on every run through it — the
- * case where one of the two always runs, so neither is a skipped assertion.
- * The other path is the other arm, or, beside an arm that always leaves
- * (`return`, `continue`, `break`, `throw`), the statements after the branch.
- * @param {SourceCode} sourceCode
+ * Whether every passing run down the other path past a branch asserts — the
+ * case where the assertion beside it is not one a passing run can do without.
+ * The other path is the other arm, which also counts when it always throws,
+ * since no run through it passes. Beside an arm that always leaves (`return`,
+ * `continue`, `break`, `throw`), the statements after the branch are on the
+ * other path too, unless the other arm leaves as well.
+ * @param {File} file
  * @param {ESTree.IfStatement | ESTree.ConditionalExpression} branch
  * @param {ESTree.Node} child
  * @returns {boolean}
  */
-function otherArmAsserts(sourceCode, branch, child) {
+function otherPathAsserts(file, branch, child) {
   const other = child === branch.consequent ? branch.alternate : branch.consequent;
   // Climbed to the branch rather than to the arm, so an arm that is itself a
   // branch (`else if`) is asked about its own arms on the way.
-  if (other !== null) return assertsOnEveryPath(sourceCode, [other], branch);
+  if (other !== null && (endsIn(other, THROWS) || assertsOnEveryPath(file, [other], branch))) {
+    return true;
+  }
+  if (!endsIn(child, LEAVES) || (other !== null && endsIn(other, LEAVES))) return false;
   const block = branch.parent;
   const statements = statementsOf(block);
-  if (statements === null || !alwaysLeaves(child)) return false;
+  if (statements === null) return false;
   const after = statements.slice(statements.findIndex((each) => each === branch) + 1);
-  return assertsOnEveryPath(sourceCode, after, block);
+  return assertsOnEveryPath(file, after, block);
 }
 
 /**
@@ -145,95 +195,41 @@ function statementsOf(node) {
 }
 
 /**
- * Whether some assertion among `nodes` runs whenever `top` does.
- * @param {SourceCode} sourceCode
+ * Whether some assertion inside `nodes` is reached by every passing run that
+ * reaches `top`.
+ * @param {File} file
  * @param {readonly ESTree.Node[]} nodes
  * @param {ESTree.Node} top
  * @returns {boolean}
  */
-function assertsOnEveryPath(sourceCode, nodes, top) {
+function assertsOnEveryPath(file, nodes, top) {
   return nodes.some((node) =>
-    assertionsIn(sourceCode, node).some(
-      (opening) => skipBetween(sourceCode, opening, top) === null,
+    file.openings.some(
+      (opening) =>
+        opening.range[0] >= node.range[0] &&
+        opening.range[1] <= node.range[1] &&
+        skipBetween(file, opening, top) === null,
     ),
   );
 }
 
 /**
- * Whether a statement never falls through to the one after it.
+ * Whether a statement, or the last statement of a block, is one of `kinds`.
  * @param {ESTree.Node} statement
+ * @param {ReadonlySet<string>} kinds
  * @returns {boolean}
  */
-function alwaysLeaves(statement) {
+function endsIn(statement, kinds) {
   if (statement.type === "BlockStatement") {
     const last = statement.body.at(-1);
-    return last !== undefined && alwaysLeaves(last);
+    return last !== undefined && endsIn(last, kinds);
   }
-  return (
-    statement.type === "ReturnStatement" ||
-    statement.type === "ThrowStatement" ||
-    statement.type === "ContinueStatement" ||
-    statement.type === "BreakStatement"
-  );
+  return kinds.has(statement.type);
 }
 
 /**
- * Every `expect(…)` written inside a node, in any function under it: the climb
- * from each is what decides whether it counts.
- * @param {SourceCode} sourceCode
- * @param {ESTree.Node} node
- * @returns {ESTree.CallExpression[]}
- */
-function assertionsIn(sourceCode, node) {
-  /** @type {ESTree.CallExpression[]} */
-  const found = [];
-  /** @param {unknown} value */
-  const visit = (value) => {
-    if (Array.isArray(value)) {
-      for (const each of value) visit(each);
-      return;
-    }
-    if (typeof value !== "object" || value === null || !("type" in value)) return;
-    const current = /** @type {ESTree.Node} */ (value);
-    if (current.type === "CallExpression" && opensAssertion(sourceCode, current)) {
-      found.push(current);
-    }
-    for (const [key, child] of Object.entries(current)) {
-      if (key !== "parent") visit(child);
-    }
-  };
-  visit(node);
-  return found;
-}
-
-/**
- * @param {SourceCode} sourceCode
- * @param {ESTree.CallExpression} call
- * @returns {boolean}
- */
-function opensAssertion(sourceCode, call) {
-  return EXPECTS.has(runnerApi(sourceCode, call.callee) ?? "");
-}
-
-/**
- * Whether a matcher is negated anywhere between it and the `expect(…)` it hangs
- * off. `.not.toThrow()` with nothing to compare is exactly what it should be.
- * @param {ESTree.MemberExpression} matcher
- * @param {ESTree.CallExpression} opening
- * @returns {boolean}
- */
-function isNegated(matcher, opening) {
-  let current = unwrapAssertions(matcher.object);
-  while (current !== opening && current.type === "MemberExpression") {
-    if (memberName(current) === "not") return true;
-    current = unwrapAssertions(current.object);
-  }
-  return false;
-}
-
-/**
- * Refuse an assertion that passes whatever the code under test does: one a
- * branch, a catch or an event can keep from running, and a throw matcher any
+ * Refuse an assertion a passing run can go without: one a branch, a guard that
+ * returns, a catch or an event can keep from running, and a throw matcher any
  * error satisfies.
  * @type {Rule}
  */
@@ -242,11 +238,13 @@ export const noUnfailableAssertionsRule = {
     type: "problem",
     docs: {
       description:
-        "Disallow an expect() a branch, a catch or an event callback can skip, and a throw matcher with nothing to compare.",
+        "Disallow an expect() a branch, a returning guard, a catch or an event callback can skip, and a throw matcher with nothing to compare.",
     },
     messages: {
       branch:
-        "Assert where every run reaches, or in every arm of the branch — this assertion runs only when the condition lets it, and the case passes having checked nothing when it does not.",
+        "Assert where every passing run reaches, or on every path past the branch — this assertion runs only when the condition lets it, and the case passes having checked nothing when it does not.",
+      guard:
+        "Fail the case where the guard above returns — throw there, or assert what made it return — since a run that takes that return passes without reaching this assertion.",
       catch:
         "Assert the throw itself, with `expect(() => …).toThrow(<what>)` or `await expect(promise).rejects.toThrow(<what>)` — an assertion in a catch runs only when something throws, so the case passes when nothing does.",
       event:
@@ -256,14 +254,15 @@ export const noUnfailableAssertionsRule = {
     },
   },
   createOnce(context) {
+    /** @type {ESTree.CallExpression[]} */
+    let openings = [];
     return {
+      before() {
+        openings = [];
+      },
       /** @param {ESTree.CallExpression} node */
       CallExpression(node) {
-        const { sourceCode } = context;
-        if (!opensAssertion(sourceCode, node)) return;
-        const skip = skipBetween(sourceCode, node, null);
-        if (skip === null || skip === "detached") return;
-        context.report({ node, messageId: skip });
+        if (opensAssertion(context.sourceCode, node)) openings.push(node);
       },
       /** @param {ESTree.MemberExpression} node */
       MemberExpression(node) {
@@ -273,8 +272,17 @@ export const noUnfailableAssertionsRule = {
         if (call.type !== "CallExpression" || call.callee !== node) return;
         if (call.arguments.length > 0) return;
         const opening = assertionOpening(context.sourceCode, node);
-        if (opening === null || isNegated(node, opening)) return;
+        if (opening === null || opening.negated) return;
         context.report({ node: node.property, messageId: "bareThrow", data: { matcher: name } });
+      },
+      "Program:exit"() {
+        /** @type {File} */
+        const file = { sourceCode: context.sourceCode, openings };
+        for (const opening of openings) {
+          const skip = skipBetween(file, opening, null);
+          if (skip === null || skip === "detached") continue;
+          context.report({ node: opening, messageId: skip });
+        }
       },
     };
   },

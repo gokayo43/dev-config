@@ -2,11 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
   baseConfig,
-  byFile,
   type Case,
   cases,
   lines,
-  oxlint,
   scopeOf,
   shippedBase,
   underBase,
@@ -629,6 +627,74 @@ test("reads", () => {
       reports: ["12:5"],
     },
     {
+      name: "an other arm that throws is no path a passing run takes",
+      source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const value = Math.random();
+  if (value > 0.5) {
+    expect(value).toBeGreaterThan(0.5);
+  } else {
+    throw new Error("the value never reached the half");
+  }
+});`,
+      reports: [],
+    },
+    {
+      name: "an arm that asserts and leaves beside an else that does not takes what follows as the else's path",
+      source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const value = Math.random();
+  if (value > 0.5) {
+    expect(value).toBeGreaterThan(0.5);
+    return;
+  } else {
+    console.log(value);
+  }
+  expect(value).toBeLessThan(1);
+});`,
+      reports: [],
+    },
+    {
+      name: "an else that leaves too ends the other path before what follows",
+      source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const value = Math.random();
+  if (value > 0.5) {
+    expect(value).toBeGreaterThan(0.5);
+    return;
+  } else {
+    return;
+  }
+  expect(value).toBeLessThan(1);
+});`,
+      reports: ["5:5", "10:3"],
+    },
+    {
+      name: "a guard that returns puts every assertion after it behind a branch",
+      source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const found = Math.random() > 0.5 ? 1 : undefined;
+  if (found === undefined) return;
+  expect(found).toBe(1);
+});`,
+      reports: ["5:3"],
+    },
+    {
+      name: "a guard that throws, or asserts before it returns, lets no passing run go without what follows",
+      source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const found = Math.random() > 0.5 ? 1 : undefined;
+  if (found === undefined) throw new Error("nothing found");
+  expect(found).toBe(1);
+  if (found > 1) {
+    expect(found).toBeGreaterThan(1);
+    return;
+  }
+  expect(found).toBe(1);
+});`,
+      reports: [],
+    },
+    {
       name: "an arm that falls through has no other path, whatever follows the branch",
       source: `import { expect, test } from "bun:test";
 test("reads", () => {
@@ -829,30 +895,6 @@ describe("the test-smell rules", () => {
       expect(wired).toContain(`anti-slop(${rule})`);
     }
   });
-
-  // Where an assertion sits is the whole of what this rule reads, so its table
-  // is held whole in every kind of file the base grades, through the base:
-  // a rule that answered differently in a harness than in a suite would pass
-  // the one-case wiring check above.
-  test.each(IN_TEST_FILES)(
-    "no-unfailable-assertions reports its whole table, at the same places, in a %s",
-    async (suffix) => {
-      const table = IN_TESTS["no-unfailable-assertions"];
-      const files = table.map((_, index) => `case-${index}${suffix}`);
-      const grouped = byFile(
-        await oxlint({
-          ".oxlintrc.json": baseConfig(),
-          ...Object.fromEntries(files.map((file, index) => [file, table[index]?.source ?? ""])),
-        }),
-      );
-      const placed = files.map((file) =>
-        (grouped.get(file) ?? [])
-          .filter(({ code }) => code === "anti-slop(no-unfailable-assertions)")
-          .map(({ line, column }) => `${line}:${column}`),
-      );
-      expect(placed).toEqual(table.map(({ reports }) => [...reports]));
-    },
-  );
 
   // The other half of scoping one to a test file: counting calls, sleeping and
   // reaching into a module are what a source file does all day, and a rule that

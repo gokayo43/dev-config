@@ -29,7 +29,7 @@ const RUNNER_GLOBALS = new Set(["expect", "jest", "vi"]);
 const NAMESPACE_NAMES = new Set(["*", "default"]);
 
 /** Every way an assertion is opened. `soft` and `poll` are vitest's, and assert just the same. */
-export const EXPECTS = new Set(["expect", "expect.soft", "expect.poll"]);
+const EXPECTS = new Set(["expect", "expect.soft", "expect.poll"]);
 
 /**
  * Which of the runners' API an expression names, said in the vocabulary above
@@ -74,22 +74,36 @@ export function runnerApi(sourceCode, expression) {
 }
 
 /**
+ * Whether a call opens an assertion: `expect(…)` in any spelling the runners
+ * give it, recognised through its binding.
+ * @param {SourceCode} sourceCode
+ * @param {ESTree.CallExpression} call
+ * @returns {boolean}
+ */
+export function opensAssertion(sourceCode, call) {
+  return EXPECTS.has(runnerApi(sourceCode, call.callee) ?? "");
+}
+
+/**
  * The `expect(…)` a matcher hangs off — walking back through the members that
- * sit between, which are `.not`, `.resolves` and `.rejects` — or nothing. The
- * name alone is not the assertion: an object of the test's own with a method
- * called `toHaveBeenCalledTimes` is a counter someone wrote, and refusing it
- * would be a rule grading a name rather than an act.
+ * sit between, which are `.not`, `.resolves` and `.rejects` — and whether one
+ * of them was `.not`, or nothing. The name alone is not the assertion: an
+ * object of the test's own with a method called `toHaveBeenCalledTimes` is a
+ * counter someone wrote, and refusing it would be a rule grading a name rather
+ * than an act.
  * @param {SourceCode} sourceCode
  * @param {ESTree.MemberExpression} matcher
- * @returns {ESTree.CallExpression | null}
+ * @returns {{ readonly call: ESTree.CallExpression, readonly negated: boolean } | null}
  */
 export function assertionOpening(sourceCode, matcher) {
+  let negated = false;
   let current = unwrapAssertions(matcher.object);
   for (;;) {
     if (current.type === "CallExpression") {
-      return EXPECTS.has(runnerApi(sourceCode, current.callee) ?? "") ? current : null;
+      return opensAssertion(sourceCode, current) ? { call: current, negated } : null;
     }
     if (current.type !== "MemberExpression") return null;
+    if (memberName(current) === "not") negated = true;
     current = unwrapAssertions(current.object);
   }
 }

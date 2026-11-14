@@ -843,13 +843,13 @@ file counts calls, sleeps, reaches into a module of its own and hands a function
 to `expect` in a helper, and none of that is a smell until it is a test's whole
 evidence.
 
-| Rule                       | What it rejects                                                                                      |
-| -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `no-call-log-assertions`   | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what |
-| `no-mock-assertions`       | `expect()` on a stand-in, or on anything read through one                                            |
-| `no-local-module-mocks`    | `mock.module()` or `spyOn()` over a relative or aliased import                                       |
-| `no-real-timers`           | the timer globals, `Bun.sleep`, and the `node:timers` modules                                        |
-| `no-unfailable-assertions` | an `expect()` a branch, a `catch` or an event callback can skip, and `.toThrow()` with no argument   |
+| Rule                       | What it rejects                                                                                                       |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `no-call-log-assertions`   | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what                  |
+| `no-mock-assertions`       | `expect()` on a stand-in, or on anything read through one                                                             |
+| `no-local-module-mocks`    | `mock.module()` or `spyOn()` over a relative or aliased import                                                        |
+| `no-real-timers`           | the timer globals, `Bun.sleep`, and the `node:timers` modules                                                         |
+| `no-unfailable-assertions` | an `expect()` a branch, a returning guard, a `catch` or an event callback can skip, and `.toThrow()` with no argument |
 
 What they have in common is that each of them passes against an implementation
 nobody would ship. A call log grades the collaborator calls an implementation
@@ -861,13 +861,14 @@ time is slow in proportion to how much of it it waits for and flaky in
 proportion to how loaded the runner is. An assertion a run can skip, or one any
 error satisfies, passes against every implementation, the broken one included.
 
-`no-unfailable-assertions` reports four shapes, each with what to write instead:
+`no-unfailable-assertions` reports an assertion a passing run can go without,
+in five shapes, each with what to write instead:
 
 - an `expect(…)` that runs only when a condition holds: in an arm of an `if` or
-  a `?:`, on the right of `&&`, `||` or `??`, or in a `switch` case. When both
-  arms of an `if` or a `?:` assert on every path through them, one of them
-  always runs and neither is reported, an `else if` chain included when it ends
-  in an `else` that asserts;
+  a `?:`, on the right of `&&`, `||` or `??`, or in a `switch` case;
+- an `expect(…)` below a guard that returns: an `if` earlier in the same block
+  with an arm that ends in `return` and asserts nothing on the way, such as
+  `if (!found) return;` above `expect(found)`;
 - an `expect(…)` in a `catch` clause or in a promise's rejection handler (a
   function passed to `.catch`, or as `.then`'s second argument), which runs
   only when something throws;
@@ -876,6 +877,17 @@ error satisfies, passes against every implementation, the broken one included.
 - `.toThrow()` or `.toThrowError()` with no argument, on `expect(…)` or after
   `.rejects`. `.not.toThrow()` with no argument is what it should be and is
   left alone.
+
+An assertion in a branch is not reported when every passing run down the other
+path asserts too. That path is the other arm of the `if` or `?:`, an `else if`
+chain included when it ends in an `else` that asserts. An other arm that always
+throws counts as asserting, since no run through it passes, and so a guard that
+throws (`if (!found) throw …;`) is no guard. When the arm holding the assertion
+always leaves (it ends in `return`, `continue`, `break` or `throw`), the
+statements after the branch are on the other path too, unless the other arm
+leaves as well: `if (late) { expect(late)…; return; } expect(onTime)…` asserts
+on every path. An arm that falls through has no other path of its own, so an
+assertion after the branch does not excuse one inside it.
 
 A loop, and a function handed to an array method, `.then`, `.finally`, a retry
 or polling helper or a property, run what they are given, so an assertion there
@@ -888,12 +900,19 @@ test-suite gate's JUnit check's. A report the rule gets wrong takes
 `// oxlint-disable-next-line anti-slop/no-unfailable-assertions -- <reason>` on
 its line.
 
-What it does not see is a guard written as an exit, which is the same skip in
-another spelling: `if (!found) return;` or `continue;` above an `expect(found)`
-reads as an assertion every run reaches. Nor does it see a loop over a
-collection that turns out empty, or a callback handed to a function of the
-repo's own that never calls it. Those are facts about values, and the rule
-answers only for where an assertion is written.
+What it does not see:
+
+- a guard that leaves a loop's turn with `continue` or `break` above an
+  assertion, and a loop over a collection that turns out empty;
+- a callback handed to a function of the repo's own that never calls it;
+- a handler passed by reference (`emitter.on("done", seen)`), whose body is
+  written elsewhere in the file;
+- an assertion inside a timer or microtask callback (`setTimeout`,
+  `queueMicrotask`), which a test that advances its clock or drains the queue
+  does run.
+
+Each of those is a fact about values or about code written somewhere else, and
+the rule answers only for where an assertion is written.
 
 What `no-call-log-assertions` accepts in place of a call log is a typed fake at
 the boundary that records the requests it received, asserted on as the whole
@@ -1150,7 +1169,7 @@ something at all, that nothing was skipped — are enforced by the JUnit greps i
 the `test-suite` action instead, on the report of a run that actually happened.
 That is the correct layer and the only one available for them. What the JUnit
 counts cannot see is an assertion that is written and still cannot fail: one a
-branch, a `catch` or an event can keep from running, which counts as an
+branch, a returning guard, a `catch` or an event can keep from running, which counts as an
 assertion on every run that reaches it, and a `.toThrow()` any error passes.
 Where an assertion sits is a fact of the syntax, so that half is the linter's,
 in `no-unfailable-assertions` above.

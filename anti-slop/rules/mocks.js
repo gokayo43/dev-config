@@ -6,7 +6,7 @@ import {
   settledValue,
   writesThroughMember,
 } from "../shared/bindings.js";
-import { assertionOpening, EXPECTS, runnerApi } from "../shared/runner.js";
+import { assertionOpening, opensAssertion, runnerApi } from "../shared/runner.js";
 import { memberName, propertyKeyName, unwrapAssertions, writtenString } from "../shared/syntax.js";
 
 /** The calls that make a stand-in, in the vocabulary the three share once the aliases are resolved. */
@@ -237,7 +237,7 @@ export const noMockAssertionsRule = {
     return {
       /** @param {ESTree.CallExpression} node */
       CallExpression(node) {
-        if (!EXPECTS.has(runnerApi(context.sourceCode, node.callee) ?? "")) return;
+        if (!opensAssertion(context.sourceCode, node)) return;
         const [subject] = node.arguments;
         if (subject === undefined || subject.type === "SpreadElement") return;
         if (reachesStandIn(context.sourceCode, subject)) {
