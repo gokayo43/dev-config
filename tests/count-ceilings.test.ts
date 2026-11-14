@@ -188,13 +188,15 @@ describe("the command", () => {
     check(
       property(entryAndMeasure, ([entry, measured]) => {
         const next = lowered(sealed(entry), measured, BROWSER).entry;
-        for (const [phase, held] of next.phases) {
-          for (const [count, ceiling] of heldIn(held)) {
+        const higher = [...next.phases].flatMap(([phase, held]) =>
+          [...heldIn(held)].flatMap(([count, ceiling]) => {
             const before = ceilingAt(entry, phase, count);
-            if (before !== undefined)
-              expect(ceilingOf(ceiling)).toBeLessThanOrEqual(ceilingOf(before));
-          }
-        }
+            return before !== undefined && ceilingOf(ceiling) > ceilingOf(before)
+              ? [{ phase, count, before: ceilingOf(before), after: ceilingOf(ceiling) }]
+              : [];
+          }),
+        );
+        expect(higher).toEqual([]);
       }),
     );
   });
@@ -428,19 +430,22 @@ describe("what a change says", () => {
           ];
           for (const change of changes) {
             const said = described(change, where);
-            expect(said).toContain(where.ceilings);
-            if (change.kind !== "above")
-              expect(said).toContain("COUNT_BUDGET=write bunx playwright test e2e/a.spec.ts");
-            if ("phase" in change) expect(said).toContain(`«${change.phase}»`);
-            if (change.kind === "browser") {
-              expect(said).toContain(`measured on ${change.from}, and this run is ${change.to}`);
-            }
-            if (change.kind === "above") {
-              expect(said).toContain(
-                `measured ${change.measured}, ceiling ${ceilingOf(change.ceiling)}`,
-              );
-              expect(said).toContain(`{ "ceiling": ${change.measured}, "was": `);
-            }
+            // What each kind of change owes its reader, stated as data so the
+            // one assertion below runs for every change, whatever its kind.
+            const owed = [
+              where.ceilings,
+              ...(change.kind === "above"
+                ? [
+                    `measured ${change.measured}, ceiling ${ceilingOf(change.ceiling)}`,
+                    `{ "ceiling": ${change.measured}, "was": `,
+                  ]
+                : ["COUNT_BUDGET=write bunx playwright test e2e/a.spec.ts"]),
+              ...("phase" in change ? [`«${change.phase}»`] : []),
+              ...(change.kind === "browser"
+                ? [`measured on ${change.from}, and this run is ${change.to}`]
+                : []),
+            ];
+            expect(owed.filter((fragment) => !said.includes(fragment))).toEqual([]);
           }
         },
       ),

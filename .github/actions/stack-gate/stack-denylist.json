@@ -82,7 +82,7 @@
     },
     {
       "names": ["jest", "vitest", "mocha", "chai", "sinon"],
-      "reason": "bun test is the runner, and it brings its own expect and mocks"
+      "reason": "bun test is the runner, and it brings its own expect and mocks; a repo whose page tests run in a real browser names vitest in its stack-allowlist, with that as the reason, for Vitest's browser mode"
     },
     {
       "names": ["nock"],

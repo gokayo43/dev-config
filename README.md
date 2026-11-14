@@ -532,7 +532,8 @@ Some facts are true of a file because of where it sits, not what it contains:
         "anti-slop/no-call-log-assertions": "error",
         "anti-slop/no-local-module-mocks": "error",
         "anti-slop/no-mock-assertions": "error",
-        "anti-slop/no-real-timers": "error"
+        "anti-slop/no-real-timers": "error",
+        "anti-slop/no-unfailable-assertions": "error"
       }
     },
     { "files": ["**/env.ts"], "rules": { "anti-slop/no-env-access": "off" } },
@@ -842,12 +843,13 @@ file counts calls, sleeps, reaches into a module of its own and hands a function
 to `expect` in a helper, and none of that is a smell until it is a test's whole
 evidence.
 
-| Rule                     | What it rejects                                                                                      |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `no-call-log-assertions` | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what |
-| `no-mock-assertions`     | `expect()` on a stand-in, or on anything read through one                                            |
-| `no-local-module-mocks`  | `mock.module()` or `spyOn()` over a relative or aliased import                                       |
-| `no-real-timers`         | the timer globals, `Bun.sleep`, and the `node:timers` modules                                        |
+| Rule                       | What it rejects                                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `no-call-log-assertions`   | `toHaveBeenCalled*` on an `expect()` chain — that it was called, how often, in what order, with what |
+| `no-mock-assertions`       | `expect()` on a stand-in, or on anything read through one                                            |
+| `no-local-module-mocks`    | `mock.module()` or `spyOn()` over a relative or aliased import                                       |
+| `no-real-timers`           | the timer globals, `Bun.sleep`, and the `node:timers` modules                                        |
+| `no-unfailable-assertions` | an `expect()` a branch, a `catch` or an event callback can skip, and `.toThrow()` with no argument   |
 
 What they have in common is that each of them passes against an implementation
 nobody would ship. A call log grades the collaborator calls an implementation
@@ -856,7 +858,42 @@ is the test's own object, so an assertion about it is about what the test
 already did; a fake over a module in this repo grades the fake rather than the
 module, and the real one is right there to call; and a suite that waits for real
 time is slow in proportion to how much of it it waits for and flaky in
-proportion to how loaded the runner is.
+proportion to how loaded the runner is. An assertion a run can skip, or one any
+error satisfies, passes against every implementation, the broken one included.
+
+`no-unfailable-assertions` reports four shapes, each with what to write instead:
+
+- an `expect(…)` that runs only when a condition holds: in an arm of an `if` or
+  a `?:`, on the right of `&&`, `||` or `??`, or in a `switch` case. When both
+  arms of an `if` or a `?:` assert on every path through them, one of them
+  always runs and neither is reported, an `else if` chain included when it ends
+  in an `else` that asserts;
+- an `expect(…)` in a `catch` clause or in a promise's rejection handler (a
+  function passed to `.catch`, or as `.then`'s second argument), which runs
+  only when something throws;
+- an `expect(…)` in a callback handed to an event registration (`on`, `once`,
+  `addEventListener`, `subscribe`), which nothing in the test waits for;
+- `.toThrow()` or `.toThrowError()` with no argument, on `expect(…)` or after
+  `.rejects`. `.not.toThrow()` with no argument is what it should be and is
+  left alone.
+
+A loop, and a function handed to an array method, `.then`, `.finally`, a retry
+or polling helper or a property, run what they are given, so an assertion there
+is as skippable as the call it is handed to and no more. A function handed to
+the runner (`test`, `describe`, `test.each(…)(…)`, `mock`) is not judged by
+what surrounds that call: a test registered on some runs only is a skipped
+test, which the run's own report counts. An un-awaited `.resolves` or `.rejects` is
+`typescript/no-floating-promises`'s, and a case with no assertion at all is the
+test-suite gate's JUnit check's. A report the rule gets wrong takes
+`// oxlint-disable-next-line anti-slop/no-unfailable-assertions -- <reason>` on
+its line.
+
+What it does not see is a guard written as an exit, which is the same skip in
+another spelling: `if (!found) return;` or `continue;` above an `expect(found)`
+reads as an assertion every run reaches. Nor does it see a loop over a
+collection that turns out empty, or a callback handed to a function of the
+repo's own that never calls it. Those are facts about values, and the rule
+answers only for where an assertion is written.
 
 What `no-call-log-assertions` accepts in place of a call log is a typed fake at
 the boundary that records the requests it received, asserted on as the whole
@@ -1108,11 +1145,15 @@ suite: they key off imports from `jest`/`vitest`, and these repos import from
 `bun:test`. Turning them on produces a config that reports nothing and looks like
 coverage.
 
-So the properties those rules would have checked — that a test asserted
-something, that nothing was skipped — are enforced by the JUnit greps in the
-`test-suite` action instead, on the report of a run that actually happened. That
-is the correct layer and the only one available: do not "improve" the gate by
-moving it into the linter.
+So the properties those rules would have checked — that a case asserted
+something at all, that nothing was skipped — are enforced by the JUnit greps in
+the `test-suite` action instead, on the report of a run that actually happened.
+That is the correct layer and the only one available for them. What the JUnit
+counts cannot see is an assertion that is written and still cannot fail: one a
+branch, a `catch` or an event can keep from running, which counts as an
+assertion on every run that reaches it, and a `.toThrow()` any error passes.
+Where an assertion sits is a fact of the syntax, so that half is the linter's,
+in `no-unfailable-assertions` above.
 
 ## Architecture boundaries
 
@@ -1332,6 +1373,16 @@ What coverage cannot say is whether the suite would have noticed had the line
 been wrong. [The mutation lane](docs/gates/mutation-lane.md) asks that, over the
 domain files a branch changed, and `mutation-floor` is the same paragraph again
 for the number it publishes.
+
+**Page tests in a real browser** run under Vitest's browser mode, beside
+`bun test` for everything else. The stack denylist denies `vitest` because
+`bun test` is the runner, so a repo with such tests names it in its
+`stack-allowlist` with that as the reason: `vitest -- page tests run in a real
+browser`. Those tests never reach the test-suite gate's JUnit and coverage
+checks, so the repo's own browser job holds them, failing on a case that fails,
+is skipped or asserts nothing. The repo also sets `mutation-tests`, because the
+mutation lane's walk of the project would otherwise load its browser test files
+into a plain `bun test`.
 
 ## Renovate
 

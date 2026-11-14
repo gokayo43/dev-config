@@ -30,6 +30,7 @@ import {
 } from "./rules/settled-imports.js";
 import { noTestSupportImportsRule } from "./rules/no-test-support-imports.js";
 import { noUnknownReturnsRule } from "./rules/no-unknown-returns.js";
+import { noUnfailableAssertionsRule } from "./rules/no-unfailable-assertions.js";
 import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases.js";
 import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.js";
 
@@ -50,6 +51,7 @@ const antiSlop = {
     "no-reflect-apply": noReflectApplyRule,
     "no-reflect-get": noReflectGetRule,
     "no-test-support-imports": noTestSupportImportsRule,
+    "no-unfailable-assertions": noUnfailableAssertionsRule,
     "no-unknown-parameters": noUnknownParametersRule,
     "no-unknown-returns": noUnknownReturnsRule,
     "no-unknown-type-aliases": noUnknownTypeAliasesRule,
