@@ -58,7 +58,10 @@ Under those folders the lane mutates `.ts`, `.tsx`, `.mts` and `.cts`, and never
 a `.d.ts`, a `*.test.*` / `*.spec.*` file, or a file the lint base's test
 override names as test code (a `*.test-harness.*` or `*.fixture.*` beside a
 suite). The lane reads that override out of the base in its own checkout, so the
-linter and the lane mean one set by "test code".
+linter and the lane mean one set by "test code", and matches each of its globs
+against a file's name. A glob there that still holds a folder once its leading
+`**/` is dropped cannot be matched that way, and the lane refuses the run naming
+it rather than mutating the test code it was meant to keep out.
 
 ## The one failure this gate cannot afford
 

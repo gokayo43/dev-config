@@ -133,7 +133,9 @@ function strings(value: unknown): string[] {
 
 /**
  * The checkout the action runs from, which holds the lint base as shipped at
- * the ref the consumer pinned — the same base its `.oxlintrc.json` extends.
+ * the ref the consumer pinned its action to. That is the base its
+ * `.oxlintrc.json` extends only while its action pin and its package pin name
+ * one release.
  */
 const ACTION_CHECKOUT = fileURLToPath(new URL("../../..", import.meta.url));
 const LINT_BASE = "oxlint.base.json";

@@ -870,8 +870,10 @@ in five shapes, each with what to write instead:
   with an arm that can take a bare `return;` and asserts nothing on the way,
   such as `if (!found) return;` above `expect(found)`. A `return <value>` is no
   guard, since it answers a caller the rule cannot see (a polling helper
-  retries on `false`), and neither is a guard whose condition reads a name an
-  assertion earlier in the block asserts on, since that assertion fails first;
+  retries on `false`), and neither is a guard pinned by an earlier assertion:
+  one in the same block whose subject is read out of a name the condition
+  reads (`found` in `expect(found.size)` and `if (!found)`), a property name
+  never counting as one;
 - an `expect(…)` in a `catch` clause or in a promise's rejection handler (a
   function passed to `.catch`, or as `.then`'s second argument), which runs
   only when something throws;
@@ -892,8 +894,8 @@ statements after the branch are on the other path too, as long as no path
 through the other arm leaves first: `if (late) { expect(late)…; return; }
 expect(onTime)…` asserts on every path. An arm that runs on has no other path of
 its own, so an assertion after the branch does not excuse one inside it. The
-paths are read through blocks and `if`s; any other statement in an arm (a loop,
-a `switch`, a `try`) is read as one that runs on.
+paths are read through blocks, `if`s and loops, where a loop may run no turn,
+so a `return` inside it is a path that leaves and the loop may still run on.
 
 A loop, and a function handed to an array method, `.then`, `.finally`, a retry
 or polling helper or a property, run what they are given, so an assertion there
@@ -911,8 +913,17 @@ What it does not see:
 - a guard that ends one element's turn: `continue` or `break` in a loop, or a
   `return` in an array method's callback (`forEach`, `map` and the rest), above
   an assertion, and a loop over a collection that turns out empty;
-- a guard's `return` written inside a `switch` case, a `try` or a nested block
-  rather than in an arm of the `if` itself, which is read as running on;
+- an arm it cannot read: one holding a `switch` or a `try` with a `return` or a
+  `throw` inside, whose fall-through cases and `finally` decide which of them
+  happens. Nothing that rests on such an arm is reported, whether it is the
+  other arm, the arm holding the assertion or a guard's arm;
+- a guard written inside a nested block rather than as an `if` of the block the
+  assertion sits in;
+- whether a pin holds: the pin is a match on a name, and does not prove the
+  earlier assertion fails on every run the guard would return on, so
+  `expect(r).toBeDefined(); if (!r.ok) return;` is silent;
+- an array method's name called on something that is not an array
+  (`opt.map(…)`), whose callback is read as one element's turn all the same;
 - a callback handed to a function of the repo's own that never calls it;
 - a handler passed by reference (`emitter.on("done", seen)`), whose body is
   written elsewhere in the file;

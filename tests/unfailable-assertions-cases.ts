@@ -251,6 +251,93 @@ test("reads", () => {
     reports: [],
   },
   {
+    name: "a guard is pinned by an earlier assertion on its root name, never on a property name",
+    source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const response = { status: 200 };
+  const body = { status: Math.random() > 0.5 ? "ok" : "late", items: [1] };
+  expect(response.status).toBe(200);
+  if (body.status !== "ok") return;
+  expect(body.items).toHaveLength(1);
+});`,
+    reports: ["7:3"],
+  },
+  {
+    name: "a property the condition reads is no name an earlier assertion can pin",
+    source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const status = 200;
+  const body = { status: Math.random() > 0.5 ? "ok" : "late", items: [1] };
+  expect(status).toBe(200);
+  if (body.status !== "ok") return;
+  expect(body.items).toHaveLength(1);
+});`,
+    reports: ["7:3"],
+  },
+  {
+    name: "a length read off one name pins no guard on another",
+    source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const rows = [1, 2];
+  const other: number[] = Math.random() > 0.5 ? [1] : [];
+  expect(rows.length).toBe(2);
+  if (other.length === 0) return;
+  expect(other[0]).toBe(1);
+});`,
+    reports: ["7:3"],
+  },
+  {
+    name: "a return inside a loop in the other arm is a path that leaves before what follows",
+    source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const first = Math.random() > 0.5;
+  const flags = [first, !first];
+  if (first) {
+    expect(first).toBe(true);
+    return;
+  } else {
+    for (const flag of flags) {
+      if (flag) return;
+    }
+  }
+  expect(flags).toHaveLength(2);
+});`,
+    reports: ["6:5", "13:3"],
+  },
+  {
+    name: "an other arm whose switch decides how it ends is one the rule cannot read, and says nothing about",
+    source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const value = Math.random();
+  if (value > 0.5) {
+    expect(value).toBeGreaterThan(0.5);
+  } else {
+    switch (value) {
+      default:
+        throw new Error("the value never reached the half");
+    }
+  }
+});`,
+    reports: [],
+  },
+  {
+    name: "an arm that leaves through a try is one the rule cannot read, and says nothing about",
+    source: `import { expect, test } from "bun:test";
+test("reads", () => {
+  const value = Math.random();
+  if (value > 0.5) {
+    expect(value).toBeGreaterThan(0.5);
+    try {
+      return;
+    } finally {
+      console.log(value);
+    }
+  }
+  expect(value).toBeLessThanOrEqual(0.5);
+});`,
+    reports: [],
+  },
+  {
     name: "a guard that returns puts every assertion after it behind a branch",
     source: `import { expect, test } from "bun:test";
 test("reads", () => {

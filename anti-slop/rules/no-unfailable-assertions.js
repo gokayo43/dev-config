@@ -36,15 +36,25 @@ const ITERATIONS = new Set([
 
 /**
  * How a statement can end: by running on to the next one, by a bare `return;`,
- * by leaving any other way (`return <value>`, `continue`, `break`), or by
- * throwing. Read through blocks and `if`s; any other statement (a loop, a
- * `switch`, a `try`) is read as one that runs on, so the rule says nothing
- * about the paths inside it rather than guessing.
- * @typedef {{ readonly fallsThrough: boolean, readonly returnsBare: boolean, readonly leavesOtherwise: boolean, readonly throws: boolean }} Ends
+ * by leaving any other way (`return <value>`, a labelled `break` or
+ * `continue`), by an unlabelled `break` or `continue` that its loop or
+ * `switch` absorbs, or by throwing. Read through blocks, `if`s and loops, where
+ * a loop may run no turn at all, so it may always run on. A `switch` or a `try`
+ * that holds a `return` or a `throw` is `unreadable`: its fall-through cases
+ * and its `finally` decide which of them happens, and the rule answers nothing
+ * that rests on it rather than guessing. Any other statement runs on.
+ * @typedef {{ readonly fallsThrough: boolean, readonly returnsBare: boolean, readonly leavesOtherwise: boolean, readonly breaks: boolean, readonly throws: boolean, readonly unreadable: boolean }} Ends
  */
 
 /** @type {Ends} */
-const RUNS_ON = { fallsThrough: true, returnsBare: false, leavesOtherwise: false, throws: false };
+const RUNS_ON = {
+  fallsThrough: true,
+  returnsBare: false,
+  leavesOtherwise: false,
+  breaks: false,
+  throws: false,
+  unreadable: false,
+};
 
 /**
  * @param {Ends} left
@@ -56,8 +66,34 @@ function either(left, right) {
     fallsThrough: left.fallsThrough || right.fallsThrough,
     returnsBare: left.returnsBare || right.returnsBare,
     leavesOtherwise: left.leavesOtherwise || right.leavesOtherwise,
+    breaks: left.breaks || right.breaks,
     throws: left.throws || right.throws,
+    unreadable: left.unreadable || right.unreadable,
   };
+}
+
+/**
+ * The ends of statements run one after another.
+ * @param {readonly ESTree.Node[]} statements
+ * @returns {Ends}
+ */
+function endsOfSequence(statements) {
+  let ends = RUNS_ON;
+  for (const each of statements) {
+    const next = endsOf(each);
+    ends = { ...either(ends, next), fallsThrough: next.fallsThrough };
+    if (!next.fallsThrough) break;
+  }
+  return ends;
+}
+
+/**
+ * Whether any path through a statement can leave it other than by running on.
+ * @param {Ends} ends
+ * @returns {boolean}
+ */
+function canLeave(ends) {
+  return ends.returnsBare || ends.leavesOtherwise || ends.breaks;
 }
 
 /**
@@ -71,7 +107,9 @@ function endsOf(statement) {
       : { ...RUNS_ON, fallsThrough: false, leavesOtherwise: true };
   }
   if (statement.type === "ContinueStatement" || statement.type === "BreakStatement") {
-    return { ...RUNS_ON, fallsThrough: false, leavesOtherwise: true };
+    return statement.label === null
+      ? { ...RUNS_ON, fallsThrough: false, breaks: true }
+      : { ...RUNS_ON, fallsThrough: false, leavesOtherwise: true };
   }
   if (statement.type === "ThrowStatement") return { ...RUNS_ON, fallsThrough: false, throws: true };
   if (statement.type === "IfStatement") {
@@ -80,14 +118,53 @@ function endsOf(statement) {
       statement.alternate === null ? RUNS_ON : endsOf(statement.alternate),
     );
   }
-  if (statement.type !== "BlockStatement") return RUNS_ON;
-  let ends = RUNS_ON;
-  for (const each of statement.body) {
-    const next = endsOf(each);
-    ends = { ...either(ends, next), fallsThrough: next.fallsThrough };
-    if (!next.fallsThrough) break;
+  if (statement.type === "BlockStatement") return endsOfSequence(statement.body);
+  if (isLoop(statement)) {
+    return { ...endsOf(statement.body), fallsThrough: true, breaks: false };
   }
-  return ends;
+  if (statement.type === "SwitchStatement") {
+    // An unlabelled `break` is the switch's own, so it alone does not count.
+    const inside = statement.cases
+      .map((each) => endsOfSequence(each.consequent))
+      .reduce(either, RUNS_ON);
+    return held({ ...inside, breaks: false });
+  }
+  if (statement.type === "TryStatement") {
+    const parts = [statement.block, statement.handler?.body, statement.finalizer];
+    return held(
+      parts
+        .filter((each) => each !== null && each !== undefined)
+        .map(endsOf)
+        .reduce(either, RUNS_ON),
+    );
+  }
+  return RUNS_ON;
+}
+
+/**
+ * @param {ESTree.Node} statement
+ * @returns {statement is ESTree.ForStatement | ESTree.ForInStatement | ESTree.ForOfStatement | ESTree.WhileStatement | ESTree.DoWhileStatement}
+ */
+function isLoop(statement) {
+  return (
+    statement.type === "ForStatement" ||
+    statement.type === "ForInStatement" ||
+    statement.type === "ForOfStatement" ||
+    statement.type === "WhileStatement" ||
+    statement.type === "DoWhileStatement"
+  );
+}
+
+/**
+ * A `switch` or a `try` holding these ends: one that only runs on, or one the
+ * rule cannot read.
+ * @param {Ends} inside
+ * @returns {Ends}
+ */
+function held(inside) {
+  return canLeave(inside) || inside.throws || inside.unreadable
+    ? { ...RUNS_ON, unreadable: true }
+    : RUNS_ON;
 }
 
 /**
@@ -97,7 +174,7 @@ function endsOf(statement) {
  */
 function alwaysThrows(statement) {
   const ends = endsOf(statement);
-  return ends.throws && !ends.fallsThrough && !ends.returnsBare && !ends.leavesOtherwise;
+  return ends.throws && !ends.fallsThrough && !canLeave(ends) && !ends.unreadable;
 }
 
 /**
@@ -209,7 +286,10 @@ function guardedBefore(file, statements, child) {
         statement.type === "IfStatement" &&
         [statement.consequent, statement.alternate].some(
           (arm) =>
-            arm !== null && endsOf(arm).returnsBare && !assertsOnEveryPath(file, [arm], statement),
+            arm !== null &&
+            endsOf(arm).returnsBare &&
+            !endsOf(arm).unreadable &&
+            !assertsOnEveryPath(file, [arm], statement),
         ) &&
         !pinnedBefore(file, statements.slice(0, index), statement.test),
     );
@@ -230,39 +310,64 @@ function inIterationCallback(node) {
 }
 
 /**
- * Whether an assertion every run reaches among `earlier` takes a subject that
- * reads one of the names the condition reads.
+ * Whether an assertion every run reaches among `earlier` takes a subject whose
+ * root name (`found` in `expect(found.size)`) is a root name the condition
+ * reads. A name match, and no more: a property name never matches, and the
+ * rule does not prove the earlier assertion fails on every run the guard would
+ * return on.
  * @param {File} file
  * @param {readonly ESTree.Node[]} earlier
  * @param {ESTree.Expression} condition
  * @returns {boolean}
  */
 function pinnedBefore(file, earlier, condition) {
-  const names = identifiers(file.sourceCode, condition);
+  const names = rootNames(file.sourceCode, condition);
   return earlier.some((statement) =>
     file.openings.some((opening) => {
       const [subject] = opening.arguments;
+      if (subject === undefined || subject.type === "SpreadElement") return false;
+      const root = rootOf(subject);
       return (
-        subject !== undefined &&
+        root !== null &&
+        names.has(root) &&
         within(opening, statement) &&
-        skipBetween(file, opening, statement.parent) === null &&
-        [...identifiers(file.sourceCode, subject)].some((name) => names.has(name))
+        skipBetween(file, opening, statement.parent) === null
       );
     }),
   );
 }
 
 /**
- * The identifier names written in a node, read off its tokens.
+ * The name an expression's value is read out of: `found` for `found.size`,
+ * `found?.items[0]` and `found.at(0)`, or nothing when it starts elsewhere.
+ * @param {ESTree.Expression} expression
+ * @returns {string | null}
+ */
+function rootOf(expression) {
+  let current = unwrapAssertions(expression);
+  for (;;) {
+    if (current.type === "Identifier") return current.name;
+    if (current.type === "MemberExpression") current = unwrapAssertions(current.object);
+    else if (current.type === "CallExpression") current = unwrapAssertions(current.callee);
+    else return null;
+  }
+}
+
+/**
+ * The names a node reads as roots, off its tokens: every identifier but one
+ * written after `.` or `?.`, which names a property.
  * @param {SourceCode} sourceCode
  * @param {ESTree.Node} node
  * @returns {Set<string>}
  */
-function identifiers(sourceCode, node) {
+function rootNames(sourceCode, node) {
+  const tokens = sourceCode.getTokens(node);
   return new Set(
-    sourceCode
-      .getTokens(node)
-      .filter((token) => token.type === "Identifier")
+    tokens
+      .filter(
+        (token, index) =>
+          token.type === "Identifier" && ![".", "?."].includes(tokens[index - 1]?.value ?? ""),
+      )
       .map((token) => token.value),
   );
 }
@@ -316,14 +421,15 @@ function otherPathAsserts(file, branch, child) {
   const other = child === branch.consequent ? branch.alternate : branch.consequent;
   // Climbed to the branch rather than to the arm, so an arm that is itself a
   // branch (`else if`) is asked about its own arms on the way.
-  if (other !== null && (alwaysThrows(other) || assertsOnEveryPath(file, [other], branch))) {
-    return true;
-  }
-  if (endsOf(child).fallsThrough) return false;
   if (other !== null) {
-    const ends = endsOf(other);
-    if (ends.returnsBare || ends.leavesOtherwise) return false;
+    // An other arm the rule cannot read may throw on every path, so nothing
+    // resting on it is reported.
+    if (endsOf(other).unreadable) return true;
+    if (alwaysThrows(other) || assertsOnEveryPath(file, [other], branch)) return true;
+    if (canLeave(endsOf(other))) return false;
   }
+  const holding = endsOf(child);
+  if (holding.fallsThrough && !holding.unreadable) return false;
   const block = branch.parent;
   const statements = statementsOf(block);
   if (statements === null) return false;
