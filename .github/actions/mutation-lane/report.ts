@@ -1,0 +1,382 @@
+/**
+ * What Stryker's report says about the files a branch changed: the status of
+ * every mutant read at the boundary, what each is worth to the score, which
+ * ones fail the branch, and the note, table and problems the lane publishes.
+ * A module of its own because it is a subject of its own — a report and the
+ * lines a branch wrote go in, a verdict comes out — and the lane's other half,
+ * choosing what to mutate and running Stryker over it, is another.
+ */
+import {
+  type ConfigObject,
+  isList,
+  isObject,
+  kindOf,
+  oneOf,
+  plural,
+  type Problem,
+  type Verdict,
+} from "../_lib/gate.ts";
+
+/** Every status the mutation-testing report schema defines, which is the whole of what a mutant can be. */
+const STATUSES = [
+  "Killed",
+  "Survived",
+  "NoCoverage",
+  "CompileError",
+  "RuntimeError",
+  "Timeout",
+  "Ignored",
+  "Pending",
+] as const;
+
+type Status = (typeof STATUSES)[number];
+
+type Worth = "detected" | "undetected" | "outside";
+
+/**
+ * What every mutant is worth to the score, as a total function of the schema's
+ * vocabulary rather than membership tests with everything else falling silently
+ * between them: a status left out of this table is a compile error rather than
+ * a mutant quietly outside the ratio.
+ *
+ * `undetected` is the finding — `Survived` means tests ran the line and all
+ * passed, `NoCoverage` means none ran it, the same statement one step earlier.
+ * `outside` is Stryker's own reading: a mutant that would not compile, that
+ * errored, or that the config declined is neither caught nor missed, so it is
+ * out of the ratio rather than a zero in it.
+ */
+const WORTH = {
+  Killed: "detected",
+  Timeout: "detected",
+  Survived: "undetected",
+  NoCoverage: "undetected",
+  CompileError: "outside",
+  RuntimeError: "outside",
+  Ignored: "outside",
+  Pending: "outside",
+} as const satisfies Record<Status, Worth>;
+
+/**
+ * The statuses that say the run came back with no verdict for the mutant. A
+ * separate reading of the same vocabulary from `WORTH` above, because they
+ * answer different questions: that one is what a mutant is worth to the score,
+ * this one is what the run managed to do. Every status here is outside the
+ * ratio, and most of what is outside the ratio is not here.
+ */
+const NO_VERDICT = new Set<Status>(["RuntimeError", "Pending"]);
+
+/**
+ * The one status whose worth depends on where it sits. `Ignored` is a
+ * `Stryker disable` comment in the source, and out of the ratio it takes the
+ * mutant from BOTH sides of the fraction — so a branch that writes an untested
+ * line and disables it raises the score it should have lowered, and clears the
+ * floor it should have breached. On a line the branch wrote, the directive is
+ * the branch's own choice and counts as a mutant nothing caught. Elsewhere it
+ * is somebody's earlier decision, and outside is the honest reading.
+ *
+ * That it also has to say WHY is not enforced here: `suppression-hygiene` holds
+ * every disable in the tree to carrying its reason, whichever tool reads it.
+ */
+function worthOf(status: Status, own: boolean): Worth {
+  return status === "Ignored" && own ? "undetected" : WORTH[status];
+}
+
+interface Mutant {
+  readonly file: string;
+  readonly from: number;
+  readonly to: number;
+  readonly mutator: string;
+  readonly replacement: string;
+  readonly status: Status;
+  /** The report's own word for a mutant that runs at module load, and so before any test does. */
+  readonly static: boolean;
+}
+
+/**
+ * Stryker's own report, flattened to the mutants it holds and parsed at the
+ * boundary rather than asserted through. The mutation-testing report schema is
+ * another tool's contract, so a document that is not the shape read here says
+ * so as itself instead of surfacing later as a score computed over nothing.
+ */
+function parseReport(text: string): Mutant[] {
+  const parsed: unknown = JSON.parse(text);
+  const files = isObject(parsed) ? parsed["files"] : undefined;
+  if (!isObject(files)) {
+    throw new Error(`the mutation report has no files object — it holds ${kindOf(files)}`);
+  }
+  return Object.entries(files).flatMap(([file, value]) => {
+    const listed = isObject(value) ? value["mutants"] : undefined;
+    if (!isList(listed)) {
+      throw new Error(`the mutation report's ${file} has no mutants array`);
+    }
+    return listed.filter(isObject).map((mutant) => asMutant(file, mutant));
+  });
+}
+
+function asMutant(file: string, value: ConfigObject): Mutant {
+  const location = isObject(value["location"]) ? value["location"] : {};
+  const at = (end: string): number => {
+    const point = location[end];
+    const line = isObject(point) ? point["line"] : undefined;
+    if (typeof line !== "number")
+      throw new Error(`a mutant in ${file} has no location.${end}.line`);
+    return line;
+  };
+  const text = (key: string): string => {
+    const found = value[key];
+    return typeof found === "string" ? found : "";
+  };
+  const status = oneOf(STATUSES, value["status"]);
+  if (status === undefined) {
+    throw new Error(
+      `a mutant in ${file} carries ${kindOf(value["status"])} where the report schema names one of: ${STATUSES.join(", ")}`,
+    );
+  }
+  return {
+    file,
+    from: at("start"),
+    to: at("end"),
+    mutator: text("mutatorName"),
+    replacement: text("replacement"),
+    status,
+    // `coverageAnalysis: "perTest"` puts this field on every mutant, and an
+    // absent one is read as not static: the exemption below is the whole of what
+    // this lane lets past, so it is granted only where the report claims it.
+    static: value["static"] === true,
+  };
+}
+
+/**
+ * Whether every line the mutant spans is one this branch wrote. Containment
+ * rather than overlap, and that is the whole of what "selective" means here: a
+ * mutant of the enclosing block spans a function whose body a one-line edit
+ * barely touched, and failing on it would fail the branch for code it did not
+ * write. The floor below is what covers what containment lets past.
+ */
+function inTheChange(mutant: Mutant, lines: ReadonlySet<number>): boolean {
+  for (let line = mutant.from; line <= mutant.to; line += 1) {
+    if (!lines.has(line)) return false;
+  }
+  return true;
+}
+
+function percent(score: number): string {
+  return `${(score * 100).toFixed(1)}%`;
+}
+
+/**
+ * A value out of the repo's own source, as a code span it cannot end early. The
+ * step summary is markdown, and a replacement carrying a backtick — every
+ * template literal in the tree does — closes the span, leaving the rest of the
+ * line to render as headings and table rows somebody wrote in a domain file.
+ * The same statement `commanded` in `_lib/gate.ts` makes about annotations: the
+ * text is not the gate author's to trust.
+ *
+ * CommonMark's own rule, rather than an escape: a span fenced by more backticks
+ * than its longest run contains cannot be ended from inside, and a space either
+ * side keeps a leading or trailing backtick from eating the fence.
+ */
+export function span(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const runs = [...flat.matchAll(/`+/g)].map((run) => run[0].length);
+  const fence = "`".repeat(Math.max(0, ...runs) + 1);
+  const pad = flat.startsWith("`") || flat.endsWith("`") ? " " : "";
+  return `${fence}${pad}${flat}${pad}${fence}`;
+}
+
+interface Tally {
+  readonly detected: number;
+  /**
+   * Of `detected`, the mutants caught by running out of time rather than by a
+   * test failing. Stryker counts a timeout as caught, and so does the lane; the
+   * number is published so that a score resting on timeouts can be seen to.
+   */
+  readonly timedOut: number;
+  readonly undetected: number;
+  /** What the suite caught over what it could have. */
+  readonly score: number;
+}
+
+/** A mutant with where it sits and what that makes it worth, decided once. */
+interface Graded {
+  readonly mutant: Mutant;
+  readonly own: boolean;
+  readonly worth: Worth;
+}
+
+/**
+ * The counts and the ratio in one pass, or nothing when the run graded no
+ * mutant at all — a file of types, or one Stryker declined entirely. Absent
+ * rather than a zero score, which is a different claim: zero says the suite
+ * caught none of them.
+ */
+function tally(graded: readonly Graded[]): Tally | undefined {
+  const detected = graded.filter((each) => each.worth === "detected").length;
+  const timedOut = graded.filter((each) => each.mutant.status === "Timeout").length;
+  const undetected = graded.filter((each) => each.worth === "undetected").length;
+  const counted = detected + undetected;
+  return counted === 0 ? undefined : { detected, timedOut, undetected, score: detected / counted };
+}
+
+/**
+ * What the reader has to write, which is the only thing separating the
+ * undetected statuses. The replacement is in the message rather than only in
+ * the summary table because a line carries several mutants — an operator and
+ * the block around it — and annotations that read identically are one finding
+ * as far as anyone scrolling the step is concerned.
+ */
+function survivorProblem(mutant: Mutant): Problem {
+  const at = `line ${mutant.from}`;
+  const swap = `\`${mutant.replacement}\` (${mutant.mutator})`;
+  const wrote = "this branch wrote that line";
+  const message =
+    mutant.status === "NoCoverage"
+      ? `write the test that reaches ${at}: this branch wrote it and nothing runs it, so ${swap} in its place goes unnoticed`
+      : mutant.status === "Ignored"
+        ? `write the test for ${at} or drop the \`Stryker disable\` above it: ${wrote}, and a disabled ${swap} counts as one nothing caught rather than leaving the score`
+        : `write the case that fails on ${swap} at ${at}: ${wrote} and the suite passes either way`;
+  return { file: mutant.file, message };
+}
+
+/** One problem for the class: the same finding however many mutants carry it. */
+function ungradedProblem(ungraded: readonly Mutant[]): Problem {
+  const files = new Set(ungraded.map((mutant) => mutant.file)).size;
+  return {
+    message: `read the run output above: ${plural(ungraded.length, "mutant")} in ${plural(files, "file")} came back with no verdict, so a score would be published over a fraction of what was mutated. A mutant is only ever active inside a test, so none of them can be why no test ran — and this run passed unmutated, so what did not happen is the runner selecting or grading the tests that cover them.`,
+  };
+}
+
+/**
+ * The lines the branch wrote in the file a mutant is in. Refused rather than
+ * read as "no lines", because the report's files are the files Stryker was
+ * pointed at: one it names that the change set does not is the two ends
+ * disagreeing about what was mutated, and reading that as an empty set turns
+ * the lane into a step that runs and can no longer fail.
+ */
+function linesOf(
+  changed: ReadonlyMap<string, ReadonlySet<number>>,
+  file: string,
+): ReadonlySet<number> {
+  const lines = changed.get(file);
+  if (lines === undefined) {
+    throw new Error(
+      `the mutation report names ${file}, which is not a file the lane asked it to mutate`,
+    );
+  }
+  return lines;
+}
+
+/** What the report says, as the score to publish and the mutants to fail on. */
+export function verdict(
+  text: string,
+  changed: ReadonlyMap<string, ReadonlySet<number>>,
+  bound: number | undefined,
+  /** What the note says of the tests the run loaded, or nothing for a walk. */
+  tested: string,
+  wrote: string,
+): Verdict {
+  const mutants = parseReport(text);
+  // Graded first, because `linesOf` refuses a report naming a file the lane
+  // never asked it to mutate — a report that is not the one this run requested
+  // outranks anything read out of it.
+  const graded = mutants.map((mutant): Graded => {
+    const own = inTheChange(mutant, linesOf(changed, mutant.file));
+    return { mutant, own, worth: worthOf(mutant.status, own) };
+  });
+  const files = plural(changed.size, "changed domain file");
+
+  // Everything the run came back with no verdict for, and then the part of that
+  // which cannot be the reason there was none: a mutant is only ever active
+  // inside a test, so one that is not static cannot be why no test ran. Why the
+  // static ones are exempt at all: docs/gates/mutation-lane.md.
+  const noVerdict = mutants.filter((mutant) => NO_VERDICT.has(mutant.status));
+  const ungraded = noVerdict.filter((mutant) => !mutant.static);
+  // Before the score, and instead of it: a number computed over the mutants that
+  // did get a verdict is a claim about a campaign that did not happen.
+  if (ungraded.length > 0) {
+    return {
+      note: `part of the run over ${files} was never graded${tested}`,
+      log: wrote,
+      problems: [ungradedProblem(ungraded)],
+    };
+  }
+
+  const counted = tally(graded);
+  if (counted === undefined) {
+    const outside = graded.filter((each) => each.worth === "outside").length;
+    return {
+      note: `${heldNothing(mutants.length, noVerdict.length, outside, files)}${tested}`,
+      problems: [],
+    };
+  }
+
+  const surviving = graded
+    .filter((each) => each.own && each.worth === "undetected")
+    .map((each) => each.mutant);
+
+  const problems = surviving.map(survivorProblem);
+  if (bound !== undefined && counted.score < bound) {
+    problems.push({
+      message: `kill the mutants listed in the run summary: ${percent(counted.score)} of the mutants in ${files} were caught, under the ${percent(bound)} floor this repo declares`,
+    });
+  }
+
+  return {
+    note: `mutation score ${percent(counted.score)} over ${files}${timeoutsNoted(counted)}${tested}`,
+    table: table(counted, surviving, noVerdict.length, bound),
+    problems,
+  };
+}
+
+/** How much of what was caught a clock caught, said wherever anything was. */
+function timeoutsNoted({ timedOut, detected }: Tally): string {
+  return timedOut === 0 ? "" : `, ${timedOut} of the ${detected} caught by timing out`;
+}
+
+/**
+ * What a report holding no score says instead, which is two different facts. A
+ * file of types has no mutants at all; a file whose every mutant left the ratio
+ * — disabled elsewhere, or running at module load — has mutants and no score,
+ * and calling that "no mutants" is the lane stating something untrue about a
+ * report it is holding.
+ */
+function heldNothing(mutants: number, notGraded: number, outside: number, files: string): string {
+  if (mutants === 0) return `${files} held no mutants`;
+  return `no mutant in ${files} counted toward a score: ${notGraded} not graded, ${outside} outside the ratio`;
+}
+
+/** The measurement, in the shape the coverage floor's own README paragraph argues for. */
+function table(
+  counted: Tally,
+  surviving: readonly Mutant[],
+  notGraded: number,
+  bound: number | undefined,
+): string {
+  return [
+    "### Mutation lane",
+    "",
+    "| Measurement | Value |",
+    "| --- | --- |",
+    `| Mutation score (changed domain files) | ${percent(counted.score)} |`,
+    `| Caught | ${counted.detected} |`,
+    `| Caught by timing out | ${counted.timedOut} |`,
+    `| Undetected | ${counted.undetected} |`,
+    `| Undetected on this branch's own lines | ${surviving.length} |`,
+    `| Not graded | ${notGraded} |`,
+    `| Floor | ${bound === undefined ? "none — published, not enforced" : percent(bound)} |`,
+    "",
+    ...surviving.map(
+      (mutant) =>
+        `- ${span(`${mutant.file}:${mutant.from}`)} ${mutant.mutator} → ${span(mutant.replacement)} (${mutant.status})`,
+    ),
+    "",
+    "A floor, not a target: it catches a change that shipped without the test that",
+    "pins it. Raise it only once the score comfortably exceeds it.",
+    "",
+    "Not graded counts mutants that run at module load, where breaking one breaks",
+    "every test before any runs. Nothing could have caught those, so they stay out",
+    "of the ratio — which is only true because the lane refuses a run whose suite",
+    "was already failing before anything was mutated.",
+    "",
+  ].join("\n");
+}

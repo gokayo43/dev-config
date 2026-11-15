@@ -48,7 +48,7 @@ describe("the tests a repo names in mutation-tests", () => {
     expect(walked.note).toBe("the suite this run mutated does not pass unmutated");
   });
 
-  test("a dirty baseline among the named files says the named files are what ran", async () => {
+  test("a dirty baseline among the named files is refused by the file that failed", async () => {
     const verdict = await lane(
       [
         repo({ "src/domain/pricing.ts": PRICING, "tests/pricing.test.ts": TOTAL_TEST }),
@@ -61,9 +61,53 @@ describe("the tests a repo names in mutation-tests", () => {
       { tests: "tests/*.test.ts" },
     );
 
-    expect(messages(verdict)).toEqual([
-      containing("The run loads exactly the 2 test files `mutation-tests` names"),
-    ]);
+    expect(messages(verdict)).toEqual([refusedBy("tests/browser.test.ts")]);
+    expect(verdict.note).toBe("the named tests do not pass unmutated");
+  });
+
+  // A branch that breaks a named test and touches no domain file used to pass,
+  // and the next branch to change a domain file met the red baseline with
+  // nothing naming the test or the branch that broke it.
+  test.each([
+    [
+      "a named test that fails a case",
+      { "tests/pricing.test.ts": TOTAL_TEST.replace("toBe(300)", "toBe(301)") },
+      "tests/pricing.test.ts",
+    ],
+    [
+      "a named test that cannot load",
+      { "tests/browser.test.ts": BROWSER_SPEC },
+      "tests/browser.test.ts",
+    ],
+  ] as const)(
+    "%s, on a branch that changed no domain file, is refused by its file",
+    async (_, change, file) => {
+      const verdict = await lane([BEFORE, { ...BEFORE, ...change }], {
+        tests: "tests/*.test.ts",
+        installed: false,
+      });
+
+      expect(messages(verdict)).toEqual([refusedBy(file)]);
+      expect(verdict.note).toBe("the named tests do not pass unmutated");
+    },
+  );
+
+  test("a named test the branch changed that passes leaves nothing to mutate", async () => {
+    const verdict = await lane(
+      [
+        BEFORE,
+        {
+          ...BEFORE,
+          "tests/pricing.test.ts": TOTAL_TEST.replace("(100, 3)).toBe(300)", "(100, 4)).toBe(400)"),
+        },
+      ],
+      { tests: "tests/*.test.ts", installed: false },
+    );
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe(
+      "no domain file changed — the named tests pass unmutated, and there is nothing to mutate; mutation-tests names 1 test file",
+    );
   });
 
   // Narrowing the tests never turns "no test noticed" into a pass. The only
@@ -177,3 +221,8 @@ describe("the tests a repo names in mutation-tests", () => {
     expect(verdict.note).toBe("mutation-tests does not name the tests it was meant to");
   });
 });
+
+/** The refusal of a named file that fails unmutated, under the default case limit. */
+function refusedBy(file: string): string {
+  return `${file}: make ${file} pass as a plain \`bun test\` of the files \`mutation-tests\` names, with every case allowed 60000 ms, or take it out of the patterns: run unmutated it failed, so no mutant can be graded against it`;
+}

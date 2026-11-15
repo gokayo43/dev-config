@@ -101,25 +101,30 @@ interface Run {
   readonly installed?: boolean;
   /** Settings written into the checkout's own config, the way a developer's `~/.gitconfig` would arrive. */
   readonly configured?: readonly (readonly [string, string])[];
+  /** What the repo passes as `mutation-case-timeout`. */
+  readonly caseTimeout?: string;
 }
 
-export async function lane(
-  trees: readonly Tree[],
-  { floor = "", tests = "", installed = true, configured = [] }: Run = {},
-): Promise<Verdict> {
-  return (await laneIn(trees, { floor, tests, installed, configured })).verdict;
+export async function lane(trees: readonly Tree[], run: Run = {}): Promise<Verdict> {
+  return (await laneIn(trees, run)).verdict;
 }
 
 /** The same run, with the checkout it worked in — for a case about what it left there. */
 export async function laneIn(
   trees: readonly Tree[],
-  { floor = "", tests = "", installed = true, configured = [] }: Run = {},
+  { floor = "", tests = "", installed = true, configured = [], caseTimeout = "" }: Run = {},
 ): Promise<{ verdict: Verdict; root: string }> {
   const { root } = await history(...trees);
   if (installed) await symlink(NODE_MODULES, join(root, "node_modules"));
   for (const [name, value] of configured) await git(root, ["config", "--local", name, value]);
   return {
-    verdict: await mutationLane({ root, event: { baseRef: "", before: "" }, floor, tests }),
+    verdict: await mutationLane({
+      root,
+      event: { baseRef: "", before: "" },
+      floor,
+      tests,
+      caseTimeout,
+    }),
     root,
   };
 }

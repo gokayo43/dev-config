@@ -6,6 +6,7 @@ await entry(async () => {
     "working-directory",
     "mutation-floor",
     "mutation-tests",
+    "mutation-case-timeout",
     "step-summary",
     "base-ref",
     "before",
@@ -16,6 +17,7 @@ await entry(async () => {
       root: read["working-directory"],
       floor: read["mutation-floor"],
       tests: read["mutation-tests"],
+      caseTimeout: read["mutation-case-timeout"],
       // The two facts about the run, read from the `github` context by action.yml
       // rather than threaded through as inputs: they are the event's own,
       // identical for every caller, and a caller that had to pass them could pass

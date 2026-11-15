@@ -9,14 +9,13 @@ import {
   type Event,
   isList,
   isObject,
-  kindOf,
-  oneOf,
   plainly,
   plural,
   type Problem,
   readConfig,
   type Verdict,
 } from "../_lib/gate.ts";
+import { span, verdict } from "./report.ts";
 
 /**
  * The two packages a repo declares to run this lane, named in the diagnostic
@@ -43,70 +42,6 @@ const DECLARE = `${CORE}@9.6.1 and ${RUNNER}@1.3.8`;
 
 const READS_THE_BASE_REF =
   "the lane mutates what this branch changed, and the base ref is what changed is measured against";
-
-/** Every status the mutation-testing report schema defines, which is the whole of what a mutant can be. */
-const STATUSES = [
-  "Killed",
-  "Survived",
-  "NoCoverage",
-  "CompileError",
-  "RuntimeError",
-  "Timeout",
-  "Ignored",
-  "Pending",
-] as const;
-
-type Status = (typeof STATUSES)[number];
-
-type Worth = "detected" | "undetected" | "outside";
-
-/**
- * What every mutant is worth to the score, as a total function of the schema's
- * vocabulary rather than membership tests with everything else falling silently
- * between them: a status left out of this table is a compile error rather than
- * a mutant quietly outside the ratio.
- *
- * `undetected` is the finding — `Survived` means tests ran the line and all
- * passed, `NoCoverage` means none ran it, the same statement one step earlier.
- * `outside` is Stryker's own reading: a mutant that would not compile, that
- * errored, or that the config declined is neither caught nor missed, so it is
- * out of the ratio rather than a zero in it.
- */
-const WORTH = {
-  Killed: "detected",
-  Timeout: "detected",
-  Survived: "undetected",
-  NoCoverage: "undetected",
-  CompileError: "outside",
-  RuntimeError: "outside",
-  Ignored: "outside",
-  Pending: "outside",
-} as const satisfies Record<Status, Worth>;
-
-/**
- * The statuses that say the run came back with no verdict for the mutant. A
- * separate reading of the same vocabulary from `WORTH` above, because they
- * answer different questions: that one is what a mutant is worth to the score,
- * this one is what the run managed to do. Every status here is outside the
- * ratio, and most of what is outside the ratio is not here.
- */
-const NO_VERDICT = new Set<Status>(["RuntimeError", "Pending"]);
-
-/**
- * The one status whose worth depends on where it sits. `Ignored` is a
- * `Stryker disable` comment in the source, and out of the ratio it takes the
- * mutant from BOTH sides of the fraction — so a branch that writes an untested
- * line and disables it raises the score it should have lowered, and clears the
- * floor it should have breached. On a line the branch wrote, the directive is
- * the branch's own choice and counts as a mutant nothing caught. Elsewhere it
- * is somebody's earlier decision, and outside is the honest reading.
- *
- * That it also has to say WHY is not enforced here: `suppression-hygiene` holds
- * every disable in the tree to carrying its reason, whichever tool reads it.
- */
-function worthOf(status: Status, own: boolean): Worth {
-  return status === "Ignored" && own ? "undetected" : WORTH[status];
-}
 
 /**
  * What a repo declares its pure domain to be — the same element the layer rule
@@ -292,156 +227,6 @@ function noFolderProblem(globs: readonly string[]): Problem {
   };
 }
 
-interface Mutant {
-  readonly file: string;
-  readonly from: number;
-  readonly to: number;
-  readonly mutator: string;
-  readonly replacement: string;
-  readonly status: Status;
-  /** The report's own word for a mutant that runs at module load, and so before any test does. */
-  readonly static: boolean;
-}
-
-/**
- * Stryker's own report, flattened to the mutants it holds and parsed at the
- * boundary rather than asserted through. The mutation-testing report schema is
- * another tool's contract, so a document that is not the shape read here says
- * so as itself instead of surfacing later as a score computed over nothing.
- */
-function parseReport(text: string): Mutant[] {
-  const parsed: unknown = JSON.parse(text);
-  const files = isObject(parsed) ? parsed["files"] : undefined;
-  if (!isObject(files)) {
-    throw new Error(`the mutation report has no files object — it holds ${kindOf(files)}`);
-  }
-  return Object.entries(files).flatMap(([file, value]) => {
-    const listed = isObject(value) ? value["mutants"] : undefined;
-    if (!isList(listed)) {
-      throw new Error(`the mutation report's ${file} has no mutants array`);
-    }
-    return listed.filter(isObject).map((mutant) => asMutant(file, mutant));
-  });
-}
-
-function asMutant(file: string, value: ConfigObject): Mutant {
-  const location = isObject(value["location"]) ? value["location"] : {};
-  const at = (end: string): number => {
-    const point = location[end];
-    const line = isObject(point) ? point["line"] : undefined;
-    if (typeof line !== "number")
-      throw new Error(`a mutant in ${file} has no location.${end}.line`);
-    return line;
-  };
-  const text = (key: string): string => {
-    const found = value[key];
-    return typeof found === "string" ? found : "";
-  };
-  const status = oneOf(STATUSES, value["status"]);
-  if (status === undefined) {
-    throw new Error(
-      `a mutant in ${file} carries ${kindOf(value["status"])} where the report schema names one of: ${STATUSES.join(", ")}`,
-    );
-  }
-  return {
-    file,
-    from: at("start"),
-    to: at("end"),
-    mutator: text("mutatorName"),
-    replacement: text("replacement"),
-    status,
-    // `coverageAnalysis: "perTest"` puts this field on every mutant, and an
-    // absent one is read as not static: the exemption below is the whole of what
-    // this lane lets past, so it is granted only where the report claims it.
-    static: value["static"] === true,
-  };
-}
-
-/**
- * Whether every line the mutant spans is one this branch wrote. Containment
- * rather than overlap, and that is the whole of what "selective" means here: a
- * mutant of the enclosing block spans a function whose body a one-line edit
- * barely touched, and failing on it would fail the branch for code it did not
- * write. The floor below is what covers what containment lets past.
- */
-function inTheChange(mutant: Mutant, lines: ReadonlySet<number>): boolean {
-  for (let line = mutant.from; line <= mutant.to; line += 1) {
-    if (!lines.has(line)) return false;
-  }
-  return true;
-}
-
-function percent(score: number): string {
-  return `${(score * 100).toFixed(1)}%`;
-}
-
-/**
- * A value out of the repo's own source, as a code span it cannot end early. The
- * step summary is markdown, and a replacement carrying a backtick — every
- * template literal in the tree does — closes the span, leaving the rest of the
- * line to render as headings and table rows somebody wrote in a domain file.
- * The same statement `commanded` in `_lib/gate.ts` makes about annotations: the
- * text is not the gate author's to trust.
- *
- * CommonMark's own rule, rather than an escape: a span fenced by more backticks
- * than its longest run contains cannot be ended from inside, and a space either
- * side keeps a leading or trailing backtick from eating the fence.
- */
-function span(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  const runs = [...flat.matchAll(/`+/g)].map((run) => run[0].length);
-  const fence = "`".repeat(Math.max(0, ...runs) + 1);
-  const pad = flat.startsWith("`") || flat.endsWith("`") ? " " : "";
-  return `${fence}${pad}${flat}${pad}${fence}`;
-}
-
-interface Tally {
-  readonly detected: number;
-  readonly undetected: number;
-  /** What the suite caught over what it could have. */
-  readonly score: number;
-}
-
-/** A mutant with where it sits and what that makes it worth, decided once. */
-interface Graded {
-  readonly mutant: Mutant;
-  readonly own: boolean;
-  readonly worth: Worth;
-}
-
-/**
- * The counts and the ratio in one pass, or nothing when the run graded no
- * mutant at all — a file of types, or one Stryker declined entirely. Absent
- * rather than a zero score, which is a different claim: zero says the suite
- * caught none of them.
- */
-function tally(graded: readonly Graded[]): Tally | undefined {
-  const detected = graded.filter((each) => each.worth === "detected").length;
-  const undetected = graded.filter((each) => each.worth === "undetected").length;
-  const counted = detected + undetected;
-  return counted === 0 ? undefined : { detected, undetected, score: detected / counted };
-}
-
-/**
- * What the reader has to write, which is the only thing separating the
- * undetected statuses. The replacement is in the message rather than only in
- * the summary table because a line carries several mutants — an operator and
- * the block around it — and annotations that read identically are one finding
- * as far as anyone scrolling the step is concerned.
- */
-function survivorProblem(mutant: Mutant): Problem {
-  const at = `line ${mutant.from}`;
-  const swap = `\`${mutant.replacement}\` (${mutant.mutator})`;
-  const wrote = "this branch wrote that line";
-  const message =
-    mutant.status === "NoCoverage"
-      ? `write the test that reaches ${at}: this branch wrote it and nothing runs it, so ${swap} in its place goes unnoticed`
-      : mutant.status === "Ignored"
-        ? `write the test for ${at} or drop the \`Stryker disable\` above it: ${wrote}, and a disabled ${swap} counts as one nothing caught rather than leaving the score`
-        : `write the case that fails on ${swap} at ${at}: ${wrote} and the suite passes either way`;
-  return { file: mutant.file, message };
-}
-
 /**
  * What the runner logs, at its default level, when the run it was asked to grade
  * did not pass before anything was mutated: bun exited non-zero, and no test it
@@ -470,14 +255,6 @@ function baselineProblem(kept: string, tests: Tests): Problem {
   };
 }
 
-/** One problem for the class: the same finding however many mutants carry it. */
-function ungradedProblem(ungraded: readonly Mutant[]): Problem {
-  const files = new Set(ungraded.map((mutant) => mutant.file)).size;
-  return {
-    message: `read the run output above: ${plural(ungraded.length, "mutant")} in ${plural(files, "file")} came back with no verdict, so a score would be published over a fraction of what was mutated. A mutant is only ever active inside a test, so none of them can be why no test ran — and this run passed unmutated, so what did not happen is the runner selecting or grading the tests that cover them.`,
-  };
-}
-
 /** The floor as a fraction, refused rather than defaulted — a default publishes a promise nobody made. */
 function floorFrom(value: string): number | undefined {
   if (value.trim() === "") return undefined;
@@ -488,6 +265,31 @@ function floorFrom(value: string): number | undefined {
     );
   }
   return floor;
+}
+
+const CASE_TIMEOUT_INPUT = "mutation-case-timeout";
+
+/**
+ * How long one test case may run in the lane before bun fails it, in
+ * milliseconds, when the repo names no other. Every deadline the run keeps is
+ * derived from it (`strykerConfig`), so it decides what a timeout means here:
+ * a mutant that hangs. Measured on A1M4N3/wmstcs (dev-config#203): with bun's
+ * own five seconds, a property test that takes 1.4 s alone crossed it beside
+ * the lane's parallel runs and the repo's suite, which failed the unmutated
+ * run on a busy runner and "killed" mutants a hand run shows surviving.
+ */
+const DEFAULT_CASE_TIMEOUT_MS = 60_000;
+
+/** The case limit in milliseconds: the default where the input is empty, refused where it is not a whole positive number. */
+function caseLimitFrom(value: string): number {
+  if (value.trim() === "") return DEFAULT_CASE_TIMEOUT_MS;
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new Error(
+      `${CASE_TIMEOUT_INPUT} is '${value}' — write it as a whole number of milliseconds, the way bun test's --timeout takes it`,
+    );
+  }
+  return limit;
 }
 
 /**
@@ -519,9 +321,9 @@ type Tests =
   | { readonly kind: "walked" }
   | { readonly kind: "named"; readonly files: readonly string[] };
 
-/** What the runner is told: nothing for a walk, so its own walk runs; the named files otherwise. */
-function testsConfig(tests: Tests): { readonly bun?: { readonly testFiles: readonly string[] } } {
-  return tests.kind === "walked" ? {} : { bun: { testFiles: tests.files } };
+/** Which files the runner is told to load: none for a walk, so its own walk runs; the named files otherwise. */
+function testFilesConfig(tests: Tests): { readonly testFiles?: readonly string[] } {
+  return tests.kind === "walked" ? {} : { testFiles: tests.files };
 }
 
 /** The usual cause of a run that failed unmutated, which depends on how its tests were chosen. */
@@ -617,6 +419,101 @@ async function ignoredByBunfig(root: string): Promise<Answer<readonly string[]>>
   return { value: isObject(test) ? strings(test["pathIgnorePatterns"]) : [] };
 }
 
+/** Stryker's own default limit on the unmutated run, written down because the runner's clock is set from it. */
+const DRY_RUN_MINUTES = 5;
+
+/** The named test files as paths from the working directory, the way a diff names them; none for a walk. */
+function namedFiles(tests: Tests): ReadonlySet<string> {
+  return new Set(tests.kind === "walked" ? [] : tests.files.map((file) => file.slice(2)));
+}
+
+/** The five entities XML escapes an attribute with, which is all a path in bun's report can carry. */
+function unescaped(attribute: string): string {
+  return attribute
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
+}
+
+/**
+ * The named files that failed, read off bun's JUnit report: a file whose cases
+ * failed is a `testsuite` counting failures, and a file that threw before its
+ * cases ran has no `testsuite` at all, so a named file missing from the report
+ * is one that failed to load.
+ */
+function failedFiles(junit: string, files: readonly string[]): string[] {
+  const reported = new Map<string, number>();
+  for (const suite of junit.matchAll(/<testsuite\s[^>]*>/g)) {
+    const file = /\sfile="([^"]*)"/.exec(suite[0])?.[1];
+    const failures = /\sfailures="(\d+)"/.exec(suite[0])?.[1];
+    if (file !== undefined && failures !== undefined) {
+      reported.set(posix.normalize(unescaped(file)), Number(failures));
+    }
+  }
+  return files.filter((file) => (reported.get(file) ?? 1) > 0);
+}
+
+/**
+ * The named tests run unmutated, as one plain `bun test` under the lane's case
+ * limit, or the verdict refusing the run when they fail. The runner's own dry
+ * run says the same of the run it makes, but only as a line of stderr naming no
+ * file; this run names the file, and it is made on a branch that changed a named
+ * test and no domain file, where Stryker never starts.
+ */
+async function redBaseline(
+  root: string,
+  tests: Extract<Tests, { kind: "named" }>,
+  caseLimit: number,
+): Promise<Verdict | undefined> {
+  const scratch = await mkdtemp(join(tmpdir(), "mutation-lane-baseline-"));
+  try {
+    const junit = join(scratch, "baseline.xml");
+    const proc = Bun.spawn(
+      [
+        "bun",
+        "--no-env-file",
+        "test",
+        `--timeout=${caseLimit}`,
+        "--reporter=junit",
+        `--reporter-outfile=${junit}`,
+        ...tests.files,
+      ],
+      { cwd: root, env: plainly(process.env), stdout: "pipe", stderr: "pipe" },
+    );
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    if ((await proc.exited) === 0) return undefined;
+
+    const report = Bun.file(junit);
+    const failed = failedFiles(
+      (await report.exists()) ? await report.text() : "",
+      tests.files.map((file) => file.slice(2)),
+    );
+    const problems: Problem[] =
+      failed.length > 0
+        ? failed.map((file) => ({
+            file,
+            message: `make ${file} pass as a plain \`bun test\` of the files \`${TESTS_INPUT}\` names, with every case allowed ${caseLimit} ms, or take it out of the patterns: run unmutated it failed, so no mutant can be graded against it`,
+          }))
+        : [
+            {
+              message: `make the named tests pass as a plain \`bun test\` with every case allowed ${caseLimit} ms: run unmutated it exited non-zero with no named file failing, so no mutant can be graded against it. The end of what it wrote: ${span(err.slice(-500))}`,
+            },
+          ];
+    return {
+      note: "the named tests do not pass unmutated",
+      log: `${out}\n${err}`,
+      problems,
+    };
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+}
+
 /** What Stryker says, once per `mutate` entry it could not resolve to a file. */
 const UNRESOLVED = /Glob pattern "([^"]*)" did not result in any files\./g;
 
@@ -630,6 +527,7 @@ function strykerConfig(
   report: string,
   sandbox: string,
   tests: Tests,
+  caseLimit: number,
 ): string {
   return JSON.stringify({
     testRunner: "bun",
@@ -638,6 +536,34 @@ function strykerConfig(
     mutate,
     reporters: ["json"],
     jsonReporter: { fileName: report },
+    // Three clocks can end a test run, and each is set so that a run ends on
+    // one only when a mutant hangs, whatever else the runner is doing.
+    // Stryker's own deadline for a mutant is timeoutFactor times the time its
+    // covering tests took unmutated, plus timeoutMS, plus the run's overhead:
+    // with the default five seconds, a mutant that runs at module load
+    // (`static`) and so reloads every test file timed out at 7.4 s beside the
+    // lane's other runs and passed as caught (dev-config#203). One case's limit on top of
+    // what the tests took is the slack a run may need before it is a hang.
+    timeoutMS: caseLimit,
+    // The runner's own clock on each `bun test` child, ten seconds by default,
+    // grades a mutant the runner's way rather than Stryker's. Set to the dry
+    // run's limit, which Stryker's deadline for any one mutant stays far
+    // inside, so that Stryker's is the clock that grades.
+    dryRunTimeoutMinutes: DRY_RUN_MINUTES,
+    bun: {
+      timeout: DRY_RUN_MINUTES * 60_000,
+      // bun's own limit on one case, five seconds unless the repo's bunfig
+      // says otherwise; the flag outranks bunfig. A case that fails on it fails
+      // as a test does, which Stryker reads as a kill.
+      bunArgs: [`--timeout=${caseLimit}`],
+      ...testFilesConfig(tests),
+    },
+    // A checkout on a developer's machine has a `.env` holding real
+    // credentials, which Stryker's walk would otherwise copy into the sandbox
+    // under the temp dir, where every `bun test` the run makes loads it
+    // (dev-config#202). The named tests' own run starts bun with --no-env-file
+    // for the same reason.
+    ignorePatterns: [".env*"],
     // The lane owns the floor, so Stryker owns none: a break threshold would
     // exit non-zero on a low score, and a non-zero exit is read here as a run
     // that did not finish. Written down rather than left to a default, because
@@ -661,7 +587,6 @@ function strykerConfig(
     // file in the project — the only value the option's schema accepts that
     // reaches nothing.
     tsconfigFile: "",
-    ...testsConfig(tests),
   });
 }
 
@@ -675,6 +600,8 @@ export interface Input {
    * leaves the runner's own walk of the project as the selection.
    */
   readonly tests: string;
+  /** How long one test case may run, in milliseconds. Empty is the lane's default. */
+  readonly caseTimeout: string;
 }
 
 /**
@@ -695,8 +622,15 @@ export interface Input {
  * could not read out of the diff, and every `mutate` entry Stryker could not
  * resolve is refused by name below.
  */
-export async function mutationLane({ root, event, floor, tests }: Input): Promise<Verdict> {
+export async function mutationLane({
+  root,
+  event,
+  floor,
+  tests,
+  caseTimeout,
+}: Input): Promise<Verdict> {
   const bound = floorFrom(floor);
+  const caseLimit = caseLimitFrom(caseTimeout);
 
   // Before the domain and the change, so a pattern that names nothing is
   // refused on every run rather than only on one that changed a domain file.
@@ -723,15 +657,34 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
     return { note: "the lint base's test code cannot be read", problems: [...testCode.problems] };
   }
 
+  // A named test file is part of the change too: a branch that breaks one and
+  // touches no domain file would otherwise pass here, and the next branch that
+  // changes a domain file would meet the red baseline instead (dev-config#201).
+  const named = namedFiles(run);
+  const mutable = mutableBeside(testCode.value);
   const change = await branchChange(root, event, {
     why: READS_THE_BASE_REF,
-    pathspecs: domain.value.map((glob) => `:(glob)${glob}/**`),
-    keeps: mutableBeside(testCode.value),
-    noun: "domain file",
+    pathspecs: [
+      ...domain.value.map((glob) => `:(glob)${glob}/**`),
+      ...[...named].map((file) => `:(literal)${file}`),
+    ],
+    keeps: (path) => named.has(path) || mutable(path),
+    noun: run.kind === "named" ? "domain file or named test file" : "domain file",
     nothing: `nothing to mutate${testsNoted(run)}`,
   });
   if (change.kind === "settled") return change.verdict;
-  const { changed } = change;
+  const changed = new Map([...change.changed].filter(([file]) => !named.has(file)));
+
+  if (run.kind === "named") {
+    const red = await redBaseline(root, run, caseLimit);
+    if (red !== undefined) return red;
+    if (changed.size === 0) {
+      return {
+        note: `no domain file changed — the named tests pass unmutated, and there is nothing to mutate${testsNoted(run)}`,
+        problems: [],
+      };
+    }
+  }
 
   const stryker = join(root, "node_modules", ".bin", "stryker");
   if (!(await Bun.file(stryker).exists())) {
@@ -753,7 +706,7 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
     const requested = new Map([...changed.keys()].map((file) => [literal(file), file]));
     await Bun.write(
       config,
-      strykerConfig([...requested.keys()], report, join(scratch, "sandbox"), run),
+      strykerConfig([...requested.keys()], report, join(scratch, "sandbox"), run, caseLimit),
     );
 
     const proc = Bun.spawn([stryker, "run", config], {
@@ -805,7 +758,7 @@ export async function mutationLane({ root, event, floor, tests }: Input): Promis
       };
     }
 
-    return verdict(await Bun.file(report).text(), changed, bound, run, wrote);
+    return verdict(await Bun.file(report).text(), changed, bound, testsNoted(run), wrote);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -825,132 +778,4 @@ function unresolvedIn(wrote: string, requested: ReadonlyMap<string, string>): Pr
           },
         ];
   });
-}
-
-/**
- * The lines the branch wrote in the file a mutant is in. Refused rather than
- * read as "no lines", because the report's files are the files Stryker was
- * pointed at: one it names that the change set does not is the two ends
- * disagreeing about what was mutated, and reading that as an empty set turns
- * the lane into a step that runs and can no longer fail.
- */
-function linesOf(
-  changed: ReadonlyMap<string, ReadonlySet<number>>,
-  file: string,
-): ReadonlySet<number> {
-  const lines = changed.get(file);
-  if (lines === undefined) {
-    throw new Error(
-      `the mutation report names ${file}, which is not a file the lane asked it to mutate`,
-    );
-  }
-  return lines;
-}
-
-/** What the report says, as the score to publish and the mutants to fail on. */
-function verdict(
-  text: string,
-  changed: ReadonlyMap<string, ReadonlySet<number>>,
-  bound: number | undefined,
-  tests: Tests,
-  wrote: string,
-): Verdict {
-  const mutants = parseReport(text);
-  // Graded first, because `linesOf` refuses a report naming a file the lane
-  // never asked it to mutate — a report that is not the one this run requested
-  // outranks anything read out of it.
-  const graded = mutants.map((mutant): Graded => {
-    const own = inTheChange(mutant, linesOf(changed, mutant.file));
-    return { mutant, own, worth: worthOf(mutant.status, own) };
-  });
-  const files = plural(changed.size, "changed domain file");
-
-  // Everything the run came back with no verdict for, and then the part of that
-  // which cannot be the reason there was none: a mutant is only ever active
-  // inside a test, so one that is not static cannot be why no test ran. Why the
-  // static ones are exempt at all: docs/gates/mutation-lane.md.
-  const noVerdict = mutants.filter((mutant) => NO_VERDICT.has(mutant.status));
-  const ungraded = noVerdict.filter((mutant) => !mutant.static);
-  // Before the score, and instead of it: a number computed over the mutants that
-  // did get a verdict is a claim about a campaign that did not happen.
-  if (ungraded.length > 0) {
-    return {
-      note: `part of the run over ${files} was never graded${testsNoted(tests)}`,
-      log: wrote,
-      problems: [ungradedProblem(ungraded)],
-    };
-  }
-
-  const counted = tally(graded);
-  if (counted === undefined) {
-    const outside = graded.filter((each) => each.worth === "outside").length;
-    return {
-      note: `${heldNothing(mutants.length, noVerdict.length, outside, files)}${testsNoted(tests)}`,
-      problems: [],
-    };
-  }
-
-  const surviving = graded
-    .filter((each) => each.own && each.worth === "undetected")
-    .map((each) => each.mutant);
-
-  const problems = surviving.map(survivorProblem);
-  if (bound !== undefined && counted.score < bound) {
-    problems.push({
-      message: `kill the mutants listed in the run summary: ${percent(counted.score)} of the mutants in ${files} were caught, under the ${percent(bound)} floor this repo declares`,
-    });
-  }
-
-  return {
-    note: `mutation score ${percent(counted.score)} over ${files}${testsNoted(tests)}`,
-    table: table(counted, surviving, noVerdict.length, bound),
-    problems,
-  };
-}
-
-/**
- * What a report holding no score says instead, which is two different facts. A
- * file of types has no mutants at all; a file whose every mutant left the ratio
- * — disabled elsewhere, or running at module load — has mutants and no score,
- * and calling that "no mutants" is the lane stating something untrue about a
- * report it is holding.
- */
-function heldNothing(mutants: number, notGraded: number, outside: number, files: string): string {
-  if (mutants === 0) return `${files} held no mutants`;
-  return `no mutant in ${files} counted toward a score: ${notGraded} not graded, ${outside} outside the ratio`;
-}
-
-/** The measurement, in the shape the coverage floor's own README paragraph argues for. */
-function table(
-  counted: Tally,
-  surviving: readonly Mutant[],
-  notGraded: number,
-  bound: number | undefined,
-): string {
-  return [
-    "### Mutation lane",
-    "",
-    "| Measurement | Value |",
-    "| --- | --- |",
-    `| Mutation score (changed domain files) | ${percent(counted.score)} |`,
-    `| Caught | ${counted.detected} |`,
-    `| Undetected | ${counted.undetected} |`,
-    `| Undetected on this branch's own lines | ${surviving.length} |`,
-    `| Not graded | ${notGraded} |`,
-    `| Floor | ${bound === undefined ? "none — published, not enforced" : percent(bound)} |`,
-    "",
-    ...surviving.map(
-      (mutant) =>
-        `- ${span(`${mutant.file}:${mutant.from}`)} ${mutant.mutator} → ${span(mutant.replacement)} (${mutant.status})`,
-    ),
-    "",
-    "A floor, not a target: it catches a change that shipped without the test that",
-    "pins it. Raise it only once the score comfortably exceeds it.",
-    "",
-    "Not graded counts mutants that run at module load, where breaking one breaks",
-    "every test before any runs. Nothing could have caught those, so they stay out",
-    "of the ratio — which is only true because the lane refuses a run whose suite",
-    "was already failing before anything was mutated.",
-    "",
-  ].join("\n");
 }

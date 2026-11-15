@@ -27,6 +27,13 @@ inputs:
       directory or names a file bunfig.toml ignores is refused. Empty lets the
       runner walk the project for every test file. docs/gates/mutation-lane.md.
     default: ""
+  mutation-case-timeout:
+    description: >-
+      How long one test case may run before bun fails it, in milliseconds, the
+      way bun test's --timeout takes it. Every deadline of the run is derived
+      from it, so a timeout means a mutant that hangs rather than a busy runner.
+      Empty is 60000. docs/gates/mutation-lane.md.
+    default: ""
 
 runs:
   using: composite
@@ -42,8 +49,9 @@ runs:
         INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         INPUT_MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
         INPUT_MUTATION_TESTS: ${{ inputs['mutation-tests'] }}
+        INPUT_MUTATION_CASE_TIMEOUT: ${{ inputs['mutation-case-timeout'] }}
         INPUT_BASE_REF: ${{ github.base_ref }}
         INPUT_BEFORE: ${{ github.event.before }}
       run: |
         set -euo pipefail
-        INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bun "$GITHUB_ACTION_PATH/mutation-lane.main.ts"
+        INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bun --no-env-file "$GITHUB_ACTION_PATH/mutation-lane.main.ts"
