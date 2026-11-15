@@ -218,6 +218,28 @@ test("adds the fee", () => {
     },
   );
 
+  // Every rule the lane reads off bunfig.toml waits on reading it, so one that
+  // cannot be read is refused as that, before any rule is named.
+  test.each(["", "tests/*.test.ts"])(
+    "a bunfig that cannot be read is refused as unreadable (mutation-tests %p)",
+    async (tests) => {
+      const verdict = await lane(
+        [
+          BEFORE,
+          repo({
+            "bunfig.toml": "[test\nretry = 2\n",
+            "src/domain/pricing.ts": PRICING + WITH_FEE,
+            "tests/pricing.test.ts": FEE_TEST,
+          }),
+        ],
+        { tests, installed: false },
+      );
+
+      expect(messages(verdict)).toEqual([containing("bunfig.toml")]);
+      expect(verdict.note).toBe("bunfig.toml cannot be read");
+    },
+  );
+
   test("a named test the branch changed that passes leaves nothing to mutate", async () => {
     const verdict = await lane(
       [

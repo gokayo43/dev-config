@@ -1,7 +1,10 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 
 import { GRACE_MS } from "../.github/actions/mutation-lane/child.ts";
-import { endedProblem, RUN_DEADLINE_MS } from "../.github/actions/mutation-lane/mutation-lane.ts";
+import {
+  endedProblem,
+  LONGEST_CASE_LIMIT_MS,
+} from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { containing } from "./matchers.ts";
 import {
   BEFORE,
@@ -137,7 +140,7 @@ test("charges for every unit, slowly", async () => {
     "-5",
     "1.5",
     "a minute",
-    String(RUN_DEADLINE_MS + 1),
+    String(LONGEST_CASE_LIMIT_MS + 1),
     "2147483648",
     "0x10",
     "1e3",
@@ -169,7 +172,7 @@ test("charges for every unit, slowly", async () => {
           "tests/pricing.test.ts": WEAK_FEE_TEST,
         }),
       ],
-      { caseTimeout: String(RUN_DEADLINE_MS), floor: "0.9" },
+      { caseTimeout: String(LONGEST_CASE_LIMIT_MS), floor: "0.9" },
     );
 
     expect(messages(verdict)).toEqual([
@@ -225,9 +228,10 @@ test("never yields", () => {
   });
 
   // A named test's own child that inherits the pipes held the lane until it
-  // exited, past the deadline; the lane signals the whole group and stops
-  // reading at the grace. The second asks the group to stop and is ignored, so
-  // only the kill at the grace ends it.
+  // exited, past the deadline. At the deadline the lane asks the group to
+  // stop, which ends `bun test` and the first grandchild; the second ignores
+  // the request, and the kill the lane sends the group once `bun test` has
+  // exited ends it. `mutation-lane-child.test.ts` drives the kill at the grace.
   test.each([
     ["a grandchild that inherits the pipes", "sleep 60"],
     ["a grandchild that ignores the request to stop", "trap '' TERM; sleep 60"],

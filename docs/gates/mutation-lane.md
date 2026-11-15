@@ -208,6 +208,11 @@ fewer tests than the repo meant and publish the score anyway:
 - a named file `bunfig.toml`'s `[test] pathIgnorePatterns` matches, which bun
   would skip even though it is named.
 
+A `bunfig.toml` that sets `[test] retry` above 0 is refused by name too, walked
+or named: bun's command line cannot switch the bunfig's retry off, and a
+retried test would grade a mutant on whichever try passed. A `bunfig.toml` that
+cannot be read is refused as unreadable, before either rule is asked.
+
 **The named tests are run unmutated first**, by the lane itself, whenever the
 branch changed a domain file or a named test file: one `bun --no-env-file test`
 of exactly the named files, under the case limit below, with bun's JUnit report
@@ -411,7 +416,11 @@ writes a bunfig and a preload per worker under the temp dir and leaves them
 when its worker is killed; the lane runs Stryker with `TMPDIR` inside its own
 scratch directory, so those go with it. And every process the lane starts runs
 in a group of its own, which the lane kills when it ends the run and again once
-the child has exited, so no test's own child outlives the lane. Stryker's own
+the child has exited, so nothing left in that group outlives the lane; a
+process that starts a session of its own leaves the group and is outside the
+lane's reach. An interrupt of the lane, a Ctrl-C or a cancelled step, is
+passed on to that group, a second one kills it, and the lane then ends by the
+first. Stryker's own
 defaults do not: `bunx stryker run` writes `.stryker-tmp/` beside the project
 and an HTML report under `reports/mutation/`. Add both to the repo's
 `.gitignore` before running it locally. A hand run also needs the
@@ -442,6 +451,10 @@ not export, so without that line the run dies on any repo that has a
   branch that breaks one through a helper or harness it imports changes
   neither, so it passes here, and the next branch to change a domain file
   meets the red run.
+- **A test that retries itself.** A case written with bun's `{ retry: n }`
+  passes on any of its tries under every flag, so a mutant it should kill on
+  the first try can pass on a later one. The lane refuses a `retry` in
+  `bunfig.toml`, which it can read; the option on a case it cannot see.
 - **A dirty baseline the runner stops announcing.** The check above reads a log
   line `@hughescr/stryker-bun-runner` writes — verified in 1.3.8 and 1.4.0 — and
   nothing in the report states the same fact, so a runner that stopped logging it

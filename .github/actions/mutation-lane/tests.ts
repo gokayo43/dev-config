@@ -19,7 +19,7 @@ import { ran } from "./child.ts";
 import { type Answer, span, strings } from "./values.ts";
 
 export const TESTS_INPUT = "mutation-tests";
-const BUNFIG = "bunfig.toml";
+export const BUNFIG = "bunfig.toml";
 
 /**
  * Which tests the run loads: every test file the runner finds by walking the
@@ -64,7 +64,7 @@ export function changedNoun(tests: Tests): string {
 export function testsCause(tests: Tests): string {
   return tests.kind === "walked"
     ? `The run loads the test and spec files it finds by walking the project rather than the ones the repo's own script selects, so the usual cause is a suite in the tree that was never meant for a plain \`bun test\`: name the files that grade the domain in \`${TESTS_INPUT}\`, or keep that suite out with \`[test] pathIgnorePatterns\` in \`bunfig.toml\`.`
-    : `The ${plural(tests.files.length, "test file")} \`${TESTS_INPUT}\` names passed when the lane ran them unmutated in the checkout, so what failed is what differs in Stryker's copy: the sandbox holds no \`.env*\` file and nothing outside the working directory, and the runner forwards only some of \`bunfig.toml\`'s \`[test]\` keys (\`preload\`, \`root\`, \`pathIgnorePatterns\`, \`timeout\`, \`smol\`, \`rerunEach\`, \`retry\`, \`randomize\`, \`seed\`): make the named files pass there too.`;
+    : `The ${plural(tests.files.length, "test file")} \`${TESTS_INPUT}\` names passed when the lane ran them unmutated in the checkout, so what failed is what differs in Stryker's copy: the sandbox holds no \`.env*\` file and nothing outside the working directory, and the runner forwards only some of \`bunfig.toml\`'s \`[test]\` keys (\`preload\`, \`root\`, \`pathIgnorePatterns\`, \`timeout\`, \`smol\`, \`rerunEach\`, \`randomize\`, \`seed\`): make the named files pass there too.`;
 }
 
 /** What a note says of the tests, wherever the run got far enough to say anything about them. */
@@ -85,7 +85,7 @@ export function testsNoted(tests: Tests): string {
  * the project the sandbox copies, a blank line between patterns, and a file
  * `bun test` itself skips because `bunfig.toml` ignores its path.
  */
-export async function testsFrom(root: string, value: string): Promise<Answer<Tests>> {
+export function testsFrom(root: string, value: string, bunfig: ConfigObject): Answer<Tests> {
   // The whole value is trimmed first, so the newline a YAML block scalar ends
   // with is not read as a blank line of the repo's.
   const written = value.trim();
@@ -120,10 +120,11 @@ export async function testsFrom(root: string, value: string): Promise<Answer<Tes
     for (const file of found) files.add(file);
   }
 
-  const ignored = await ignoredByBunfig(root);
-  if ("problems" in ignored) return ignored;
+  // bun applies `[test] pathIgnorePatterns` to a file named on its command
+  // line as much as to one it found.
+  const ignored = strings(bunfig["pathIgnorePatterns"]);
   for (const file of files) {
-    const by = ignored.value.find((each) => new Bun.Glob(each).match(file));
+    const by = ignored.find((each) => new Bun.Glob(each).match(file));
     if (by !== undefined) {
       problems.push({
         file: BUNFIG,
@@ -136,24 +137,16 @@ export async function testsFrom(root: string, value: string): Promise<Answer<Tes
   return { value: { kind: "named", files: [...files].toSorted() } };
 }
 
-/** `bunfig.toml`'s `[test]` table: empty where there is no bunfig or no table. */
-async function bunfigTest(root: string): Promise<Answer<ConfigObject>> {
+/**
+ * `bunfig.toml`'s `[test]` table, read once for every rule the lane takes from
+ * it: empty where there is no bunfig or no table.
+ */
+export async function bunfigTest(root: string): Promise<Answer<ConfigObject>> {
   if (!(await Bun.file(join(root, BUNFIG)).exists())) return { value: {} };
   const bunfig = await readConfig(root, BUNFIG, "TOML");
   if (bunfig.contents === undefined) return { problems: bunfig.problems };
   const test = bunfig.contents["test"];
   return { value: isObject(test) ? test : {} };
-}
-
-/**
- * `bunfig.toml`'s `[test] pathIgnorePatterns`, which bun applies to a file named
- * on its command line as much as to one it found. No bunfig, or one without the
- * key, ignores nothing.
- */
-async function ignoredByBunfig(root: string): Promise<Answer<readonly string[]>> {
-  const test = await bunfigTest(root);
-  if ("problems" in test) return test;
-  return { value: strings(test.value["pathIgnorePatterns"]) };
 }
 
 /**
@@ -165,10 +158,8 @@ async function ignoredByBunfig(root: string): Promise<Answer<readonly string[]>>
  * test is a mutant graded on whichever attempt passed, and the lane never
  * retries a test for an answer.
  */
-export async function retried(root: string): Promise<readonly Problem[]> {
-  const test = await bunfigTest(root);
-  if ("problems" in test) return test.problems;
-  const retry = test.value["retry"];
+export function retried(bunfig: ConfigObject): readonly Problem[] {
+  const retry = bunfig["retry"];
   return typeof retry === "number" && retry > 0
     ? [
         {

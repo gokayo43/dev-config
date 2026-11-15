@@ -17,6 +17,8 @@ import {
 import { ran } from "./child.ts";
 import { verdict } from "./report.ts";
 import {
+  BUNFIG,
+  bunfigTest,
   changedNoun,
   namedFiles,
   TESTS_INPUT,
@@ -283,26 +285,33 @@ const DEFAULT_CASE_TIMEOUT_MS = 60_000;
  * How long the whole lane may run, in milliseconds: the named tests' unmutated
  * run and Stryker's both end at this deadline, counted from the lane's start.
  * Inside the ten minutes `check.yml` gives the step, so the lane rather than
- * GitHub ends a run that would not finish, and says how far it got. A mutant
- * that hangs costs one case limit of one worker, so a file with many of them
- * is what reaches it.
+ * GitHub ends a run that would not finish, and says how far it got. A run
+ * reaches it with mutants that hang, each holding a worker for one case limit,
+ * or with more mutants than the time holds when none of them is stuck.
  */
 export const RUN_DEADLINE_MS = 9 * 60_000;
 
 /**
+ * The longest case limit the lane takes, in milliseconds: the run's deadline,
+ * since a case allowed longer than the whole run is allowed nothing more. The
+ * cap is also what keeps Stryker's deadline for a mutant, built from the limit,
+ * inside the 2147483647 ms Node's timers take: past it a timer fires after
+ * 1 ms, and every covered mutant came back caught by timing out.
+ *
+ * @alias the same value as `RUN_DEADLINE_MS` on purpose, under the name of what it bounds
+ */
+export const LONGEST_CASE_LIMIT_MS = RUN_DEADLINE_MS;
+
+/**
  * The case limit in milliseconds: the default where the input is empty, and
- * refused where it is not decimal digits from 1 to the run's deadline. A case
- * allowed longer than the whole run is allowed nothing more, and the cap is
- * also what keeps Stryker's deadline for a mutant, built from the limit, inside
- * the 2147483647 ms Node's timers take: past it a timer fires after 1 ms, and
- * every covered mutant came back caught by timing out.
+ * refused where it is not decimal digits from 1 to `LONGEST_CASE_LIMIT_MS`.
  */
 function caseLimitFrom(value: string): number {
   if (value === "") return DEFAULT_CASE_TIMEOUT_MS;
   const limit = /^\d+$/.test(value) ? Number(value) : Number.NaN;
-  if (!(limit >= 1 && limit <= RUN_DEADLINE_MS)) {
+  if (!(limit >= 1 && limit <= LONGEST_CASE_LIMIT_MS)) {
     throw new Error(
-      `${CASE_TIMEOUT_INPUT} is '${value}' — write it as a whole number of milliseconds from 1 to ${RUN_DEADLINE_MS}, the lane's whole run, in decimal digits`,
+      `${CASE_TIMEOUT_INPUT} is '${value}' — write it as a whole number of milliseconds from 1 to ${LONGEST_CASE_LIMIT_MS}, the lane's whole run, in decimal digits`,
     );
   }
   return limit;
@@ -454,9 +463,14 @@ export async function mutationLane({
   const bound = floorFrom(floor);
   const caseLimit = caseLimitFrom(caseTimeout);
 
+  const bunfig = await bunfigTest(root);
+  if ("problems" in bunfig) {
+    return { note: `${BUNFIG} cannot be read`, problems: [...bunfig.problems] };
+  }
+
   // Before the domain and the change, so a pattern that names nothing is
   // refused on every run rather than only on one that changed a domain file.
-  const chosen = await testsFrom(root, tests);
+  const chosen = testsFrom(root, tests, bunfig.value);
   if ("problems" in chosen) {
     return {
       note: `${TESTS_INPUT} does not name the tests it was meant to`,
@@ -465,7 +479,7 @@ export async function mutationLane({
   }
   const run = chosen.value;
 
-  const retries = await retried(root);
+  const retries = retried(bunfig.value);
   if (retries.length > 0) {
     return { note: "the repo's bunfig retries failing tests", problems: [...retries] };
   }
