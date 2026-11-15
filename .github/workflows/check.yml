@@ -99,6 +99,14 @@ on:
           mutation-lane or not at all.
         type: string
         default: ""
+      mutation-case-timeout:
+        description: >-
+          How long one test case may run in the mutation lane before bun fails it, in
+          milliseconds. Every deadline of the run is derived from it, so a timeout there
+          means a mutant that hangs. Empty is 60000. Set it with mutation-lane or not at
+          all.
+        type: string
+        default: ""
       duplicate-code:
         description: >-
           Fail on a run of twelve or more lines, comments and whitespace aside, that this
@@ -362,6 +370,7 @@ jobs:
           MUTATION_LANE: ${{ inputs['mutation-lane'] }}
           MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
           MUTATION_TESTS: ${{ inputs['mutation-tests'] }}
+          MUTATION_CASE_TIMEOUT: ${{ inputs['mutation-case-timeout'] }}
           BUILD: ${{ inputs.build }}
           BUILD_CACHE: ${{ inputs['build-cache'] }}
           AFFECTED: ${{ inputs.affected }}
@@ -446,6 +455,9 @@ jobs:
           fi
           if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_TESTS" ]; then
             refuse "mutation-tests needs mutation-lane: true — the tests it names are run by that step"
+          fi
+          if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_CASE_TIMEOUT" ]; then
+            refuse "mutation-case-timeout needs mutation-lane: true — the cases it bounds are run by that step"
           fi
           if [ "$BUILD" != true ] && [ -n "$BUILD_CACHE" ]; then
             refuse "build-cache needs build: true; the paths it names are kept around the build that input runs"
@@ -542,6 +554,7 @@ jobs:
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
           mutation-tests: ${{ inputs['mutation-tests'] }}
+          mutation-case-timeout: ${{ inputs['mutation-case-timeout'] }}
 
   database:
     if: inputs.database == 'postgres'

@@ -71,6 +71,7 @@ const NOTHING_SET = {
   MUTATION_LANE: "false",
   MUTATION_FLOOR: "",
   MUTATION_TESTS: "",
+  MUTATION_CASE_TIMEOUT: "",
   BUILD: "false",
   BUILD_CACHE: "",
   AFFECTED: "false",
@@ -248,6 +249,27 @@ describe("what a caller may pass, and what the jobs do with it", () => {
         ...NOTHING_SET,
         MUTATION_LANE: "true",
         MUTATION_TESTS: tests,
+      }),
+    ).toMatchObject({ status: 0 });
+  });
+
+  // Wrong implementation: no guard, so a caller bounding the lane's cases and
+  // never turning the lane on is green with nothing bounded.
+  test("a case limit with no mutation lane to bound is refused, and passes beside one", async () => {
+    const without = await ran(VALIDATION, MONOREPO, {
+      ...NOTHING_SET,
+      MUTATION_CASE_TIMEOUT: "120000",
+    });
+    expect(without.output).toContain(
+      "::error::mutation-case-timeout needs mutation-lane: true — the cases it bounds are run by that step",
+    );
+    expect(without.status).not.toBe(0);
+
+    expect(
+      await ran(VALIDATION, MONOREPO, {
+        ...NOTHING_SET,
+        MUTATION_LANE: "true",
+        MUTATION_CASE_TIMEOUT: "120000",
       }),
     ).toMatchObject({ status: 0 });
   });
