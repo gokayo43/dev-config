@@ -99,6 +99,15 @@ on:
           mutation-lane or not at all.
         type: string
         default: ""
+      mutation-case-timeout:
+        description: >-
+          How long one test case may run in the mutation lane before bun fails it, in
+          milliseconds from 1 to 540000, the lane's whole run. Stryker's deadline for a
+          mutant is 1.5 × what its tests took unmutated, plus this, so a timeout there
+          means a mutant that hangs. Empty is 60000. Set it with mutation-lane or not at
+          all.
+        type: string
+        default: ""
       duplicate-code:
         description: >-
           Fail on a run of twelve or more lines, comments and whitespace aside, that this
@@ -362,6 +371,7 @@ jobs:
           MUTATION_LANE: ${{ inputs['mutation-lane'] }}
           MUTATION_FLOOR: ${{ inputs['mutation-floor'] }}
           MUTATION_TESTS: ${{ inputs['mutation-tests'] }}
+          MUTATION_CASE_TIMEOUT: ${{ inputs['mutation-case-timeout'] }}
           BUILD: ${{ inputs.build }}
           BUILD_CACHE: ${{ inputs['build-cache'] }}
           AFFECTED: ${{ inputs.affected }}
@@ -441,12 +451,17 @@ jobs:
           if [ -z "$PROBE_COMMAND" ] && [ -n "$PROBE_TIMEOUT" ]; then
             refuse "probe-timeout needs probe-command — it bounds that command, and on its own it bounds nothing"
           fi
-          if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_FLOOR" ]; then
-            refuse "mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
-          fi
-          if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_TESTS" ]; then
-            refuse "mutation-tests needs mutation-lane: true — the tests it names are run by that step"
-          fi
+          # An input aimed at the mutation lane, refused when that step is not
+          # one this run makes: its name, the value that says a caller set it,
+          # and why it needs the step.
+          needs_lane() {
+            if [ "$MUTATION_LANE" != true ] && [ -n "$2" ]; then
+              refuse "$1 needs mutation-lane: true — $3"
+            fi
+          }
+          needs_lane mutation-floor "$MUTATION_FLOOR" "the score it bounds is measured by that step"
+          needs_lane mutation-tests "$MUTATION_TESTS" "the tests it names are run by that step"
+          needs_lane mutation-case-timeout "$MUTATION_CASE_TIMEOUT" "the cases it bounds are run by that step"
           if [ "$BUILD" != true ] && [ -n "$BUILD_CACHE" ]; then
             refuse "build-cache needs build: true; the paths it names are kept around the build that input runs"
           fi
@@ -455,39 +470,39 @@ jobs:
           fi
           exit "$wrong"
 
-      - uses: gokayo43/dev-config/.github/actions/secret-scan@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/secret-scan@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       # The declarative gates read the tree as committed, so they run before the
       # install: a repo that has drifted out of the contract says so in seconds
       # rather than after a full dependency resolution.
-      - uses: gokayo43/dev-config/.github/actions/repo-contract@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/repo-contract@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           database: ${{ inputs.database }}
           exemptions: ${{ inputs.contract-exemptions }}
           data-jobs-external: ${{ inputs['data-jobs-external'] }}
 
-      - uses: gokayo43/dev-config/.github/actions/stack-gate@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/stack-gate@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           stack-allowlist: ${{ inputs.stack-allowlist }}
 
       # The caller's own workflows were schema-checked and pin-checked by
       # nothing until this ran here. Needs the Bun that setup-bun installed.
-      - uses: gokayo43/dev-config/.github/actions/lint-workflows@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/lint-workflows@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
 
-      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/suppression-hygiene@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
 
       - if: inputs['duplicate-code']
-        uses: gokayo43/dev-config/.github/actions/duplicate-code@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+        uses: gokayo43/dev-config/.github/actions/duplicate-code@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
 
       # docs/gates/shell-scripts.md — nothing else here reads a repo's own shell.
-      - uses: gokayo43/dev-config/.github/actions/shell-scripts@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/shell-scripts@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
 
       - if: inputs.compose
-        uses: gokayo43/dev-config/.github/actions/compose-lint@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+        uses: gokayo43/dev-config/.github/actions/compose-lint@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/install@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
@@ -497,7 +512,7 @@ jobs:
       # packages alone leaves lint, knip and the root typecheck reading files
       # nothing wrote this run.
       - if: inputs.build
-        uses: gokayo43/dev-config/.github/actions/build@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+        uses: gokayo43/dev-config/.github/actions/build@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           cache: ${{ inputs['build-cache'] }}
 
@@ -518,7 +533,7 @@ jobs:
           bun run typecheck ${TURBO_AFFECTED:-}
       - run: bun run knip
 
-      - uses: gokayo43/dev-config/.github/actions/test-suite@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/test-suite@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           nightly: ${{ inputs.nightly }}
           test-network: ${{ inputs['test-network'] }}
@@ -530,18 +545,22 @@ jobs:
       #
       # The bound is here rather than inside the action because a composite
       # action's own steps take no timeout-minutes; this is the only place a
-      # caller can put one. Ten, against a campaign whose cost is a test run per
-      # mutant: the fixture suite's runs are a couple of seconds for ten mutants
-      # on a file, so ten minutes is thousands of mutants — far more than a pull
-      # request's own domain lines produce, and short enough that a runner stuck
-      # on one mutant does not eat the job's fifteen and take the evidence of
-      # every step before it down with it.
+      # caller can put one. Ten, short enough that a lane stuck on one mutant
+      # does not eat the job's fifteen and take the evidence of every step
+      # before it down with it. The lane ends its own run at nine
+      # (`RUN_DEADLINE_MS`) and says how far it got, so these ten are what
+      # catches the lane itself hanging. A mutant costs a test run, and one
+      # that hangs costs a whole case limit, a minute by default. A run
+      # reaches the lane's nine with mutants that hang, and the refusal then
+      # points at `mutation-case-timeout`, or with more mutants than nine
+      # minutes hold, and it then points at changing fewer domain files.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
-        uses: gokayo43/dev-config/.github/actions/mutation-lane@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+        uses: gokayo43/dev-config/.github/actions/mutation-lane@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           mutation-floor: ${{ inputs['mutation-floor'] }}
           mutation-tests: ${{ inputs['mutation-tests'] }}
+          mutation-case-timeout: ${{ inputs['mutation-case-timeout'] }}
 
   database:
     if: inputs.database == 'postgres'
@@ -610,12 +629,12 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - uses: gokayo43/dev-config/.github/actions/install@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/install@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           git-ssh-key: ${{ secrets['git-ssh-key'] }}
 
       - if: inputs.build
-        uses: gokayo43/dev-config/.github/actions/build@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+        uses: gokayo43/dev-config/.github/actions/build@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           cache: ${{ inputs['build-cache'] }}
 
@@ -644,7 +663,7 @@ jobs:
                   console.log(`PORT=${s.port}`); s.stop(true);' >> "$GITHUB_ENV"
           printf 'DATABASE_URL=%s\nREDIS_URL=%s\n' "$DATABASE_URL" "$REDIS_URL" >> "$GITHUB_ENV"
 
-      - uses: gokayo43/dev-config/.github/actions/db-gate@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0
+      - uses: gokayo43/dev-config/.github/actions/db-gate@52419a140775218ca44b60c48cb1fae057290ba9 # v0.74.0
         with:
           upgrade-gate: ${{ inputs.upgrade-gate }}
           semantic-fixtures: ${{ inputs['semantic-fixtures'] }}

@@ -12,6 +12,7 @@ import {
   FEE_TEST,
   lane,
   laneIn,
+  laneInput,
   messages,
   NODE_MODULES,
   OXLINTRC,
@@ -461,12 +462,7 @@ describe("the mutation lane", () => {
       },
     );
     await symlink(NODE_MODULES, join(root, "app", "node_modules"));
-    const verdict = await mutationLane({
-      root: join(root, "app"),
-      event: { baseRef: "", before: "" },
-      floor: "",
-      tests: "",
-    });
+    const verdict = await mutationLane(laneInput(join(root, "app")));
 
     // The project's own path, not `app/src/domain/pricing.ts`: the second is
     // what the repository root would have called it, and what Stryker could not
@@ -836,24 +832,16 @@ describe("the mutation lane", () => {
 
   test("a base ref this checkout does not carry is refused, not read as nothing to mutate", async () => {
     const { root } = await history(BEFORE);
-    const verdict = await mutationLane({
-      root,
-      event: { baseRef: "release", before: "" },
-      floor: "",
-      tests: "",
-    });
+    const verdict = await mutationLane(
+      laneInput(root, { event: { baseRef: "release", before: "" } }),
+    );
 
     expect(messages(verdict)).toEqual([containing("is not in this checkout")]);
   });
 
   test("a first commit has nothing to compare against and passes", async () => {
     const { root } = await history(BEFORE);
-    const verdict = await mutationLane({
-      root,
-      event: { baseRef: "", before: "" },
-      floor: "",
-      tests: "",
-    });
+    const verdict = await mutationLane(laneInput(root));
 
     expect(messages(verdict)).toEqual([]);
     expect(verdict.note).toEqual(containing("no earlier commit"));
@@ -886,13 +874,40 @@ describe("the mutation lane", () => {
     expect(verdict.note).toEqual(containing("no domain file changed"));
   });
 
+  // A developer's checkout holds a `.env` with real credentials. Stryker's walk
+  // copies whatever it is not told to leave, and bun loads a `.env` from the
+  // directory it runs in, so the copy reached every test the run made.
+  test("a checkout's .env reaches neither the sandbox nor a test", async () => {
+    const ENV_TEST = `import { expect, test } from "bun:test";
+import { total, withFee } from "../src/domain/pricing.ts";
+
+test("adds the fee, with no credential in reach", async () => {
+  expect(process.env["LANE_SECRET"]).toBeUndefined();
+  expect(await Bun.file(".env").exists()).toBe(false);
+  expect(total(100, 3)).toBe(300);
+  expect(withFee(100)).toBe(150);
+});
+`;
+    const verdict = await lane([
+      BEFORE,
+      repo({
+        ".env": "LANE_SECRET=from-the-checkout\n",
+        "src/domain/pricing.ts": PRICING + WITH_FEE,
+        "tests/pricing.test.ts": ENV_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe("mutation score 100.0% over 1 changed domain file");
+  });
+
   test.each(["75", "-1", "high"])(
     "a floor of '%s' is refused rather than read as a fraction",
     async (floor) => {
       const { root } = await history(BEFORE);
-      await expect(
-        mutationLane({ root, event: { baseRef: "", before: "" }, floor, tests: "" }),
-      ).rejects.toThrow("write it as a fraction between 0 and 1");
+      await expect(mutationLane(laneInput(root, { floor }))).rejects.toThrow(
+        "write it as a fraction between 0 and 1",
+      );
     },
   );
 });

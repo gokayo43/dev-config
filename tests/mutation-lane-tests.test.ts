@@ -48,7 +48,7 @@ describe("the tests a repo names in mutation-tests", () => {
     expect(walked.note).toBe("the suite this run mutated does not pass unmutated");
   });
 
-  test("a dirty baseline among the named files says the named files are what ran", async () => {
+  test("a dirty baseline among the named files is refused by the file that failed", async () => {
     const verdict = await lane(
       [
         repo({ "src/domain/pricing.ts": PRICING, "tests/pricing.test.ts": TOTAL_TEST }),
@@ -61,9 +61,201 @@ describe("the tests a repo names in mutation-tests", () => {
       { tests: "tests/*.test.ts" },
     );
 
+    expect(messages(verdict)).toEqual([refusedBy("tests/browser.test.ts")]);
+    expect(verdict.note).toBe("the named tests do not pass unmutated");
+  });
+
+  // A branch that breaks a named test and touches no domain file used to pass,
+  // and the next branch to change a domain file met the red baseline with
+  // nothing naming the test or the branch that broke it.
+  test.each([
+    [
+      "a named test that fails a case",
+      { "tests/pricing.test.ts": TOTAL_TEST.replace("toBe(300)", "toBe(301)") },
+      "tests/pricing.test.ts",
+    ],
+    [
+      "a named test that cannot load",
+      { "tests/browser.test.ts": BROWSER_SPEC },
+      "tests/browser.test.ts",
+    ],
+    // bun's JUnit report gives each describe a suite of its own under the
+    // file's, with the same file and only its own count.
+    [
+      "a named test whose failing case sits in a describe block before a passing one",
+      {
+        "tests/pricing.test.ts": `import { describe, expect, test } from "bun:test";
+import { total } from "../src/domain/pricing.ts";
+describe("first", () => { test("charges for every unit", () => { expect(total(100, 3)).toBe(301); }); });
+describe("second", () => { test("charges for one unit", () => { expect(total(100, 1)).toBe(100); }); });
+`,
+      },
+      "tests/pricing.test.ts",
+    ],
+  ] as const)(
+    "%s, on a branch that changed no domain file, is refused by its file",
+    async (_, change, file) => {
+      const verdict = await lane([BEFORE, { ...BEFORE, ...change }], {
+        tests: "tests/*.test.ts",
+        installed: false,
+      });
+
+      expect(messages(verdict)).toEqual([refusedBy(file)]);
+      expect(verdict.note).toBe("the named tests do not pass unmutated");
+    },
+  );
+
+  // A case that ends the process leaves bun no report, which names no file:
+  // the refusal quotes what bun wrote rather than blaming every named file.
+  test("a named run that ends before bun writes its report blames no file", async () => {
+    const EXITS = `import { test } from "bun:test";
+
+test("ends the process", () => {
+  process.exit(1);
+});
+`;
+    const verdict = await lane([BEFORE, { ...BEFORE, "tests/exits.test.ts": EXITS }], {
+      tests: "tests/*.test.ts",
+      installed: false,
+    });
+
     expect(messages(verdict)).toEqual([
-      containing("The run loads exactly the 2 test files `mutation-tests` names"),
+      containing(
+        ": make the named tests pass as a plain `bun test` with every case allowed 60000 ms and no `.env` file read: run unmutated it exited 1 without a report naming a file that failed",
+      ),
     ]);
+    expect(verdict.note).toBe("the named tests do not pass unmutated");
+  });
+
+  // A developer's checkout holds a `.env` with real credentials, and bun loads
+  // it, and the files beside it, into every test it runs from there.
+  test("the named tests' unmutated run reads no .env file of the checkout's", async () => {
+    const ENV_TEST = `import { expect, test } from "bun:test";
+
+test("no name a .env file sets is in reach", () => {
+  expect(process.env["FROM_ENV"]).toBeUndefined();
+  expect(process.env["FROM_ENV_LOCAL"]).toBeUndefined();
+  expect(process.env["FROM_ENV_TEST"]).toBeUndefined();
+});
+`;
+    const verdict = await lane(
+      [
+        BEFORE,
+        {
+          ...BEFORE,
+          ".env": "FROM_ENV=1\n",
+          ".env.local": "FROM_ENV_LOCAL=1\n",
+          ".env.test": "FROM_ENV_TEST=1\n",
+          "tests/env.test.ts": ENV_TEST,
+        },
+      ],
+      { tests: "tests/*.test.ts", installed: false },
+    );
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toEqual(containing("the named tests pass unmutated"));
+  });
+
+  // What the lane's own unmutated run in the checkout cannot see is what
+  // differs in Stryker's copy, and the refusal names those differences.
+  test("named tests that pass in the checkout and fail in Stryker's copy are refused, naming what differs", async () => {
+    const NEEDS_THE_EXAMPLE = `import { expect, test } from "bun:test";
+import { total, withFee } from "../src/domain/pricing.ts";
+
+if (!(await Bun.file(".env.example").exists())) throw new Error("the example env file is gone");
+
+test("adds the fee", () => {
+  expect(total(100, 3)).toBe(300);
+  expect(withFee(100)).toBe(150);
+});
+`;
+    const verdict = await lane(
+      [
+        repo({
+          ".env.example": "NAME=\n",
+          "src/domain/pricing.ts": PRICING,
+          "tests/pricing.test.ts": NEEDS_THE_EXAMPLE,
+        }),
+        repo({
+          ".env.example": "NAME=\n",
+          "src/domain/pricing.ts": PRICING + WITH_FEE,
+          "tests/pricing.test.ts": NEEDS_THE_EXAMPLE,
+        }),
+      ],
+      { tests: "tests/*.test.ts" },
+    );
+
+    expect(messages(verdict)).toEqual([
+      containing(
+        "passed when the lane ran them unmutated in the checkout, so what failed is what differs in Stryker's copy: the sandbox holds no `.env*` file",
+      ),
+    ]);
+    expect(verdict.note).toBe("the suite this run mutated does not pass unmutated");
+  });
+
+  // bun passes a test on any of its retried attempts, so a mutant would be
+  // graded on whichever run passed; bun's --retry=0 does not outrank the
+  // bunfig, so the lane refuses it, walked or named.
+  test.each(["", "tests/*.test.ts"])(
+    "a bunfig that retries failing tests is refused by name (mutation-tests %p)",
+    async (tests) => {
+      const verdict = await lane(
+        [
+          BEFORE,
+          repo({
+            "bunfig.toml": "[test]\nretry = 2\n",
+            "src/domain/pricing.ts": PRICING + WITH_FEE,
+            "tests/pricing.test.ts": FEE_TEST,
+          }),
+        ],
+        { tests, installed: false },
+      );
+
+      expect(messages(verdict)).toEqual([
+        "bunfig.toml: take `retry = 2` out of [test] in bunfig.toml, or run the retried suite outside the lane: bun retries a failing test that many times and passes it on any attempt, so a mutant would be graded on whichever run passed, and neither the runner nor bun's --retry=0 switches it off",
+      ]);
+      expect(verdict.note).toBe("the repo's bunfig retries failing tests");
+    },
+  );
+
+  // Every rule the lane reads off bunfig.toml waits on reading it, so one that
+  // cannot be read is refused as that, before any rule is named.
+  test.each(["", "tests/*.test.ts"])(
+    "a bunfig that cannot be read is refused as unreadable (mutation-tests %p)",
+    async (tests) => {
+      const verdict = await lane(
+        [
+          BEFORE,
+          repo({
+            "bunfig.toml": "[test\nretry = 2\n",
+            "src/domain/pricing.ts": PRICING + WITH_FEE,
+            "tests/pricing.test.ts": FEE_TEST,
+          }),
+        ],
+        { tests, installed: false },
+      );
+
+      expect(messages(verdict)).toEqual([containing("bunfig.toml")]);
+      expect(verdict.note).toBe("bunfig.toml cannot be read");
+    },
+  );
+
+  test("a named test the branch changed that passes leaves nothing to mutate", async () => {
+    const verdict = await lane(
+      [
+        BEFORE,
+        {
+          ...BEFORE,
+          "tests/pricing.test.ts": TOTAL_TEST.replace("(100, 3)).toBe(300)", "(100, 4)).toBe(400)"),
+        },
+      ],
+      { tests: "tests/*.test.ts", installed: false },
+    );
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toBe(
+      "no domain file changed — the named tests pass unmutated, and there is nothing to mutate; mutation-tests names 1 test file",
+    );
   });
 
   // Narrowing the tests never turns "no test noticed" into a pass. The only
@@ -177,3 +369,8 @@ describe("the tests a repo names in mutation-tests", () => {
     expect(verdict.note).toBe("mutation-tests does not name the tests it was meant to");
   });
 });
+
+/** The refusal of a named file that fails unmutated, under the default case limit. */
+function refusedBy(file: string): string {
+  return `${file}: make ${file} pass as a plain \`bun test\` of the files \`mutation-tests\` names, with every case allowed 60000 ms and no \`.env\` file read, or take it out of the patterns: run unmutated it failed, so no mutant can be graded against it`;
+}

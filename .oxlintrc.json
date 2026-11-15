@@ -31,7 +31,7 @@
         ".github/actions/_lib/gate.ts",
         ".github/actions/db-gate/database.ts",
         ".github/actions/db-gate/probe.ts",
-        ".github/actions/mutation-lane/mutation-lane.ts"
+        ".github/actions/mutation-lane/child.ts"
       ],
       "rules": {
         // `dev-server.ts` is a CLI rather than a module this repo configures:
