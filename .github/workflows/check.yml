@@ -550,9 +550,10 @@ jobs:
       # before it down with it. The lane ends its own run at nine
       # (`RUN_DEADLINE_MS`) and says how far it got, so these ten are what
       # catches the lane itself hanging. A mutant costs a test run, and one
-      # that hangs costs a whole case limit, a minute by default: a file full
-      # of loops is what reaches the lane's nine, and the refusal points at
-      # `mutation-case-timeout`.
+      # that hangs costs a whole case limit, a minute by default. A run
+      # reaches the lane's nine with mutants that hang, and the refusal then
+      # points at `mutation-case-timeout`, or with more mutants than nine
+      # minutes hold, and it then points at changing fewer domain files.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
         uses: gokayo43/dev-config/.github/actions/mutation-lane@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0

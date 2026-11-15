@@ -185,6 +185,24 @@ describe("what a caller may pass, and what the jobs do with it", () => {
     expect(status).not.toBe(0);
   });
 
+  // ...and its other half: a guard that refused the input whatever stood beside
+  // it would pass the row above and refuse every caller that meant it. Two of
+  // them ride on a second input as well, which the step checks in a rule of its
+  // own after the guards.
+  const ALSO_RIDES_ON: Record<string, Record<string, string>> = {
+    "semantic-fixtures": { UPGRADE_GATE: "true" },
+    "probe-timeout": { PROBE_COMMAND: "bun run scripts/probe.ts" },
+  };
+  test.each(GUARDED)("%s beside %s passes", async (name, needs) => {
+    const { status } = await ran(VALIDATION, MONOREPO, {
+      ...NOTHING_SET,
+      ...(needs === "database: postgres" ? { DATABASE: "postgres" } : { MUTATION_LANE: "true" }),
+      ...ALSO_RIDES_ON[name],
+      [name.toUpperCase().replaceAll("-", "_")]: "what the caller meant by it",
+    });
+    expect(status).toBe(0);
+  });
+
   // The one input in the set graded on its value rather than on its emptiness,
   // because it is the one boolean: `-n` is true of `false`, so an emptiness
   // reading would refuse every caller that names it at all.
@@ -428,14 +446,14 @@ describe("the typecheck lane the repo contract reads", () => {
   });
 });
 
-// It proves only that each input is declared at the pin, by name, and nothing
-// about what the action does with it.
-//
 // A release tags the commit that ships an action's new input, then points
 // check.yml's pin at it. Between the two, check.yml can hand a pinned action an
 // input that commit does not declare, which GitHub passes over with a warning
 // and the action never reads. Every key a step hands one of this repo's
 // actions is read against the action.yml at the commit its pin names.
+//
+// It proves only that each input is declared at the pin, by name, and nothing
+// about what the action does with it.
 describe("what check.yml hands this repo's actions", () => {
   const PINNED = /^gokayo43\/dev-config\/(\.github\/actions\/[^@]+)@([0-9a-f]{40})$/u;
   const steps = [STATIC, DATABASE_JOB].flatMap((job) =>
@@ -458,12 +476,16 @@ describe("what check.yml hands this repo's actions", () => {
   test.each(handed.map((step) => [`${step.action}@${step.commit.slice(0, 7)}`, step] as const))(
     "every input %s is handed is one that commit declares",
     (_, { action, commit, keys }) => {
-      const shown = Bun.spawnSync(["git", "show", `${commit}:${action}/action.yml`], {
-        cwd: import.meta.dir,
-      });
-      if (shown.exitCode !== 0) {
+      const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: import.meta.dir });
+      if (git("cat-file", "-e", `${commit}^{commit}`).exitCode !== 0) {
         throw new Error(
           `${commit} is not in this clone's object store, so ${action}/action.yml at the pin cannot be read: fetch it (\`git fetch origin ${commit}\`, or clone with fetch-depth: 0)`,
+        );
+      }
+      const shown = git("show", `${commit}:${action}/action.yml`);
+      if (shown.exitCode !== 0) {
+        throw new Error(
+          `${commit} holds no ${action}/action.yml: the pin names a commit from before that action, or a path the action never had`,
         );
       }
       const declared = Object.keys(
