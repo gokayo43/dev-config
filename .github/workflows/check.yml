@@ -102,9 +102,10 @@ on:
       mutation-case-timeout:
         description: >-
           How long one test case may run in the mutation lane before bun fails it, in
-          milliseconds from 1 to 4294967295. Stryker's deadline for a mutant is what its
-          tests took plus this, so a timeout there means a mutant that hangs. Empty is
-          60000. Set it with mutation-lane or not at all.
+          milliseconds from 1 to 540000, the lane's whole run. Stryker's deadline for a
+          mutant is 1.5 × what its tests took unmutated, plus this, so a timeout there
+          means a mutant that hangs. Empty is 60000. Set it with mutation-lane or not at
+          all.
         type: string
         default: ""
       duplicate-code:
