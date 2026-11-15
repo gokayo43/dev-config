@@ -102,9 +102,9 @@ on:
       mutation-case-timeout:
         description: >-
           How long one test case may run in the mutation lane before bun fails it, in
-          milliseconds. Every deadline of the run is derived from it, so a timeout there
-          means a mutant that hangs. Empty is 60000. Set it with mutation-lane or not at
-          all.
+          milliseconds from 1 to 4294967295. Stryker's deadline for a mutant is what its
+          tests took plus this, so a timeout there means a mutant that hangs. Empty is
+          60000. Set it with mutation-lane or not at all.
         type: string
         default: ""
       duplicate-code:
@@ -450,15 +450,17 @@ jobs:
           if [ -z "$PROBE_COMMAND" ] && [ -n "$PROBE_TIMEOUT" ]; then
             refuse "probe-timeout needs probe-command — it bounds that command, and on its own it bounds nothing"
           fi
-          if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_FLOOR" ]; then
-            refuse "mutation-floor needs mutation-lane: true — the score it bounds is measured by that step"
-          fi
-          if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_TESTS" ]; then
-            refuse "mutation-tests needs mutation-lane: true — the tests it names are run by that step"
-          fi
-          if [ "$MUTATION_LANE" != true ] && [ -n "$MUTATION_CASE_TIMEOUT" ]; then
-            refuse "mutation-case-timeout needs mutation-lane: true — the cases it bounds are run by that step"
-          fi
+          # An input aimed at the mutation lane, refused when that step is not
+          # one this run makes: its name, the value that says a caller set it,
+          # and why it needs the step.
+          needs_lane() {
+            if [ "$MUTATION_LANE" != true ] && [ -n "$2" ]; then
+              refuse "$1 needs mutation-lane: true — $3"
+            fi
+          }
+          needs_lane mutation-floor "$MUTATION_FLOOR" "the score it bounds is measured by that step"
+          needs_lane mutation-tests "$MUTATION_TESTS" "the tests it names are run by that step"
+          needs_lane mutation-case-timeout "$MUTATION_CASE_TIMEOUT" "the cases it bounds are run by that step"
           if [ "$BUILD" != true ] && [ -n "$BUILD_CACHE" ]; then
             refuse "build-cache needs build: true; the paths it names are kept around the build that input runs"
           fi
@@ -542,12 +544,14 @@ jobs:
       #
       # The bound is here rather than inside the action because a composite
       # action's own steps take no timeout-minutes; this is the only place a
-      # caller can put one. Ten, against a campaign whose cost is a test run per
-      # mutant: the fixture suite's runs are a couple of seconds for ten mutants
-      # on a file, so ten minutes is thousands of mutants — far more than a pull
-      # request's own domain lines produce, and short enough that a runner stuck
-      # on one mutant does not eat the job's fifteen and take the evidence of
-      # every step before it down with it.
+      # caller can put one. Ten, short enough that a lane stuck on one mutant
+      # does not eat the job's fifteen and take the evidence of every step
+      # before it down with it. The lane ends its own run at nine
+      # (`RUN_DEADLINE_MS`) and says how far it got, so these ten are what
+      # catches the lane itself hanging. A mutant costs a test run, and one
+      # that hangs costs a whole case limit, a minute by default: a file full
+      # of loops is what reaches the lane's nine, and the refusal points at
+      # `mutation-case-timeout`.
       - if: inputs['mutation-lane']
         timeout-minutes: 10
         uses: gokayo43/dev-config/.github/actions/mutation-lane@5cf4b9abf2828de848d0b9d7b0b41e724d8e64d3 # v0.73.0

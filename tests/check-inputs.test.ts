@@ -443,3 +443,42 @@ describe("the typecheck lane the repo contract reads", () => {
     ).toBe(true);
   });
 });
+
+// A release tags the commit that ships an action's new input, then points
+// check.yml's pin at it. Between the two, check.yml can hand a pinned action an
+// input that commit does not declare, which GitHub passes over with a warning
+// and the action never reads. Every key a step hands one of this repo's
+// actions is read against the action.yml at the commit its pin names.
+describe("what check.yml hands this repo's actions", () => {
+  const PINNED = /^gokayo43\/dev-config\/(\.github\/actions\/[^@]+)@([0-9a-f]{40})$/u;
+  const steps = [STATIC, DATABASE_JOB].flatMap((job) =>
+    isList(job["steps"]) ? job["steps"].map((step) => record(step)) : [],
+  );
+  const handed = steps.flatMap((step) => {
+    const pin = PINNED.exec(textAt(step, "uses"));
+    const given = step["with"];
+    return pin === null || given === undefined
+      ? []
+      : [{ action: pin[1] ?? "", commit: pin[2] ?? "", keys: Object.keys(record(given)) }];
+  });
+
+  test("names a step of each job, so the check below reads something", () => {
+    const actions = handed.map(({ action }) => action);
+    expect(actions).toContain(".github/actions/mutation-lane");
+    expect(actions).toContain(".github/actions/db-gate");
+  });
+
+  test.each(handed.map((step) => [`${step.action}@${step.commit.slice(0, 7)}`, step] as const))(
+    "every input %s is handed is one that commit declares",
+    (_, { action, commit, keys }) => {
+      const shown = Bun.spawnSync(["git", "show", `${commit}:${action}/action.yml`], {
+        cwd: import.meta.dir,
+      });
+      expect(shown.exitCode).toBe(0);
+      const declared = Object.keys(
+        record(record(Bun.YAML.parse(shown.stdout.toString()))["inputs"]),
+      );
+      expect(keys.filter((key) => !declared.includes(key))).toEqual([]);
+    },
+  );
+});
