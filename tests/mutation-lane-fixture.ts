@@ -2,7 +2,11 @@ import { symlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { Verdict } from "../.github/actions/_lib/gate.ts";
-import { mutationLane } from "../.github/actions/mutation-lane/mutation-lane.ts";
+import {
+  type Input,
+  mutationLane,
+  RUN_DEADLINE_MS,
+} from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { git, history, type Tree } from "./tree.ts";
 
 /**
@@ -103,6 +107,21 @@ interface Run {
   readonly configured?: readonly (readonly [string, string])[];
   /** What the repo passes as `mutation-case-timeout`. */
   readonly caseTimeout?: string;
+  /** How long the whole lane may run, in milliseconds. */
+  readonly runDeadline?: number;
+}
+
+/** What the action hands the lane for a checkout at `root`: every input empty, the run's own deadline, unless a case says otherwise. */
+export function laneInput(root: string, given: Partial<Omit<Input, "root">> = {}): Input {
+  return {
+    root,
+    event: { baseRef: "", before: "" },
+    floor: "",
+    tests: "",
+    caseTimeout: "",
+    runDeadline: RUN_DEADLINE_MS,
+    ...given,
+  };
 }
 
 export async function lane(trees: readonly Tree[], run: Run = {}): Promise<Verdict> {
@@ -112,19 +131,13 @@ export async function lane(trees: readonly Tree[], run: Run = {}): Promise<Verdi
 /** The same run, with the checkout it worked in — for a case about what it left there. */
 export async function laneIn(
   trees: readonly Tree[],
-  { floor = "", tests = "", installed = true, configured = [], caseTimeout = "" }: Run = {},
+  { installed = true, configured = [], ...given }: Run = {},
 ): Promise<{ verdict: Verdict; root: string }> {
   const { root } = await history(...trees);
   if (installed) await symlink(NODE_MODULES, join(root, "node_modules"));
   for (const [name, value] of configured) await git(root, ["config", "--local", name, value]);
   return {
-    verdict: await mutationLane({
-      root,
-      event: { baseRef: "", before: "" },
-      floor,
-      tests,
-      caseTimeout,
-    }),
+    verdict: await mutationLane(laneInput(root, given)),
     root,
   };
 }

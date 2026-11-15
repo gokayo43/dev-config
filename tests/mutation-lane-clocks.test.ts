@@ -112,11 +112,13 @@ test("charges for every unit, slowly", async () => {
     });
 
     expect(messages(verdict)).toEqual([
-      "tests/slow.test.ts: make tests/slow.test.ts pass as a plain `bun test` of the files `mutation-tests` names, with every case allowed 1000 ms, or take it out of the patterns: run unmutated it failed, so no mutant can be graded against it",
+      "tests/slow.test.ts: make tests/slow.test.ts pass as a plain `bun test` of the files `mutation-tests` names, with every case allowed 1000 ms and no `.env` file read, or take it out of the patterns: run unmutated it failed, so no mutant can be graded against it",
     ]);
   });
 
-  test.each(["0", "-5", "1.5", "a minute"])(
+  // The upper bound is bun's: past it bun refuses the run before it writes a
+  // report, and the lane would read that as every named file failing.
+  test.each(["0", "-5", "1.5", "a minute", "4294967296", "0x10", "1e3", " 60000", "60000\n"])(
     "a case limit written as %p is refused rather than guessed at",
     async (caseTimeout) => {
       await expect(
@@ -127,4 +129,62 @@ test("charges for every unit, slowly", async () => {
       ).rejects.toThrow("write it as a whole number of milliseconds");
     },
   );
+
+  test("the longest case limit bun takes is taken", async () => {
+    const verdict = await lane([BEFORE, repo({ ...BEFORE, "tests/more.test.ts": TOTAL_TEST })], {
+      tests: "tests/*.test.ts",
+      caseTimeout: "4294967295",
+      installed: false,
+    });
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toEqual(containing("the named tests pass unmutated"));
+  });
+
+  // bun's case limit cannot end a case that never yields, so without a clock
+  // of the lane's own the step ran until GitHub killed it, with no note.
+  test("named tests that never finish unmutated are ended at the run's deadline, and said so", async () => {
+    const HANGING_TEST = `import { test } from "bun:test";
+
+test("never yields", () => {
+  for (;;) {}
+});
+`;
+    const verdict = await lane([BEFORE, repo({ ...BEFORE, "tests/hangs.test.ts": HANGING_TEST })], {
+      tests: "tests/*.test.ts",
+      installed: false,
+      runDeadline: 3_000,
+    });
+
+    expect(messages(verdict)).toEqual([
+      containing(
+        "make the named tests finish as a plain `bun test` inside the lane's 3000 ms: run unmutated they were still running when the lane ended them",
+      ),
+    ]);
+    expect(verdict.note).toBe("the named tests did not finish unmutated");
+  });
+
+  // A mutant that hangs holds a worker for one case limit, so a file of them
+  // can outlast the step; the lane ends the run at its own deadline and says
+  // what to lower, rather than leaving GitHub to kill the step.
+  test("a mutation run that outlasts the run's deadline is ended and refused, naming the case limit", async () => {
+    const verdict = await lane(
+      [
+        BEFORE,
+        repo({
+          ...BEFORE,
+          "src/domain/countdown.ts": COUNTDOWN,
+          "tests/countdown.test.ts": COUNTDOWN_TEST,
+        }),
+      ],
+      { runDeadline: 12_000 },
+    );
+
+    expect(messages(verdict)).toEqual([
+      containing(
+        ": lower `mutation-case-timeout` toward what the slowest named case needs, or end the loops that hang under a mutant: the lane ended the mutation run at its deadline of 12000 ms",
+      ),
+    ]);
+    expect(verdict.note).toBe("the mutation run did not finish before the lane's deadline");
+  });
 });

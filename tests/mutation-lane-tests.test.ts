@@ -79,6 +79,19 @@ describe("the tests a repo names in mutation-tests", () => {
       { "tests/browser.test.ts": BROWSER_SPEC },
       "tests/browser.test.ts",
     ],
+    // bun's JUnit report gives each describe a suite of its own under the
+    // file's, with the same file and only its own count.
+    [
+      "a named test whose failing case sits in a describe block before a passing one",
+      {
+        "tests/pricing.test.ts": `import { describe, expect, test } from "bun:test";
+import { total } from "../src/domain/pricing.ts";
+describe("first", () => { test("charges for every unit", () => { expect(total(100, 3)).toBe(301); }); });
+describe("second", () => { test("charges for one unit", () => { expect(total(100, 1)).toBe(100); }); });
+`,
+      },
+      "tests/pricing.test.ts",
+    ],
   ] as const)(
     "%s, on a branch that changed no domain file, is refused by its file",
     async (_, change, file) => {
@@ -91,6 +104,94 @@ describe("the tests a repo names in mutation-tests", () => {
       expect(verdict.note).toBe("the named tests do not pass unmutated");
     },
   );
+
+  // A case that ends the process leaves bun no report, which names no file:
+  // the refusal quotes what bun wrote rather than blaming every named file.
+  test("a named run that ends before bun writes its report blames no file", async () => {
+    const EXITS = `import { test } from "bun:test";
+
+test("ends the process", () => {
+  process.exit(1);
+});
+`;
+    const verdict = await lane([BEFORE, { ...BEFORE, "tests/exits.test.ts": EXITS }], {
+      tests: "tests/*.test.ts",
+      installed: false,
+    });
+
+    expect(messages(verdict)).toEqual([
+      containing(
+        ": make the named tests pass as a plain `bun test` with every case allowed 60000 ms and no `.env` file read: run unmutated it exited 1 without a report naming a file that failed",
+      ),
+    ]);
+    expect(verdict.note).toBe("the named tests do not pass unmutated");
+  });
+
+  // A developer's checkout holds a `.env` with real credentials, and bun loads
+  // it, and the files beside it, into every test it runs from there.
+  test("the named tests' unmutated run reads no .env file of the checkout's", async () => {
+    const ENV_TEST = `import { expect, test } from "bun:test";
+
+test("no name a .env file sets is in reach", () => {
+  expect(process.env["FROM_ENV"]).toBeUndefined();
+  expect(process.env["FROM_ENV_LOCAL"]).toBeUndefined();
+  expect(process.env["FROM_ENV_TEST"]).toBeUndefined();
+});
+`;
+    const verdict = await lane(
+      [
+        BEFORE,
+        {
+          ...BEFORE,
+          ".env": "FROM_ENV=1\n",
+          ".env.local": "FROM_ENV_LOCAL=1\n",
+          ".env.test": "FROM_ENV_TEST=1\n",
+          "tests/env.test.ts": ENV_TEST,
+        },
+      ],
+      { tests: "tests/*.test.ts", installed: false },
+    );
+
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toEqual(containing("the named tests pass unmutated"));
+  });
+
+  // What the lane's own unmutated run in the checkout cannot see is what
+  // differs in Stryker's copy, and the refusal names those differences.
+  test("named tests that pass in the checkout and fail in Stryker's copy are refused, naming what differs", async () => {
+    const NEEDS_THE_EXAMPLE = `import { expect, test } from "bun:test";
+import { total, withFee } from "../src/domain/pricing.ts";
+
+if (!(await Bun.file(".env.example").exists())) throw new Error("the example env file is gone");
+
+test("adds the fee", () => {
+  expect(total(100, 3)).toBe(300);
+  expect(withFee(100)).toBe(150);
+});
+`;
+    const verdict = await lane(
+      [
+        repo({
+          ".env.example": "NAME=\n",
+          "src/domain/pricing.ts": PRICING,
+          "tests/pricing.test.ts": NEEDS_THE_EXAMPLE,
+        }),
+        repo({
+          ".env.example": "NAME=\n",
+          "src/domain/pricing.ts": PRICING + WITH_FEE,
+          "tests/pricing.test.ts": NEEDS_THE_EXAMPLE,
+        }),
+      ],
+      { tests: "tests/*.test.ts" },
+    );
+
+    expect(messages(verdict)).toEqual([
+      containing(
+        "passed when the lane ran them unmutated in the checkout, so what failed is what differs in Stryker's copy: the sandbox holds no `.env*` file",
+      ),
+    ]);
+    expect(verdict.note).toBe("the suite this run mutated does not pass unmutated");
+  });
 
   test("a named test the branch changed that passes leaves nothing to mutate", async () => {
     const verdict = await lane(
@@ -224,5 +325,5 @@ describe("the tests a repo names in mutation-tests", () => {
 
 /** The refusal of a named file that fails unmutated, under the default case limit. */
 function refusedBy(file: string): string {
-  return `${file}: make ${file} pass as a plain \`bun test\` of the files \`mutation-tests\` names, with every case allowed 60000 ms, or take it out of the patterns: run unmutated it failed, so no mutant can be graded against it`;
+  return `${file}: make ${file} pass as a plain \`bun test\` of the files \`mutation-tests\` names, with every case allowed 60000 ms and no \`.env\` file read, or take it out of the patterns: run unmutated it failed, so no mutant can be graded against it`;
 }

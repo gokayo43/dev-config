@@ -1,6 +1,6 @@
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, posix } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { branchChange } from "../_lib/change-set.ts";
@@ -9,13 +9,25 @@ import {
   type Event,
   isList,
   isObject,
-  plainly,
   plural,
   type Problem,
   readConfig,
   type Verdict,
 } from "../_lib/gate.ts";
-import { span, verdict } from "./report.ts";
+import { ran } from "./child.ts";
+import { verdict } from "./report.ts";
+import {
+  changedNoun,
+  namedFiles,
+  TESTS_INPUT,
+  type Tests,
+  testFilesConfig,
+  testsCause,
+  testsFrom,
+  testsNoted,
+  unmutatedRun,
+} from "./tests.ts";
+import { type Answer, span, strings } from "./values.ts";
 
 /**
  * The two packages a repo declares to run this lane, named in the diagnostic
@@ -51,20 +63,6 @@ const READS_THE_BASE_REF =
  */
 const OXLINTRC = ".oxlintrc.json";
 const DOMAIN = "domain";
-
-/**
- * What a read gave, or what to tell the repo instead — the two kept apart the
- * way `Base` in `_lib/gate.ts` keeps them, because "here it is" and "there is
- * none to give you" are not one value with a hole in it.
- */
-type Answer<T> = { readonly value: T } | { readonly problems: readonly Problem[] };
-
-/** A setting written as one string or a list of them, as both configs read here allow. */
-function strings(value: unknown): string[] {
-  return (isList(value) ? value : [value]).filter(
-    (each): each is string => typeof each === "string",
-  );
-}
 
 /**
  * The checkout the action runs from, which holds the lint base as shipped at
@@ -271,8 +269,8 @@ const CASE_TIMEOUT_INPUT = "mutation-case-timeout";
 
 /**
  * How long one test case may run in the lane before bun fails it, in
- * milliseconds, when the repo names no other. Every deadline the run keeps is
- * derived from it (`strykerConfig`), so it decides what a timeout means here:
+ * milliseconds, when the repo names no other. Stryker's deadline for a mutant
+ * is built from it (`strykerConfig`), so it decides what a timeout means here:
  * a mutant that hangs. Measured on A1M4N3/wmstcs (dev-config#203): with bun's
  * own five seconds, a property test that takes 1.4 s alone crossed it beside
  * the lane's parallel runs and the repo's suite, which failed the unmutated
@@ -280,16 +278,34 @@ const CASE_TIMEOUT_INPUT = "mutation-case-timeout";
  */
 const DEFAULT_CASE_TIMEOUT_MS = 60_000;
 
-/** The case limit in milliseconds: the default where the input is empty, refused where it is not a whole positive number. */
+/** The longest `--timeout` bun takes; above it bun refuses the run before it writes a report. */
+const LONGEST_CASE_TIMEOUT_MS = 4_294_967_295;
+
+/** The case limit in milliseconds: the default where the input is empty, refused where it is not decimal digits bun takes. */
 function caseLimitFrom(value: string): number {
-  if (value.trim() === "") return DEFAULT_CASE_TIMEOUT_MS;
-  const limit = Number(value);
-  if (!Number.isSafeInteger(limit) || limit < 1) {
+  if (value === "") return DEFAULT_CASE_TIMEOUT_MS;
+  const limit = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!(limit >= 1 && limit <= LONGEST_CASE_TIMEOUT_MS)) {
     throw new Error(
-      `${CASE_TIMEOUT_INPUT} is '${value}' — write it as a whole number of milliseconds, the way bun test's --timeout takes it`,
+      `${CASE_TIMEOUT_INPUT} is '${value}' — write it as a whole number of milliseconds from 1 to ${LONGEST_CASE_TIMEOUT_MS}, in decimal digits, the way bun test's --timeout takes it`,
     );
   }
   return limit;
+}
+
+/**
+ * How long the whole lane may run, in milliseconds: the named tests' unmutated
+ * run and Stryker's both end at this deadline, counted from the lane's start.
+ * Inside the ten minutes `check.yml` gives the step, so the lane rather than
+ * GitHub ends a run that would not finish, and says how far it got. A mutant
+ * that hangs costs one case limit of one worker, so a file with many of them
+ * is what reaches it.
+ */
+export const RUN_DEADLINE_MS = 9 * 60_000;
+
+/** The deadline as a refusal says it. */
+function minutes(ms: number): string {
+  return ms % 60_000 === 0 ? plural(ms / 60_000, "minute") : `${ms} ms`;
 }
 
 /**
@@ -309,211 +325,6 @@ function literal(path: string): string {
   return path.replace(/[*?[\]()+@|]/g, (mark) => `[${mark}]`);
 }
 
-const TESTS_INPUT = "mutation-tests";
-const BUNFIG = "bunfig.toml";
-
-/**
- * Which tests the run loads: every test file the runner finds by walking the
- * project, or exactly the files a repo names in `mutation-tests`. The one value
- * the config, the dirty-baseline cause and the note each read.
- */
-type Tests =
-  | { readonly kind: "walked" }
-  | { readonly kind: "named"; readonly files: readonly string[] };
-
-/** Which files the runner is told to load: none for a walk, so its own walk runs; the named files otherwise. */
-function testFilesConfig(tests: Tests): { readonly testFiles?: readonly string[] } {
-  return tests.kind === "walked" ? {} : { testFiles: tests.files };
-}
-
-/** The usual cause of a run that failed unmutated, which depends on how its tests were chosen. */
-function testsCause(tests: Tests): string {
-  return tests.kind === "walked"
-    ? `The run loads the test and spec files it finds by walking the project rather than the ones the repo's own script selects, so the usual cause is a suite in the tree that was never meant for a plain \`bun test\`: name the files that grade the domain in \`${TESTS_INPUT}\`, or keep that suite out with \`[test] pathIgnorePatterns\` in \`bunfig.toml\`.`
-    : `The run loads exactly the ${plural(tests.files.length, "test file")} \`${TESTS_INPUT}\` names, as one plain \`bun test\` without the repo's own script, so the usual cause is a named file that passes only under that script: take it out of the patterns, or make it pass on its own.`;
-}
-
-/** What a note says of the tests, wherever the run got far enough to say anything about them. */
-function testsNoted(tests: Tests): string {
-  return tests.kind === "walked"
-    ? ""
-    : `; ${TESTS_INPUT} names ${plural(tests.files.length, "test file")}`;
-}
-
-/**
- * The tests a repo names, each as the relative path beginning `./` the runner
- * hands `bun test`. Bun reads a bare relative path as a substring filter, so
- * `lib/a.test.ts` also runs `other/lib/a.test.ts`; the `./` is what makes it
- * one file. An absolute path would point the runner at the original files
- * rather than the sandbox copy it mutates. Every path is normalised before
- * anything is asked of it, because a pattern written `./lib/*.test.ts` scans
- * to `./lib/a.test.ts`, which no ignore pattern matches and which bun, handed
- * `././lib/a.test.ts`, skips.
- *
- * Every refusal here is one that would otherwise leave a named test out of the
- * run with nothing said: a pattern that names nothing, one that reaches outside
- * the project the sandbox copies, a blank line between patterns, and a file
- * `bun test` itself skips because `bunfig.toml` ignores its path.
- */
-async function testsFrom(root: string, value: string): Promise<Answer<Tests>> {
-  // The whole value is trimmed first, so the newline a YAML block scalar ends
-  // with is not read as a blank line of the repo's.
-  const written = value.trim();
-  if (written === "") return { value: { kind: "walked" } };
-
-  const problems: Problem[] = [];
-  const files = new Set<string>();
-  for (const [index, line] of written.split("\n").entries()) {
-    const pattern = line.trim();
-    if (pattern === "") {
-      problems.push({
-        message: `delete the blank line ${index + 1} of ${TESTS_INPUT}, or write the pattern it was for: every line there is a pattern, one test file or more`,
-      });
-      continue;
-    }
-    if (isAbsolute(pattern) || pattern.split("/").includes("..")) {
-      problems.push({
-        message: `write ${TESTS_INPUT}'s \`${pattern}\` relative to the working directory and inside it: the run copies only that directory, so a test outside it never runs`,
-      });
-      continue;
-    }
-    // `node_modules` is the one directory a `**` pattern would otherwise walk
-    // into, and nothing under it is the repo's own test.
-    const found = [...new Bun.Glob(pattern).scanSync({ cwd: root })]
-      .map((file) => posix.normalize(file))
-      .filter((file) => !file.split("/").includes("node_modules"));
-    if (found.length === 0) {
-      problems.push({
-        message: `fix ${TESTS_INPUT}'s \`${pattern}\` so it names a test file: it matches none, and a pattern that names nothing grades the domain with fewer tests than the repo meant`,
-      });
-    }
-    for (const file of found) files.add(file);
-  }
-
-  const ignored = await ignoredByBunfig(root);
-  if ("problems" in ignored) return ignored;
-  for (const file of files) {
-    const by = ignored.value.find((each) => new Bun.Glob(each).match(file));
-    if (by !== undefined) {
-      problems.push({
-        file: BUNFIG,
-        message: `take ${file} out of ${TESTS_INPUT}, or \`${by}\` out of [test] pathIgnorePatterns: bun skips a file that pattern matches even when it is named, so the test would never run`,
-      });
-    }
-  }
-
-  if (problems.length > 0) return { problems };
-  return { value: { kind: "named", files: [...files].toSorted().map((file) => `./${file}`) } };
-}
-
-/**
- * `bunfig.toml`'s `[test] pathIgnorePatterns`, which bun applies to a file named
- * on its command line as much as to one it found. No bunfig, or one without the
- * key, ignores nothing.
- */
-async function ignoredByBunfig(root: string): Promise<Answer<readonly string[]>> {
-  if (!(await Bun.file(join(root, BUNFIG)).exists())) return { value: [] };
-  const bunfig = await readConfig(root, BUNFIG, "TOML");
-  if (bunfig.contents === undefined) return { problems: bunfig.problems };
-  const test = bunfig.contents["test"];
-  return { value: isObject(test) ? strings(test["pathIgnorePatterns"]) : [] };
-}
-
-/** Stryker's own default limit on the unmutated run, written down because the runner's clock is set from it. */
-const DRY_RUN_MINUTES = 5;
-
-/** The named test files as paths from the working directory, the way a diff names them; none for a walk. */
-function namedFiles(tests: Tests): ReadonlySet<string> {
-  return new Set(tests.kind === "walked" ? [] : tests.files.map((file) => file.slice(2)));
-}
-
-/** The five entities XML escapes an attribute with, which is all a path in bun's report can carry. */
-function unescaped(attribute: string): string {
-  return attribute
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&amp;", "&");
-}
-
-/**
- * The named files that failed, read off bun's JUnit report: a file whose cases
- * failed is a `testsuite` counting failures, and a file that threw before its
- * cases ran has no `testsuite` at all, so a named file missing from the report
- * is one that failed to load.
- */
-function failedFiles(junit: string, files: readonly string[]): string[] {
-  const reported = new Map<string, number>();
-  for (const suite of junit.matchAll(/<testsuite\s[^>]*>/g)) {
-    const file = /\sfile="([^"]*)"/.exec(suite[0])?.[1];
-    const failures = /\sfailures="(\d+)"/.exec(suite[0])?.[1];
-    if (file !== undefined && failures !== undefined) {
-      reported.set(posix.normalize(unescaped(file)), Number(failures));
-    }
-  }
-  return files.filter((file) => (reported.get(file) ?? 1) > 0);
-}
-
-/**
- * The named tests run unmutated, as one plain `bun test` under the lane's case
- * limit, or the verdict refusing the run when they fail. The runner's own dry
- * run says the same of the run it makes, but only as a line of stderr naming no
- * file; this run names the file, and it is made on a branch that changed a named
- * test and no domain file, where Stryker never starts.
- */
-async function redBaseline(
-  root: string,
-  tests: Extract<Tests, { kind: "named" }>,
-  caseLimit: number,
-): Promise<Verdict | undefined> {
-  const scratch = await mkdtemp(join(tmpdir(), "mutation-lane-baseline-"));
-  try {
-    const junit = join(scratch, "baseline.xml");
-    const proc = Bun.spawn(
-      [
-        "bun",
-        "--no-env-file",
-        "test",
-        `--timeout=${caseLimit}`,
-        "--reporter=junit",
-        `--reporter-outfile=${junit}`,
-        ...tests.files,
-      ],
-      { cwd: root, env: plainly(process.env), stdout: "pipe", stderr: "pipe" },
-    );
-    const [out, err] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    if ((await proc.exited) === 0) return undefined;
-
-    const report = Bun.file(junit);
-    const failed = failedFiles(
-      (await report.exists()) ? await report.text() : "",
-      tests.files.map((file) => file.slice(2)),
-    );
-    const problems: Problem[] =
-      failed.length > 0
-        ? failed.map((file) => ({
-            file,
-            message: `make ${file} pass as a plain \`bun test\` of the files \`${TESTS_INPUT}\` names, with every case allowed ${caseLimit} ms, or take it out of the patterns: run unmutated it failed, so no mutant can be graded against it`,
-          }))
-        : [
-            {
-              message: `make the named tests pass as a plain \`bun test\` with every case allowed ${caseLimit} ms: run unmutated it exited non-zero with no named file failing, so no mutant can be graded against it. The end of what it wrote: ${span(err.slice(-500))}`,
-            },
-          ];
-    return {
-      note: "the named tests do not pass unmutated",
-      log: `${out}\n${err}`,
-      problems,
-    };
-  } finally {
-    await rm(scratch, { recursive: true, force: true });
-  }
-}
-
 /** What Stryker says, once per `mutate` entry it could not resolve to a file. */
 const UNRESOLVED = /Glob pattern "([^"]*)" did not result in any files\./g;
 
@@ -528,30 +339,33 @@ function strykerConfig(
   sandbox: string,
   tests: Tests,
   caseLimit: number,
+  runDeadline: number,
 ): string {
   return JSON.stringify({
     testRunner: "bun",
     coverageAnalysis: "perTest",
     plugins: [RUNNER],
     mutate,
-    reporters: ["json"],
+    // The progress line every ten seconds is what says how far a run got when
+    // the lane's deadline ended it.
+    reporters: ["json", "progress-append-only"],
     jsonReporter: { fileName: report },
-    // Three clocks can end a test run, and each is set so that a run ends on
-    // one only when a mutant hangs, whatever else the runner is doing.
-    // Stryker's own deadline for a mutant is timeoutFactor times the time its
-    // covering tests took unmutated, plus timeoutMS, plus the run's overhead:
-    // with the default five seconds, a mutant that runs at module load
-    // (`static`) and so reloads every test file timed out at 7.4 s beside the
-    // lane's other runs and passed as caught (dev-config#203). One case's limit on top of
-    // what the tests took is the slack a run may need before it is a hang.
+    // Three clocks can end a mutant's run, and each is set so that one ends
+    // it only when the mutant hangs, however busy the runner. Stryker's
+    // deadline for a mutant is timeoutFactor times what its covering tests
+    // took unmutated, plus timeoutMS, plus the run's overhead: with the default
+    // five seconds, a mutant that runs at module load (`static`), and so
+    // reloads every test file, timed out at 7.4 s beside the lane's other runs
+    // and passed as caught (dev-config#203). One case's limit on top of what
+    // the tests took is the slack a run may need before it is a hang.
     timeoutMS: caseLimit,
-    // The runner's own clock on each `bun test` child, ten seconds by default,
-    // grades a mutant the runner's way rather than Stryker's. Set to the dry
-    // run's limit, which Stryker's deadline for any one mutant stays far
-    // inside, so that Stryker's is the clock that grades.
-    dryRunTimeoutMinutes: DRY_RUN_MINUTES,
+    // The runner's own clock on a `bun test` child (ten seconds by default)
+    // and Stryker's limit on the dry run (five minutes) are set to the lane's
+    // whole run, which ends every child first: neither can then grade a mutant
+    // in place of Stryker's deadline, however long the covering tests take.
+    dryRunTimeoutMinutes: runDeadline / 60_000,
     bun: {
-      timeout: DRY_RUN_MINUTES * 60_000,
+      timeout: runDeadline,
       // bun's own limit on one case, five seconds unless the repo's bunfig
       // says otherwise; the flag outranks bunfig. A case that fails on it fails
       // as a test does, which Stryker reads as a kill.
@@ -561,8 +375,7 @@ function strykerConfig(
     // A checkout on a developer's machine has a `.env` holding real
     // credentials, which Stryker's walk would otherwise copy into the sandbox
     // under the temp dir, where every `bun test` the run makes loads it
-    // (dev-config#202). The named tests' own run starts bun with --no-env-file
-    // for the same reason.
+    // (dev-config#202).
     ignorePatterns: [".env*"],
     // The lane owns the floor, so Stryker owns none: a break threshold would
     // exit non-zero on a low score, and a non-zero exit is read here as a run
@@ -602,6 +415,8 @@ export interface Input {
   readonly tests: string;
   /** How long one test case may run, in milliseconds. Empty is the lane's default. */
   readonly caseTimeout: string;
+  /** How long the whole lane may run, in milliseconds: `RUN_DEADLINE_MS`, or less in a suite. */
+  readonly runDeadline: number;
 }
 
 /**
@@ -628,7 +443,9 @@ export async function mutationLane({
   floor,
   tests,
   caseTimeout,
+  runDeadline,
 }: Input): Promise<Verdict> {
+  const deadline = Date.now() + runDeadline;
   const bound = floorFrom(floor);
   const caseLimit = caseLimitFrom(caseTimeout);
 
@@ -669,58 +486,62 @@ export async function mutationLane({
       ...[...named].map((file) => `:(literal)${file}`),
     ],
     keeps: (path) => named.has(path) || mutable(path),
-    noun: run.kind === "named" ? "domain file or named test file" : "domain file",
+    noun: changedNoun(run),
     nothing: `nothing to mutate${testsNoted(run)}`,
   });
   if (change.kind === "settled") return change.verdict;
   const changed = new Map([...change.changed].filter(([file]) => !named.has(file)));
 
-  if (run.kind === "named") {
-    const red = await redBaseline(root, run, caseLimit);
-    if (red !== undefined) return red;
-    if (changed.size === 0) {
-      return {
-        note: `no domain file changed — the named tests pass unmutated, and there is nothing to mutate${testsNoted(run)}`,
-        problems: [],
-      };
-    }
-  }
-
-  const stryker = join(root, "node_modules", ".bin", "stryker");
-  if (!(await Bun.file(stryker).exists())) {
-    return {
-      note: "the mutation runner is not installed",
-      problems: [
-        {
-          file: "package.json",
-          message: `add ${DECLARE} to devDependencies — the lane runs the repo's own install, so those are the versions it runs`,
-        },
-      ],
-    };
-  }
-
   const scratch = await mkdtemp(join(tmpdir(), "mutation-lane-"));
   try {
+    const budget = minutes(runDeadline);
+    const unmutated = await unmutatedRun(root, run, {
+      caseLimit,
+      scratch,
+      deadline,
+      budget,
+      mutates: changed.size > 0,
+    });
+    if (unmutated !== undefined) return unmutated;
+
+    const stryker = join(root, "node_modules", ".bin", "stryker");
+    if (!(await Bun.file(stryker).exists())) {
+      return {
+        note: "the mutation runner is not installed",
+        problems: [
+          {
+            file: "package.json",
+            message: `add ${DECLARE} to devDependencies — the lane runs the repo's own install, so those are the versions it runs`,
+          },
+        ],
+      };
+    }
+
     const config = join(scratch, "stryker.conf.json");
     const report = join(scratch, "mutation.json");
     const requested = new Map([...changed.keys()].map((file) => [literal(file), file]));
     await Bun.write(
       config,
-      strykerConfig([...requested.keys()], report, join(scratch, "sandbox"), run, caseLimit),
+      strykerConfig(
+        [...requested.keys()],
+        report,
+        join(scratch, "sandbox"),
+        run,
+        caseLimit,
+        runDeadline,
+      ),
     );
 
-    const proc = Bun.spawn([stryker, "run", config], {
-      cwd: root,
-      env: plainly(process.env),
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [out, err] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const status = await proc.exited;
-    const wrote = `${out}\n${err}`;
+    const stryked = await ran([stryker, "run", config], root, deadline);
+    const wrote = `${stryked.out}\n${stryked.err}`;
+
+    if (stryked.ended) {
+      return {
+        note: "the mutation run did not finish before the lane's deadline",
+        log: wrote,
+        problems: [endedProblem(wrote, budget, caseLimit)],
+      };
+    }
 
     // Read on every exit, not only a failing one: Stryker resolves what it can
     // and finishes cleanly over the rest, so an unresolved pattern is a green
@@ -746,22 +567,41 @@ export async function mutationLane({
       };
     }
 
-    if (status !== 0) {
+    if (stryked.status !== 0) {
       return {
         note: "the mutation run did not finish",
         log: wrote,
         problems: [
           {
-            message: `fix what the run reported above: it exited ${status} without a report, so nothing was graded`,
+            message: `fix what the run reported above: it exited ${stryked.status} without a report, so nothing was graded`,
           },
         ],
       };
     }
 
-    return verdict(await Bun.file(report).text(), changed, bound, testsNoted(run), wrote);
+    return verdict(await Bun.file(report).text(), changed, bound, run, wrote);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
+}
+
+/** The last of the lines Stryker's progress reporter writes every ten seconds. */
+const PROGRESS = /Mutation testing [^\n]*tested \([^\n]*timed out\)/g;
+
+/**
+ * A run the lane's deadline ended, and how far it got by Stryker's own count.
+ * What usually takes a run there is mutants that hang, each costing one case
+ * limit of one worker before Stryker's deadline ends it.
+ */
+function endedProblem(wrote: string, budget: string, caseLimit: number): Problem {
+  const progress = [...wrote.matchAll(PROGRESS)].at(-1)?.[0];
+  const got =
+    progress === undefined
+      ? "It ended before Stryker reported any progress."
+      : `Stryker's last word on its progress: ${span(progress)}.`;
+  return {
+    message: `lower \`${CASE_TIMEOUT_INPUT}\` toward what the slowest named case needs, or end the loops that hang under a mutant: the lane ended the mutation run at its deadline of ${budget}, and every mutant that hangs holds a worker for one case limit, ${caseLimit} ms, before Stryker's deadline ends it. ${got}`,
+  };
 }
 
 /** Every file Stryker was pointed at and could not find, named as the repo wrote it. */

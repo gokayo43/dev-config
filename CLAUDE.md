@@ -144,10 +144,12 @@ a change to a rule usually lands here too.
   install rather than a binary it pins itself: Stryker resolves its runner
   plugin from the working directory, and declaring the two packages in the
   repo's manifest is what puts them under its lockfile, its exact pins and its
-  release-age window. `mutation-lane/report.ts` is what Stryker's report says
-  about a branch, read apart from choosing what to mutate and running Stryker,
-  since a report and the lines a branch wrote going in and a verdict coming out
-  is a subject of its own. `duplicate-code` is written here rather than run as jscpd
+  release-age window. The lane's orchestrator, `mutation-lane.ts`,
+  chooses what to mutate and runs Stryker; beside it `tests.ts` is which tests
+  a run loads and whether the named ones pass unmutated, `report.ts` what
+  Stryker's report says about a branch, `child.ts` a child the lane runs and the
+  run's deadline that ends it, and `values.ts` how the lane reads a repo's text
+  and quotes it back, which all four do. `duplicate-code` is written here rather than run as jscpd
   for the reason `fuzz.ts` carries its own PRNG: an action runs from a checkout
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
@@ -289,7 +291,7 @@ a change to a rule usually lands here too.
   its own, `mutation-lane-clocks.test.ts` over the clocks a run keeps and what a
   timeout means under them, which spends real seconds waiting a slow mutant out,
   and `mutation-lane-fixture.ts` is the fixture repository and the run
-  both suites share. `test-suite.test.ts` is the
+  all three suites share. `test-suite.test.ts` is the
   same argument one level down: that gate is a shell script rather than a
   module, so the suite extracts the step out of the shipped `action.yml` and
   runs it over fixture suites of its own. It needs passwordless sudo, because

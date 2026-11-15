@@ -16,6 +16,8 @@ import {
   type Problem,
   type Verdict,
 } from "../_lib/gate.ts";
+import { type Tests, testsNoted } from "./tests.ts";
+import { span } from "./values.ts";
 
 /** Every status the mutation-testing report schema defines, which is the whole of what a mutant can be. */
 const STATUSES = [
@@ -164,26 +166,6 @@ function percent(score: number): string {
   return `${(score * 100).toFixed(1)}%`;
 }
 
-/**
- * A value out of the repo's own source, as a code span it cannot end early. The
- * step summary is markdown, and a replacement carrying a backtick — every
- * template literal in the tree does — closes the span, leaving the rest of the
- * line to render as headings and table rows somebody wrote in a domain file.
- * The same statement `commanded` in `_lib/gate.ts` makes about annotations: the
- * text is not the gate author's to trust.
- *
- * CommonMark's own rule, rather than an escape: a span fenced by more backticks
- * than its longest run contains cannot be ended from inside, and a space either
- * side keeps a leading or trailing backtick from eating the fence.
- */
-export function span(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  const runs = [...flat.matchAll(/`+/g)].map((run) => run[0].length);
-  const fence = "`".repeat(Math.max(0, ...runs) + 1);
-  const pad = flat.startsWith("`") || flat.endsWith("`") ? " " : "";
-  return `${fence}${pad}${flat}${pad}${fence}`;
-}
-
 interface Tally {
   readonly detected: number;
   /**
@@ -271,8 +253,7 @@ export function verdict(
   text: string,
   changed: ReadonlyMap<string, ReadonlySet<number>>,
   bound: number | undefined,
-  /** What the note says of the tests the run loaded, or nothing for a walk. */
-  tested: string,
+  tests: Tests,
   wrote: string,
 ): Verdict {
   const mutants = parseReport(text);
@@ -295,7 +276,7 @@ export function verdict(
   // did get a verdict is a claim about a campaign that did not happen.
   if (ungraded.length > 0) {
     return {
-      note: `part of the run over ${files} was never graded${tested}`,
+      note: `part of the run over ${files} was never graded${testsNoted(tests)}`,
       log: wrote,
       problems: [ungradedProblem(ungraded)],
     };
@@ -305,7 +286,7 @@ export function verdict(
   if (counted === undefined) {
     const outside = graded.filter((each) => each.worth === "outside").length;
     return {
-      note: `${heldNothing(mutants.length, noVerdict.length, outside, files)}${tested}`,
+      note: `${heldNothing(mutants.length, noVerdict.length, outside, files)}${testsNoted(tests)}`,
       problems: [],
     };
   }
@@ -322,7 +303,7 @@ export function verdict(
   }
 
   return {
-    note: `mutation score ${percent(counted.score)} over ${files}${timeoutsNoted(counted)}${tested}`,
+    note: `mutation score ${percent(counted.score)} over ${files}${timeoutsNoted(counted)}${testsNoted(tests)}`,
     table: table(counted, surviving, noVerdict.length, bound),
     problems,
   };

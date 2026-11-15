@@ -236,16 +236,16 @@ test(s), but no failing test could be identified from inspector or console data.
 … Last 500 chars of stderr:
 ```
 
-Named tests reach Stryker only once the lane's own run of them passed, so this
-line is the backstop for what differs between the two runs: the runner's
-sandbox and the `bunfig.toml` keys its copy forwards. Walked, it is the only
-check.
+Named tests reach Stryker only once the lane's own run of them passed in the
+checkout, so for them this line is the backstop for what differs in Stryker's
+copy: the sandbox holds no `.env*` file and nothing outside the working
+directory, and the runner forwards only some of `bunfig.toml`'s `[test]` keys.
+Walked, it is the only check.
 
 That line present, the lane refuses the run and quotes the stderr the runner kept
 — which is what names the file that would not load — and says which way the
 tests were chosen: walked, it points at `mutation-tests` and
-`pathIgnorePatterns`; named, at the named file that passes only under the repo's
-own script. It is read on **every** exit,
+`pathIgnorePatterns`; named, at those differences. It is read on **every** exit,
 before the report is opened, for the reason the unresolved-pattern check is: the
 run it belongs to is otherwise green.
 
@@ -259,21 +259,35 @@ reading of statuses recovers that.
 
 ## What a timeout means
 
-Three clocks can end a test run in the lane, and every one is set so that a run
-ends on a clock only when a mutant hangs:
+Four clocks can end a test run in the lane. The first two follow
+`mutation-case-timeout`, the other two follow the lane's deadline for its whole
+run, and each is set so that a run ends on a clock only when something hangs:
 
 | Clock                                    | Its default                                   | In the lane                                     |
 | ---------------------------------------- | --------------------------------------------- | ----------------------------------------------- |
 | bun's limit on one case                  | 5 s                                           | the case limit, `--timeout` on every `bun test` |
 | Stryker's deadline for one mutant        | 1.5 × what its tests took unmutated, plus 5 s | 1.5 × what its tests took, plus the case limit  |
-| the runner's clock on a `bun test` child | 10 s                                          | Stryker's five-minute limit on the dry run      |
+| the runner's clock on a `bun test` child | 10 s                                          | the run's deadline                              |
+| Stryker's limit on its own unmutated run | 5 minutes                                     | the run's deadline                              |
 
 The **case limit** is `mutation-case-timeout`, in milliseconds as bun's
-`--timeout` takes it, and 60000 when empty. The flag outranks a `[test] timeout`
-in the repo's `bunfig.toml`. Stryker's deadline is built from it, so one case's
-limit beyond what the tests took is the slack a run gets before it is a hang;
-and the runner's own clock is put out of reach, so that Stryker's is the clock
-that grades.
+`--timeout` takes it: decimal digits from 1 to 4294967295, the most bun takes,
+and 60000 when empty. The flag outranks any `[test] timeout` in the repo's
+`bunfig.toml`, a longer one included, which the runner used to forward to every
+case. Stryker's deadline is built from it, so one case's limit beyond what the
+tests took is the slack a run gets before it is a hang.
+
+The **run's deadline** is nine minutes from the lane's start, inside the ten
+`check.yml` gives the step. The named tests' unmutated run and Stryker both end
+at it, and the runner's clock and Stryker's dry-run limit are set to it, so
+neither can grade a mutant in place of Stryker's deadline however long the
+covering tests take. A run the deadline ended is refused, never graded: the
+named tests' unmutated run with a note saying they did not finish, since bun's
+case limit cannot end a case that never yields, and Stryker's with its last
+progress line, how many mutants it had tested and how many had timed out. A
+mutant that hangs holds a worker for one case limit, so a changed file full of
+loops is what reaches the deadline, and that refusal points at
+`mutation-case-timeout`.
 
 At the defaults one commit got a different verdict on every run (dev-config#203,
 measured on A1M4N3/wmstcs: 35 named test files, three changed domain files, six
@@ -303,6 +317,8 @@ says how many of the mutants caught were caught by timing out, wherever any
 were, and the summary has a **Caught by timing out** row, so a score that rests
 on timeouts is seen to. A mutant that hangs costs one case limit of one worker;
 a repo whose hangs are many lowers the limit to what its slowest case needs.
+At the default that is a minute a hang, where Stryker's own defaults ended one
+after five seconds and what its tests took.
 
 ## The score, and the floor
 
@@ -336,7 +352,7 @@ with:
   mutation-floor: "0.7"
 ```
 
-`mutation-floor` or `mutation-tests` without `mutation-lane: true` fails the
+`mutation-floor`, `mutation-tests` or `mutation-case-timeout` without `mutation-lane: true` fails the
 run rather than being ignored, for the reason the database inputs do: a bound
 nobody notices is off is a bound nobody has.
 
@@ -377,10 +393,11 @@ INPUT_MUTATION_TESTS= INPUT_MUTATION_CASE_TIMEOUT= INPUT_STEP_SUMMARY=/dev/null 
 ```
 
 `INPUT_BASE_REF` names the branch the change is measured against, as
-`refs/remotes/origin/<it>`. No test the lane runs sees a `.env` file either: the
-named tests' own run starts bun with `--no-env-file`, and Stryker's copy of the
-project leaves out every `.env*`, so a suite that needs one fails unmutated in
-the lane.
+`refs/remotes/origin/<it>`. No test the lane runs reads a `.env` file either:
+the named tests' unmutated run is made in the checkout, where the files are on
+disk, and starts bun with `--no-env-file`, so none of them reaches the
+environment; Stryker's copy of the project leaves out every `.env*`. A suite
+that needs one, such as a tracked `.env.test`, fails unmutated in the lane.
 
 The lane keeps Stryker's sandbox outside the checkout
 and cleans it whatever happens, so a CI run leaves nothing behind. Stryker's own
@@ -409,8 +426,11 @@ not export, so without that line the run dies on any repo that has a
   reaches a folder is refused; one element pointing at a project that has no
   domain folder yet under-gates without a word. Naming it would fail a workspace
   scaffolded a project at a time, which is a real state and a worse trade.
-- **How long a campaign may take.** Every clock above is per mutant, not per
-  run, so the bound is a `timeout-minutes` on the calling step in `check.yml`.
+- **A named test broken through what it imports.** The named tests run
+  unmutated when the branch changed a domain file or a named test file. A
+  branch that breaks one through a helper or harness it imports changes
+  neither, so it passes here, and the next branch to change a domain file
+  meets the red run.
 - **A dirty baseline the runner stops announcing.** The check above reads a log
   line `@hughescr/stryker-bun-runner` writes — verified in 1.3.8 and 1.4.0 — and
   nothing in the report states the same fact, so a runner that stopped logging it

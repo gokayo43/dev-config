@@ -29,10 +29,11 @@ inputs:
     default: ""
   mutation-case-timeout:
     description: >-
-      How long one test case may run before bun fails it, in milliseconds, the
-      way bun test's --timeout takes it. Every deadline of the run is derived
-      from it, so a timeout means a mutant that hangs rather than a busy runner.
-      Empty is 60000. docs/gates/mutation-lane.md.
+      How long one test case may run before bun fails it, in milliseconds from 1
+      to 4294967295, the way bun test's --timeout takes it. Stryker's deadline
+      for a mutant is what its tests took plus this, so a timeout means a mutant
+      that hangs rather than a busy runner; the lane's whole run ends at nine
+      minutes whatever it is. Empty is 60000. docs/gates/mutation-lane.md.
     default: ""
 
 runs:

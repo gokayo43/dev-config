@@ -12,6 +12,7 @@ import {
   FEE_TEST,
   lane,
   laneIn,
+  laneInput,
   messages,
   NODE_MODULES,
   OXLINTRC,
@@ -461,13 +462,7 @@ describe("the mutation lane", () => {
       },
     );
     await symlink(NODE_MODULES, join(root, "app", "node_modules"));
-    const verdict = await mutationLane({
-      root: join(root, "app"),
-      event: { baseRef: "", before: "" },
-      floor: "",
-      tests: "",
-      caseTimeout: "",
-    });
+    const verdict = await mutationLane(laneInput(join(root, "app")));
 
     // The project's own path, not `app/src/domain/pricing.ts`: the second is
     // what the repository root would have called it, and what Stryker could not
@@ -837,26 +832,16 @@ describe("the mutation lane", () => {
 
   test("a base ref this checkout does not carry is refused, not read as nothing to mutate", async () => {
     const { root } = await history(BEFORE);
-    const verdict = await mutationLane({
-      root,
-      event: { baseRef: "release", before: "" },
-      floor: "",
-      tests: "",
-      caseTimeout: "",
-    });
+    const verdict = await mutationLane(
+      laneInput(root, { event: { baseRef: "release", before: "" } }),
+    );
 
     expect(messages(verdict)).toEqual([containing("is not in this checkout")]);
   });
 
   test("a first commit has nothing to compare against and passes", async () => {
     const { root } = await history(BEFORE);
-    const verdict = await mutationLane({
-      root,
-      event: { baseRef: "", before: "" },
-      floor: "",
-      tests: "",
-      caseTimeout: "",
-    });
+    const verdict = await mutationLane(laneInput(root));
 
     expect(messages(verdict)).toEqual([]);
     expect(verdict.note).toEqual(containing("no earlier commit"));
@@ -920,15 +905,9 @@ test("adds the fee, with no credential in reach", async () => {
     "a floor of '%s' is refused rather than read as a fraction",
     async (floor) => {
       const { root } = await history(BEFORE);
-      await expect(
-        mutationLane({
-          root,
-          event: { baseRef: "", before: "" },
-          floor,
-          tests: "",
-          caseTimeout: "",
-        }),
-      ).rejects.toThrow("write it as a fraction between 0 and 1");
+      await expect(mutationLane(laneInput(root, { floor }))).rejects.toThrow(
+        "write it as a fraction between 0 and 1",
+      );
     },
   );
 });
