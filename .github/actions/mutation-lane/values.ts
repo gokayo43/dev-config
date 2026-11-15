@@ -1,8 +1,9 @@
 /**
  * How the lane reads what a repo wrote and quotes it back: an answer or the
  * problems in its place, a setting written as one string or several, and a
- * value set in a diagnostic as a span nothing in it can end. Every module of
- * the lane reads or quotes the repo's text, so these sit apart from all of them.
+ * value set in a diagnostic as a span nothing in it can end. Three modules of
+ * the lane read or quote the repo's text, `mutation-lane.ts`, `tests.ts` and
+ * `report.ts`, so these sit apart from all three.
  */
 import { isList, type Problem } from "../_lib/gate.ts";
 

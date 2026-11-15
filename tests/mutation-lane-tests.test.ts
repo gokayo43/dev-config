@@ -193,6 +193,31 @@ test("adds the fee", () => {
     expect(verdict.note).toBe("the suite this run mutated does not pass unmutated");
   });
 
+  // bun passes a test on any of its retried attempts, so a mutant would be
+  // graded on whichever run passed; bun's --retry=0 does not outrank the
+  // bunfig, so the lane refuses it, walked or named.
+  test.each(["", "tests/*.test.ts"])(
+    "a bunfig that retries failing tests is refused by name (mutation-tests %p)",
+    async (tests) => {
+      const verdict = await lane(
+        [
+          BEFORE,
+          repo({
+            "bunfig.toml": "[test]\nretry = 2\n",
+            "src/domain/pricing.ts": PRICING + WITH_FEE,
+            "tests/pricing.test.ts": FEE_TEST,
+          }),
+        ],
+        { tests, installed: false },
+      );
+
+      expect(messages(verdict)).toEqual([
+        "bunfig.toml: take `retry = 2` out of [test] in bunfig.toml, or run the retried suite outside the lane: bun retries a failing test that many times and passes it on any attempt, so a mutant would be graded on whichever run passed, and neither the runner nor bun's --retry=0 switches it off",
+      ]);
+      expect(verdict.note).toBe("the repo's bunfig retries failing tests");
+    },
+  );
+
   test("a named test the branch changed that passes leaves nothing to mutate", async () => {
     const verdict = await lane(
       [

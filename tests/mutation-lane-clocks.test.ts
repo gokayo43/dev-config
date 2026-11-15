@@ -1,7 +1,19 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 
+import { GRACE_MS } from "../.github/actions/mutation-lane/child.ts";
+import { endedProblem, RUN_DEADLINE_MS } from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { containing } from "./matchers.ts";
-import { BEFORE, lane, messages, repo, TOTAL_TEST } from "./mutation-lane-fixture.ts";
+import {
+  BEFORE,
+  FEE_TEST,
+  lane,
+  laneIn,
+  messages,
+  PRICING,
+  repo,
+  TOTAL_TEST,
+  WITH_FEE,
+} from "./mutation-lane-fixture.ts";
 
 // Real Stryker runs, timed out as the lane's other suites time them, and for
 // the reason given there.
@@ -118,27 +130,53 @@ test("charges for every unit, slowly", async () => {
 
   // The upper bound is bun's: past it bun refuses the run before it writes a
   // report, and the lane would read that as every named file failing.
-  test.each(["0", "-5", "1.5", "a minute", "4294967296", "0x10", "1e3", " 60000", "60000\n"])(
-    "a case limit written as %p is refused rather than guessed at",
-    async (caseTimeout) => {
-      await expect(
-        lane([BEFORE, repo({ ...BEFORE, "tests/pricing.test.ts": TOTAL_TEST })], {
-          caseTimeout,
-          installed: false,
+  // The cap is the run's deadline: a case allowed longer than the whole run is
+  // allowed nothing more, and it keeps Stryker's timers inside Node's.
+  test.each([
+    "0",
+    "-5",
+    "1.5",
+    "a minute",
+    String(RUN_DEADLINE_MS + 1),
+    "2147483648",
+    "0x10",
+    "1e3",
+    " 60000",
+    "60000\n",
+  ])("a case limit written as %p is refused rather than guessed at", async (caseTimeout) => {
+    await expect(
+      lane([BEFORE, repo({ ...BEFORE, "tests/pricing.test.ts": TOTAL_TEST })], {
+        caseTimeout,
+        installed: false,
+      }),
+    ).rejects.toThrow("write it as a whole number of milliseconds");
+  });
+
+  // Stryker waits on its deadline for a mutant with Node's setTimeout, which
+  // fires any delay above 2147483647 ms after 1 ms: at a case limit that large
+  // every covered mutant came back caught by timing out, and this branch's
+  // survivor passed. At the cap it is graded by its tests.
+  test("a run at the longest case limit the lane takes grades a survivor as survived", async () => {
+    const WEAK_FEE_TEST = FEE_TEST.replace(
+      "expect(withFee(100)).toBe(150);",
+      "expect(withFee(100) > 0).toBe(true);",
+    );
+    const verdict = await lane(
+      [
+        BEFORE,
+        repo({
+          "src/domain/pricing.ts": PRICING + WITH_FEE,
+          "tests/pricing.test.ts": WEAK_FEE_TEST,
         }),
-      ).rejects.toThrow("write it as a whole number of milliseconds");
-    },
-  );
+      ],
+      { caseTimeout: String(RUN_DEADLINE_MS), floor: "0.9" },
+    );
 
-  test("the longest case limit bun takes is taken", async () => {
-    const verdict = await lane([BEFORE, repo({ ...BEFORE, "tests/more.test.ts": TOTAL_TEST })], {
-      tests: "tests/*.test.ts",
-      caseTimeout: "4294967295",
-      installed: false,
-    });
-
-    expect(messages(verdict)).toEqual([]);
-    expect(verdict.note).toEqual(containing("the named tests pass unmutated"));
+    expect(messages(verdict)).toEqual([
+      "src/domain/pricing.ts: write the case that fails on `cents - 50` (ArithmeticOperator) at line 6: this branch wrote that line and the suite passes either way",
+      ": kill the mutants listed in the run summary: 75.0% of the mutants in 1 changed domain file were caught, under the 90.0% floor this repo declares",
+    ]);
+    expect(verdict.table).toEqual(containing("| Caught by timing out | 0 |"));
   });
 
   // bun's case limit cannot end a case that never yields, so without a clock
@@ -181,10 +219,70 @@ test("never yields", () => {
     );
 
     expect(messages(verdict)).toEqual([
-      containing(
-        ": lower `mutation-case-timeout` toward what the slowest named case needs, or end the loops that hang under a mutant: the lane ended the mutation run at its deadline of 12000 ms",
-      ),
+      containing("the lane ended the mutation run at its deadline of 12000 ms"),
     ]);
     expect(verdict.note).toBe("the mutation run did not finish before the lane's deadline");
+  });
+
+  // A named test's own child that inherits the pipes held the lane until it
+  // exited, past the deadline; the lane signals the whole group and stops
+  // reading at the grace. The second asks the group to stop and is ignored, so
+  // only the kill at the grace ends it.
+  test.each([
+    ["a grandchild that inherits the pipes", "sleep 60"],
+    ["a grandchild that ignores the request to stop", "trap '' TERM; sleep 60"],
+  ])("%s is gone when the lane returns, inside the deadline and the grace", async (_, script) => {
+    const SPAWNS = `import { test } from "bun:test";
+
+test("waits on a child of its own", async () => {
+  const child = Bun.spawn(["sh", "-c", ${JSON.stringify(script)}], { stdout: "inherit", stderr: "inherit" });
+  await Bun.write("grandchild.pid", String(child.pid));
+  await child.exited;
+});
+`;
+    const runDeadline = 3_000;
+    const started = performance.now();
+    const { verdict, root } = await laneIn(
+      [BEFORE, repo({ ...BEFORE, "tests/spawns.test.ts": SPAWNS })],
+      { tests: "tests/*.test.ts", installed: false, runDeadline },
+    );
+    const took = performance.now() - started;
+
+    expect(verdict.note).toBe("the named tests did not finish unmutated");
+    // The deadline counts from the lane's start, so the grace and a second of
+    // the lane's own work bound the rest.
+    expect(took).toBeLessThan(runDeadline + GRACE_MS + 1_000);
+    const pid = Number(await Bun.file(`${root}/grandchild.pid`).text());
+    expect(() => process.kill(pid, 0)).toThrow("ESRCH");
+  });
+
+  // What the refusal of a run the deadline ended advises turns on Stryker's own
+  // count, in the line its progress reporter writes (`render()` in
+  // progress-append-only-reporter.js): mutants that timed out held it; none
+  // timed out, it was long.
+  test.each([
+    [
+      "with mutants that timed out",
+      "Mutation testing 40% (elapsed: ~8m, remaining: ~12m) 40/100 tested (3 survived, 2 timed out)\n",
+      ["lower `mutation-case-timeout`", "`40/100 tested (3 survived, 2 timed out)`"],
+    ],
+    [
+      "with none that timed out",
+      "Mutation testing 40% (elapsed: ~8m, remaining: ~12m) 40/100 tested (3 survived, 0 timed out)\n",
+      ["change fewer domain files in one branch", "the run was long rather than stuck"],
+    ],
+    [
+      "before any progress line",
+      "INFO ProjectReader Found 1 of 4 file(s) to be mutated.\n",
+      [
+        "whether mutants hung cannot be told",
+        "lower `mutation-case-timeout`",
+        "change fewer domain files",
+      ],
+    ],
+  ])("a run the deadline ended %s is advised by what Stryker counted", (_, wrote, said) => {
+    const { message } = endedProblem(wrote, "9 minutes", 60_000);
+    for (const part of said) expect(message).toEqual(containing(part));
+    expect(message).not.toEqual(containing("%"));
   });
 });

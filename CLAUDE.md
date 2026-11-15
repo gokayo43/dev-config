@@ -149,7 +149,7 @@ a change to a rule usually lands here too.
   a run loads and whether the named ones pass unmutated, `report.ts` what
   Stryker's report says about a branch, `child.ts` a child the lane runs and the
   run's deadline that ends it, and `values.ts` how the lane reads a repo's text
-  and quotes it back, which all four do. `duplicate-code` is written here rather than run as jscpd
+  and quotes it back, which the orchestrator, `tests.ts` and `report.ts` do. `duplicate-code` is written here rather than run as jscpd
   for the reason `fuzz.ts` carries its own PRNG: an action runs from a checkout
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.

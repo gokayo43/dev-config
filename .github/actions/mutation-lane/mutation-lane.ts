@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ import {
   testsCause,
   testsFrom,
   testsNoted,
+  retried,
   unmutatedRun,
 } from "./tests.ts";
 import { type Answer, span, strings } from "./values.ts";
@@ -278,21 +279,6 @@ const CASE_TIMEOUT_INPUT = "mutation-case-timeout";
  */
 const DEFAULT_CASE_TIMEOUT_MS = 60_000;
 
-/** The longest `--timeout` bun takes; above it bun refuses the run before it writes a report. */
-const LONGEST_CASE_TIMEOUT_MS = 4_294_967_295;
-
-/** The case limit in milliseconds: the default where the input is empty, refused where it is not decimal digits bun takes. */
-function caseLimitFrom(value: string): number {
-  if (value === "") return DEFAULT_CASE_TIMEOUT_MS;
-  const limit = /^\d+$/.test(value) ? Number(value) : Number.NaN;
-  if (!(limit >= 1 && limit <= LONGEST_CASE_TIMEOUT_MS)) {
-    throw new Error(
-      `${CASE_TIMEOUT_INPUT} is '${value}' — write it as a whole number of milliseconds from 1 to ${LONGEST_CASE_TIMEOUT_MS}, in decimal digits, the way bun test's --timeout takes it`,
-    );
-  }
-  return limit;
-}
-
 /**
  * How long the whole lane may run, in milliseconds: the named tests' unmutated
  * run and Stryker's both end at this deadline, counted from the lane's start.
@@ -302,6 +288,25 @@ function caseLimitFrom(value: string): number {
  * is what reaches it.
  */
 export const RUN_DEADLINE_MS = 9 * 60_000;
+
+/**
+ * The case limit in milliseconds: the default where the input is empty, and
+ * refused where it is not decimal digits from 1 to the run's deadline. A case
+ * allowed longer than the whole run is allowed nothing more, and the cap is
+ * also what keeps Stryker's deadline for a mutant, built from the limit, inside
+ * the 2147483647 ms Node's timers take: past it a timer fires after 1 ms, and
+ * every covered mutant came back caught by timing out.
+ */
+function caseLimitFrom(value: string): number {
+  if (value === "") return DEFAULT_CASE_TIMEOUT_MS;
+  const limit = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!(limit >= 1 && limit <= RUN_DEADLINE_MS)) {
+    throw new Error(
+      `${CASE_TIMEOUT_INPUT} is '${value}' — write it as a whole number of milliseconds from 1 to ${RUN_DEADLINE_MS}, the lane's whole run, in decimal digits`,
+    );
+  }
+  return limit;
+}
 
 /** The deadline as a refusal says it. */
 function minutes(ms: number): string {
@@ -460,6 +465,11 @@ export async function mutationLane({
   }
   const run = chosen.value;
 
+  const retries = await retried(root);
+  if (retries.length > 0) {
+    return { note: "the repo's bunfig retries failing tests", problems: [...retries] };
+  }
+
   const domain = await domainGlobs(root);
   if (!("value" in domain)) {
     return { note: "the pure domain is not declared", problems: [...domain.problems] };
@@ -532,7 +542,12 @@ export async function mutationLane({
       ),
     );
 
-    const stryked = await ran([stryker, "run", config], root, deadline);
+    // The runner writes a bunfig and a preload per worker under the temp dir
+    // and leaves them when its worker is killed; under the scratch directory
+    // the `finally` below removes them whatever ended the run.
+    const temp = join(scratch, "tmp");
+    await mkdir(temp);
+    const stryked = await ran([stryker, "run", config], root, deadline, { TMPDIR: temp });
     const wrote = `${stryked.out}\n${stryked.err}`;
 
     if (stryked.ended) {
@@ -585,22 +600,31 @@ export async function mutationLane({
   }
 }
 
-/** The last of the lines Stryker's progress reporter writes every ten seconds. */
-const PROGRESS = /Mutation testing [^\n]*tested \([^\n]*timed out\)/g;
+/** The counts in the last of the lines Stryker's progress reporter writes every ten seconds. */
+const PROGRESS = /(\d+)\/(\d+) tested \((\d+) survived, (\d+) timed out\)/g;
 
 /**
  * A run the lane's deadline ended, and how far it got by Stryker's own count.
- * What usually takes a run there is mutants that hang, each costing one case
- * limit of one worker before Stryker's deadline ends it.
+ * Where mutants had timed out, they are what held it, each costing one case
+ * limit of one worker; where none had, the run was simply long.
  */
-function endedProblem(wrote: string, budget: string, caseLimit: number): Problem {
-  const progress = [...wrote.matchAll(PROGRESS)].at(-1)?.[0];
-  const got =
-    progress === undefined
-      ? "It ended before Stryker reported any progress."
-      : `Stryker's last word on its progress: ${span(progress)}.`;
+export function endedProblem(wrote: string, budget: string, caseLimit: number): Problem {
+  const last = [...wrote.matchAll(PROGRESS)].at(-1);
+  const ended = `the lane ended the mutation run at its deadline of ${budget}`;
+  const hang = `lower \`${CASE_TIMEOUT_INPUT}\` toward what the slowest named case needs, or end the loops that hang under a mutant`;
+  const long = "change fewer domain files in one branch, or make the named tests faster";
+  const holds = `every mutant that hangs holds a worker for one case limit, ${caseLimit} ms, before Stryker's deadline ends it`;
+  if (last === undefined) {
+    return {
+      message: `${hang}; or, if none hung, ${long}: ${ended} before Stryker reported any progress, so whether mutants hung cannot be told, and ${holds}.`,
+    };
+  }
+  const counts = `Stryker's last count: ${span(last[0])}.`;
   return {
-    message: `lower \`${CASE_TIMEOUT_INPUT}\` toward what the slowest named case needs, or end the loops that hang under a mutant: the lane ended the mutation run at its deadline of ${budget}, and every mutant that hangs holds a worker for one case limit, ${caseLimit} ms, before Stryker's deadline ends it. ${got}`,
+    message:
+      Number(last[4]) > 0
+        ? `${hang}: ${ended}, and ${holds}. ${counts}`
+        : `${long}: ${ended}, and no mutant had timed out, so the run was long rather than stuck. ${counts}`,
   };
 }
 

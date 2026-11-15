@@ -7,7 +7,14 @@
  */
 import { join, isAbsolute, posix } from "node:path";
 
-import { isObject, plural, type Problem, readConfig, type Verdict } from "../_lib/gate.ts";
+import {
+  type ConfigObject,
+  isObject,
+  plural,
+  type Problem,
+  readConfig,
+  type Verdict,
+} from "../_lib/gate.ts";
 import { ran } from "./child.ts";
 import { type Answer, span, strings } from "./values.ts";
 
@@ -129,17 +136,47 @@ export async function testsFrom(root: string, value: string): Promise<Answer<Tes
   return { value: { kind: "named", files: [...files].toSorted() } };
 }
 
+/** `bunfig.toml`'s `[test]` table: empty where there is no bunfig or no table. */
+async function bunfigTest(root: string): Promise<Answer<ConfigObject>> {
+  if (!(await Bun.file(join(root, BUNFIG)).exists())) return { value: {} };
+  const bunfig = await readConfig(root, BUNFIG, "TOML");
+  if (bunfig.contents === undefined) return { problems: bunfig.problems };
+  const test = bunfig.contents["test"];
+  return { value: isObject(test) ? test : {} };
+}
+
 /**
  * `bunfig.toml`'s `[test] pathIgnorePatterns`, which bun applies to a file named
  * on its command line as much as to one it found. No bunfig, or one without the
  * key, ignores nothing.
  */
 async function ignoredByBunfig(root: string): Promise<Answer<readonly string[]>> {
-  if (!(await Bun.file(join(root, BUNFIG)).exists())) return { value: [] };
-  const bunfig = await readConfig(root, BUNFIG, "TOML");
-  if (bunfig.contents === undefined) return { problems: bunfig.problems };
-  const test = bunfig.contents["test"];
-  return { value: isObject(test) ? strings(test["pathIgnorePatterns"]) : [] };
+  const test = await bunfigTest(root);
+  if ("problems" in test) return test;
+  return { value: strings(test.value["pathIgnorePatterns"]) };
+}
+
+/**
+ * The refusal of a `bunfig.toml` that retries a failing test, which the lane
+ * cannot switch off: the runner forwards `[test] retry` to every mutant's run,
+ * the named tests' unmutated run reads it from the checkout, and bun's
+ * `--retry=0` does not outrank it (probed on bun 1.4.4: a case that passes only
+ * on its second try passed under `retry = 3` with `--retry=0` given). A retried
+ * test is a mutant graded on whichever attempt passed, and the lane never
+ * retries a test for an answer.
+ */
+export async function retried(root: string): Promise<readonly Problem[]> {
+  const test = await bunfigTest(root);
+  if ("problems" in test) return test.problems;
+  const retry = test.value["retry"];
+  return typeof retry === "number" && retry > 0
+    ? [
+        {
+          file: BUNFIG,
+          message: `take \`retry = ${retry}\` out of [test] in ${BUNFIG}, or run the retried suite outside the lane: bun retries a failing test that many times and passes it on any attempt, so a mutant would be graded on whichever run passed, and neither the runner nor bun's --retry=0 switches it off`,
+        },
+      ]
+    : [];
 }
 
 /** The five entities XML escapes an attribute with, which is all a path in bun's report can carry. */

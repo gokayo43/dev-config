@@ -261,7 +261,9 @@ reading of statuses recovers that.
 
 Four clocks can end a test run in the lane. The first two follow
 `mutation-case-timeout`, the other two follow the lane's deadline for its whole
-run, and each is set so that a run ends on a clock only when something hangs:
+run. The first two are set so that a mutant's run ends on one only when it
+hangs; the run's deadline ends a run that hangs and also one that is simply
+too long:
 
 | Clock                                    | Its default                                   | In the lane                                     |
 | ---------------------------------------- | --------------------------------------------- | ----------------------------------------------- |
@@ -271,8 +273,11 @@ run, and each is set so that a run ends on a clock only when something hangs:
 | Stryker's limit on its own unmutated run | 5 minutes                                     | the run's deadline                              |
 
 The **case limit** is `mutation-case-timeout`, in milliseconds as bun's
-`--timeout` takes it: decimal digits from 1 to 4294967295, the most bun takes,
-and 60000 when empty. The flag outranks any `[test] timeout` in the repo's
+`--timeout` takes it: decimal digits from 1 to 540000, the run's deadline, and
+60000 when empty. A case allowed longer than the whole run is allowed nothing
+more, and the cap keeps Stryker's deadline for a mutant inside the 2147483647
+ms Node's timers take, past which a timer fires after 1 ms and every covered
+mutant came back caught by timing out. The flag outranks any `[test] timeout` in the repo's
 `bunfig.toml`, a longer one included, which the runner used to forward to every
 case. Stryker's deadline is built from it, so one case's limit beyond what the
 tests took is the slack a run gets before it is a hang.
@@ -284,10 +289,11 @@ neither can grade a mutant in place of Stryker's deadline however long the
 covering tests take. A run the deadline ended is refused, never graded: the
 named tests' unmutated run with a note saying they did not finish, since bun's
 case limit cannot end a case that never yields, and Stryker's with its last
-progress line, how many mutants it had tested and how many had timed out. A
-mutant that hangs holds a worker for one case limit, so a changed file full of
-loops is what reaches the deadline, and that refusal points at
-`mutation-case-timeout`.
+count, how many mutants it had tested and how many had timed out. A mutant that
+hangs holds a worker for one case limit, so a changed file full of loops is one
+thing that reaches the deadline, and where mutants had timed out the refusal
+points at `mutation-case-timeout`; where none had, the run was simply long, and
+it points at fewer changed domain files in one branch or faster named tests.
 
 At the defaults one commit got a different verdict on every run (dev-config#203,
 measured on A1M4N3/wmstcs: 35 named test files, three changed domain files, six
@@ -317,8 +323,8 @@ says how many of the mutants caught were caught by timing out, wherever any
 were, and the summary has a **Caught by timing out** row, so a score that rests
 on timeouts is seen to. A mutant that hangs costs one case limit of one worker;
 a repo whose hangs are many lowers the limit to what its slowest case needs.
-At the default that is a minute a hang, where Stryker's own defaults ended one
-after five seconds and what its tests took.
+At the default that is a minute a hang, where Stryker's defaults ended one at
+1.5 × what its tests took unmutated, plus 5 s.
 
 ## The score, and the floor
 
@@ -400,7 +406,12 @@ environment; Stryker's copy of the project leaves out every `.env*`. A suite
 that needs one, such as a tracked `.env.test`, fails unmutated in the lane.
 
 The lane keeps Stryker's sandbox outside the checkout
-and cleans it whatever happens, so a CI run leaves nothing behind. Stryker's own
+and cleans it whatever happens, so a CI run leaves nothing behind. The runner
+writes a bunfig and a preload per worker under the temp dir and leaves them
+when its worker is killed; the lane runs Stryker with `TMPDIR` inside its own
+scratch directory, so those go with it. And every process the lane starts runs
+in a group of its own, which the lane kills when it ends the run and again once
+the child has exited, so no test's own child outlives the lane. Stryker's own
 defaults do not: `bunx stryker run` writes `.stryker-tmp/` beside the project
 and an HTML report under `reports/mutation/`. Add both to the repo's
 `.gitignore` before running it locally. A hand run also needs the
