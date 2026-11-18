@@ -1623,9 +1623,12 @@ export TEST_REDIS_URL=redis://127.0.0.1:6390
 
 The request-timing connector suites need a MySQL, since what they grade is
 what mysql2 and drizzle do against a real server, and the Redis above. They
-create and **drop** a database of their own on the MySQL and write only keys
-under a prefix of their own on the Redis, so `TEST_MYSQL_URL` is required and
-refuses to guess for the reason the Postgres does:
+create and **drop** a database of their own on the MySQL and write their keys
+under a prefix of their own on the Redis. The prefix keeps their keys apart
+from each other's, not from the limiter conformance suite, which flushes the
+same Redis between its cases, so two runs that share one Redis can wipe each
+other's keys: give each run a Redis of its own. `TEST_MYSQL_URL` is required
+and refuses to guess for the reason the Postgres does:
 
 ```sh
 docker run --rm -d -p 127.0.0.1:3417:3306 -e MYSQL_ROOT_PASSWORD=mysql --tmpfs /var/lib/mysql:size=1g mysql:8.0.42

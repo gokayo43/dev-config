@@ -25,3 +25,11 @@ async function* parts() {
 }
 
 export const streamingFn = createServerFn({ method: "GET" }).handler(() => parts());
+
+/**
+ * A server function whose record name, its file and its variable, is longer
+ * than the core takes: the one refused name Start can make at a request, met
+ * when the call closes.
+ */
+export const aServerFunctionWhoseFileAndVariableTogetherRunPastTheLongestNameTheCoreTakesForARecordWhichIsTwoHundredAndFiftySixCharactersSoItsOperationMeetsTheRefusalOnlyWhenItsFirstCallClosesAndThatRefusalGoesToTheAppsFaultLeavingNoRecordAndTheCallItselfServedAsUsual =
+  createServerFn({ method: "GET" }).handler(() => "served");

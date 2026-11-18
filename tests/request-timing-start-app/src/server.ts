@@ -5,7 +5,12 @@
 import { createStartHandler, defaultStreamHandler } from "@tanstack/react-start/server";
 
 import { timedStartHandler } from "../../../request-timing-tanstack-start.ts";
-import { failingFn, listPresetsFn, streamingFn } from "./fns.ts";
+import {
+  aServerFunctionWhoseFileAndVariableTogetherRunPastTheLongestNameTheCoreTakesForARecordWhichIsTwoHundredAndFiftySixCharactersSoItsOperationMeetsTheRefusalOnlyWhenItsFirstCallClosesAndThatRefusalGoesToTheAppsFaultLeavingNoRecordAndTheCallItselfServedAsUsual as refusedFn,
+  failingFn,
+  listPresetsFn,
+  streamingFn,
+} from "./fns.ts";
 import { arrived, held, holdPermit } from "./presets.ts";
 import { getRouter, inProcess } from "./router.ts";
 import { runtime } from "./runtime.ts";
@@ -30,5 +35,10 @@ export const fixture = {
     return () => runtime.runPromise(release);
   },
   /** Where each server function is called over HTTP. */
-  urls: { list: listPresetsFn.url, failing: failingFn.url, streaming: streamingFn.url },
+  urls: {
+    list: listPresetsFn.url,
+    failing: failingFn.url,
+    streaming: streamingFn.url,
+    refused: refusedFn.url,
+  },
 };

@@ -7,8 +7,8 @@
 import type { AnyElysia, Elysia } from "elysia";
 
 import { must } from "./narrowing.ts";
-import { endings, watched } from "./request-timing-entry.ts";
-import { inOperation, OperationName, type Timing, within } from "./request-timing.ts";
+import { registeredNames, timedEntry } from "./request-timing-entry.ts";
+import { OperationName, type Timing } from "./request-timing.ts";
 
 /**
  * A body Elysia streams is one it sends chunked with no length: every
@@ -17,6 +17,17 @@ import { inOperation, OperationName, type Timing, within } from "./request-timin
  */
 const isStreamed = (response: Response): boolean =>
   response.headers.get("transfer-encoding") === "chunked";
+
+/**
+ * Elysia's own type says its handler answers a Function; what it answers is
+ * the Response every route and error handler is mapped to.
+ */
+function asResponse(answered: unknown): Response {
+  if (!(answered instanceof Response)) {
+    throw new TypeError("request timing: Elysia answered a request with no Response");
+  }
+  return answered;
+}
 
 /**
  * The plugin, for `timing`: `app.use(requestTimingPlugin(timing))`, mounted
@@ -30,22 +41,17 @@ const isStreamed = (response: Response): boolean =>
  * route Elysia matched, as registered, or `unmatched`; its status is the
  * response's, whatever error handler made it, 101 for a request Bun upgraded
  * to a WebSocket, or 499 for a client gone before there was one. A request the
- * app serves in-process while an operation is current opens none of its own. Mounting it throws, naming the route, where a route was
- * registered ahead of it, and `app.listen` throws where a route's pattern is
- * not one the core takes.
+ * app serves in-process while an operation is current opens none of its own.
+ * Mounting it throws, naming the route, where a route was registered ahead of
+ * it, and `app.listen` throws where a route's pattern is not one the core
+ * takes; an app served without `listen` meets that pattern at its first
+ * request, where the name goes to the app's `fault` and no record is written.
  */
 export function requestTimingPlugin(timing: Timing) {
   const matchedRoutes = new WeakMap<Request, string>();
   /** The requests Bun's server took over as WebSockets, whose client received 101. */
   const upgraded = new WeakSet<Request>();
-  const names = new Map<string, OperationName>();
-  const nameOf = (pattern: string): OperationName => {
-    const known = names.get(pattern);
-    if (known !== undefined) return known;
-    const name = OperationName.registered(pattern);
-    names.set(pattern, name);
-    return name;
-  };
+  const nameOf = registeredNames();
 
   // Reads `route` off the context by property, never by passing the context
   // on: Elysia reads a hook's source to decide what each route computes, and a
@@ -54,51 +60,30 @@ export function requestTimingPlugin(timing: Timing) {
     matchedRoutes.set(context.request, context.route);
   };
 
-  const serve = (handle: (request: Request) => object, request: Request): Promise<Response> => {
-    const operation = timing.open();
-    const { end, produced } = endings(
-      operation,
+  const serve = (handle: (request: Request) => object, request: Request): Promise<Response> =>
+    timedEntry(
+      timing,
       request,
-      () => {
+      () => Promise.resolve(handle(request)).then(asResponse),
+      () => () => {
         const pattern = matchedRoutes.get(request);
         return pattern === undefined ? OperationName.unmatched : nameOf(pattern);
       },
-      isStreamed,
-    );
-    const answered = new Promise<object>((resolve) =>
-      resolve(within(operation, () => handle(request))),
-    );
-    return answered.then(
-      (response) => {
-        // Elysia's own type says its handler answers a Function; what it
-        // answers is the Response every route and error handler is mapped to.
-        if (!(response instanceof Response)) {
-          throw new TypeError("request timing: Elysia answered a request with no Response");
-        }
-        produced(response);
+      (response) =>
         // `isStreamed` first: reading `body` turns a buffered body into a
         // stream, which Bun then sends as `application/octet-stream`.
-        if (!isStreamed(response) || response.body === null) {
-          // An upgraded request's response is Elysia's, which Bun drops: the
-          // client was answered 101 by the upgrade itself.
-          const status = upgraded.has(request) ? 101 : response.status;
-          end({ status, aborted: false, streamed: false });
-          return response;
-        }
-        const body = watched(response.body, (aborted) =>
-          end({ status: response.status, aborted, streamed: true }),
-        );
-        return new Response(body, response);
-      },
-      (error: unknown) => {
-        // A handler of errors that throws leaves the server to answer, and
-        // Bun answers a fetch that throws with 500; the export's page asks an
-        // app with an `error` option of its own to answer the same.
-        end({ status: 500, aborted: false, streamed: false });
-        throw error;
-      },
+        !isStreamed(response) || response.body === null
+          ? {
+              close: {
+                // An upgraded request's response is Elysia's, which Bun
+                // drops: the client was answered 101 by the upgrade itself.
+                status: upgraded.has(request) ? 101 : response.status,
+                aborted: false,
+                streamed: false,
+              },
+            }
+          : { watch: response.body, streamed: () => true },
     );
-  };
 
   return <App extends AnyElysia>(app: App): App => {
     const [preceding] = app.routes;
@@ -113,7 +98,7 @@ export function requestTimingPlugin(timing: Timing) {
     elysia
       // A request the app serves in-process while an operation is current,
       // as `app.handle` from a handler, is part of that operation.
-      .wrap((handle, request) => () => (inOperation() ? handle(request) : serve(handle, request)))
+      .wrap((handle, request) => () => serve(handle, request))
       .onTransform({ as: "global" }, matched)
       .onStart(({ routes, server }) => {
         for (const route of routes) nameOf(route.path);

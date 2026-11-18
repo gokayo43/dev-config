@@ -21,7 +21,10 @@ export const presets = pgTable("presets", {
 });
 
 const bare = new SQL(
-  required("DATABASE_URL", "the fixture app reaches the scratch database its suite made for it"),
+  required(
+    "FIXTURE_DATABASE_URL",
+    "the fixture app reaches the scratch database its suite made for it",
+  ),
 );
 const client = timed ? timedSql(bare) : bare;
 

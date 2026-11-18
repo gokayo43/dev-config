@@ -2,6 +2,12 @@ import { l as Timing } from "./request-timing-operation-BG4yllkT.js";
 import "./request-timing.js";
 import { AnyRouter } from "@tanstack/react-router";
 //#region request-timing-tanstack-start.d.ts
+/** What Start's compiler records of a server function: its id, its variable name and its file. */
+interface ServerFnMeta {
+  readonly id: string;
+  readonly name: string;
+  readonly filename: string;
+}
 /** The handler of Start's server entry, `createStartHandler`'s answer, and the wrapper's. */
 export type StartHandler<Options> = (request: Request, options?: Options) => Response | Promise<Response>;
 /** What `timedStartHandler` takes beside the handler. */
@@ -34,12 +40,7 @@ export interface StartTimingOptions {
 export declare function timedStartHandler<Options>(timing: Timing, handler: StartHandler<Options>, getRouter: () => AnyRouter, options?: StartTimingOptions): StartHandler<Options>;
 /** What `nameServerFunction` reads of a server function's middleware call. */
 interface ServerFunctionCall<Next> {
-  /** Start's compile-time record of the function: its id, its variable name and its file. */
-  readonly serverFnMeta: {
-    readonly id: string;
-    readonly name: string;
-    readonly filename: string;
-  };
+  readonly serverFnMeta: ServerFnMeta;
   readonly next: () => Next;
 }
 /**
@@ -52,8 +53,9 @@ interface ServerFunctionCall<Next> {
  * which Start's compiler records and which no build changes, where the id in
  * the request's path is a hash a reader cannot read back. The id is used only
  * to tell the call the request made from a call its handler makes in-process,
- * which names nothing. A file whose path the core refuses, one with a space, `?` or `#`,
- * throws on the function's every call.
+ * which names nothing. A name the core refuses, from a file path with a space,
+ * `?` or `#`, or longer than it takes, goes to the app's `fault` when the
+ * operation closes, and the call writes no record.
  */
 export declare function nameServerFunction<Next>(call: ServerFunctionCall<Next>): Next;
 //#endregion

@@ -8,8 +8,9 @@
 import { Effect } from "effect";
 
 import * as effectCarrier from "../request-timing-effect.ts";
+import { parseRecord } from "../request-timing-summary.ts";
 import * as plainCarrier from "../request-timing.ts";
-import { methodOf, OperationName, requestTiming } from "../request-timing.ts";
+import { methodOf, OperationName, requestTiming, type TimingRecord } from "../request-timing.ts";
 
 export const DB_WAITS = 2;
 export const PATTERN = "/presets/:id";
@@ -50,22 +51,75 @@ export function lines() {
   };
 }
 
-/** A latch a handler waits on, which tells the case once the handler is waiting. */
+/**
+ * The line a fixture's `fault` writes beside its records, as an app logs a
+ * fault: the error's message, under `fault`.
+ */
+export const faultLine = (error: unknown): string =>
+  JSON.stringify({ fault: error instanceof Error ? error.message : String(error) });
+
+/**
+ * The records among the lines `next` hands over, one at a time, with every
+ * fault line read past on the way kept for `faults`. Other lines are skipped.
+ */
+export function recordsFrom(next: () => Promise<string>) {
+  const faults: string[] = [];
+  return {
+    next: async (): Promise<TimingRecord> => {
+      for (;;) {
+        const line = await next();
+        const record = parseRecord(line);
+        if (record !== undefined) return record;
+        const parsed: unknown = line.startsWith("{") ? JSON.parse(line) : undefined;
+        if (typeof parsed === "object" && parsed !== null && "fault" in parsed) {
+          faults.push(String(parsed.fault));
+        }
+      }
+    },
+    /** The faults read past so far, taken. */
+    faults: () => faults.splice(0),
+  };
+}
+
+/**
+ * A response as a client reads it, less the one header that differs by the
+ * second it was sent, with its body read by `body`: as text, unless a case
+ * reads bytes or masks what differs by the moment it was made.
+ */
+export async function read(
+  response: Response,
+  body: (response: Response) => Promise<unknown> = (sent) => sent.text(),
+) {
+  const headers = [...response.headers].filter(([name]) => name !== "date");
+  return { status: response.status, headers, body: await body(response) };
+}
+
+/**
+ * A latch a handler waits on midway, so a case can leave while the handler is
+ * provably waiting and then let it finish. One handler at a time.
+ */
 export function latch() {
   let reached = Promise.withResolvers<void>();
   let opened = Promise.withResolvers<void>();
+  let finished = Promise.withResolvers<void>();
   return {
-    /** What the handler awaits. */
+    /** What a handler awaits midway. */
     wait: () => {
       reached.resolve();
       return opened.promise;
     },
-    /** Resolves once a handler is waiting on the latch. */
+    /** Called by the handler once it has done everything after the wait. */
+    done: () => finished.resolve(),
+    /** Resolves once a handler is waiting. */
     reached: () => reached.promise,
-    open: () => {
+    /** Lets the waiting handler on, and resolves once it has called `done`. */
+    open: async () => {
+      const waiting = finished;
       opened.resolve();
+      await waiting.promise;
       reached = Promise.withResolvers<void>();
       opened = Promise.withResolvers<void>();
+      finished = Promise.withResolvers<void>();
     },
   };
 }
@@ -76,9 +130,7 @@ const query = async () => [{ id: 1 }];
 export function presetServer(adoption: Adoption) {
   const sink = lines();
   const timing = requestTiming({
-    fault: (error) => {
-      throw error;
-    },
+    fault: (error) => sink.write(faultLine(error)),
     sink: (record) => {
       sink.write(JSON.stringify({ level: "info", msg: "served" }));
       sink.write(JSON.stringify({ service: "fixture", ...record }));

@@ -8,7 +8,7 @@ on:
   # itself: the filing below. The other half — the long property budget — is set
   # by the test-suite action, which this repo substitutes for (see the step that
   # runs `bun test` and the exemptions above it), so the numbers stay in that
-  # action rather than being restated here for a suite of six properties.
+  # action rather than being restated here for this suite's properties.
   schedule:
     - cron: "0 2 * * *"
 
@@ -112,7 +112,7 @@ jobs:
       #
       # The fifth is the test-suite action, which the step below substitutes for
       # rather than uses. Its seal puts the run in a network namespace, and the
-      # Postgres and Redis this suite needs are service containers on the host's
+      # Postgres, MySQL and Redis this suite needs are service containers on the host's
       # loopback, which that namespace does not reach. Substituting drops three
       # guarantees every other repo gets — the seal itself, the junit report,
       # and the two greps over it that refuse a skipped test and an

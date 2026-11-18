@@ -43,6 +43,7 @@ import {
   WAIT_KINDS,
   type WaitKind,
 } from "../request-timing.ts";
+import { countsOf } from "./request-timing-oracle.ts";
 
 type Step =
   | { readonly do: "wait"; readonly kind: WaitKind; readonly turns: number; readonly lazy: boolean }
@@ -144,12 +145,7 @@ function expected(plan: Plan, callsPer: (turns: number) => number = () => 1) {
 
 const counted = (records: readonly TimingRecord[]) =>
   records
-    .map((made) => ({
-      operation: made.operation,
-      db: made.db.count,
-      out: made.out.count,
-      store: made.store.count,
-    }))
+    .map((made) => ({ operation: made.operation, ...countsOf(made) }))
     .toSorted((a, b) => a.operation.localeCompare(b.operation));
 
 // --- the plain carrier -------------------------------------------------------

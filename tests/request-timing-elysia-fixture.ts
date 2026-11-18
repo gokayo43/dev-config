@@ -17,9 +17,8 @@ import { requestTimingPlugin } from "../request-timing-elysia.ts";
 import { timedFetch } from "../request-timing-fetch.ts";
 import { timedBunRedis } from "../request-timing-bun-redis.ts";
 import { timedPool } from "../request-timing-mysql2.ts";
-import { parseRecord } from "../request-timing-summary.ts";
-import { requestTiming, type TimingRecord } from "../request-timing.ts";
-import { latch, lines } from "./request-timing-fixture.ts";
+import { requestTiming } from "../request-timing.ts";
+import { faultLine, latch, lines, recordsFrom } from "./request-timing-fixture.ts";
 import { keyPrefix, REDIS_URL, scratchDatabase } from "./request-timing-servers.ts";
 
 const presets = mysqlTable("presets", {
@@ -36,6 +35,9 @@ class Broken extends Error {}
 /** How many lanes the overlap property can run at once, each a route of its own so its record names it. */
 export const LANES = 6;
 
+/** The operation whose record the fixture's sink refuses, by throwing, as a sink whose log has gone would. */
+export const UNWRITTEN = "/unwritten";
+
 /** Boots the app on a free loopback port, with request timing on or off. */
 export async function presetApp(timed: boolean, connectionLimit = 4) {
   const database = await scratchDatabase(connectionLimit);
@@ -48,10 +50,9 @@ export async function presetApp(timed: boolean, connectionLimit = 4) {
   });
   const sink = lines();
   const timing = requestTiming({
-    fault: (error) => {
-      throw error;
-    },
+    fault: (error) => sink.write(faultLine(error)),
     sink: (record) => {
+      if (record.operation === UNWRITTEN) throw new Error("the sink refused the record");
       sink.write(JSON.stringify({ level: "info", msg: "served" }));
       sink.write(JSON.stringify({ service: "fixture", ...record }));
     },
@@ -123,13 +124,19 @@ export async function presetApp(timed: boolean, connectionLimit = 4) {
       await db.select().from(presets);
       await held.wait();
       await db.select().from(presets);
+      held.done();
       return "too late";
     })
+    .get(UNWRITTEN, () => "served")
+    // A status no response can be sent with, which Bun answers with the
+    // server's own 500.
+    .get("/errored", () => Response.error())
     .ws("/socket", { message: (socket, message) => void socket.send(message) })
     .get("/drip", async function* () {
       yield "drop;";
       await held.wait();
       await db.select().from(presets);
+      held.done();
       yield "never read";
     });
   for (let lane = 0; lane < LANES; lane += 1) {
@@ -148,19 +155,16 @@ export async function presetApp(timed: boolean, connectionLimit = 4) {
   const server = app.server;
   if (server === null) throw new Error("the fixture app did not start");
 
-  const nextRecord = async (): Promise<TimingRecord> => {
-    for (;;) {
-      const record = parseRecord(await sink.next());
-      if (record !== undefined) return record;
-    }
-  };
+  const records = recordsFrom(sink.next);
 
   return {
     url: (path: string) => new URL(path, server.url),
     /** The bare pool beneath, which the overlap property holds a connection of. */
     pool: database.pool,
     nextLine: sink.next,
-    nextRecord,
+    nextRecord: records.next,
+    /** The faults the app's `fault` wrote among the lines read so far, taken. */
+    faults: records.faults,
     held,
     [Symbol.asyncDispose]: async () => {
       await app.stop(true);

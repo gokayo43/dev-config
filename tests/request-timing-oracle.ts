@@ -15,7 +15,8 @@ import {
 /** What one kind of wait came to in a record: its count alone, the part a real server makes deterministic. */
 export type Counts = Readonly<Record<WaitKind, number>>;
 
-const countsOf = (record: TimingRecord): Counts => ({
+/** How many waits of each kind a record counted. */
+export const countsOf = (record: TimingRecord): Counts => ({
   db: record.db.count,
   out: record.out.count,
   store: record.store.count,

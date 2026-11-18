@@ -1,7 +1,7 @@
 import { must } from "./narrowing.js";
 import { o as plainStorage, t as OperationName } from "./request-timing-operation-DfYtKiLO.js";
-import { inOperation, within } from "./request-timing.js";
-import { n as watched, t as endings } from "./request-timing-entry-CvP6uUHj.js";
+import "./request-timing.js";
+import { n as registeredNames, r as timedEntry } from "./request-timing-entry-D56lhQUm.js";
 //#region request-timing-tanstack-start.ts
 /**
 * Every open operation of a server-function request, by the operation. The
@@ -23,7 +23,7 @@ const DEFAULT_SERVER_FN_BASE = "/_serverFn/";
 * chunked` itself. A rendered page is not one, since its time to the last byte
 * is the page's own work.
 */
-const isStreamed = (response) => response.headers.get("transfer-encoding") === "chunked" || /^(?:text\/event-stream|application\/x-tss-framed)\b/u.test(response.headers.get("content-type") ?? "");
+const isStreamed = (headers) => headers.get("transfer-encoding") === "chunked" || /^(?:text\/event-stream|application\/x-tss-framed)\b/u.test(headers.get("content-type") ?? "");
 /**
 * Start's server-entry handler with every request it serves run as one
 * operation, for `timing`: `export default { fetch: timedStartHandler(timing,
@@ -44,69 +44,45 @@ const isStreamed = (response) => response.headers.get("transfer-encoding") === "
 */
 function timedStartHandler(timing, handler, getRouter, options = {}) {
 	const base = options.serverFnBase ?? DEFAULT_SERVER_FN_BASE;
+	if (!base.startsWith("/") || !base.endsWith("/")) throw new Error(`request timing: serverFnBase is the path server functions are called on, beginning and ending with "/", such as "/_serverFn/"; it was given as ${JSON.stringify(base)}`);
 	const router = getRouter();
-	const names = /* @__PURE__ */ new Map();
+	const nameOf = registeredNames();
 	const routes = Object.values(router.routesById);
-	for (const route of routes) if (!route.isRoot) names.set(route.fullPath, OperationName.registered(route.fullPath));
+	for (const route of routes) if (!route.isRoot) nameOf(route.fullPath);
 	/**
 	* The route the router matches for `pathname`, as Start's own handler asks
 	* it. `**` among the params is Start's mark for a route that matched only a
-	* prefix of the path, which renders the not-found page and runs no handler.
+	* prefix of the path, which renders the not-found page and runs no handler,
+	* and the root route answers no path of its own: it is found only for a path
+	* no route matched.
 	*/
 	const routeName = (pathname) => {
 		const [, params, found] = router.getMatchedRoutes(pathname);
 		const route = found;
-		if (route === void 0 || params["**"] !== void 0) return OperationName.unmatched;
-		return names.get(route.fullPath) ?? OperationName.unmatched;
+		if (route === void 0 || route.isRoot || params["**"] !== void 0) return OperationName.unmatched;
+		return nameOf(route.fullPath);
 	};
-	const serve = (request, handlerOptions) => {
-		const operation = timing.open();
-		const { pathname } = new URL(request.url);
-		let name;
-		if (pathname.startsWith(base)) {
-			const awaiting = {
-				id: must(pathname.slice(base.length).split("/")[0]),
-				name: void 0
-			};
-			awaitingName.set(operation, awaiting);
-			name = () => awaiting.name ?? OperationName.unmatched;
-		} else {
-			const matched = routeName(pathname);
-			name = () => matched;
-		}
-		const { end, produced } = endings(operation, request, name, isStreamed);
-		return new Promise((resolve) => resolve(within(operation, () => handler(request, handlerOptions)))).then((response) => {
-			produced(response);
-			const streamed = isStreamed(response);
-			const headers = new Headers(response.headers);
-			if (!headers.has("content-type") || response.body === null) {
-				end({
-					status: response.status,
-					aborted: false,
-					streamed
-				});
-				return response;
-			}
-			const body = watched(response.body, (aborted) => end({
-				status: response.status,
-				aborted,
-				streamed
-			}));
-			return new Response(body, {
-				status: response.status,
-				statusText: response.statusText,
-				headers
-			});
-		}, (error) => {
-			end({
-				status: 500,
-				aborted: false,
-				streamed: false
-			});
-			throw error;
-		});
+	/** How the operation serving a request to `pathname` is named, once it is open. */
+	const naming = (pathname) => (operation) => {
+		if (!pathname.startsWith(base)) return () => routeName(pathname);
+		const awaiting = {
+			id: must(pathname.slice(base.length).split("/")[0]),
+			meta: void 0
+		};
+		awaitingName.set(operation, awaiting);
+		return () => awaiting.meta === void 0 ? OperationName.unmatched : nameOf(`${awaiting.meta.filename}:${awaiting.meta.name}`);
 	};
-	return (request, handlerOptions) => inOperation() ? handler(request, handlerOptions) : serve(request, handlerOptions);
+	return (request, handlerOptions) => timedEntry(timing, request, () => handler(request, handlerOptions), naming(new URL(request.url).pathname), (response, headers) => {
+		const streamed = isStreamed(headers);
+		return !headers.has("content-type") || response.body === null ? { close: {
+			status: response.status,
+			aborted: false,
+			streamed
+		} } : {
+			watch: response.body,
+			streamed: () => streamed
+		};
+	});
 }
 /**
 * The server half of a global function middleware, which names the operation
@@ -118,13 +94,14 @@ function timedStartHandler(timing, handler, getRouter, options = {}) {
 * which Start's compiler records and which no build changes, where the id in
 * the request's path is a hash a reader cannot read back. The id is used only
 * to tell the call the request made from a call its handler makes in-process,
-* which names nothing. A file whose path the core refuses, one with a space, `?` or `#`,
-* throws on the function's every call.
+* which names nothing. A name the core refuses, from a file path with a space,
+* `?` or `#`, or longer than it takes, goes to the app's `fault` when the
+* operation closes, and the call writes no record.
 */
 function nameServerFunction(call) {
 	const operation = plainStorage.getStore();
 	const awaiting = operation === void 0 ? void 0 : awaitingName.get(operation);
-	if (awaiting?.name === void 0 && awaiting?.id === call.serverFnMeta.id) awaiting.name = OperationName.registered(`${call.serverFnMeta.filename}:${call.serverFnMeta.name}`);
+	if (awaiting?.meta === void 0 && awaiting?.id === call.serverFnMeta.id) awaiting.meta = call.serverFnMeta;
 	return call.next();
 }
 //#endregion

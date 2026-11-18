@@ -24,7 +24,9 @@ import { check } from "../property.ts";
 import { requestTimingConforms } from "../request-timing-conformance.ts";
 import { requestTimingPlugin } from "../request-timing-elysia.ts";
 import { requestTiming, type TimingRecord } from "../request-timing.ts";
-import { LANES, presetApp } from "./request-timing-elysia-fixture.ts";
+import { LANES, presetApp, UNWRITTEN } from "./request-timing-elysia-fixture.ts";
+import { faultLine, lines, read, recordsFrom } from "./request-timing-fixture.ts";
+import { countsOf } from "./request-timing-oracle.ts";
 
 type App = Awaited<ReturnType<typeof presetApp>>;
 
@@ -36,12 +38,6 @@ afterAll(async () => {
   await app[Symbol.asyncDispose]();
 });
 
-/** A response as a client reads it, less the one header that differs by the second it was sent. */
-async function read(response: Response) {
-  const headers = [...response.headers].filter(([name]) => name !== "date");
-  return { status: response.status, headers, body: await response.text() };
-}
-
 /** The scripted sequence the differential runs against both apps. */
 const SCRIPT: readonly [string, RequestInit][] = [
   ["/presets/1", {}],
@@ -52,6 +48,8 @@ const SCRIPT: readonly [string, RequestInit][] = [
   ["/fail", {}],
   ["/broken", {}],
   ["/nowhere", {}],
+  [UNWRITTEN, {}],
+  ["/errored", {}],
   [
     "/presets",
     { method: "POST", headers: { "content-type": "application/json" }, body: '{"label":"third"}' },
@@ -161,7 +159,7 @@ describe("the Elysia connector", () => {
       const made = await recordOf(written);
       expect(made).toMatchObject(expected);
       const counts = kinds[path] ?? {};
-      expect({ db: made.db.count, store: made.store.count, out: made.out.count }).toEqual({
+      expect(countsOf(made)).toEqual({
         db: counts.db ?? 0,
         store: counts.store ?? 0,
         out: counts.out ?? 0,
@@ -177,7 +175,7 @@ describe("the Elysia connector", () => {
     client.abort();
     await expect(response).rejects.toMatchObject({ name: "AbortError" });
     const made = await written;
-    app.held.open();
+    await app.held.open();
     expect(made).toMatchObject({ operation: "/hang", status: 499, aborted: true, streamed: false });
     expect(made.db.count).toBe(1);
     await recordOf(Promise.resolve(made));
@@ -193,7 +191,7 @@ describe("the Elysia connector", () => {
     await app.held.reached();
     client.abort();
     const made = await written;
-    app.held.open();
+    await app.held.open();
     expect(made).toMatchObject({ operation: "/drip", status: 200, aborted: true, streamed: true });
     expect(made.db.count).toBe(0);
     await recordOf(Promise.resolve(made));
@@ -235,12 +233,7 @@ describe("the Elysia connector", () => {
           holding.release();
           await Promise.all(responses);
           const records = await Promise.all(lanes.map(() => app.nextRecord()));
-          const seen = Object.fromEntries(
-            records.map((made) => [
-              made.operation,
-              { db: made.db.count, store: made.store.count, out: made.out.count },
-            ]),
-          );
+          const seen = Object.fromEntries(records.map((made) => [made.operation, countsOf(made)]));
           const planned = Object.fromEntries(
             lanes.map((lane) => {
               const plan = plans[lane] ?? { db: 0, store: 0, out: 0 };
@@ -276,6 +269,51 @@ describe("the Elysia connector", () => {
     expect(() =>
       new Elysia().get("/early", () => "early").use(requestTimingPlugin(timing)),
     ).toThrow("GET /early");
+  });
+
+  // What the app's `fault` is handed, and no record: the response served as
+  // it would be without timing, and the app still serving.
+  const faults: [string, string, number, string][] = [
+    ["a sink that throws", UNWRITTEN, 200, "the sink refused the record"],
+    ["a status no response is sent with", "/errored", 500, "closed with status 0"],
+  ];
+  for (const [fault, path, status, message] of faults) {
+    test(`hands ${fault} to the app's fault, once, and writes no record`, async () => {
+      const response = await fetch(app.url(path));
+      await response.text();
+      expect(response.status).toBe(status);
+      await (await fetch(app.url("/presets/2"))).text();
+      expect((await app.nextRecord()).operation).toBe("/presets/:id");
+      const reported = app.faults();
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toContain(message);
+    });
+  }
+
+  test("hands a name the core refuses, met first on a request, to the app's fault", async () => {
+    const written = lines();
+    const records = recordsFrom(written.next);
+    const timing = requestTiming({
+      fault: (error) => written.write(faultLine(error)),
+      sink: (made) => written.write(JSON.stringify(made)),
+    });
+    // Served by Bun with the app's own `fetch`, not `listen`, so the plugin's
+    // check of every route at startup never runs.
+    const optional = new Elysia()
+      .use(requestTimingPlugin(timing))
+      .get("/presets/:id?", () => "one")
+      .get("/health", () => "ok");
+    using server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: optional.fetch });
+    const response = await fetch(new URL("/presets/1", server.url));
+    expect({ status: response.status, body: await response.text() }).toEqual({
+      status: 200,
+      body: "one",
+    });
+    await (await fetch(new URL("/health", server.url))).text();
+    expect((await records.next()).operation).toBe("/health");
+    const reported = records.faults();
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain("query string");
   });
 
   test("refuses at listen a route whose pattern the core will not take", () => {

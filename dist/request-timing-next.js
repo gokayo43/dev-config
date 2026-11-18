@@ -1,6 +1,6 @@
 import { t as OperationName } from "./request-timing-operation-DfYtKiLO.js";
-import { inOperation, within } from "./request-timing.js";
-import { t as endings } from "./request-timing-entry-CvP6uUHj.js";
+import "./request-timing.js";
+import { r as timedEntry } from "./request-timing-entry-D56lhQUm.js";
 import { t as marked } from "./request-timing-route-BhLXYn3w.js";
 //#region request-timing-next.ts
 /**
@@ -11,50 +11,16 @@ import { t as marked } from "./request-timing-route-BhLXYn3w.js";
 * pattern itself.
 */
 /**
-* `body`, passed through chunk for chunk, with `ended` called once the last
-* chunk has been taken, the source has failed, or the client has cancelled.
-* Not `request-timing-entry.ts`'s `watched`, since Next.js sends every body
-* chunked and only the chunks the body hands over say whether it streamed.
-* The source still runs in the context it was made in, the handler's, so what
-* it waits on as it is pulled counts in the operation (measured on Bun 1.4.4
-* and Node 24: a stream's `pull` sees the store its constructor ran under, not
-* its reader's). A high-water mark of nothing reads no chunk ahead of
-* the server, so the source is pulled exactly as it was without the wrapper.
-*
-* A body counts as streamed once it has handed over a chunk and was then not
-* finished on the next read: a buffered body is one chunk and then its end.
-* `delivered` counts the chunks handed over, for the client's abort to read.
+* Whether a body Next.js sends was sent over time. Next.js sends every body
+* chunked, so only the chunks it hands over say: a buffered body is one chunk
+* and then its end, and a body that was not finished on the read after its
+* first chunk, or was still being read when it stopped, streamed. What a
+* source waits on as it is pulled counts in the operation, since it runs in
+* the context it was made in, the handler's (measured on Bun 1.4.4 and Node
+* 24: a stream's `pull` sees the store its constructor ran under, not its
+* reader's).
 */
-function counted(body, delivered, ended) {
-	const reader = body.getReader();
-	return new ReadableStream({
-		pull: (controller) => reader.read().then((chunk) => {
-			if (chunk.done) {
-				controller.close();
-				ended({
-					aborted: false,
-					streamed: delivered.chunks > 1
-				});
-				return;
-			}
-			delivered.chunks += 1;
-			controller.enqueue(chunk.value);
-		}, (error) => {
-			ended({
-				aborted: false,
-				streamed: delivered.chunks > 0
-			});
-			controller.error(error);
-		}),
-		cancel: (reason) => {
-			ended({
-				aborted: true,
-				streamed: delivered.chunks > 0
-			});
-			return reader.cancel(reason);
-		}
-	}, { highWaterMark: 0 });
-}
+const streamed = ({ finished, chunks }) => finished ? chunks > 1 : chunks > 0;
 /**
 * The wrapper, for `timing`. An app makes it once and wraps each handler a
 * `route.ts` exports with it, naming the route's pattern as its place under
@@ -76,35 +42,14 @@ function counted(body, delivered, ended) {
 function requestTimingRoute(timing) {
 	return (pattern, handler) => {
 		const name = OperationName.registered(pattern);
-		const timed = (request, context) => {
-			if (inOperation()) return Promise.resolve(handler(request, context));
-			const operation = timing.open();
-			const delivered = { chunks: 0 };
-			const { end, produced } = endings(operation, request, () => name, () => delivered.chunks > 0);
-			return new Promise((resolve) => resolve(within(operation, () => handler(request, context)))).then((response) => {
-				produced(response);
-				if (response.body === null || request.method === "HEAD") {
-					end({
-						status: response.status,
-						aborted: false,
-						streamed: false
-					});
-					return response;
-				}
-				const body = counted(response.body, delivered, (how) => end({
-					status: response.status,
-					...how
-				}));
-				return new Response(body, response);
-			}, (error) => {
-				end({
-					status: 500,
-					aborted: false,
-					streamed: false
-				});
-				throw error;
-			});
-		};
+		const timed = (request, context) => timedEntry(timing, request, () => handler(request, context), () => () => name, (response) => response.body === null || request.method === "HEAD" ? { close: {
+			status: response.status,
+			aborted: false,
+			streamed: false
+		} } : {
+			watch: response.body,
+			streamed
+		});
 		return marked(timed, {
 			kind: "route",
 			pattern

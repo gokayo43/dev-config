@@ -3,7 +3,7 @@
  * `handle(program)`, on a base procedure that carries the request-timing
  * middleware while timing is on.
  */
-import { initTRPC, TRPCError } from "@trpc/server";
+import { initTRPC, lazy, TRPCError } from "@trpc/server";
 import { TRPC_ERROR_CODES_BY_KEY, type TRPC_ERROR_CODE_KEY } from "@trpc/server/rpc";
 import { eq } from "drizzle-orm";
 import { Effect } from "effect";
@@ -57,6 +57,13 @@ const code = (raw: unknown): TRPC_ERROR_CODE_KEY => {
   if (known === undefined) throw new TypeError("a code tRPC knows is required");
   return known;
 };
+
+/**
+ * A procedure of a lazily loaded router whose path is longer than the core
+ * takes for a name: the envelope cannot check it when the route module loads,
+ * so its call meets the refusal when it closes.
+ */
+export const REFUSED_PROCEDURE = `deferred.${"aProcedurePathLongerThanTheCoreTakes".repeat(8)}`;
 
 /** How many lanes the overlap case can run at once, each a procedure of its own so its record names it. */
 export const LANES = 6;
@@ -127,4 +134,10 @@ export const appRouter = t.router({
     }),
   }),
   lanes: t.router(lanes),
+  faults: t.router({ unwritten: procedure.query(() => "served") }),
+  deferred: lazy(async () =>
+    t.router({
+      [REFUSED_PROCEDURE.slice("deferred.".length)]: procedure.query(() => "served"),
+    }),
+  ),
 });
