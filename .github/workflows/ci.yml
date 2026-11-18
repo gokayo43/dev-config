@@ -8,7 +8,7 @@ on:
   # itself: the filing below. The other half — the long property budget — is set
   # by the test-suite action, which this repo substitutes for (see the step that
   # runs `bun test` and the exemptions above it), so the numbers stay in that
-  # action rather than being restated here for a suite of six properties.
+  # action rather than being restated here for this suite's properties.
   schedule:
     - cron: "0 2 * * *"
 
@@ -65,6 +65,25 @@ jobs:
           --health-retries 30
           --tmpfs /data:size=64m
 
+      # The request-timing connector suites grade what mysql2 and drizzle do
+      # against a real server. They create and drop a database of their own on
+      # it and refuse to guess at an address, so this instance exists for them.
+      # The version and digest are the warehouse's CI database, the first app
+      # to adopt the connector. Its health check reaches the server over TCP,
+      # which the image's first-start initialisation does not listen on.
+      mysql:
+        image: mysql:8.0.42@sha256:63823b8e2cbe4ae0c558155e02d00beba56130fbc3d147efccbdb328ae2dbb9e
+        env:
+          MYSQL_ROOT_PASSWORD: mysql
+        ports:
+          - 127.0.0.1::3306
+        options: >-
+          --health-cmd "mysqladmin ping --host 127.0.0.1 --user root --password=mysql --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --tmpfs /var/lib/mysql:size=1g
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -93,7 +112,7 @@ jobs:
       #
       # The fifth is the test-suite action, which the step below substitutes for
       # rather than uses. Its seal puts the run in a network namespace, and the
-      # Postgres and Redis this suite needs are service containers on the host's
+      # Postgres, MySQL and Redis this suite needs are service containers on the host's
       # loopback, which that namespace does not reach. Substituting drops three
       # guarantees every other repo gets — the seal itself, the junit report,
       # and the two greps over it that refuse a skipped test and an
@@ -134,12 +153,13 @@ jobs:
       # applied to nothing. docs/gates/test-suite.md.
       - run: bun test --coverage
         env:
-          # Neither has a default, deliberately: the conformance suite flushes
+          # None has a default, deliberately: the conformance suite flushes
           # its Redis and the database suites drop databases on their server,
           # and `localhost` on a box that runs the fleet's stacks is not a safe
-          # thing for either to assume. Both are the port the daemon assigned.
+          # thing for any of them to assume. Each is the port the daemon assigned.
           TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
           TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}
+          TEST_MYSQL_URL: mysql://root:mysql@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/mysql
 
       # The k6 ramp this repo ships is the one file its own linter cannot read,
       # so it gets executed instead: both branches, against a stub server.

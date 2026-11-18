@@ -30,6 +30,13 @@ takes the repo's implementation and the resources it needs, and the repo's own
 `bun test` is what runs it. Distinct from a gate: nothing in CI knows it exists
 until the suite it is part of fails.
 
+**Conformance kit** — an export a repo's own test calls against its booted
+server, which asserts with bun:test's `expect` and registers no test of its
+own: request timing's, which grades one operation's record. Distinct from a
+conformance suite, which registers its tests, and known to CI: the repo
+contract requires a live repo that serves HTTP and owns a database to call it,
+or to say at the call site how its operations are timed otherwise.
+
 **Deny tier** — the rules set to `error`. `warn` is advisory and cannot fail a
 build, so the deny tier is the whole of what a lint config enforces.
 
@@ -47,10 +54,10 @@ property of what the repo _is_, and it is visible in the caller's diff.
 one field and inferred by nothing: `dev` or `live`. Distinct from a deployment,
 which is a thing that has happened, and from an exemption, which is about what a
 repo _is_ — this is about who it owes. `live` is what the crash reporting is
-derived from; the swept browser suite for a repo that ships pages; and — for a
-repo that owns migrations — the backups, the rehearsed restore and the upgrade
-gate as well. All of it read from the repo rather than from a workflow input, so
-that going live is one word rather than a checklist somebody does half of, and
+derived from; the swept browser suite for a repo that ships pages; for a repo
+that owns migrations, the backups, the rehearsed restore and the upgrade gate as
+well; and for one that also serves HTTP, the request-timing conformance test.
+All of it read from the repo rather than from a workflow input, so that going live is one word rather than a checklist somebody does half of, and
 cannot be undone by editing the workflow those rules govern. It only moves up:
 `dev` says nothing about anyone, `live` says people are on the other end, and a
 repo that is genuinely being wound down says so with an exemption rather than
@@ -125,6 +132,39 @@ asks for. `ran-on` names which happened, because nothing downstream can tell.
 router registered them (`/presets/:id`, not `/presets/42`). Only the router
 knows which route answered a URL, so it is the only honest source, and both
 floors over it are measured against it.
+
+**Operation** — the innermost named handler a server's framework dispatches: a
+matched route handler, one RPC procedure, one server function, named as its
+router registered it. A request that only carries procedures, such as a tRPC
+batch, is not one; each procedure in it is. Distinct from a request, which is
+what reached the server, and from background work, which belongs to no
+operation.
+
+**Wait** — a span in which an operation waits on something outside its own
+code: its database (`db`), an outside HTTP service (`out`) or an in-memory store
+such as Redis (`store`). A wait belongs to the operation that issued it,
+whoever settles it.
+
+**Record** — the one line of JSON an operation closes into when its response has
+finished: its name, method, status, total time, and per kind of wait the summed
+time and the count. It is derived, never edited, and nothing of a person can
+be represented in it.
+
+**The rest** — an operation's total time minus the time during which at least
+one of its waits was in flight. It holds the code's own time and every wait
+nobody measured, so it is never called the app's code.
+
+**Carrier** — what tells a wait which operation is current: `AsyncLocalStorage`
+in plain async code, the fiber in an Effect program.
+
+**Crossing** — a call where the operation moves between carriers. In: a plain
+handler hands an Effect program to its runtime, and from there only the fiber
+says which operation is current. Out: an Effect program hands a promise-returning
+thunk to plain code, such as a database client's, and the fiber's operation is
+the plain carrier's until the thunk's promise settles.
+
+**Sink** — the function an app hands request timing when it switches it on,
+which writes each record to stdout. The export itself writes nothing.
 
 **Route snapshot** — a repo's committed `routes.snapshot.json`: its route table
 as of a commit, which is what makes the table readable at a ref nothing boots.

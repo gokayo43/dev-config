@@ -8,6 +8,7 @@ await entry(async () => {
     "database",
     "exemptions",
     "data-jobs-external",
+    "operations-timed-otherwise",
     "base-ref",
     "before",
   );
@@ -23,6 +24,11 @@ await entry(async () => {
     notice(`the data jobs run outside this repo: ${dataJobsExternal}`);
   }
 
+  const operationsTimedOtherwise = read["operations-timed-otherwise"];
+  if (operationsTimedOtherwise.trim() !== "") {
+    notice(`the operations are not timed by request timing: ${operationsTimedOtherwise}`);
+  }
+
   // Refused rather than read as `none`, which is what any "is it the word I
   // know" test does with a value nobody defined: `none` is the one value that
   // switches every database rule off, so a typo would shed them in silence.
@@ -34,6 +40,7 @@ await entry(async () => {
       database,
       exemptions,
       dataJobsExternal,
+      operationsTimedOtherwise,
       // The two facts about the run, read from the `github` context by
       // action.yml rather than threaded through as inputs: they are the event's
       // own, identical for every caller, and a caller that had to pass them

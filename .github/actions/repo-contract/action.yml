@@ -9,7 +9,8 @@ description: >-
 
   That last one is `lifecycle`, which reads "dev" or "live". "live" derives what
   a repo with users owes — crash reporting, and for one that owns migrations a
-  backup script, a rehearsed restore and the upgrade gate — from the repo
+  backup script, a rehearsed restore and the upgrade gate, and for one that
+  also serves HTTP a request-timing conformance test — from the repo
   itself rather than from this action's inputs, so none of it can be shed by
   editing the workflow those rules are about. It is also read at the base ref,
   because a field that only ever moves up cannot be tidied back down by a
@@ -42,6 +43,16 @@ inputs:
       them. The reason IS the waiver: there is no way to claim it without naming
       the jobs, and it is read in review like the reason on a lint directive.
     default: ""
+  operations-timed-otherwise:
+    description: >-
+      Why a live repo that serves HTTP and owns a database is not timed by
+      request timing: how its operations are timed instead, or that it serves
+      nothing a connector covers, and what it serves. Empty, which is every repo
+      that uses it, asks for a test importing
+      @gokayo43/dev-config/request-timing/conformance.
+      The reason is the waiver, and it is refused on a repo that does not owe
+      the test or that has one.
+    default: ""
 
 runs:
   using: composite
@@ -57,6 +68,7 @@ runs:
         INPUT_DATABASE: ${{ inputs.database }}
         INPUT_EXEMPTIONS: ${{ inputs.exemptions }}
         INPUT_DATA_JOBS_EXTERNAL: ${{ inputs['data-jobs-external'] }}
+        INPUT_OPERATIONS_TIMED_OTHERWISE: ${{ inputs['operations-timed-otherwise'] }}
         INPUT_BASE_REF: ${{ github.base_ref }}
         INPUT_BEFORE: ${{ github.event.before }}
       run: |

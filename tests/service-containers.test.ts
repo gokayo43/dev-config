@@ -15,6 +15,8 @@ const POSTGRES_18 =
   "postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
 const REDIS_7 =
   "redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf";
+const MYSQL_8 =
+  "mysql:8.0.42@sha256:63823b8e2cbe4ae0c558155e02d00beba56130fbc3d147efccbdb328ae2dbb9e";
 const ALPINE = "alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b";
 /** Pinned well enough for the pin rule, and held by no registry this box can read. */
 const UNREADABLE = `ghcr.io/gokayo43/private-db@sha256:${"0".repeat(64)}`;
@@ -30,6 +32,7 @@ const INSPECTED = new Map([
   [POSTGRES_16, '{"/var/lib/postgresql/data":{}}\n'],
   [POSTGRES_18, '{"/var/lib/postgresql":{}}\n'],
   [REDIS_7, '{"/data":{}}\n'],
+  [MYSQL_8, '{"/var/lib/mysql":{}}\n'],
   [ALPINE, "null\n"],
 ]);
 

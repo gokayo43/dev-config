@@ -1,2 +1,5 @@
 node_modules/
 .claude/
+# What `next build` writes in the request-timing Next.js fixture app.
+tests/request-timing-next-app/.next/
+tests/request-timing-next-app/next-env.d.ts

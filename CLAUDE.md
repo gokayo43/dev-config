@@ -67,6 +67,9 @@ a change to a rule usually lands here too.
   whether or not anyone is on the other end; `repo-contract/browser-suite.ts` is
   the half of that word about pages rather than about a schema, which is a
   second subject reached through the one field;
+  `repo-contract/request-timing.ts` is the conformance test a live repo owes
+  for serving HTTP out of a database, called from the contract rather than from
+  `live.ts` because its waiver is graded in every lifecycle;
   `repo-contract/typecheck.ts` is what CI type-checks with — the script
   check.yml's typecheck lane reaches and the Bun `packageManager` names, one
   fact seen from both ends;
@@ -154,11 +157,11 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Nine of them are **exports** it imports and
+  gates, which run over it from CI. Twenty of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
-  `types`, and the two `dev-server*` files below are a bin it runs and the module
-  that bin imports. Two more reach it only inside those, and no specifier
-  exports either. `count-ceilings.ts` is the count budget's ceiling rule — the
+  `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
+  `dev-server-derive.ts` is the module the first imports. Seven more reach it
+  only inside those, and no specifier exports any of them. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
   command decide by — which the build bundles into `dist/count-budget.js`, a
   module of its own so `tests/count-ceilings.test.ts` can search it with
@@ -167,13 +170,38 @@ a change to a rule usually lands here too.
   count budget's write command take: the build bundles it into the count
   budget, `files` ships its source for the bin, and `tests/file-lock.test.ts`
   holds each waiter before every step through the `between` seam `lock` takes
-  for that suite's sake. Each export is reachable through
+  for that suite's sake. `request-timing-operation.ts` is what request timing's
+  two carriers share, the operation, its waits and its record, which the build
+  makes a chunk beside both and `files` ships as source for the summary;
+  `request-timing-summary.ts` is what the reader makes of a log, which the bin
+  feeds stdin and the conformance kit parses a record with;
+  `request-timing-wait.ts` is what every wait connector is built from, the
+  Proxy that answers a client as itself with some members standing in and the
+  one way a call is measured, which the build makes a chunk beside them;
+  `request-timing-entry.ts` is what every entry connector is built from, a
+  response body passed through and watched for its end, which the build makes
+  a chunk beside them too; `request-timing-route.ts` is the mark an entry
+  connector leaves on a route handler it wrapped, which the Next.js and tRPC
+  connectors' builds share as a chunk and the conformance kit's route-tree
+  check reads, from source. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is the protocol between an app and the two floors
   over its route table; `invariant-sweep.ts` replaces Playwright's browser
   context with one that watches every page it opens, popups included, and turns
   Playwright's own `video` on when the run sets `E2E_VIDEO=on`;
+  `request-timing.ts` records per operation where its time went,
+  carrying the operation in `AsyncLocalStorage`, and `request-timing-effect.ts`
+  is the same carrier in an Effect fiber, the only file that imports `effect`
+  so an app without it never loads it; `request-timing-conformance.ts` is the
+  check an adopting app runs against its booted server, and the bin
+  `request-timing-report.ts` reads a log of the records; the connectors
+  `request-timing-elysia.ts`, `request-timing-tanstack-start.ts`,
+  `request-timing-next.ts`, `request-timing-trpc.ts`,
+  `request-timing-mysql2.ts`, `request-timing-bun-sql.ts`,
+  `request-timing-bun-redis.ts` and `request-timing-fetch.ts` are an app's entry and its waits, each importing
+  its framework or driver as types only, so the package gains no runtime
+  dependency;
   `count-budget.ts` is that sweep's `test` with a `budget` fixture beside it,
   which counts a job's work per phase and holds each count exactly to a ceiling
   committed beside the spec, which the `COUNT_BUDGET=write` run lowers and
@@ -203,11 +231,12 @@ a change to a rule usually lands here too.
   is a value one call can grade, and a limiter is a sequence of attempts against
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
-  to is this package's business rather than a caller's: four of them are built and
-  seven ship their source, and no import says which. `tsdown.config.ts` is where
+  to is this package's business rather than a caller's: fourteen of them are built and
+  eight ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing}.{js,d.ts}`;
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-next,request-timing-trpc,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
+  and the chunks the request-timing ones share;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
 - `dev-server.ts` and `dev-server-derive.ts` — one supervised dev server per git
@@ -272,7 +301,9 @@ a change to a rule usually lands here too.
   one word deciding whether a whole rule set applies is its own subject), what
   pages cost a live repo in `repo-contract-browser.test.ts` (a second subject
   under that same word, and the reason the live static site is in the fixture
-  rather than in either), how a dependency spec is read in
+  rather than in either), what serving HTTP out of a database costs one in
+  `repo-contract-request-timing.test.ts` (mirroring `request-timing.ts`), how a
+  dependency spec is read in
   `repo-contract-pins.test.ts`, the git hooks in `repo-contract-lefthook.test.ts`,
   the bunfig's release-age window and its exclusions in
   `repo-contract-release-age.test.ts`, what CI type-checks with in
@@ -341,6 +372,36 @@ a change to a rule usually lands here too.
   `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
   fixture app's schemas with — is typebox under elysia's re-export.
+  Request timing's suites split by what each grades: `request-timing.test.ts`
+  the operation and its record through both carriers, `request-timing-attribution.test.ts`
+  the property that every wait lands in its own operation's record, run per
+  carrier and once against a carrier kept in `AsyncLocalStorage`, which must
+  fail it; `request-timing-summary.test.ts` the reader, the bin spawned for its
+  statuses; and `request-timing-conformance.test.ts` the kit, against the
+  servers `request-timing-fixture.ts` boots, one per carrier and one per wrong
+  adoption the kit names. The connectors' suites run against real servers:
+  `request-timing-elysia.test.ts` boots the Elysia app
+  `request-timing-elysia-fixture.ts` builds over MySQL, Redis and an outside
+  service, once with timing off as the differential's oracle;
+  `request-timing-tanstack-start.test.ts` boots the Start app
+  `request-timing-start-app/` holds, which `request-timing-start-build.ts`
+  builds with Vite and the Start plugin once per run into
+  `node_modules/.cache` and `request-timing-start-server.ts` serves with Bun,
+  in-process with timing on and in a process of its own through
+  `request-timing-start-serve.ts` with timing off, as the differential's
+  oracle; `request-timing-next.test.ts` and `request-timing-trpc.test.ts` boot
+  the Next.js app `request-timing-next-app/`, shaped as the warehouse with tRPC
+  and Effect over MySQL and an outside service, which
+  `request-timing-next-fixture.ts` builds once per run with `next build` and
+  starts per suite with `bun --bun next start`, once more with timing off as
+  the differentials' oracle, its build output gitignored and its route files
+  knip entries since only Next.js loads them; and `request-timing-mysql2.test.ts`, `request-timing-bun-sql.test.ts`,
+  `request-timing-bun-redis.test.ts` and `request-timing-fetch.test.ts` grade
+  one driver each. `request-timing-servers.ts` is their one reader of
+  `TEST_MYSQL_URL` and `TEST_REDIS_URL`, `request-timing-postgres.ts` makes the
+  Postgres databases on the server `postgres.ts` reads, and
+  `request-timing-oracle.ts` is how each reads what an operation counted and
+  what a differential step settled with, needing no server of its own.
   `git-free-environment.ts` is the one file here that is not a suite and not a
   fixture: `bunfig.toml` preloads it, so it runs before the first test file of
   every `bun test`. It takes the whole `GIT_` prefix out of the environment,
@@ -365,7 +426,7 @@ a change to a rule usually lands here too.
 ```sh
 bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites
-bun run build   # rewrites the committed dist/ from the four built exports
+bun run build   # rewrites the committed dist/ from the exports tsdown.config.ts builds
 ```
 
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
@@ -379,22 +440,25 @@ them and then watches them run nowhere. What carries their duty instead is
 trees with the shipped binary — a block of cases per rule, and a check that the
 base enables exactly the rules the plugin defines.
 
-`tests/house-limiter.ts`, `dev-server.ts` and `property.ts` are out for the same
-reason and carry their duty the same way — a suite that spawns the real thing.
+`tests/house-limiter.ts`, `dev-server.ts`, `property.ts` and
+`request-timing-report.ts` are out for the same reason and carry their duty the same way — a suite that spawns the real thing.
 `bunfig.toml` names which suite, per file, and says why `dev-server-derive.ts`
 is not with them.
 
-`bun test` needs a Postgres, a Redis, a chromium and passwordless sudo. The
-first because the replay gate's property is what two databases end up holding
-and the semantic fixtures' is what a real migration does to a real row; the
-second because a limiter's bucket is shared by two processes and its Redis can
-be gone; the third because what the invariant sweep claims is what a browser
-reports; the fourth because the test-suite gate seals a run in a network
-namespace and nothing short of taking one says whether it holds. Neither
-`TEST_DATABASE_URL` nor `TEST_REDIS_URL` has a default, and each is refused when
-unset: the database suites create and **drop** databases on the server they are
-given and the conformance suite **flushes** its Redis, and `localhost` on this
-box is a host address one of the stacks or a runner's service container may be
+`bun test` needs a Postgres, a MySQL, a Redis, a chromium and passwordless
+sudo. The Postgres because the replay gate's property is what two databases end
+up holding and the semantic fixtures' is what a real migration does to a real
+row, and the request-timing Bun.sql and Start connectors on what Bun.sql and
+drizzle do against one; the MySQL because the request-timing connectors are
+graded on what mysql2 and drizzle do against a real server; the Redis because a limiter's bucket is
+shared by two processes and its Redis can be gone; the chromium because what
+the invariant sweep claims is what a browser reports; the sudo because the
+test-suite gate seals a run in a network namespace and nothing short of taking
+one says whether it holds. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
+`TEST_REDIS_URL` has a default, and each is refused when unset: the database
+suites create and **drop** databases on the server they are given and the
+conformance suite **flushes** its Redis, and `localhost` on this box is a host
+address one of the stacks or a runner's service container may be
 publishing. `tests/postgres.ts` is the one reader of the first.
 README's "Gating this repo" has the one-liners, including the browser install.
 

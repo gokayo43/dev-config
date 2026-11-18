@@ -1,6 +1,6 @@
 {
   "name": "@gokayo43/dev-config",
-  "version": "0.74.1",
+  "version": "0.75.1",
   "description": "Shared TypeScript, oxlint, oxfmt, knip, Renovate and Lighthouse configuration for Bun projects.",
   "license": "MIT",
   "repository": {
@@ -8,7 +8,8 @@
     "url": "git+https://github.com/gokayo43/dev-config.git"
   },
   "bin": {
-    "dev-server": "./dev-server.ts"
+    "dev-server": "./dev-server.ts",
+    "request-timing-report": "./request-timing-report.ts"
   },
   "files": [
     "tsconfig.base.json",
@@ -25,6 +26,11 @@
     "interleaving.ts",
     "response-schema.ts",
     "characterization-net.ts",
+    "request-timing-conformance.ts",
+    "request-timing-operation.ts",
+    "request-timing-report.ts",
+    "request-timing-route.ts",
+    "request-timing-summary.ts",
     "bun-test.d.ts",
     "css-custom-properties.d.ts",
     "anti-slop"
@@ -52,6 +58,47 @@
       "types": "./dist/narrowing.d.ts",
       "default": "./dist/narrowing.js"
     },
+    "./request-timing": {
+      "types": "./dist/request-timing.d.ts",
+      "default": "./dist/request-timing.js"
+    },
+    "./request-timing/effect": {
+      "types": "./dist/request-timing-effect.d.ts",
+      "default": "./dist/request-timing-effect.js"
+    },
+    "./request-timing/elysia": {
+      "types": "./dist/request-timing-elysia.d.ts",
+      "default": "./dist/request-timing-elysia.js"
+    },
+    "./request-timing/mysql2": {
+      "types": "./dist/request-timing-mysql2.d.ts",
+      "default": "./dist/request-timing-mysql2.js"
+    },
+    "./request-timing/bun-redis": {
+      "types": "./dist/request-timing-bun-redis.d.ts",
+      "default": "./dist/request-timing-bun-redis.js"
+    },
+    "./request-timing/fetch": {
+      "types": "./dist/request-timing-fetch.d.ts",
+      "default": "./dist/request-timing-fetch.js"
+    },
+    "./request-timing/next": {
+      "types": "./dist/request-timing-next.d.ts",
+      "default": "./dist/request-timing-next.js"
+    },
+    "./request-timing/trpc": {
+      "types": "./dist/request-timing-trpc.d.ts",
+      "default": "./dist/request-timing-trpc.js"
+    },
+    "./request-timing/tanstack-start": {
+      "types": "./dist/request-timing-tanstack-start.d.ts",
+      "default": "./dist/request-timing-tanstack-start.js"
+    },
+    "./request-timing/bun-sql": {
+      "types": "./dist/request-timing-bun-sql.d.ts",
+      "default": "./dist/request-timing-bun-sql.js"
+    },
+    "./request-timing/conformance": "./request-timing-conformance.ts",
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
     "./interleaving": "./interleaving.ts",
@@ -82,6 +129,9 @@
     "@shadcn/lint": "0.2.0",
     "@sinclair/typebox": "0.34.52",
     "@stryker-mutator/core": "9.6.1",
+    "@tanstack/react-router": "1.170.46",
+    "@tanstack/react-start": "1.169.5",
+    "@trpc/server": "11.25.1",
     "@types/bun": "1.4.0",
     "@types/react": "19.3.0",
     "drizzle-orm": "0.45.2",
@@ -90,6 +140,8 @@
     "fast-check": "4.9.0",
     "knip": "6.38.0",
     "lefthook": "2.1.10",
+    "mysql2": "3.24.6",
+    "next": "16.4.5",
     "oxfmt": "0.63.0",
     "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2001",
@@ -97,7 +149,8 @@
     "react-dom": "19.3.0",
     "tailwindcss": "4.3.3",
     "tsdown": "0.23.0",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
   },
   "peerDependencies": {
     "@playwright/test": ">=1.62",

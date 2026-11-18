@@ -6,7 +6,9 @@
  * on the other end of it: a package manager is pinned or it is not. This half
  * grades what having users costs — a dump nobody took, a restore nobody
  * rehearsed, a crash nobody was told about, a migration nobody proved upgrades,
- * a page nobody opened — and every rule in it is reached through one field. Its
+ * a page nobody opened, an operation nobody timed — and every rule in it is
+ * reached through one field. The last is `request-timing.ts`, which the
+ * contract calls itself because its waiver is graded in every lifecycle. Its
  * own file, because one word deciding whether a whole rule set applies is a
  * different subject from the facts that always apply, and the diff of a new
  * live rule should read as a rule rather than as a change to the contract.
@@ -35,14 +37,21 @@ import { CI_WORKFLOW, type DatabaseGates } from "./ci-workflow.ts";
  * nothing about anyone, so anything is reachable from it; `live` says people
  * are on the other end, and that does not stop being true because a line was
  * tidied out of a manifest. Deleting it — or writing `dev` over it — sheds
- * backups, a rehearsed restore, crash reporting, the swept browser suite and
- * the upgrade gate in one edit that reviews as a whitespace change, which is
+ * everything `LIVE_OWES` names in one edit that reviews as a whitespace change, which is
  * the whole reason this is read from the base ref rather than trusted from the
  * tree in front of us.
  *
  * A repo really is retired sometimes, and that is a decision rather than a
  * diff: `lifecycle-retire` is where it gets written down.
  */
+/**
+ * Everything "live" derives, for the two diagnostics that tell a repo what it
+ * owes or is shedding. One statement, so a rule added under "Going live" in
+ * docs/gates/repo-contract.md is one edit here.
+ */
+const LIVE_OWES =
+  "backups, a rehearsed restore, crash reporting, the swept browser suite, the request-timing test and the upgrade gate";
+
 const READS_THE_BASE_REF =
   "the lifecycle field is compared with the base ref's, so that it cannot move back down as part of a tidy-up";
 
@@ -136,7 +145,7 @@ export function checkLifecycle(
       : [
           {
             file: "package.json",
-            message: `lifecycle was "live" at ${base.liveAt} and now ${declared.found} — a repo does not stop carrying people because a field was tidied away, and everything "live" derives goes with it: backups, a rehearsed restore, crash reporting, the swept browser suite and the upgrade gate. Put it back, or name the lifecycle-retire exemption at the call site, which is what a deliberate retirement looks like.`,
+            message: `lifecycle was "live" at ${base.liveAt} and now ${declared.found} — a repo does not stop carrying people because a field was tidied away, and everything "live" derives goes with it: ${LIVE_OWES}. Put it back, or name the lifecycle-retire exemption at the call site, which is what a deliberate retirement looks like.`,
           },
         ];
   }
@@ -172,7 +181,7 @@ function notDeclared({ found, is }: Declared): Problem[] {
   return [
     {
       file: "package.json",
-      message: `lifecycle ${found} — it says "dev" or "live", and moving it to "live" is the commit that declares this repo carries real users: from then on it owes backups, a rehearsed restore, crash reporting, the swept browser suite and the upgrade gate`,
+      message: `lifecycle ${found} — it says "dev" or "live", and moving it to "live" is the commit that declares this repo carries real users: from then on it owes ${LIVE_OWES}`,
     },
   ];
 }
@@ -222,7 +231,10 @@ const SCHEMA_IN_THE_TREE = [
  * off it would let a live repo shed its backup script, its rehearsed restore and
  * its upgrade gate by deleting one line from its own workflow.
  */
-async function ownsDatabase(root: string, all: readonly Manifest[]): Promise<string | undefined> {
+export async function ownsDatabase(
+  root: string,
+  all: readonly Manifest[],
+): Promise<string | undefined> {
   const named = all.find(({ value }) => {
     const scripts = record(value["scripts"]);
     return scripts[MIGRATE] !== undefined || scripts[ALSO_MIGRATE] !== undefined;
@@ -649,7 +661,7 @@ const EXECUTABLE = 0o111;
  * pin check applies in reverse. A Sentry SDK in either is a repo that does not
  * report its crashes.
  */
-const SHIPPED_FIELDS = ["dependencies", "optionalDependencies"] as const;
+export const SHIPPED_FIELDS = ["dependencies", "optionalDependencies"] as const;
 
 /** Any of Sentry's per-runtime SDKs, anywhere in the workspace, among what a manifest actually ships. */
 function hasSentry(all: readonly Manifest[]): boolean {
@@ -749,14 +761,15 @@ async function checkDataJobs(root: string, external: string): Promise<Problem[]>
  * upgrade and no drill to rehearse, and an API has no page to open — demanding
  * either would teach people to write something that does nothing in order to
  * get past a gate.
+ * @param owned The witness `ownsDatabase` found, or nothing for a repo with no database.
  */
 export async function checkLive(
   root: string,
   all: readonly Manifest[],
+  owned: string | undefined,
   asked: Asked,
 ): Promise<Problem[]> {
   const problems: Problem[] = [];
-  const owned = await ownsDatabase(root, all);
 
   // Everything about a database is owed exactly when the repo owns one — read
   // from its own migration entry point, never from the workflow input, which

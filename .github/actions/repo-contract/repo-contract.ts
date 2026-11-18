@@ -24,7 +24,8 @@ import {
   type DatabaseGates,
 } from "./ci-workflow.ts";
 import { checkOffReasons } from "./lint-switch-offs.ts";
-import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
+import { checkLifecycle, checkLive, lifecycleAtBase, ownsDatabase } from "./live.ts";
+import { checkRequestTiming } from "./request-timing.ts";
 import { checkTypeAwarePair } from "./lockfile.ts";
 import { checkWeakenedFlags } from "./tsconfig-flags.ts";
 import { checkTypecheck } from "./typecheck.ts";
@@ -511,6 +512,12 @@ export interface Contract {
    * the argument for why the reason is the waiver rather than a word beside one.
    */
   readonly dataJobsExternal: string;
+  /**
+   * How a live repo's operations are timed, when it is not by request timing.
+   * Empty is every repo that owes the conformance test; `request-timing.ts`
+   * grades it.
+   */
+  readonly operationsTimedOtherwise: string;
   /** Where the run came from, so the lifecycle can be read at the base ref as well as here. */
   readonly event: Event;
 }
@@ -594,6 +601,8 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
   const linting = reading.then((file) => readLintConfig(file, exempt("config-lineage")));
 
   const none = Promise.resolve<Problem[]>([]);
+  // Asked once, of a live repo only: every rule reading it is a live rule.
+  const owning = declared.is === "live" ? ownsDatabase(root, all.read) : Promise.resolve(undefined);
   const [
     base,
     lockfiles,
@@ -608,6 +617,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     secrets,
     docs,
     live,
+    requestTiming,
   ] = await Promise.all([
     // Nothing else in this batch reads the base ref, and it is the one entry
     // that spawns a process per question — so it runs beside them rather than
@@ -625,13 +635,30 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     exempt("secrets") ? none : checkSecrets(root),
     exempt("docs-spine") ? none : checkDocs(root),
     declared.is === "live"
-      ? checkLive(root, all.read, {
-          database: contract.database,
-          call: call.asked,
-          steps: call.steps,
-          dataJobsExternal: contract.dataJobsExternal,
-        })
+      ? owning.then(
+          async (owned) =>
+            await checkLive(root, all.read, owned, {
+              database: contract.database,
+              call: call.asked,
+              steps: call.steps,
+              dataJobsExternal: contract.dataJobsExternal,
+            }),
+        )
       : none,
+    // A repo that has not said which it is is graded against neither set of
+    // rules, and a waiver on it cannot be said to waive nothing.
+    declared.is === undefined
+      ? none
+      : owning.then(
+          async (owned) =>
+            await checkRequestTiming(
+              root,
+              all.read,
+              declared.is === "live",
+              owned,
+              contract.operationsTimedOtherwise.trim(),
+            ),
+        ),
   ]);
 
   // Spelled out rather than flattened from the batch, because the order is the
@@ -658,5 +685,6 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     ...call.problems,
     ...queue,
     ...live,
+    ...requestTiming,
   ];
 }
