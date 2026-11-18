@@ -702,9 +702,20 @@ unmarked each fail it, naming the file and the method, and so does a route file
 that imports `notFound`, `redirect`, `permanentRedirect`, `forbidden` or
 `unauthorized` from `next/navigation`, whose answer its record would get wrong.
 It reads the imports the file itself writes, so one of those called through a
-helper module is not seen. The route modules load
-in the suite's own process, so whatever a module does when it loads, it does
-there.
+helper module is not seen.
+
+The route modules load in the suite's own process, because the mark a
+connector leaves on a handler exists only once the module has run: the
+source alone cannot say what `handler` is in `export { handler as GET }`. So
+whatever a module does when it loads, it does there, under the suite's own
+preload, and a module that needs `server-only` or the environment needs what
+the app's other suites already give it. It also puts every `route.ts` in the
+suite's coverage, at what loading it executes. An app whose floor is graded
+over the whole suite sees its totals move a little. An app whose floor is
+Bun's per-file `coverageThreshold` sees each route below it unless a test of
+its own calls the handlers; one whose handlers run only in a server it spawns
+lists those routes in `coveragePathIgnorePatterns`, with the suite that grades
+them, as this repo does for its fixture apps in `bunfig.toml`.
 
 ## Ships built
 

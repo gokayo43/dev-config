@@ -34,9 +34,10 @@ preload = ["./tests/git-free-environment.ts"]
 # docs/gates/test-suite.md.
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
-# Five files here are graded by a suite that spawns a process rather than by the
-# runner watching them execute, so the coverage they report is not the coverage
-# they have. Each names the suite that carries its duty instead.
+# Five files and the request-timing fixture apps here are graded by a suite that
+# spawns a process rather than by the runner watching them execute, so the
+# coverage they report is not the coverage they have. Each names the suite that
+# carries its duty instead. The scratch trees last are no code of this repo.
 #
 # `anti-slop/**` — the plugin's rules run inside a spawned oxlint.
 # `tests/anti-slop*.test.ts` is what actually grades them, by linting fixture
@@ -68,6 +69,22 @@ coverageSkipTestFiles = true
 # its contract, and only a spawned process has one, so
 # `tests/request-timing-summary.test.ts` runs the bin and reads it back.
 #
+# `tests/request-timing-*-app/**` — the request-timing fixture apps, a Next.js
+# app and a TanStack Start one, which run in the server a suite starts: `next
+# start` in a process of its own, and the Start app as the Vite build in
+# `node_modules/.cache`, so neither app's own source is the code that runs. The
+# runner sees one only where a suite imports it: a constant module such as the
+# Start app's `src/lanes.ts`, at whatever loading it executes, and every Next.js
+# route module, which the conformance kit's route-tree check loads to read the
+# mark a connector left on each handler. What grades the apps is the suites
+# that serve them, `tests/request-timing-next.test.ts`,
+# `tests/request-timing-trpc.test.ts` and
+# `tests/request-timing-tanstack-start.test.ts`.
+#
+# `**/gate-fixtures-*/**` — the scratch trees `tests/tree.ts` writes under the
+# temp directory, whose route files the route-tree check's own cases load for
+# the same reason. They are what a case reads, not code of this repo.
+#
 # `dev-server-derive.ts` is deliberately NOT here: everything that can be
 # answered without a machine was split into it for exactly that reason, and it is
 # graded by the floor like anything else.
@@ -77,4 +94,6 @@ coveragePathIgnorePatterns = [
   "dev-server.ts",
   "property.ts",
   "request-timing-report.ts",
+  "tests/request-timing-*-app/**",
+  "**/gate-fixtures-*/**",
 ]
