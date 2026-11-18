@@ -333,6 +333,7 @@ field exists to prevent.
 | `scripts/backup.sh` exists and is executable                             | the repo owns a database, and `data-jobs-external` is empty | an undumped database is one nobody has                                                                                                                          |
 | `scripts/restore-drill.sh` exists and is executable                      | the repo owns a database, and `data-jobs-external` is empty | a backup nobody has restored is a backup nobody has                                                                                                             |
 | a timer/service pair that runs each of them                              | the repo owns a database, and `data-jobs-external` is empty | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
+| a test importing `@gokayo43/dev-config/request-timing/conformance`       | the repo owns a database and serves HTTP, unless waived     | an operation nobody times is one whose slow wait nobody can name (below)                                                                                        |
 | `@playwright/test` among what the workspace declares                     | the repo ships a browser surface: `react-dom` or `astro`    | a page nobody opens in CI is one that breaks in front of a user                                                                                                 |
 | a spec written with `@gokayo43/dev-config/invariant-sweep`               | the repo ships a browser surface: `react-dom` or `astro`    | a spec on Playwright's own `test` passes without noticing a console error, an uncaught error or a page scrolling sideways                                       |
 | a `ci.yml` step that runs `playwright test`                              | the repo ships a browser surface: `react-dom` or `astro`    | a suite CI never runs is one that ran the day it was written                                                                                                    |
@@ -342,8 +343,10 @@ repo is: the data rules are about a database, and half this fleet is a static
 site with a hostname and no schema — demanding a backup script of one would
 teach people to write a script that does nothing in order to get past a gate.
 The three browser rules are the same shape from the other side, and an API owes
-none of them. The upgrade gate is scoped the same way for a harder
-reason than symmetry: `check.yml` **refuses** `upgrade-gate: true` without
+none of them. The request-timing test is owed where a database and HTTP meet: a
+server answering requests out of a database is where an operation's time goes to
+waits, and a static site or a worker with no route owes nothing here. The
+upgrade gate is scoped the same way for a harder reason than symmetry: `check.yml` **refuses** `upgrade-gate: true` without
 `database: postgres`, so asking for it there would be this contract demanding
 the one configuration the shared workflow rejects. `external` is that same state
 and the only other one — the gate that input names belongs to the Postgres job,
@@ -489,6 +492,35 @@ with a type generator runs it inside `typecheck`, ahead of the checker, as in
 `next typegen && bun check --no-script`. That script passes, since the reading
 splits it into commands and the second has `bun check` at its head.
 
+**"Serves HTTP" is three names, among what a manifest ships.** They are the
+frameworks [request timing](../exports/request-timing.md) has an entry connector
+for: `elysia`, `next` and `@tanstack/react-start`, in `dependencies` or
+`optionalDependencies` of any manifest in the workspace, the fields the crash
+SDK is read from. A library that takes one as a peer, or tests against one as a
+devDependency, serves nothing, and this repo is that case: its connector suites
+hold `elysia` and `@tanstack/react-start` as devDependencies.
+
+**The test is an import Bun's parser reads.** A live repo that owns a database
+and serves HTTP has at least one `*.test.ts` or `*.test.tsx` importing
+`@gokayo43/dev-config/request-timing/conformance`, which is where an app runs
+`requestTimingConforms` against its booted server. The file is read with
+`Bun.Transpiler`'s scan, so the specifier in a comment, a string or a template
+is no import, and nor is an `import type`, which is erased and runs nothing. A
+`*.spec.ts` does not count, since that is the Playwright lane and the kit is a
+`bun test` import. A test file that will not parse is named in the problem,
+because what it imports is then unknown. What the scan cannot see is whether the
+test calls the kit or is skipped: an import whose binding is never used, or a
+`test.skip` around the call, still passes, and review is what catches it.
+
+**When the operations are timed some other way, `operations-timed-otherwise`
+says how.** It is `data-jobs-external`'s shape: the reason is the waiver, an
+empty or whitespace value is a repo that owes the test, and it is refused once
+it waives nothing. That is a repo that does not owe the rule, `dev` or with no
+database or no HTTP, and a repo that has a conformance test beside it, whose two
+answers to how its operations are timed are one too many. It waives the
+conformance test and nothing else. A repo that has not declared its `lifecycle`
+is graded against neither set of rules, so the input is not graded there either.
+
 ### A scheduled job is three files
 
 Canon says a backup is taken and a restore is rehearsed _periodically_. A script
@@ -585,8 +617,8 @@ as well, and the two are compared:
 | `live`   | absent    | refused — the same edit, less visible      |
 
 Writing `dev` over `live`, or deleting the field, sheds backups, a rehearsed
-restore, crash reporting, the swept browser suite and the upgrade gate in one
-edit that reviews as a whitespace change. Deleting the manifest outright is
+restore, crash reporting, the swept browser suite, the request-timing test and
+the upgrade gate in one edit that reviews as a whitespace change. Deleting the manifest outright is
 refused a line earlier, by the rule that a repo has a `package.json` at all.
 
 The base ref is the merge base with the branch a pull request targets, or the

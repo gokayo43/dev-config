@@ -25,6 +25,7 @@ import {
 } from "./ci-workflow.ts";
 import { checkOffReasons } from "./lint-switch-offs.ts";
 import { checkLifecycle, checkLive, lifecycleAtBase } from "./live.ts";
+import { checkRequestTiming } from "./request-timing.ts";
 import { checkTypeAwarePair } from "./lockfile.ts";
 import { checkWeakenedFlags } from "./tsconfig-flags.ts";
 import { checkTypecheck } from "./typecheck.ts";
@@ -511,6 +512,12 @@ export interface Contract {
    * the argument for why the reason is the waiver rather than a word beside one.
    */
   readonly dataJobsExternal: string;
+  /**
+   * How a live repo's operations are timed, when it is not by request timing.
+   * Empty is every repo that owes the conformance test; `request-timing.ts`
+   * grades it.
+   */
+  readonly operationsTimedOtherwise: string;
   /** Where the run came from, so the lifecycle can be read at the base ref as well as here. */
   readonly event: Event;
 }
@@ -608,6 +615,7 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     secrets,
     docs,
     live,
+    requestTiming,
   ] = await Promise.all([
     // Nothing else in this batch reads the base ref, and it is the one entry
     // that spawns a process per question — so it runs beside them rather than
@@ -632,6 +640,16 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
           dataJobsExternal: contract.dataJobsExternal,
         })
       : none,
+    // A repo that has not said which it is is graded against neither set of
+    // rules, and a waiver on it cannot be said to waive nothing.
+    declared.is === undefined
+      ? none
+      : checkRequestTiming(
+          root,
+          all.read,
+          declared.is === "live",
+          contract.operationsTimedOtherwise.trim(),
+        ),
   ]);
 
   // Spelled out rather than flattened from the batch, because the order is the
@@ -658,5 +676,6 @@ export async function repoContract(root: string, contract: Contract): Promise<Pr
     ...call.problems,
     ...queue,
     ...live,
+    ...requestTiming,
   ];
 }

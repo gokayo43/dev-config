@@ -67,6 +67,9 @@ a change to a rule usually lands here too.
   whether or not anyone is on the other end; `repo-contract/browser-suite.ts` is
   the half of that word about pages rather than about a schema, which is a
   second subject reached through the one field;
+  `repo-contract/request-timing.ts` is the conformance test a live repo owes
+  for serving HTTP out of a database, called from the contract rather than from
+  `live.ts` because its waiver is graded in every lifecycle;
   `repo-contract/typecheck.ts` is what CI type-checks with — the script
   check.yml's typecheck lane reaches and the Bun `packageManager` names, one
   fact seen from both ends;
@@ -294,7 +297,9 @@ a change to a rule usually lands here too.
   one word deciding whether a whole rule set applies is its own subject), what
   pages cost a live repo in `repo-contract-browser.test.ts` (a second subject
   under that same word, and the reason the live static site is in the fixture
-  rather than in either), how a dependency spec is read in
+  rather than in either), what serving HTTP out of a database costs one in
+  `repo-contract-request-timing.test.ts` (mirroring `request-timing.ts`), how a
+  dependency spec is read in
   `repo-contract-pins.test.ts`, the git hooks in `repo-contract-lefthook.test.ts`,
   the bunfig's release-age window and its exclusions in
   `repo-contract-release-age.test.ts`, what CI type-checks with in
