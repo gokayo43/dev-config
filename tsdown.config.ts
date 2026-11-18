@@ -1,15 +1,16 @@
 /**
- * Why these six entries, and why no others.
+ * Why these ten entries, and why no others.
  *
  * `count-budget.ts`, `invariant-sweep.ts`, `narrowing.ts` and `route-log.ts`
  * are imported by a repo's Playwright specs. Playwright's runner is node, and node refuses to
  * strip types from anything under `node_modules` — `--experimental-strip-types`
  * excludes that directory outright, which is where every consumer has this
  * package — so a specifier resolving to a `.ts` there cannot load at all
- * (dev-config#113). `request-timing.ts` and `request-timing-effect.ts` are
- * imported by an app's own code, which Next.js and Vite bundle, and neither
- * strips types under `node_modules` either; the module both import becomes a
- * shared chunk beside them. Everything else here is imported by `bun test` or
+ * (dev-config#113). `request-timing.ts`, `request-timing-effect.ts` and the
+ * four `request-timing-<connector>.ts` are imported by an app's own code,
+ * which Next.js and Vite bundle, and neither strips types under
+ * `node_modules` either; the modules they share become chunks beside them.
+ * Everything else here is imported by `bun test` or
  * run by Bun, which strips types, and its source is what ships.
  *
  * That `dist/` is committed rather than built on install is STACK.md's bargain
@@ -31,7 +32,11 @@ export default defineConfig({
     "invariant-sweep.ts",
     "narrowing.ts",
     "request-timing.ts",
+    "request-timing-bun-redis.ts",
     "request-timing-effect.ts",
+    "request-timing-elysia.ts",
+    "request-timing-fetch.ts",
+    "request-timing-mysql2.ts",
     "route-log.ts",
   ],
   platform: "neutral",

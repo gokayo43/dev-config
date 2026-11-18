@@ -64,6 +64,10 @@ through `files` and `exports`, and each has a page of its own:
 | ---------------------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`route-log`](docs/exports/route-log.md)                         | the app, for the capacity ramp      | the protocol between an app and the two floors over its route table                                                                                                     |
 | [`request-timing`](docs/exports/request-timing.md)               | the app, at its entry and its waits | per operation, one record of where its time went; `/effect` carries it in an Effect program, `/conformance` is the app's check, and `request-timing-report` reads a log |
+| [`request-timing/elysia`](docs/exports/request-timing.md)        | the app's entry                     | one operation per request an Elysia app serves, named by the route it matched                                                                                           |
+| [`request-timing/mysql2`](docs/exports/request-timing.md)        | the app's database client           | each wait of a mysql2 pool, its connections and statements, as a `db` wait                                                                                              |
+| [`request-timing/bun-redis`](docs/exports/request-timing.md)     | the app's store client              | each command Bun's Redis client sends, as a `store` wait                                                                                                                |
+| [`request-timing/fetch`](docs/exports/request-timing.md)         | the app's outbound calls            | each `fetch` call until its headers arrive, as an `out` wait                                                                                                            |
 | [`invariant-sweep`](docs/exports/invariant-sweep.md)             | the Playwright specs                | no console error, thrown error, overflow or unprompted shift on its pages                                                                                               |
 | [`count-budget`](docs/exports/count-budget.md)                   | the Playwright specs of a job       | a job's commits, DOM mutations, requests and bytes per phase, held exactly to ceilings the write command never raises                                                   |
 | [`limiter-conformance`](docs/exports/limiter-conformance.md)     | the rate limiter's own suite        | STACK's rate-limit rule, executable                                                                                                                                     |
@@ -76,7 +80,9 @@ through `files` and `exports`, and each has a page of its own:
 | [`css-custom-properties`](docs/exports/css-custom-properties.md) | `compilerOptions.types`             | any `--name` as a key of React's `CSSProperties`, so a runtime value reaches `style` without a cast                                                                     |
 
 No specifier carries an extension, and what one resolves to is this package's
-business: `route-log`, `request-timing` and `request-timing/effect`,
+business: `route-log`, `request-timing`, `request-timing/effect`,
+`request-timing/elysia`, `request-timing/mysql2`, `request-timing/bun-redis`,
+`request-timing/fetch`,
 `invariant-sweep`, `count-budget` and `narrowing` are **built** — `bun run
 build` writes them to `dist/`, which is committed and held equal to a
 fresh build by `tests/dist.test.ts` — and the others ship their source.
@@ -1610,7 +1616,18 @@ docker run --rm -d -p 127.0.0.1:6390:6379 redis:7-alpine
 export TEST_REDIS_URL=redis://127.0.0.1:6390
 ```
 
-Both publish on `127.0.0.1` explicitly: a bare `-p 5432:5432` binds `0.0.0.0`,
+The request-timing connector suites need a MySQL, since what they grade is
+what mysql2 and drizzle do against a real server, and the Redis above. They
+create and **drop** a database of their own on the MySQL and write only keys
+under a prefix of their own on the Redis, so `TEST_MYSQL_URL` is required and
+refuses to guess for the reason the Postgres does:
+
+```sh
+docker run --rm -d -p 127.0.0.1:3417:3306 -e MYSQL_ROOT_PASSWORD=mysql --tmpfs /var/lib/mysql:size=1g mysql:8.0.42
+export TEST_MYSQL_URL=mysql://root:mysql@127.0.0.1:3417/mysql
+```
+
+All three publish on `127.0.0.1` explicitly: a bare `-p 5432:5432` binds `0.0.0.0`,
 and Docker's forwarding rule answers it on the box's public address whatever
 `ufw` is set to.
 
