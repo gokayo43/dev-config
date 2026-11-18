@@ -37,7 +37,33 @@ In this order:
    the framework, an app does the same by hand, as in the fixture
    `tests/request-timing-fixture.ts`.
 
-3. **Wrap every wait**: the database client, the store client and the outbound
+   **Operations never nest.** An entry connector asks `inOperation()` first and
+   opens nothing when an operation is already current: it runs the handler as
+   it is. So a server function a page calls in-process during its own request
+   counts in the page's operation, and the page's record holds every wait of
+   the request.
+
+3. **Make the crossing**, where a plain handler (a tRPC procedure, a server
+   function) runs an Effect program with a runtime. The entry connector opened
+   the operation in the plain carrier, and `AsyncLocalStorage` holds it only up
+   to the call that hands the program to the runtime; after that only the fiber
+   is right. Wrap the program in `carryOperation` at that call, in the one module
+   the app runs Effects from handlers through, its adapter:
+
+   ```ts
+   import { carryOperation } from "@gokayo43/dev-config/request-timing/effect";
+
+   export const handle = <A>(program: Effect.Effect<A, AppError, AppServices>) =>
+     runtime.runPromise(carryOperation(program.pipe(/* the app's error map */)));
+   ```
+
+   `carryOperation` reads the plain carrier's current operation when it is
+   called, in the handler's context, and carries it in the program's fiber.
+   With no current operation it answers the program unchanged. Call it per run,
+   never once at module scope: a program carried once keeps the operation it
+   was carried with.
+
+4. **Wrap every wait**: the database client, the store client and the outbound
    `fetch` through their connectors, and any wait no connector covers (an SDK,
    SMTP) with `measure` directly:
 
@@ -50,34 +76,37 @@ In this order:
    In an Effect program, from `@gokayo43/dev-config/request-timing/effect`:
 
    ```ts
-   const sent =
-     yield *
+   const send = (message: Message) =>
      measure(
        "out",
        Effect.tryPromise(() => mailer.send(message)),
      );
    ```
 
-4. **Run the conformance kit** in the app's own suite against its booted server
+   Inside an Effect program every wait is measured with the Effect `measure`, at
+   the service that wraps the client. A wait measured by the plain carrier
+   inside the program reads `AsyncLocalStorage`, which after the crossing may
+   hold another request's operation, so it can land in the wrong record.
+
+5. **Run the conformance kit** in the app's own suite against its booted server
    (below).
 
 ### Which carrier
 
-Which operation a wait belongs to is carried for it, and an app uses one
-carrier, by what the program is:
+Which operation a wait belongs to is carried for it, by what the code is:
 
-- A plain async program: `within` and `measure` from
+- Plain async code: `within`, `measure` and `inOperation` from
   `@gokayo43/dev-config/request-timing`, which carry the operation in
   `AsyncLocalStorage`.
-- An Effect program: `within` and `measure` from
-  `@gokayo43/dev-config/request-timing/effect`, which carry it in the fiber. That
-  file is the only one that imports `effect`, so an app without Effect never
-  loads it. An Effect program never enters an operation with the plain `within`:
-  a fiber resumed by another (on a semaphore, a Deferred, a queue, or Effect's
-  own scheduler) runs on that fiber's stack and reads its `AsyncLocalStorage`, so
-  the plain carrier would count the wait in another request's record. A wait
-  measured with the plain `measure` inside an Effect program whose edge used the
-  Effect `within` is counted in no record rather than a wrong one.
+- An Effect program: `within`, `measure`, `inOperation` and `carryOperation`
+  from `@gokayo43/dev-config/request-timing/effect`, which carry it in the
+  fiber. That file is the only one that imports `effect`, so an app without
+  Effect never loads it. A fiber resumed by another (on a semaphore, a
+  Deferred, a queue, or Effect's own scheduler) runs on that fiber's stack and
+  reads its `AsyncLocalStorage`, so nothing in an Effect program reads that
+  storage after the crossing. An edge that is itself an Effect program opens
+  the operation and enters it with the Effect `within`; an edge that is plain
+  enters it with the plain `within` and crosses with `carryOperation`.
 
 ## Elysia
 
@@ -180,6 +209,8 @@ body is not part of the wait, and is in the rest.
 | `requestTiming({ sink, now? })`       | switches it on; answers `{ open(): Operation }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                                                                                        |
 | `Operation.close(ending)`             | emits the record through the sink, once                                                                                                                                                                                  |
 | `within(operation, handler)`          | runs `handler` under `operation` and answers what it answers; one per carrier (a thunk for the plain one, an Effect for the Effect one)                                                                                  |
+| `inOperation`                         | whether an operation is current: `inOperation(): boolean` plain, `inOperation: Effect<boolean>` Effect; an entry connector opens nothing while it is true                                                                |
+| `carryOperation(program)`             | Effect only: `program` with the plain carrier's current operation, read at the call, carried in its fiber; `program` itself when none is current                                                                         |
 | `measure(kind, wait)`                 | runs `wait` unchanged and adds its duration to the current operation, or to nothing; one per carrier (`() => PromiseLike<T>` plain, an Effect for Effect)                                                                |
 | `OperationName.registered(pattern)`   | the name a router registered; refuses, without quoting it, a pattern that is empty, longer than 256 UTF-16 code units, holds a space or a character that does not print, or holds a query string, a fragment or a scheme |
 | `OperationName.unmatched`             | the fixed name of a request no route matched                                                                                                                                                                             |
@@ -188,6 +219,8 @@ body is not part of the wait, and is in the rest.
 
 What a connector author has to hold:
 
+- **No nesting.** Ask `inOperation` before opening, and when it answers true
+  run the handler as it is: no `open`, no `within`, no `close`.
 - **Open, run, close.** `timing.open()` starts the clock. The handler runs under
   it with the carrier's `within`. `operation.close({ method, name, status,
 aborted, streamed })` is called once the response has finished: the last byte

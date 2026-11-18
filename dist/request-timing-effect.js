@@ -1,4 +1,4 @@
-import { i as beginWait } from "./request-timing-operation-De4y0ZtW.js";
+import { i as beginWait, o as plainStorage } from "./request-timing-operation-Dti3zFz_.js";
 import { Effect, FiberRef } from "effect";
 //#region request-timing-effect.ts
 /**
@@ -6,7 +6,9 @@ import { Effect, FiberRef } from "effect";
 * carried in the fiber. Never in `AsyncLocalStorage`: a fiber that waits on a
 * shared semaphore, Deferred or queue resumes on the stack of the fiber that
 * released it and inherits that fiber's store (measured on Bun 1.4.4 with
-* effect 3.22.1: 38 of 40 queries attributed to the wrong request).
+* effect 3.22.1: 38 of 40 queries attributed to the wrong request). The one
+* place it reads that storage is `carryOperation`, synchronously, in the
+* caller's context, before any fiber runs.
 * `docs/exports/request-timing.md` is how an app adopts it.
 */
 /**
@@ -32,5 +34,23 @@ const measure = (kind, wait) => FiberRef.getWith(current, (operation) => {
 		return Effect.ensuring(wait, Effect.sync(() => end()));
 	});
 });
+/**
+* Whether the fiber has an operation: the Effect carrier's half of the
+* no-nesting rule an entry connector holds to, as the plain `inOperation` is.
+*/
+const inOperation = FiberRef.getWith(current, (operation) => Effect.succeed(operation !== void 0));
+/**
+* The crossing from a plain handler into an Effect program: `program` with the
+* plain carrier's current operation, read now, carried in its fiber, or
+* `program` itself when none is current. Call it where the handler hands the
+* program to its runtime, `runtime.runPromise(carryOperation(program))`, since
+* `AsyncLocalStorage` holds the right operation only up to that call; a
+* program carried once and run again later keeps the operation it was carried
+* with.
+*/
+function carryOperation(program) {
+	const operation = plainStorage.getStore();
+	return operation === void 0 ? program : within(operation, program);
+}
 //#endregion
-export { measure, within };
+export { carryOperation, inOperation, measure, within };

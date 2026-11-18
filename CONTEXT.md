@@ -148,7 +148,11 @@ one of its waits was in flight. It holds the code's own time and every wait
 nobody measured, so it is never called the app's code.
 
 **Carrier** — what tells a wait which operation is current: `AsyncLocalStorage`
-in a plain async program, the fiber in an Effect program. A program uses one.
+in plain async code, the fiber in an Effect program.
+
+**Crossing** — the call where a plain handler hands an Effect program to its
+runtime, and the operation moves from the plain carrier to the fiber. Past it,
+only the fiber says which operation is current.
 
 **Sink** — the function an app hands request timing when it switches it on,
 which writes each record to stdout. The export itself writes nothing.
