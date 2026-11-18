@@ -1,5 +1,6 @@
-import { a as methodOf, t as OperationName } from "./request-timing-operation-gsGVMm95.js";
+import { t as OperationName } from "./request-timing-operation-gsGVMm95.js";
 import { inOperation, within } from "./request-timing.js";
+import { t as endings } from "./request-timing-entry-Dp_bovEo.js";
 import { t as marked } from "./request-timing-route-BhLXYn3w.js";
 //#region request-timing-next.ts
 /**
@@ -12,6 +13,8 @@ import { t as marked } from "./request-timing-route-BhLXYn3w.js";
 /**
 * `body`, passed through chunk for chunk, with `ended` called once the last
 * chunk has been taken, the source has failed, or the client has cancelled.
+* Not `request-timing-entry.ts`'s `watched`, since Next.js sends every body
+* chunked and only the chunks the body hands over say whether it streamed.
 * The source still runs in the context it was made in, the handler's, so what
 * it waits on as it is pulled counts in the operation (measured on Bun 1.4.4
 * and Node 24: a stream's `pull` sees the store its constructor ran under, not
@@ -22,7 +25,7 @@ import { t as marked } from "./request-timing-route-BhLXYn3w.js";
 * finished on the next read: a buffered body is one chunk and then its end.
 * `delivered` counts the chunks handed over, for the client's abort to read.
 */
-function watched(body, delivered, ended) {
+function counted(body, delivered, ended) {
 	const reader = body.getReader();
 	return new ReadableStream({
 		pull: (controller) => reader.read().then((chunk) => {
@@ -76,23 +79,10 @@ function requestTimingRoute(timing) {
 		const timed = (request, context) => {
 			if (inOperation()) return Promise.resolve(handler(request, context));
 			const operation = timing.open();
-			const { promise: ending, resolve: end } = Promise.withResolvers();
-			ending.then((ended) => {
-				operation.close({
-					method: methodOf(request.method),
-					name,
-					...ended
-				});
-			});
-			let produced;
 			const delivered = { chunks: 0 };
-			request.signal.addEventListener("abort", () => end({
-				status: produced?.status ?? 499,
-				aborted: true,
-				streamed: delivered.chunks > 0
-			}), { once: true });
+			const { end, produced } = endings(operation, request, () => name, () => delivered.chunks > 0);
 			return new Promise((resolve) => resolve(within(operation, () => handler(request, context)))).then((response) => {
-				produced = response;
+				produced(response);
 				if (response.body === null || request.method === "HEAD") {
 					end({
 						status: response.status,
@@ -101,7 +91,7 @@ function requestTimingRoute(timing) {
 					});
 					return response;
 				}
-				const body = watched(response.body, delivered, (how) => end({
+				const body = counted(response.body, delivered, (how) => end({
 					status: response.status,
 					...how
 				}));

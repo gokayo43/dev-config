@@ -104,6 +104,21 @@ describe("the conformance kit's route-tree check", () => {
       "const handler = (request: Request) => new Response(request.url);\nexport { handler as GET, handler as POST };\n",
       "POST is not wrapped",
     ],
+    [
+      "a handler that answers with a status its record cannot see",
+      "api/gone/route.ts",
+      routeFile("/api/gone").replace(
+        "import {",
+        'import { notFound, redirect as away } from "next/navigation";\nimport {',
+      ),
+      "imports notFound, redirect from next/navigation",
+    ],
+    [
+      "a route that takes the whole of next/navigation",
+      "api/elsewhere/route.ts",
+      `import * as navigation from "next/navigation";\n${routeFile("/api/elsewhere")}`,
+      "imports notFound, redirect, permanentRedirect, forbidden, unauthorized from next/navigation",
+    ],
   ];
   for (const [wrong, file, contents, problem] of failing) {
     test(`fails ${wrong}, naming the file`, async () => {

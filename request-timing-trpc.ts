@@ -59,7 +59,7 @@ const isAsyncIterable = (data: unknown): data is AsyncIterable<unknown> =>
  * work between two values counts in it, and `ended` called once it is done:
  * when it finishes, fails, or its consumer stops it.
  */
-function watched(
+function iterated(
   source: AsyncIterable<unknown>,
   operation: Operation,
   ended: () => void,
@@ -142,7 +142,9 @@ export function requestTimingProcedures(timing: Timing, statusOf: (error: TRPCEr
     const { promise: ending, resolve: end } = Promise.withResolvers<Ended>();
     const name = nameOf(call.path);
     // The one place the operation closes, on the first ending to arrive. A
-    // sink that throws rejects here, out of band of the call it measured.
+    // sink that throws rejects here, out of band of the call it measured. Not
+    // `request-timing-entry.ts`'s `endings`: a call in a batch has no request
+    // of its own, its method is its type's, and its abort signal is tRPC's.
     void ending.then((ended) => {
       operation.close({ method: METHOD_OF[call.type], name, ...ended });
     });
@@ -162,7 +164,7 @@ export function requestTimingProcedures(timing: Timing, statusOf: (error: TRPCEr
       return result;
     }
     streaming = true;
-    const data = watched(result.data, operation, () =>
+    const data = iterated(result.data, operation, () =>
       end({ status: 200, aborted: false, streamed: true }),
     );
     return { ...result, data };

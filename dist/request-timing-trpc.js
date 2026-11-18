@@ -27,7 +27,7 @@ const isAsyncIterable = (data) => typeof data === "object" && data !== null && S
 * work between two values counts in it, and `ended` called once it is done:
 * when it finishes, fails, or its consumer stops it.
 */
-function watched(source, operation, ended) {
+function iterated(source, operation, ended) {
 	const settle = (step) => step.then((result) => {
 		if (result.done === true) ended();
 		return result;
@@ -126,7 +126,7 @@ function requestTimingProcedures(timing, statusOf) {
 			return result;
 		}
 		streaming = true;
-		const data = watched(result.data, operation, () => end({
+		const data = iterated(result.data, operation, () => end({
 			status: 200,
 			aborted: false,
 			streamed: true

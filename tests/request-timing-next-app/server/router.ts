@@ -32,12 +32,14 @@ const plan = (raw: unknown) => {
     raw === null ||
     !("db" in raw) ||
     !("out" in raw) ||
+    !("tx" in raw) ||
     typeof raw.db !== "number" ||
-    typeof raw.out !== "number"
+    typeof raw.out !== "number" ||
+    typeof raw.tx !== "boolean"
   ) {
-    throw new TypeError("a plan of db and out waits is required");
+    throw new TypeError("a plan of db and out waits, and whether in a transaction, is required");
   }
-  return { db: raw.db, out: raw.out };
+  return { db: raw.db, out: raw.out, tx: raw.tx };
 };
 
 const label = (raw: unknown) => {

@@ -15,8 +15,9 @@
  *   requests, each with a generated number of database and outbound waits,
  *   whose outbound waits are made in turn under one semaphore the case holds
  *   until every lane is provably queued for it, so each lane after the first
- *   resumes on the stack of the lane that let it go, and whose database waits
- *   queue on a pool of four.
+ *   resumes on the stack of the lane that let it go, and whose database waits,
+ *   drizzle queries a `Db` thunk hands straight back or the statements of one
+ *   drizzle transaction, queue on a pool of four.
  * - The conformance kit, run against the app as an adopting app runs it.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -94,7 +95,8 @@ const SCRIPT: readonly [string, RequestInit][] = [
     {},
   ],
   [single("ticks.count"), {}],
-  [single("lanes.l0", { db: 2, out: 1 }), {}],
+  [single("lanes.l0", { db: 2, out: 1, tx: false }), {}],
+  [single("lanes.l1", { db: 2, out: 1, tx: true }), {}],
 ];
 
 const runScript = async (target: NextApp) => {
@@ -321,12 +323,19 @@ describe("the tRPC connector", () => {
           const reader = must(latch.body).getReader();
           expect(await nextText(reader)).toBe("held;");
           const planned = lanes.map((lane) => {
-            const plan = must(plans[lane]);
+            // An odd lane runs its database waits as one drizzle transaction,
+            // an even one hands each drizzle query straight back from its thunk.
+            const plan = { ...must(plans[lane]), tx: lane % 2 === 1 };
             // The last lane is a route handler; the others are procedures.
             const operation = lane === LANES ? "/api/lane" : `lanes.l${lane}`;
             const path =
-              lane === LANES ? `/api/lane?db=${plan.db}&out=${plan.out}` : single(operation, plan);
-            return { operation, plan, answered: fetch(app.url(path)).then((r) => r.text()) };
+              lane === LANES
+                ? `/api/lane?db=${plan.db}&out=${plan.out}&tx=${plan.tx}`
+                : single(operation, plan);
+            // A transaction adds its checkout, its begin and its commit, as the
+            // mysql2 connector's page counts them.
+            const counted = { db: plan.tx ? plan.db + 3 : plan.db, out: plan.out };
+            return { operation, counted, answered: fetch(app.url(path)).then((r) => r.text()) };
           });
           expect(await restOf(reader)).toBe("released");
           for (const lane of planned) expect(await lane.answered).toContain("done");
@@ -336,7 +345,7 @@ describe("the tRPC connector", () => {
           );
           expect(seen).toEqual({
             "/api/latch": { db: 0, out: 0 },
-            ...Object.fromEntries(planned.map((lane) => [lane.operation, lane.plan])),
+            ...Object.fromEntries(planned.map((lane) => [lane.operation, lane.counted])),
           });
           expect(written).toHaveLength(planned.length + 1);
         },

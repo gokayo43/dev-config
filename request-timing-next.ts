@@ -5,19 +5,15 @@
  * says how an app mounts it, what its records hold, and why the app states the
  * pattern itself.
  */
+import { endings } from "./request-timing-entry.ts";
 import { marked } from "./request-timing-route.ts";
-import { inOperation, methodOf, OperationName, type Timing, within } from "./request-timing.ts";
-
-/** How a response ended, short of its name and method. */
-interface Ended {
-  readonly status: number;
-  readonly aborted: boolean;
-  readonly streamed: boolean;
-}
+import { inOperation, OperationName, type Timing, within } from "./request-timing.ts";
 
 /**
  * `body`, passed through chunk for chunk, with `ended` called once the last
  * chunk has been taken, the source has failed, or the client has cancelled.
+ * Not `request-timing-entry.ts`'s `watched`, since Next.js sends every body
+ * chunked and only the chunks the body hands over say whether it streamed.
  * The source still runs in the context it was made in, the handler's, so what
  * it waits on as it is pulled counts in the operation (measured on Bun 1.4.4
  * and Node 24: a stream's `pull` sees the store its constructor ran under, not
@@ -28,7 +24,7 @@ interface Ended {
  * finished on the next read: a buffered body is one chunk and then its end.
  * `delivered` counts the chunks handed over, for the client's abort to read.
  */
-function watched(
+function counted(
   body: ReadableStream<Uint8Array>,
   delivered: { chunks: number },
   ended: (how: { readonly aborted: boolean; readonly streamed: boolean }) => void,
@@ -90,37 +86,25 @@ export function requestTimingRoute(timing: Timing) {
     const timed = (request: R, context: C): Promise<Response> => {
       if (inOperation()) return Promise.resolve(handler(request, context));
       const operation = timing.open();
-      const { promise: ending, resolve: end } = Promise.withResolvers<Ended>();
-      // The one place the operation closes, on the first ending to arrive. A
-      // sink that throws rejects here, out of band of the response it
-      // measured, which the client has already been answered with.
-      void ending.then((ended) => {
-        operation.close({ method: methodOf(request.method), name, ...ended });
-      });
-      let produced: Response | undefined;
       const delivered = { chunks: 0 };
-      request.signal.addEventListener(
-        "abort",
-        () =>
-          end({
-            status: produced?.status ?? 499,
-            aborted: true,
-            streamed: delivered.chunks > 0,
-          }),
-        { once: true },
+      const { end, produced } = endings(
+        operation,
+        request,
+        () => name,
+        () => delivered.chunks > 0,
       );
       const answered = new Promise<Response>((resolve) =>
         resolve(within(operation, () => handler(request, context))),
       );
       return answered.then(
         (response) => {
-          produced = response;
+          produced(response);
           // Next.js answers a HEAD with the headers alone and never reads the body.
           if (response.body === null || request.method === "HEAD") {
             end({ status: response.status, aborted: false, streamed: false });
             return response;
           }
-          const body = watched(response.body, delivered, (how) =>
+          const body = counted(response.body, delivered, (how) =>
             end({ status: response.status, ...how }),
           );
           return new Response(body, response);

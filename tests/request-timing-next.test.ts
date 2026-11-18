@@ -55,7 +55,8 @@ const SCRIPT: readonly [string, RequestInit][] = [
   ["/api/presets/1", { method: "HEAD" }],
   ["/api/stream", {}],
   ["/api/fail", {}],
-  ["/api/lane?db=2&out=1", {}],
+  ["/api/lane?db=2&out=1&tx=false", {}],
+  ["/api/lane?db=2&out=1&tx=true", {}],
   ["/api/presets/2", { method: "POST" }],
 ];
 

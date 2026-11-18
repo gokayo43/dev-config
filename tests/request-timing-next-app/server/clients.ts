@@ -34,3 +34,5 @@ export function clients() {
 }
 
 export type Database = ReturnType<typeof clients>["db"];
+
+export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];

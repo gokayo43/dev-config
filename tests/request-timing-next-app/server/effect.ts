@@ -11,7 +11,7 @@ import { count, eq, sql } from "drizzle-orm";
 import { Cause, Data, Deferred, Effect, Exit, Layer, ManagedRuntime, Option, Ref } from "effect";
 
 import { carryOperation, tryPromiseCarried } from "../../../request-timing-effect.ts";
-import { clients, type Database, presets } from "./clients.ts";
+import { clients, type Database, presets, type Transaction } from "./clients.ts";
 import { timed } from "./env.ts";
 
 class DbError extends Data.TaggedError("DbError")<{ readonly cause: unknown }> {}
@@ -29,8 +29,14 @@ const carry = <A, E, R>(program: Effect.Effect<A, E, R>) =>
 
 export class Db extends Effect.Service<Db>()("Db", {
   sync: () => ({
-    use: <A>(f: (db: Database) => Promise<A>) =>
+    use: <A>(f: (db: Database) => PromiseLike<A>) =>
       tryPromise({ try: () => f(clients().db), catch: (cause) => new DbError({ cause }) }),
+    /** One interactive transaction, its body plain async over drizzle's transaction client. */
+    transaction: <A>(f: (tx: Transaction) => Promise<A>) =>
+      tryPromise({
+        try: () => clients().db.transaction(f),
+        catch: (cause) => new DbError({ cause }),
+      }),
   }),
 }) {}
 
@@ -140,8 +146,12 @@ export const presetById = (id: number) =>
 /** One database wait. */
 export const touch = Effect.flatMap(Db, (db) => db.use((client) => client.execute(sql`select 1`)));
 
-/** A lane of the overlap case: its outbound waits under the token cache's lock, then its database waits. */
-export const lane = (plan: { readonly db: number; readonly out: number }) =>
+/**
+ * A lane of the overlap case: its outbound waits under the token cache's lock,
+ * then its database waits, each a drizzle query the thunk hands straight back,
+ * or, for a lane in a transaction, the statements of one drizzle transaction.
+ */
+export const lane = (plan: Plan) =>
   Effect.gen(function* () {
     const outside = yield* Outside;
     yield* (yield* Turns).take(
@@ -149,6 +159,22 @@ export const lane = (plan: { readonly db: number; readonly out: number }) =>
         for (let wait = 0; wait < plan.out; wait += 1) yield* outside.send("/token");
       }),
     );
-    for (let wait = 0; wait < plan.db; wait += 1) yield* touch;
+    const db = yield* Db;
+    if (plan.tx) {
+      yield* db.transaction(async (tx) => {
+        for (let wait = 0; wait < plan.db; wait += 1) await tx.select().from(presets);
+      });
+    } else {
+      for (let wait = 0; wait < plan.db; wait += 1) {
+        yield* db.use((client) => client.select().from(presets));
+      }
+    }
     return "done";
   });
+
+/** What a lane waits on: its database waits, whether they run in one transaction, and its outbound waits. */
+export interface Plan {
+  readonly db: number;
+  readonly tx: boolean;
+  readonly out: number;
+}

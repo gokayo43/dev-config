@@ -100,11 +100,40 @@ function handlerProblem(exported: unknown, pattern: string): string | undefined 
 }
 
 /**
+ * The functions of `next/navigation` that end a handler by throwing, which
+ * Next.js answers with a status of its own (404, 307 or 308, 403, 401) by
+ * means it does not make public, so the route wrapper records 500.
+ */
+const THROWN_ANSWERS = ["notFound", "redirect", "permanentRedirect", "forbidden", "unauthorized"];
+
+/** The imports from `next/navigation` a route's source writes: every name, or `*` for the whole module. */
+const NAVIGATION_IMPORT =
+  /import\s+(?:type\s+)?(\{[^}]*\}|\*\s+as\s+\w+)\s+from\s+["']next\/navigation["']/gu;
+
+/**
+ * Which of `THROWN_ANSWERS` a route's source imports from `next/navigation`,
+ * by the name it exports them under; all of them for the whole module.
+ */
+function thrownAnswers(source: string): string[] {
+  const found = new Set<string>();
+  for (const [, clause = ""] of source.matchAll(NAVIGATION_IMPORT)) {
+    if (clause.startsWith("*")) return THROWN_ANSWERS;
+    for (const imported of clause.slice(1, -1).split(",")) {
+      const name = imported.trim().split(/\s+/u)[0] ?? "";
+      if (THROWN_ANSWERS.includes(name)) found.add(name);
+    }
+  }
+  return [...found];
+}
+
+/**
  * Rejects, through bun:test's `expect`, unless every handler every route file
  * under `appDirectory` exports is wrapped by request timing with the pattern
- * its place gives it, or is the envelope that carries procedures. Each route
- * module is imported, so the check reads what Next.js would run; a problem
- * names the file and the method.
+ * its place gives it, or is the envelope that carries procedures, and no route
+ * file imports one of the `next/navigation` functions whose answer its record
+ * would get wrong. Each route module is imported, so the check reads what
+ * Next.js would run; a problem names the file, and the method where it is one
+ * handler's.
  *
  * ```ts
  * test("every route handler is timed", () => requestTimingRoutesConform(join(import.meta.dir, "../app")));
@@ -116,6 +145,13 @@ export async function requestTimingRoutesConform(appDirectory: string): Promise<
   for await (const file of files) {
     const pattern = routePattern(file);
     if (pattern === undefined) continue;
+    const thrown = thrownAnswers(await Bun.file(join(appDirectory, file)).text());
+    if (thrown.length > 0) {
+      problems.push(
+        `${join(appDirectory, file)}: imports ${thrown.join(", ")} from next/navigation, which ends a handler with a status its record says is 500; return the response instead`,
+      );
+      continue;
+    }
     const route: unknown = await import(join(appDirectory, file));
     if (typeof route !== "object" || route === null) continue;
     for (const method of ROUTE_METHODS) {

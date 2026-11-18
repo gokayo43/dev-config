@@ -295,11 +295,7 @@ export const GET = timedRoute("/api/presets/[id]", async (request, { params }) =
   where it handed over a chunk and was not finished on the next read, so a
   buffered body, one chunk and then its end, is not.
 - The status is the response's. A handler that throws is recorded with the
-  500 Next.js answers. Next.js's `notFound()`, `redirect()`, `forbidden()` and
-  `unauthorized()` throw too, and Next.js answers them with 404, 307, 403 and
-  401 by means it does not make public, so their record says 500: return the
-  response instead (`new Response(null, { status: 404 })`,
-  `NextResponse.redirect(url)`).
+  500 Next.js answers.
 - A client that goes away closes the operation then, with `aborted: true` and
   the status the handler had produced, or 499 where it had produced none. What
   the handler waits on after that is in no record.
@@ -311,6 +307,13 @@ export const GET = timedRoute("/api/presets/[id]", async (request, { params }) =
   `unmatched` record; the `OPTIONS` Next.js answers itself; pages and server
   components, whose render is in no record; and server actions, which no
   connector covers.
+- Left alone, and wrong in the record: the status of a handler that ends by calling
+  `notFound()`, `redirect()`, `permanentRedirect()`, `forbidden()` or
+  `unauthorized()` from `next/navigation`. Each throws, and Next.js answers
+  with 404, 307, 308, 403 or 401 by means it does not make public, so the
+  record says 500 while the client received the other. The route-tree check
+  below refuses a `route.ts` that imports any of them; return the response
+  instead (`new Response(null, { status: 404 })`, `NextResponse.redirect(url)`).
 
 ## tRPC
 
@@ -631,7 +634,11 @@ folders `_name` and every directory whose name starts with a dot, and requires
 each handler it exports for a method to be wrapped by the route wrapper with
 the pattern the file's place gives it, or to be the tRPC envelope. A bare
 handler, a pattern the file's place does not give, and a tRPC route left
-unmarked each fail it, naming the file and the method. The route modules load
+unmarked each fail it, naming the file and the method, and so does a route file
+that imports `notFound`, `redirect`, `permanentRedirect`, `forbidden` or
+`unauthorized` from `next/navigation`, whose answer its record would get wrong.
+It reads the imports the file itself writes, so one of those called through a
+helper module is not seen. The route modules load
 in the suite's own process, so whatever a module does when it loads, it does
 there.
 
