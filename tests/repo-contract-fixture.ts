@@ -101,6 +101,7 @@ export const DEFAULTS: Contract = {
   database: "postgres",
   exemptions: [],
   dataJobsExternal: "",
+  operationsTimedOtherwise: "",
   event: NO_EVENT,
 };
 

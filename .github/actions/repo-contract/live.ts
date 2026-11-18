@@ -222,7 +222,10 @@ const SCHEMA_IN_THE_TREE = [
  * off it would let a live repo shed its backup script, its rehearsed restore and
  * its upgrade gate by deleting one line from its own workflow.
  */
-async function ownsDatabase(root: string, all: readonly Manifest[]): Promise<string | undefined> {
+export async function ownsDatabase(
+  root: string,
+  all: readonly Manifest[],
+): Promise<string | undefined> {
   const named = all.find(({ value }) => {
     const scripts = record(value["scripts"]);
     return scripts[MIGRATE] !== undefined || scripts[ALSO_MIGRATE] !== undefined;
@@ -649,7 +652,7 @@ const EXECUTABLE = 0o111;
  * pin check applies in reverse. A Sentry SDK in either is a repo that does not
  * report its crashes.
  */
-const SHIPPED_FIELDS = ["dependencies", "optionalDependencies"] as const;
+export const SHIPPED_FIELDS = ["dependencies", "optionalDependencies"] as const;
 
 /** Any of Sentry's per-runtime SDKs, anywhere in the workspace, among what a manifest actually ships. */
 function hasSentry(all: readonly Manifest[]): boolean {
