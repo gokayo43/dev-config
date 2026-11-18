@@ -124,14 +124,6 @@ export const appRouter = t.router({
       await run(touch);
       yield 3;
     }),
-    drip: procedure.subscription(async function* () {
-      yield "drop";
-      await run(touch);
-      await held.wait();
-      await run(touch);
-      held.done();
-      yield "never read";
-    }),
   }),
   lanes: t.router(lanes),
   faults: t.router({ unwritten: procedure.query(() => "served") }),

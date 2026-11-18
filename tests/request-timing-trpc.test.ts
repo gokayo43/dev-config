@@ -21,16 +21,23 @@
  * - The conformance kit, run against the app as an adopting app runs it.
  */
 import { describe, expect, test } from "bun:test";
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { TRPC_ERROR_CODES_BY_KEY, type TRPC_ERROR_CODE_KEY } from "@trpc/server/rpc";
 import { array, asyncProperty, integer, record, uniqueArray } from "fast-check";
 
 import { must } from "../narrowing.ts";
 import { check } from "../property.ts";
 import { requestTimingConforms } from "../request-timing-conformance.ts";
 import { requestTimingProcedures } from "../request-timing-trpc.ts";
-import { OperationName, requestTiming, type TimingRecord, within } from "../request-timing.ts";
+import {
+  measure,
+  OperationName,
+  requestTiming,
+  type TimingRecord,
+  within,
+} from "../request-timing.ts";
 import { LANES, REFUSED_PROCEDURE, TRPC_CODES } from "./request-timing-next-app/server/router.ts";
 import { read } from "./request-timing-fixture.ts";
 import { bootedForSuite, differential, type Ending } from "./request-timing-next-fixture.ts";
@@ -200,19 +207,6 @@ describe("the tRPC connector", () => {
     expect(await settled()).toEqual([]);
   });
 
-  test("records each error code with the status tRPC answers it with alone", async () => {
-    for (const code of TRPC_CODES) {
-      const response = await fetch(suite.app.url(single("fail.code", code)));
-      await response.arrayBuffer();
-      const made = await onlyOne("fail.code");
-      expect({ code, status: made.status, db: made.db.count }).toEqual({
-        code,
-        status: response.status,
-        db: 1,
-      });
-    }
-  });
-
   test("closes each call of a batch into a record of its own, and none for the envelope", async () => {
     const calls = [
       { path: "presets.byId", input: { id: 1 }, db: 2 },
@@ -250,30 +244,6 @@ describe("the tRPC connector", () => {
     expect(made).toMatchObject({ method: "GET", status: 499, aborted: true, streamed: false });
     expect(countsOf(made)).toEqual({ db: 1, out: 0, store: 0 });
     expect((await settled()).map((written) => written.operation)).not.toContain("held.hang");
-  });
-
-  test("closes a subscription when its stream ends, with the waits between its events", async () => {
-    const response = await fetch(suite.app.url(single("ticks.count")));
-    const body = await response.text();
-    expect(body).toContain("data: 3");
-    const made = await onlyOne("ticks.count");
-    expect(made).toMatchObject({ method: "GET", status: 200, aborted: false, streamed: true });
-    expect(countsOf(made)).toEqual({ db: 2, out: 0, store: 0 });
-  });
-
-  test("closes a subscription its client left midway, as aborted", async () => {
-    const client = new AbortController();
-    const response = await fetch(suite.app.url(single("ticks.drip")), { signal: client.signal });
-    const reader = must(response.body).getReader();
-    let seen = "";
-    while (!seen.includes("drop")) seen += await nextText(reader);
-    await (await fetch(suite.app.url("/api/held"))).text();
-    client.abort();
-    const made = await suite.app.recordOf("ticks.drip");
-    await (await fetch(suite.app.url("/api/held"), { method: "POST" })).text();
-    expect(made).toMatchObject({ method: "GET", status: 200, aborted: true, streamed: true });
-    expect(countsOf(made)).toEqual({ db: 1, out: 0, store: 0 });
-    expect((await settled()).map((written) => written.operation)).not.toContain("ticks.drip");
   });
 
   test("counts each overlapping lane's own waits, whoever let it through", () =>
@@ -369,6 +339,11 @@ describe("the tRPC connector", () => {
 describe("the tRPC connector, in-process", () => {
   const t = initTRPC.create();
 
+  /** Every code a TRPCError takes, as tRPC lists them. */
+  const CODES = Object.keys(TRPC_ERROR_CODES_BY_KEY).filter(
+    (key): key is TRPC_ERROR_CODE_KEY => key in TRPC_ERROR_CODES_BY_KEY,
+  );
+
   test("opens no operation for a call that did not arrive through the envelope", async () => {
     const records: TimingRecord[] = [];
     const timing = requestTimingProcedures(
@@ -385,7 +360,21 @@ describe("the tRPC connector, in-process", () => {
     expect(records).toEqual([]);
   });
 
-  /** A router of one procedure, `ping`, on the middleware, served through the envelope, and the records it writes. */
+  /** Opens once the case lets the procedure that waits on it on. */
+  const gate = () => {
+    const { promise: opened, resolve: open } = Promise.withResolvers<void>();
+    return { opened, open: () => open() };
+  };
+
+  /** A wait the operation counts, which waits on nothing outside the process. */
+  const waited = () => measure("db", () => Promise.resolve());
+
+  /**
+   * A router on the middleware, served through the envelope by tRPC's own
+   * fetch adapter, and the records it writes: a query, a query that refuses
+   * with the code it is given after one wait, and subscriptions that finish,
+   * fail, or wait on `held` midway.
+   */
   function enveloped() {
     const records: TimingRecord[] = [];
     const timing = requestTiming({
@@ -395,16 +384,93 @@ describe("the tRPC connector, in-process", () => {
       sink: (made) => void records.push(made),
     });
     const procedures = requestTimingProcedures(timing, getHTTPStatusCodeFromError);
-    const router = t.router({ ping: t.procedure.use(procedures.middleware).query(() => "pong") });
+    const procedure = t.procedure.use(procedures.middleware);
+    const held = gate();
+    const router = t.router({
+      ping: procedure.query(() => "pong"),
+      refuse: procedure
+        .input((raw: unknown) => must(CODES.find((code) => code === raw)))
+        .query(async ({ input }) => {
+          await waited();
+          throw new TRPCError({ code: input });
+        }),
+      ticks: procedure.subscription(async function* () {
+        yield 1;
+        await waited();
+        yield 2;
+        await waited();
+        yield 3;
+      }),
+      broken: procedure.subscription(async function* () {
+        yield 1;
+        await waited();
+        throw new Error("the stream broke");
+      }),
+      drip: procedure.subscription(async function* () {
+        yield "drop";
+        await waited();
+        await held.opened;
+        yield "never read";
+      }),
+    });
     const handler = procedures.envelope(router, (request: Request) =>
       fetchRequestHandler({ endpoint: "/trpc", req: request, router, createContext: () => ({}) }),
     );
-    return { records, timing, handler };
+    const call = (path: string, init?: RequestInit) =>
+      handler(new Request(`http://in-process${path}`, init), {});
+    return { records, timing, handler, call, held };
   }
 
+  test("records each error code with the status tRPC answers it with alone", async () => {
+    const { records, call } = enveloped();
+    for (const code of CODES) {
+      const response = await call(`/trpc/refuse?input=${encodeURIComponent(JSON.stringify(code))}`);
+      await response.arrayBuffer();
+      const made = must(records.pop());
+      expect({ code, status: made.status, db: made.db.count }).toEqual({
+        code,
+        status: response.status,
+        db: 1,
+      });
+    }
+    expect(records).toEqual([]);
+  });
+
+  test("closes a subscription when its stream ends, with the waits between its events", async () => {
+    const { records, call } = enveloped();
+    expect(await (await call("/trpc/ticks")).text()).toContain("data: 3");
+    expect(records).toMatchObject([
+      { method: "GET", operation: "ticks", status: 200, aborted: false, streamed: true },
+    ]);
+    expect(countsOf(must(records[0]))).toEqual({ db: 2, out: 0, store: 0 });
+  });
+
+  test("closes a subscription that fails midway, with the 200 its stream was sent with", async () => {
+    const { records, call } = enveloped();
+    await (await call("/trpc/broken")).text();
+    expect(records).toMatchObject([
+      { operation: "broken", status: 200, aborted: false, streamed: true },
+    ]);
+    expect(countsOf(must(records[0]))).toEqual({ db: 1, out: 0, store: 0 });
+  });
+
+  test("closes a subscription its client left midway, as aborted", async () => {
+    const { records, call, held } = enveloped();
+    const client = new AbortController();
+    const reader = must((await call("/trpc/drip", { signal: client.signal })).body).getReader();
+    let seen = "";
+    while (!seen.includes("drop")) seen += await nextText(reader);
+    client.abort();
+    await reader.cancel();
+    held.open();
+    expect(records).toMatchObject([
+      { operation: "drip", status: 200, aborted: true, streamed: true },
+    ]);
+  });
+
   test("opens one operation per call through the envelope, and none while one is current", async () => {
-    const { records, timing, handler } = enveloped();
-    const call = () => handler(new Request("http://in-process/trpc/ping"), {});
+    const { records, timing, call: served } = enveloped();
+    const call = () => served("/trpc/ping");
     expect((await call()).status).toBe(200);
     const outer = timing.open();
     expect((await within(outer, call)).status).toBe(200);
@@ -419,9 +485,8 @@ describe("the tRPC connector, in-process", () => {
   });
 
   test("closes a call whose client had left before the middleware ran, as 499 and aborted", async () => {
-    const { records, handler } = enveloped();
-    const left = new Request("http://in-process/trpc/ping", { signal: AbortSignal.abort() });
-    await (await handler(left, {})).arrayBuffer();
+    const { records, call } = enveloped();
+    await (await call("/trpc/ping", { signal: AbortSignal.abort() })).arrayBuffer();
     expect(records).toMatchObject([{ operation: "ping", status: 499, aborted: true }]);
   });
 
