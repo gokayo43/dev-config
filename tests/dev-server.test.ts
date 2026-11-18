@@ -10,10 +10,10 @@
  * one that never does.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   basePort,
@@ -30,11 +30,13 @@ import {
   BRANCHES,
   bystander,
   claimBlocks,
+  EPHEMERAL_FLOOR,
   EXITS_AT_ONCE,
   holderOf,
   killBehindItsBack,
   NEVER_BINDS,
   occupy,
+  reclaim,
   running,
   scratchRepo,
   SERVES,
@@ -856,21 +858,40 @@ describe("the argument list", () => {
 });
 
 describe("the fixture's own guards", () => {
+  test(
+    "gives a fixture's name back only once its directory is gone",
+    async () => {
+      // The wrong implementation releases the claim and then removes the
+      // directory. A second run one case behind takes the name in that gap, so
+      // the same directory, and the first run's removal deletes the fixture the
+      // second is building.
+      const scratch = await scratchRepo(SERVES);
+      const home = dirname(scratch.root);
+
+      const disposed = scratch[Symbol.asyncDispose]();
+      using reclaimed = await reclaim(scratch.name);
+      const homeWhenFree = existsSync(home);
+      await disposed;
+
+      expect(reclaimed.name).toBe(scratch.name);
+      expect(homeWhenFree).toBe(false);
+    },
+    CASE_MS,
+  );
+
   test("hands two runs at once different blocks, none the kernel gives a connection", () => {
     // Two wrong implementations. One names fixtures alike in every run, or
     // forgets the claim it took, and two runs on one machine bind each other's
     // ports. The other lets a block into the ephemeral range, where an outgoing
     // connection on another address holds the port that the HOST case binds on
     // 0.0.0.0 after `up` has probed it free on 127.0.0.1.
-    const range = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8");
-    const ephemeral = Number(range.trim().split(/\s+/)[0]);
     using first = claimBlocks("guard");
     using second = claimBlocks("guard");
 
     expect(second.name).not.toBe(first.name);
     const all = [...first.bases, ...second.bases];
     expect(new Set(all).size).toBe(BRANCHES.length * 2);
-    for (const base of all) expect(base + PORTS_PER_WORKTREE).toBeLessThanOrEqual(ephemeral);
+    for (const base of all) expect(base + PORTS_PER_WORKTREE).toBeLessThanOrEqual(EPHEMERAL_FLOOR);
   });
 
   test("refuses to signal a pid that is not one", () => {

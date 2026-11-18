@@ -28,21 +28,18 @@ import {
 /** The CLI under test, reached the way a consuming repo reaches it. */
 const CLI = join(dirname(import.meta.dir), "dev-server.ts");
 
-const FIXTURES = join(tmpdir(), "dev-server-fixtures");
-
 /** Every branch a fixture runs `up` on. A fixture claims all of their blocks before any case starts a server. */
 export const BRANCHES = ["main", "feature", "feat/x", "feat-x"] as const;
 
+export type Branch = (typeof BRANCHES)[number];
+
 /** The first port the kernel hands an outgoing connection on this machine. */
-const EPHEMERAL_FLOOR = Number(
+export const EPHEMERAL_FLOOR = Number(
   readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8").trim().split(/\s+/)[0],
 );
 
 /** How many names `claimBlocks` tries before it says the machine has no room. */
 const CANDIDATES = 100_000;
-
-/** The fixture's position in the run, so consecutive cases never share a block. */
-let made = 0;
 
 export interface Claim extends Disposable {
   /** The package name every block was derived from. */
@@ -59,7 +56,9 @@ export interface Claim extends Disposable {
  * only when the nine before it are held. The kernel grants a port to one socket
  * on the whole machine and frees it when its process dies, so a second run of
  * this suite, whatever its checkout or temp directory, fails the bind and takes
- * the next name, while one run keeps its names for as long as it holds them.
+ * the next name, while one run keeps its names for as long as it holds them. A
+ * name that puts two branches in one block fails the same way, on its own second
+ * bind of that block's last port, so every block of a claim is its own.
  *
  * Every block also lies below the ephemeral range. The kernel gives an outgoing
  * connection a port from that range on whichever local address it leaves from,
@@ -76,33 +75,46 @@ export function claimBlocks(stem: string): Claim {
     if (bases.some((base) => base + PORTS_PER_WORKTREE > EPHEMERAL_FLOOR)) continue;
     const held = hold(bases.map((base) => base + PORTS_PER_WORKTREE - 1));
     if (held === null) continue;
-    return {
-      name,
-      bases,
-      [Symbol.dispose](): void {
-        for (const listener of held) listener.stop(true);
-      },
-    };
+    return { name, bases, [Symbol.dispose]: () => held.dispose() };
   }
   throw new Error(
     `no name among ${CANDIDATES} for ${stem} puts every block of ${BRANCHES.join(", ")} free and between ${PORT_FLOOR} and the ephemeral range at ${EPHEMERAL_FLOOR}`,
   );
 }
 
+/**
+ * The claim on `name`, taken the first turn of the event loop it comes free, as
+ * a second run of this suite would take it. Every name the search finds before
+ * it is held meanwhile, so the search cannot settle on one of those instead.
+ */
+export async function reclaim(name: string): Promise<Claim> {
+  const stem = name.slice(0, name.lastIndexOf("-"));
+  const rank = (candidate: string): number => Number(candidate.slice(stem.length + 1));
+  using passed = new DisposableStack();
+  for (let turn = 0; turn < CANDIDATES; turn++) {
+    const claim = claimBlocks(stem);
+    if (claim.name === name) return claim;
+    if (rank(claim.name) < rank(name)) passed.use(claim);
+    else claim[Symbol.dispose]();
+    await new Promise((next) => setImmediate(next));
+  }
+  throw new Error(`${name} did not come free within ${CANDIDATES} turns of the event loop`);
+}
+
 /** Every port bound on loopback, or none of them. */
-function hold(ports: readonly number[]): Bun.TCPSocketListener<undefined>[] | null {
-  const held: Bun.TCPSocketListener<undefined>[] = [];
+function hold(ports: readonly number[]): DisposableStack | null {
+  using held = new DisposableStack();
   for (const port of ports) {
     try {
-      held.push(Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } }));
+      const listener = Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } });
+      held.defer(() => listener.stop(true));
     } catch {
       // Claimed by another run, or by anything else on this machine: either way
       // not this name's to use.
-      for (const listener of held) listener.stop(true);
       return null;
     }
   }
-  return held;
+  return held.move();
 }
 
 /**
@@ -143,26 +155,28 @@ export interface Run {
 }
 
 export interface Scratch extends AsyncDisposable {
+  /** The package name its claim gave it. */
+  readonly name: string;
   /** The primary checkout. */
   readonly root: string;
   /** Where the records are, so a case can read one or check that it is gone. */
   readonly state: string;
   /** A linked worktree on a branch of its own, ready to run the CLI. */
-  worktree(branch: (typeof BRANCHES)[number]): Promise<string>;
+  worktree(branch: Exclude<Branch, "main">): Promise<string>;
   /** `bun run dev-server <args>` in a worktree, exactly as a person would type it. */
   devServer(cwd: string, ...args: readonly string[]): Promise<Run>;
   /** Two of them at once, started as close together as this can arrange. */
   devServerRace(cwd: string, ...args: readonly string[]): Promise<[Run, Run]>;
   /** Where a branch's record, log and lock live, derived the way the CLI derives them. */
-  paths(branch: string): { readonly record: string; readonly log: string; readonly lock: string };
+  paths(branch: Branch): { readonly record: string; readonly log: string; readonly lock: string };
   /** The record for a branch. Refuses to invent one: an absent record is a failing case, not a zero. */
-  record(branch: string): Promise<Server>;
+  record(branch: Branch): Promise<Server>;
   /** The record for a branch, or null — for the cases whose whole claim is that there is none. */
-  recordOrNull(branch: string): Promise<Server | null>;
+  recordOrNull(branch: Branch): Promise<Server | null>;
   /** Puts exactly these bytes where a branch's record goes, for the cases about a record nothing wrote. */
-  putRecord(branch: string, contents: string): Promise<void>;
+  putRecord(branch: Branch, contents: string): Promise<void>;
   /** The same, for the lock one `up` holds against another. */
-  putLock(branch: string, contents: string): Promise<void>;
+  putLock(branch: Branch, contents: string): Promise<void>;
 }
 
 /**
@@ -230,9 +244,9 @@ function slay(pid: number): void {
 }
 
 export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch> {
-  const claim = claimBlocks(`dev-server-fixture-${made++}`);
+  const claim = claimBlocks("dev-server-fixture");
   const { name } = claim;
-  const home = join(FIXTURES, name);
+  const home = join(tmpdir(), name);
   // Whatever a killed run left at this exact path, rather than a sweep of the
   // directory: a sweep is how two runs sharing a machine delete each other's
   // work. The claim makes the path this run's alone.
@@ -252,9 +266,9 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
 
   const seen = new Set<number>();
   const state = join(root, ".git", "dev-server");
-  const worktrees = new Map<string, string>([["main", root]]);
+  const worktrees = new Map<Branch, string>([["main", root]]);
 
-  function paths(branch: string): { record: string; log: string; lock: string } {
+  function paths(branch: Branch): { record: string; log: string; lock: string } {
     const path = worktrees.get(branch);
     if (path === undefined) throw new Error(`this fixture has no worktree on ${branch}`);
     const stem = recordStem(path, branch);
@@ -303,10 +317,11 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
   }
 
   return {
+    name,
     root,
     state,
     paths,
-    async worktree(branch: (typeof BRANCHES)[number]): Promise<string> {
+    async worktree(branch: Exclude<Branch, "main">): Promise<string> {
       // Numbered, because the point of several of these cases is two branches
       // whose readable form is the same one.
       const path = join(home, `wt-${worktrees.size}-${branch.replaceAll(/[^A-Za-z0-9]+/g, "-")}`);
@@ -325,35 +340,35 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
       await remember();
       return both;
     },
-    async record(branch: string): Promise<Server> {
+    async record(branch: Branch): Promise<Server> {
       const { record } = paths(branch);
       if (!existsSync(record)) throw new Error(`no record at ${record}`);
       return read(JSON.parse(await readFile(record, "utf8")));
     },
-    async recordOrNull(branch: string): Promise<Server | null> {
+    async recordOrNull(branch: Branch): Promise<Server | null> {
       const { record } = paths(branch);
       return existsSync(record) ? read(JSON.parse(await readFile(record, "utf8"))) : null;
     },
-    async putRecord(branch: string, contents: string): Promise<void> {
+    async putRecord(branch: Branch, contents: string): Promise<void> {
       await mkdir(state, { recursive: true });
       await Bun.write(paths(branch).record, contents);
     },
-    async putLock(branch: string, contents: string): Promise<void> {
+    async putLock(branch: Branch, contents: string): Promise<void> {
       await mkdir(state, { recursive: true });
       await Bun.write(paths(branch).lock, contents);
     },
     async [Symbol.asyncDispose](): Promise<void> {
       await remember();
       for (const pid of seen) slay(pid);
-      // The blocks go back only once nothing of this fixture can still hold a
-      // port in them, or the next run to claim one finds it taken.
+      // The name goes back last. The next run to claim it reuses its ports and
+      // its directory, so nothing of this fixture may still hold either.
       for (const pid of seen) {
-        if (!(await settles(() => groupGone(pid)))) {
+        if (!(await settles(() => !exists(-real(pid))))) {
           throw new Error(`process group ${pid} outlived SIGKILL, so its blocks stay claimed`);
         }
       }
-      claim[Symbol.dispose]();
       await rm(home, { recursive: true, force: true });
+      claim[Symbol.dispose]();
     },
   };
 }
@@ -437,22 +452,16 @@ export async function stays(
 
 /** Whether a process is there at all — the question `status` answers in its own column. */
 export function running(pid: number): boolean {
-  const target = real(pid);
+  return exists(real(pid));
+}
+
+/** Whether a signal reaches anything at a pid, or at a whole process group as `-pid`. */
+function exists(target: number): boolean {
   try {
     process.kill(target, 0);
     return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Whether no process is left in the group a server leads, which is when its ports are free. */
-function groupGone(pid: number): boolean {
-  try {
-    process.kill(-real(pid), 0);
-    return false;
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ESRCH") return true;
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
     throw error;
   }
 }
