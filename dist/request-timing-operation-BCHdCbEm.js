@@ -19,19 +19,21 @@ const WAIT_KINDS = [
 	"out",
 	"store"
 ];
-const STANDARD = [
+/** Every method a record can carry. */
+const METHODS = [
 	"GET",
 	"HEAD",
 	"POST",
 	"PUT",
 	"PATCH",
 	"DELETE",
-	"OPTIONS"
+	"OPTIONS",
+	"OTHER"
 ];
 /** A request's method as a record carries it: a standard one upper-cased, and every other as `OTHER`. */
 function methodOf(written) {
 	const upper = written.toUpperCase();
-	return STANDARD.find((method) => method === upper) ?? "OTHER";
+	return METHODS.find((method) => method === upper) ?? "OTHER";
 }
 /** What marks a URL rather than a pattern: a query string, a fragment, a scheme. */
 const URL_SHAPED = /[?#]|:\/\//u;

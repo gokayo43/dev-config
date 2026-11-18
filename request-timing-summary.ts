@@ -4,6 +4,7 @@
  * that feeds it stdin, and the conformance kit reads a record with `parseRecord`.
  */
 import {
+  METHODS,
   RECORD_VERSION,
   type Method,
   type TimingRecord,
@@ -59,17 +60,6 @@ const numberIn = (fields: ReadonlyMap<string, unknown>, key: string) => {
   const found = fields.get(key);
   return typeof found === "number" && Number.isFinite(found) && found >= 0 ? found : undefined;
 };
-
-const METHODS: readonly Method[] = [
-  "GET",
-  "HEAD",
-  "POST",
-  "PUT",
-  "PATCH",
-  "DELETE",
-  "OPTIONS",
-  "OTHER",
-];
 
 /**
  * The record a log line holds, or nothing for a line that is not one: not JSON,

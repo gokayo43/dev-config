@@ -27,12 +27,22 @@ export const WAIT_KINDS: readonly WaitKind[] = ["db", "out", "store"];
  */
 export type Method = "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "OTHER";
 
-const STANDARD: readonly Method[] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+/** Every method a record can carry. */
+export const METHODS: readonly Method[] = [
+  "GET",
+  "HEAD",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+  "OPTIONS",
+  "OTHER",
+];
 
 /** A request's method as a record carries it: a standard one upper-cased, and every other as `OTHER`. */
 export function methodOf(written: string): Method {
   const upper = written.toUpperCase();
-  return STANDARD.find((method) => method === upper) ?? "OTHER";
+  return METHODS.find((method) => method === upper) ?? "OTHER";
 }
 
 /** What marks a URL rather than a pattern: a query string, a fragment, a scheme. */

@@ -1,4 +1,4 @@
-import { a as methodOf, i as beginWait, n as RECORD_VERSION, o as requestTiming, r as WAIT_KINDS, t as OperationName } from "./request-timing-operation-BUh0ai0I.js";
+import { a as methodOf, i as beginWait, n as RECORD_VERSION, o as requestTiming, r as WAIT_KINDS, t as OperationName } from "./request-timing-operation-BCHdCbEm.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 //#region request-timing.ts
 /**
