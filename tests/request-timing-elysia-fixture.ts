@@ -18,6 +18,7 @@ import { timedBunRedis } from "../request-timing-bun-redis.ts";
 import { timedPool } from "../request-timing-mysql2.ts";
 import { parseRecord } from "../request-timing-summary.ts";
 import { requestTiming, type TimingRecord } from "../request-timing.ts";
+import { lines } from "./request-timing-fixture.ts";
 import { keyPrefix, REDIS_URL, scratchDatabase } from "./request-timing-servers.ts";
 
 const presets = mysqlTable("presets", {
@@ -33,25 +34,6 @@ class Broken extends Error {}
 
 /** How many lanes the overlap property can run at once, each a route of its own so its record names it. */
 export const LANES = 6;
-
-/** Lines in the order the sink writes them, taken one at a time. */
-function lines() {
-  const written: string[] = [];
-  const waiting: ((line: string) => void)[] = [];
-  return {
-    write: (line: string) => {
-      const taker = waiting.shift();
-      if (taker === undefined) written.push(line);
-      else taker(line);
-    },
-    next: () => {
-      const line = written.shift();
-      return line === undefined
-        ? new Promise<string>((resolve) => waiting.push(resolve))
-        : Promise.resolve(line);
-    },
-  };
-}
 
 /** A latch a route waits on, which tells the case once the route is waiting. */
 function latch() {

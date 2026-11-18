@@ -26,7 +26,7 @@ export type Adoption =
   | "misnamed";
 
 /** Lines in the order the sink writes them, taken one at a time. */
-function lines() {
+export function lines() {
   const written: string[] = [];
   const waiting: ((line: string) => void)[] = [];
   return {
