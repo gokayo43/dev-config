@@ -26,7 +26,7 @@ await entry(async () => {
 
   const operationsTimedOtherwise = read["operations-timed-otherwise"];
   if (operationsTimedOtherwise.trim() !== "") {
-    notice(`the operations are timed outside request timing: ${operationsTimedOtherwise}`);
+    notice(`the operations are not timed by request timing: ${operationsTimedOtherwise}`);
   }
 
   // Refused rather than read as `none`, which is what any "is it the word I
