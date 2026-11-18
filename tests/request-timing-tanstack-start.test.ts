@@ -260,52 +260,44 @@ describe("the TanStack Start connector", () => {
     await recordOf(Promise.resolve(made));
   });
 
-  // Fails until the Effect carrier's `tryPromiseCarried` starts what its thunk
-  // answers under the operation: drizzle answers a query that runs when its
-  // `then` is called, which `Effect.tryPromise` calls after the thunk has
-  // returned, so a lane resumed by another's release issues its queries under
-  // none. Turn it back into `test` with that change.
-  test.failing(
-    "counts each overlapping request's own waits, whoever releases it into the permit",
-    () =>
-      check(
-        asyncProperty(
-          uniqueArray(integer({ min: 0, max: LANES - 1 }), { minLength: 2, maxLength: LANES }),
-          array(record({ queries: integer({ min: 0, max: 3 }), transaction: boolean() }), {
-            minLength: LANES,
-            maxLength: LANES,
-          }),
-          async (lanes, plans) => {
-            const planOf = (lane: number) => plans[lane] ?? { queries: 0, transaction: false };
-            // The latch: the permit every lane queues on, held outside any
-            // operation until every lane has arrived at it.
-            const release = await on.app.fixture.hold();
-            const arrived = on.app.fixture.arrived(lanes.length);
-            const responses = lanes.map(async (lane) => {
-              const { queries, transaction } = planOf(lane);
-              const query = `queries=${queries}&transaction=${transaction}`;
-              return (await fetch(url(`/lanes/${lane}?${query}`))).text();
-            });
-            await arrived;
-            await release();
-            await Promise.all(responses);
-            const records = await Promise.all(lanes.map(() => nextRecord()));
-            expect(
-              Object.fromEntries(records.map((made) => [made.operation, made.db.count])),
-            ).toEqual(
-              Object.fromEntries(
-                lanes.map((lane) => {
-                  const { queries, transaction } = planOf(lane);
-                  // A transaction is its opening, its one query and its closing.
-                  return [`/lanes/${lane}`, queries + (transaction ? 3 : 0)];
-                }),
-              ),
-            );
-          },
-        ),
-        { numRuns: 25 },
+  test("counts each overlapping request's own waits, whoever releases it into the permit", () =>
+    check(
+      asyncProperty(
+        uniqueArray(integer({ min: 0, max: LANES - 1 }), { minLength: 2, maxLength: LANES }),
+        array(record({ queries: integer({ min: 0, max: 3 }), transaction: boolean() }), {
+          minLength: LANES,
+          maxLength: LANES,
+        }),
+        async (lanes, plans) => {
+          const planOf = (lane: number) => plans[lane] ?? { queries: 0, transaction: false };
+          // The latch: the permit every lane queues on, held outside any
+          // operation until every lane has arrived at it.
+          const release = await on.app.fixture.hold();
+          const arrived = on.app.fixture.arrived(lanes.length);
+          const responses = lanes.map(async (lane) => {
+            const { queries, transaction } = planOf(lane);
+            const query = `queries=${queries}&transaction=${transaction}`;
+            return (await fetch(url(`/lanes/${lane}?${query}`))).text();
+          });
+          await arrived;
+          await release();
+          await Promise.all(responses);
+          const records = await Promise.all(lanes.map(() => nextRecord()));
+          expect(
+            Object.fromEntries(records.map((made) => [made.operation, made.db.count])),
+          ).toEqual(
+            Object.fromEntries(
+              lanes.map((lane) => {
+                const { queries, transaction } = planOf(lane);
+                // A transaction is its opening, its one query and its closing.
+                return [`/lanes/${lane}`, queries + (transaction ? 3 : 0)];
+              }),
+            ),
+          );
+        },
       ),
-  );
+      { numRuns: 25 },
+    ));
 
   test("passes the conformance kit on a server route", () =>
     requestTimingConforms({

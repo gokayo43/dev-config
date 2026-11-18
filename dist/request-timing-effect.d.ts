@@ -30,10 +30,11 @@ export declare const inOperation: Effect.Effect<boolean>;
 export declare function carryOperation<A, E, R>(program: Effect.Effect<A, E, R>): Effect.Effect<A, E, R>;
 /**
  * The crossing back from an Effect program into plain async code: exactly
- * `Effect.tryPromise`, with the promise run under the plain carrier holding the
- * fiber's operation, so every wait a plain connector measures inside it,
- * across all of its awaits, counts in the fiber's operation. With no operation
- * in the fiber the promise runs under no operation, whatever
+ * `Effect.tryPromise`, with the thunk called, and what it answers started, under
+ * the plain carrier holding the fiber's operation, so every wait a plain
+ * connector measures inside it, across all of its awaits, counts in the
+ * fiber's operation, a lazy drizzle query handed straight back included. With
+ * no operation in the fiber both run under no operation, whatever
  * `AsyncLocalStorage` holds where the fiber happens to run, so a stale store
  * from another request never leaks in. Rejection, a synchronous throw, the
  * abort signal and interruption are `Effect.tryPromise`'s: a driver's

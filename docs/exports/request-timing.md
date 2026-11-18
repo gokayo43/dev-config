@@ -67,14 +67,22 @@ In this order:
    promise-returning thunk to plain async code: the one service that wraps the
    database client, and the one outbound send. Use `tryPromiseCarried` there in
    place of `Effect.tryPromise`; it takes the same arguments and answers the
-   same, and runs the thunk under the plain carrier with the fiber's operation:
+   same, and runs the thunk, and starts what it answers, under the plain carrier
+   with the fiber's operation:
 
    ```ts
    import { tryPromiseCarried } from "@gokayo43/dev-config/request-timing/effect";
 
-   const use = <A>(f: (client: Client) => Promise<A>) =>
+   const use = <A>(f: (client: Client) => PromiseLike<A>) =>
      tryPromiseCarried({ try: () => f(client), catch: (cause) => new DbError({ cause }) });
+
+   const presets = use((client) => client.select().from(presetsTable));
    ```
+
+   A drizzle query handed straight back, as `presets` does, is a lazy thenable
+   that runs only when its `then` is called; `tryPromiseCarried` calls it,
+   once, inside the carrier, so the query counts like one awaited inside the
+   thunk.
 
    Every query a plain connector measures inside the thunk, across all of its
    awaits, a whole transaction included, counts in the fiber's operation, each
@@ -122,8 +130,9 @@ Which operation a wait belongs to is carried for it, by what the code is:
   trusts that storage inside a program. It crosses at two places only. In:
   `carryOperation` reads the storage at the call that hands the program to the
   runtime, the last moment it is right. Out: `tryPromiseCarried` sets the
-  storage from the fiber for the length of a thunk, and clears it when the
-  fiber has no operation. An edge that is itself an Effect program opens the
+  storage from the fiber, or clears it when the fiber has no operation, while
+  it calls the thunk and the `then` of what the thunk answers, and everything
+  started there keeps that storage across its awaits. An edge that is itself an Effect program opens the
   operation and enters it with the Effect `within` instead of crossing in.
 
 ## Elysia

@@ -516,10 +516,30 @@ describe("measure answers what the wait answers", () => {
   }
 });
 
+/**
+ * A query that does nothing until its `then` is called, as every drizzle query
+ * does, and then does `run`.
+ */
+class Lazy implements PromiseLike<string> {
+  readonly #run: () => Promise<string>;
+
+  constructor(run: () => Promise<string>) {
+    this.#run = run;
+  }
+
+  // oxlint-disable-next-line unicorn/no-thenable -- the subject: what the crossing out does with a lazy query
+  then<Fulfilled = string, Rejected = never>(
+    fulfilled?: ((row: string) => Fulfilled | PromiseLike<Fulfilled>) | null,
+    rejected?: ((reason: unknown) => Rejected | PromiseLike<Rejected>) | null,
+  ): PromiseLike<Fulfilled | Rejected> {
+    return this.#run().then(fulfilled, rejected);
+  }
+}
+
 describe("the way back out to plain code behaves as Effect.tryPromise does", () => {
   const refused = new Error("refused");
   const thrown = new Error("thrown");
-  const thunks: readonly { readonly name: string; readonly thunk: () => Promise<string> }[] = [
+  const thunks: readonly { readonly name: string; readonly thunk: () => PromiseLike<string> }[] = [
     { name: "a value", thunk: async () => "row" },
     { name: "a rejection", thunk: () => Promise.reject(refused) },
     {
@@ -527,6 +547,15 @@ describe("the way back out to plain code behaves as Effect.tryPromise does", () 
       thunk: () => {
         throw thrown;
       },
+    },
+    { name: "a lazy value", thunk: () => new Lazy(async () => "row") },
+    { name: "a lazy rejection", thunk: () => new Lazy(() => Promise.reject(refused)) },
+    {
+      name: "a lazy query whose then throws",
+      thunk: () =>
+        new Lazy(() => {
+          throw thrown;
+        }),
     },
   ];
   const mapped = (error: unknown) => ({ mapped: error });
