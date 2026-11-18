@@ -166,8 +166,7 @@ export function timedStartHandler<Options>(
       },
       (error: unknown) => {
         // Start throws out of its handler only for a server route or page
-        // whose handler threw, and the server answers a fetch that throws
-        // with 500, Bun's own and Nitro's alike.
+        // whose handler threw, and Bun answers a fetch that throws with 500.
         end({ status: 500, aborted: false, streamed: false });
         throw error;
       },

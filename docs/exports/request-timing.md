@@ -214,7 +214,7 @@ Start mounts its own CSRF check on server functions only while an app has no
   every request as `unmatched`.
 - A server function is named by its file and variable as Start's compiler
   records them, `src/server/presets.ts:listPresets`, which no build changes;
-  the id in its URL is a hash. A function in a file whose path the core refuses,
+  the id in its URL is a hash in a build. A function in a file whose path the core refuses,
   one holding a space, `?` or `#`, fails on every call.
 - A request no route matched is `unmatched`, and so is a call to a server
   function that does not exist, or one refused before the function ran, as by
@@ -225,7 +225,8 @@ Start mounts its own CSRF check on server functions only while an app has no
   served in-process by calling the handler while an operation is current.
 - The status is the one the client received. A page or a server route whose
   handler throws leaves the server to answer, and the record says 500, which is
-  Bun's answer and Nitro's. A server function that throws is answered by Start,
+  Bun's answer to a fetch that throws; a server that answers otherwise leaves
+  its records disagreeing with its clients. A server function that throws is answered by Start,
   200 with the error in its body, and the record says 200.
 - A response closes after the last chunk of its body. It is `streamed` when it
   is sent over time: a `text/event-stream`, a server function's framed answer
