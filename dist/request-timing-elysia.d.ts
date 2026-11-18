@@ -1,4 +1,5 @@
-import { c as Timing } from "./request-timing-operation-BLYTP7sS.js";
+import { c as Timing } from "./request-timing-operation-BW73YQNi.js";
+import "./request-timing.js";
 import { AnyElysia } from "elysia";
 //#region request-timing-elysia.d.ts
 /**
@@ -11,8 +12,9 @@ import { AnyElysia } from "elysia";
  * response once Elysia hands it to the server, a streamed one after its last
  * chunk, and either once the client has gone. The operation is named by the
  * route Elysia matched, as registered, or `unmatched`; its status is the
- * response's, whatever error handler made it, or 499 for a client gone before
- * there was one. Mounting it throws, naming the route, where a route was
+ * response's, whatever error handler made it, 101 for a request Bun upgraded
+ * to a WebSocket, or 499 for a client gone before there was one. A request the
+ * app serves in-process while an operation is current opens none of its own. Mounting it throws, naming the route, where a route was
  * registered ahead of it, and `app.listen` throws where a route's pattern is
  * not one the core takes.
  */

@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { Elysia, sse, t } from "elysia";
 import { RedisClient } from "bun";
 
+import { must } from "../narrowing.ts";
 import { requestTimingPlugin } from "../request-timing-elysia.ts";
 import { timedFetch } from "../request-timing-fetch.ts";
 import { timedBunRedis } from "../request-timing-bun-redis.ts";
@@ -77,6 +78,9 @@ export async function presetApp(timed: boolean, connectionLimit = 4) {
   const send = timed ? timedFetch(fetch) : fetch;
   const db = drizzle(pool);
   const held = latch();
+  // The app serving a request in-process, as the API serves its own generated
+  // spec; set once the app below exists.
+  const inProcess: { handle?: (request: Request) => Promise<Response> } = {};
 
   // Bun's own answer to a fetch that throws is a page it also logs as a
   // failure, which `bun test` counts against the run; this is the same 500.
@@ -123,6 +127,11 @@ export async function presetApp(timed: boolean, connectionLimit = 4) {
       await db.select().from(presets);
       throw new Refused("refused midway");
     })
+    .get("/outer", async () => {
+      const inner = await must(inProcess.handle)(new Request("http://in-process/presets/1"));
+      await db.select().from(presets);
+      return { inner: inner.status };
+    })
     .get("/broken", async () => {
       await db.select().from(presets);
       throw new Broken("broken");
@@ -151,6 +160,7 @@ export async function presetApp(timed: boolean, connectionLimit = 4) {
       return "done";
     });
   }
+  inProcess.handle = (request) => app.handle(request);
   app.listen({ port: 0, hostname: "127.0.0.1" });
   const server = app.server;
   if (server === null) throw new Error("the fixture app did not start");

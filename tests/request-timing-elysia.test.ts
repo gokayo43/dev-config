@@ -114,6 +114,12 @@ describe("the Elysia connector", () => {
       { method: "GET", operation: "/fail", status: 503, aborted: false, streamed: false },
     ],
     [
+      "a handler that serves the app in-process, with both requests' waits",
+      "/outer",
+      {},
+      { method: "GET", operation: "/outer", status: 200, aborted: false, streamed: false },
+    ],
+    [
       "an error handler that throws, with the 500 the server answered",
       "/broken",
       {},
@@ -144,6 +150,7 @@ describe("the Elysia connector", () => {
     "/events": { db: 1, store: 0, out: 0 },
     "/fail": { db: 1, store: 0, out: 0 },
     "/broken": { db: 1, store: 0, out: 0 },
+    "/outer": { db: 3, store: 1, out: 1 },
     "/nowhere/42?q=private": { db: 0, store: 0, out: 0 },
     "/presets": { db: 0, store: 0, out: 0 },
   };
@@ -271,7 +278,7 @@ describe("the Elysia connector", () => {
     void optional.stop(true);
   });
 
-  test("closes a WebSocket upgrade into one record of the status Elysia answered it with", async () => {
+  test("closes a WebSocket upgrade into one record of the 101 the client received", async () => {
     const written = app.nextRecord();
     const socket = new WebSocket(app.url("/socket").href.replace("http", "ws"));
     const echoed = Promise.withResolvers<unknown>();
@@ -282,7 +289,7 @@ describe("the Elysia connector", () => {
     socket.close();
     expect(await recordOf(written)).toMatchObject({
       operation: "/socket",
-      status: 200,
+      status: 101,
       aborted: false,
     });
   });

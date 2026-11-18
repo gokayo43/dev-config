@@ -6,7 +6,8 @@
  */
 import type { AnyElysia, Elysia } from "elysia";
 
-import { methodOf, OperationName, type Timing, within } from "./request-timing.ts";
+import { must } from "./narrowing.ts";
+import { inOperation, methodOf, OperationName, type Timing, within } from "./request-timing.ts";
 
 /** How a response ended, short of its name and method, which the request carries. */
 interface Ended {
@@ -62,13 +63,16 @@ function watched<Chunk>(
  * response once Elysia hands it to the server, a streamed one after its last
  * chunk, and either once the client has gone. The operation is named by the
  * route Elysia matched, as registered, or `unmatched`; its status is the
- * response's, whatever error handler made it, or 499 for a client gone before
- * there was one. Mounting it throws, naming the route, where a route was
+ * response's, whatever error handler made it, 101 for a request Bun upgraded
+ * to a WebSocket, or 499 for a client gone before there was one. A request the
+ * app serves in-process while an operation is current opens none of its own. Mounting it throws, naming the route, where a route was
  * registered ahead of it, and `app.listen` throws where a route's pattern is
  * not one the core takes.
  */
 export function requestTimingPlugin(timing: Timing) {
   const matchedRoutes = new WeakMap<Request, string>();
+  /** The requests Bun's server took over as WebSockets, whose client received 101. */
+  const upgraded = new WeakSet<Request>();
   const names = new Map<string, OperationName>();
   const nameOf = (pattern: string): OperationName => {
     const known = names.get(pattern);
@@ -124,7 +128,10 @@ export function requestTimingPlugin(timing: Timing) {
         // `isStreamed` first: reading `body` turns a buffered body into a
         // stream, which Bun then sends as `application/octet-stream`.
         if (!isStreamed(response) || response.body === null) {
-          end({ status: response.status, aborted: false, streamed: false });
+          // An upgraded request's response is Elysia's, which Bun drops: the
+          // client was answered 101 by the upgrade itself.
+          const status = upgraded.has(request) ? 101 : response.status;
+          end({ status, aborted: false, streamed: false });
           return response;
         }
         const body = watched(response.body, (aborted) =>
@@ -153,10 +160,21 @@ export function requestTimingPlugin(timing: Timing) {
     // the app goes back with its own type and none of the plugin's.
     const elysia: Elysia = app;
     elysia
-      .wrap((handle, request) => () => serve(handle, request))
+      // A request the app serves in-process while an operation is current,
+      // as `app.handle` from a handler, is part of that operation.
+      .wrap((handle, request) => () => (inOperation() ? handle(request) : serve(handle, request)))
       .onTransform({ as: "global" }, matched)
-      .onStart(({ routes }) => {
+      .onStart(({ routes, server }) => {
         for (const route of routes) nameOf(route.path);
+        // `listen` sets the server before it starts the app. Bun answers an
+        // upgrade itself, and only `upgrade`'s answer says one happened.
+        const running = must(server);
+        const upgrade = running.upgrade.bind(running);
+        running.upgrade = (request, ...options) => {
+          const taken = upgrade(request, ...options);
+          if (taken) upgraded.add(request);
+          return taken;
+        };
       });
     return app;
   };

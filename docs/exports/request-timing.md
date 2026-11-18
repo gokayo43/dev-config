@@ -133,15 +133,22 @@ export const app = new Elysia().use(errorHandler).use(requestTimingPlugin(timing
 - A buffered response closes its operation when Elysia hands it to Bun. A
   streamed one, which is every generator, `ReadableStream` and `sse()` a handler
   answers and every response that says `transfer-encoding: chunked`, closes
-  after its last chunk, with `streamed: true`.
+  after its last chunk, with `streamed: true`. A handler that builds its own
+  `Response` around a `ReadableStream` without that header is a buffered
+  response to the connector, since Bun shows no difference: it closes when the
+  response is handed over, and what the body waits on while it is read is in
+  no record. Answer the stream itself, or say `transfer-encoding: chunked`.
 - A client that goes away closes the operation then, with `aborted: true` and
   the status the handler had produced, or 499 where it had produced none. What
   the handler waits on after that is in no record.
 - Mounting it behind a route throws, naming the route, and `listen` throws on a
   route whose pattern the core refuses, such as an optional parameter `/:id?`.
-- A WebSocket route's upgrade is one operation, recorded with the status Elysia
-  answers it with, 200, though the client receives 101. The messages after it
-  are in no record.
+- A WebSocket route's upgrade is one operation, recorded with the 101 the
+  client received once Bun's server took the request over. The messages after
+  it are in no record.
+- A request the app serves in-process while an operation is current, as
+  `app.handle` called from a handler, opens no operation of its own: its waits
+  count in the operation of the request that made it.
 
 ## mysql2
 
