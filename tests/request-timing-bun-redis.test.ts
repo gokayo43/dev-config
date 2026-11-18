@@ -13,7 +13,8 @@ import { RedisClient } from "bun";
 
 import { rejectionOf } from "../narrowing.ts";
 import { timedBunRedis } from "../request-timing-bun-redis.ts";
-import { counted, keyPrefix, NONE, REDIS_URL } from "./request-timing-servers.ts";
+import { counted, NONE } from "./request-timing-oracle.ts";
+import { keyPrefix, REDIS_URL } from "./request-timing-servers.ts";
 
 /** What a step settled with, in a form two runs can be compared by. */
 async function outcome(step: () => Promise<unknown>) {

@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { only, rejectionOf } from "../narrowing.ts";
 import { timedFetch } from "../request-timing-fetch.ts";
 import { OperationName, requestTiming, type TimingRecord, within } from "../request-timing.ts";
-import { counted, NONE } from "./request-timing-servers.ts";
+import { counted, NONE } from "./request-timing-oracle.ts";
 
 /**
  * An outside service: `/json` answers at once, and `/held` sends its headers

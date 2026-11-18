@@ -8,14 +8,15 @@ const config: KnipConfig = {
   // it. Splitting the entry point out of the gate module is also what lets the
   // coverage floor mean something: a module the suite drives reports its own
   // coverage, rather than carrying an entry block no test can reach.
-  // The Next.js fixture app's route files and config are Next's to load: the
-  // request-timing Next.js suite builds and boots the app, and nothing imports
-  // them.
+  // The Next.js fixture app's route files and config are Next's to load, and
+  // the TanStack Start fixture's server entry and Start instance are found by
+  // the Start plugin at their paths, as an app's are: nothing imports them.
   entry: [
     ".github/actions/*/*.main.ts",
     "tests/*.ts",
     "tests/request-timing-next-app/next.config.ts",
     "tests/request-timing-next-app/app/**/route.ts",
+    "tests/request-timing-start-app/src/{server,start}.ts",
   ],
   project: [".github/actions/**/*.ts", "anti-slop/**/*.js", "tests/**/*.ts"],
   // The mutation lane's own two packages, which its suite drives against this
@@ -31,7 +32,6 @@ const config: KnipConfig = {
   // built into that runtime and resolvable from no package.json anywhere. The
   // linter skips it for the same reason, and tests/capacity-script.ts executes
   // it so that skipping is not the same as never running it.
-  // The fixture app's build output, which its own .gitignore keeps out of git.
   ignore: [".github/actions/db-gate/capacity.js"],
 };
 

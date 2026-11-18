@@ -45,8 +45,13 @@ import {
 } from "../request-timing.ts";
 
 type Step =
-  | { readonly do: "wait"; readonly kind: WaitKind; readonly turns: number }
-  | { readonly do: "locked"; readonly kind: WaitKind; readonly turns: number }
+  | { readonly do: "wait"; readonly kind: WaitKind; readonly turns: number; readonly lazy: boolean }
+  | {
+      readonly do: "locked";
+      readonly kind: WaitKind;
+      readonly turns: number;
+      readonly lazy: boolean;
+    }
   | { readonly do: "await"; readonly signal: number; readonly afterwards: WaitKind }
   | { readonly do: "signal"; readonly signal: number };
 
@@ -66,8 +71,8 @@ interface Plan {
 const kind = constantFrom<WaitKind>(...WAIT_KINDS);
 const turns = integer({ min: 0, max: 4 });
 const own: Arbitrary<Step> = oneof(
-  record({ do: constantFrom("wait" as const), kind, turns }),
-  record({ do: constantFrom("locked" as const), kind, turns }),
+  record({ do: constantFrom("wait" as const), kind, turns, lazy: boolean() }),
+  record({ do: constantFrom("locked" as const), kind, turns, lazy: boolean() }),
 );
 
 /**
@@ -259,7 +264,7 @@ async function runPlain(plan: Plan): Promise<readonly TimingRecord[]> {
 interface EffectCarrier {
   readonly serve: (operation: Operation, handler: Effect.Effect<void>) => Promise<void>;
   readonly measure: (kind: WaitKind, wait: Effect.Effect<void>) => Effect.Effect<void>;
-  readonly wait?: (kind: WaitKind, turns: number) => Effect.Effect<void>;
+  readonly wait?: (kind: WaitKind, turns: number, lazy: boolean) => Effect.Effect<void>;
   readonly callsPer?: (turns: number) => number;
 }
 
@@ -311,15 +316,39 @@ const storageCrossing: EffectCarrier = {
 };
 
 /**
+ * A query that starts when its `then` is called, as every drizzle query does,
+ * rather than when it is made.
+ */
+class LazyQuery implements PromiseLike<void> {
+  readonly #run: () => Promise<void>;
+
+  constructor(run: () => Promise<void>) {
+    this.#run = run;
+  }
+
+  // oxlint-disable-next-line unicorn/no-thenable -- the subject: a drizzle query is a thenable that runs when awaited, and the crossing out has to start it under the fiber's operation
+  then<Fulfilled = void, Rejected = never>(
+    fulfilled?: ((value: void) => Fulfilled | PromiseLike<Fulfilled>) | null,
+    rejected?: ((reason: unknown) => Rejected | PromiseLike<Rejected>) | null,
+  ): PromiseLike<Fulfilled | Rejected> {
+    return this.#run().then(fulfilled, rejected);
+  }
+}
+
+/**
  * The plain code an Effect program hands a promise-returning thunk to, as a
  * `Db` service's `use` does: `count + 1` queries through a plain connector,
- * each followed by an await of the thunk's own.
+ * each followed by an await of the thunk's own. A lazy thunk answers them
+ * unstarted, as a drizzle query handed straight back is.
  */
-const queries = (waited: WaitKind, count: number) => async () => {
-  for (let index = 0; index <= count; index += 1) {
-    await plainCarrier.measure(waited, () => turn(1));
-    await turn(1);
-  }
+const queries = (waited: WaitKind, count: number, lazy: boolean) => {
+  const run = async () => {
+    for (let index = 0; index <= count; index += 1) {
+      await plainCarrier.measure(waited, () => turn(1));
+      await turn(1);
+    }
+  };
+  return (): PromiseLike<void> => (lazy ? new LazyQuery(run) : run());
 };
 
 /**
@@ -328,14 +357,15 @@ const queries = (waited: WaitKind, count: number) => async () => {
  */
 const roundTrip: EffectCarrier = {
   ...crossingCarrier,
-  wait: (waited, count) => Effect.orDie(effectCarrier.tryPromiseCarried(queries(waited, count))),
+  wait: (waited, count, lazy) =>
+    Effect.orDie(effectCarrier.tryPromiseCarried(queries(waited, count, lazy))),
   callsPer: (count) => count + 1,
 };
 
 /** The way back out as plain `Effect.tryPromise`, which carries nothing into the thunk. */
 const uncarriedReturn: EffectCarrier = {
   ...roundTrip,
-  wait: (waited, count) => Effect.orDie(Effect.tryPromise(queries(waited, count))),
+  wait: (waited, count, lazy) => Effect.orDie(Effect.tryPromise(queries(waited, count, lazy))),
 };
 
 /**
@@ -345,12 +375,12 @@ const uncarriedReturn: EffectCarrier = {
  */
 const unshieldedReturn: EffectCarrier = {
   ...roundTrip,
-  wait: (waited, count) =>
+  wait: (waited, count, lazy) =>
     Effect.flatMap(effectCarrier.inOperation, (carried) =>
       Effect.orDie(
         carried
-          ? effectCarrier.tryPromiseCarried(queries(waited, count))
-          : Effect.tryPromise(queries(waited, count)),
+          ? effectCarrier.tryPromiseCarried(queries(waited, count, lazy))
+          : Effect.tryPromise(queries(waited, count, lazy)),
       ),
     ),
 };
@@ -373,14 +403,14 @@ async function runEffect(plan: Plan, carrier: EffectCarrier): Promise<readonly T
     const queue = Effect.runSync(Queue.unbounded<void>());
     return { taken: Queue.take(queue), given: Effect.asVoid(Queue.offer(queue, undefined)) };
   });
-  const wait = (waited: WaitKind, count: number) =>
-    carrier.wait?.(waited, count) ?? carrier.measure(waited, yields(count));
+  const wait = (waited: WaitKind, count: number, lazy = false) =>
+    carrier.wait?.(waited, count, lazy) ?? carrier.measure(waited, yields(count));
   const step = (taken: Step): Effect.Effect<void> => {
     switch (taken.do) {
       case "wait":
-        return wait(taken.kind, taken.turns);
+        return wait(taken.kind, taken.turns, taken.lazy);
       case "locked":
-        return lock.withPermits(1)(wait(taken.kind, taken.turns));
+        return lock.withPermits(1)(wait(taken.kind, taken.turns, taken.lazy));
       case "await":
         return Effect.zipRight(nth(handoffs, taken.signal).taken, wait(taken.afterwards, 0));
       case "signal":

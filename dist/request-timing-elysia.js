@@ -1,6 +1,7 @@
 import { must } from "./narrowing.js";
-import { a as methodOf, t as OperationName } from "./request-timing-operation-Cvj5mYAc.js";
+import { t as OperationName } from "./request-timing-operation-gsGVMm95.js";
 import { inOperation, within } from "./request-timing.js";
+import { n as watched, t as endings } from "./request-timing-entry-Dp_bovEo.js";
 //#region request-timing-elysia.ts
 /**
 * A body Elysia streams is one it sends chunked with no length: every
@@ -8,27 +9,6 @@ import { inOperation, within } from "./request-timing.js";
 * that says `transfer-encoding: chunked` itself.
 */
 const isStreamed = (response) => response.headers.get("transfer-encoding") === "chunked";
-/**
-* `body`, passed through chunk for chunk, calling `ended` once the last chunk
-* has been taken or the client has cancelled it. Elysia ends a source that
-* fails as though it had finished, so a read never rejects here. A
-* high-water mark of nothing reads no chunk ahead of the client, so the source
-* is pulled exactly as it was before the connector stood in front of it.
-*/
-function watched(body, ended) {
-	const reader = body.getReader();
-	return new ReadableStream({
-		pull: (controller) => reader.read().then((chunk) => {
-			if (!chunk.done) return controller.enqueue(chunk.value);
-			controller.close();
-			return ended(false);
-		}),
-		cancel: (reason) => {
-			ended(true);
-			return reader.cancel(reason);
-		}
-	}, { highWaterMark: 0 });
-}
 /**
 * The plugin, for `timing`: `app.use(requestTimingPlugin(timing))`, mounted
 * before the app's routes, since Elysia applies a hook only to the routes
@@ -62,24 +42,13 @@ function requestTimingPlugin(timing) {
 	};
 	const serve = (handle, request) => {
 		const operation = timing.open();
-		const { promise: ending, resolve: end } = Promise.withResolvers();
-		ending.then((ended) => {
+		const { end, produced } = endings(operation, request, () => {
 			const pattern = matchedRoutes.get(request);
-			operation.close({
-				method: methodOf(request.method),
-				name: pattern === void 0 ? OperationName.unmatched : nameOf(pattern),
-				...ended
-			});
-		});
-		let produced;
-		request.signal.addEventListener("abort", () => end({
-			status: produced?.status ?? 499,
-			aborted: true,
-			streamed: produced !== void 0 && isStreamed(produced)
-		}), { once: true });
+			return pattern === void 0 ? OperationName.unmatched : nameOf(pattern);
+		}, isStreamed);
 		return new Promise((resolve) => resolve(within(operation, () => handle(request)))).then((response) => {
 			if (!(response instanceof Response)) throw new TypeError("request timing: Elysia answered a request with no Response");
-			produced = response;
+			produced(response);
 			if (!isStreamed(response) || response.body === null) {
 				const status = upgraded.has(request) ? 101 : response.status;
 				end({
