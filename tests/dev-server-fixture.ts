@@ -8,29 +8,102 @@
  * which is the one wait long enough to matter, and the cases about a server that
  * never answers set it to two seconds.
  *
- * The fixture root is derived rather than made fresh, for `tests/tree.ts`'s
- * reason one step further on: what a killed run leaks here is a detached server
- * process holding a port, and the port comes from the package name — so two
- * checkouts under review get different names, while two runs of one checkout get
- * the same ones and reclaim them. Different names can still hash to one port
- * block, which is why the suite holds one lock per machine for its whole run.
+ * A fixture's ports come from its package name, so the name is what keeps two
+ * runs of this suite on one machine apart: `claimBlocks` below.
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { isServer, recordStem, type Server } from "../dev-server-derive.ts";
+import {
+  basePort,
+  isServer,
+  PORT_FLOOR,
+  PORTS_PER_WORKTREE,
+  recordStem,
+  type Server,
+} from "../dev-server-derive.ts";
 
 /** The CLI under test, reached the way a consuming repo reaches it. */
 const CLI = join(dirname(import.meta.dir), "dev-server.ts");
 
-const CHECKOUT = dirname(import.meta.dir);
-const DIGEST = new Bun.CryptoHasher("sha256").update(CHECKOUT).digest("hex").slice(0, 12);
-const FIXTURES = join(tmpdir(), `dev-server-fixtures-${DIGEST}`);
+const FIXTURES = join(tmpdir(), "dev-server-fixtures");
 
-/** The fixture's position in the run, which is the half of its name that varies. */
+/** Every branch a fixture runs `up` on. A fixture claims all of their blocks before any case starts a server. */
+export const BRANCHES = ["main", "feature", "feat/x", "feat-x"] as const;
+
+/** The first port the kernel hands an outgoing connection on this machine. */
+const EPHEMERAL_FLOOR = Number(
+  readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8").trim().split(/\s+/)[0],
+);
+
+/** How many names `claimBlocks` tries before it says the machine has no room. */
+const CANDIDATES = 100_000;
+
+/** The fixture's position in the run, so consecutive cases never share a block. */
 let made = 0;
+
+export interface Claim extends Disposable {
+  /** The package name every block was derived from. */
+  readonly name: string;
+  /** The base port of each branch's block, in `BRANCHES` order. */
+  readonly bases: readonly number[];
+}
+
+/**
+ * A package name whose port blocks, one per branch in `BRANCHES`, belong to the
+ * caller until it disposes of the claim or dies.
+ *
+ * The claim is a loopback listener on each block's last port, which `up` reaches
+ * only when the nine before it are held. The kernel grants a port to one socket
+ * on the whole machine and frees it when its process dies, so a second run of
+ * this suite, whatever its checkout or temp directory, fails the bind and takes
+ * the next name, while one run keeps its names for as long as it holds them.
+ *
+ * Every block also lies below the ephemeral range. The kernel gives an outgoing
+ * connection a port from that range on whichever local address it leaves from,
+ * and the connection keeps the port for a minute of TIME_WAIT after it closes.
+ * `up` probes a port on 127.0.0.1 alone, so a port held that way on any other
+ * address passes the probe and then fails a dev script that binds 0.0.0.0.
+ */
+export function claimBlocks(stem: string): Claim {
+  for (let candidate = 0; candidate < CANDIDATES; candidate++) {
+    const name = `${stem}-${candidate}`;
+    const bases = BRANCHES.map((branch) =>
+      basePort(name, { worktree: "", branch, detached: false }),
+    );
+    if (bases.some((base) => base + PORTS_PER_WORKTREE > EPHEMERAL_FLOOR)) continue;
+    const held = hold(bases.map((base) => base + PORTS_PER_WORKTREE - 1));
+    if (held === null) continue;
+    return {
+      name,
+      bases,
+      [Symbol.dispose](): void {
+        for (const listener of held) listener.stop(true);
+      },
+    };
+  }
+  throw new Error(
+    `no name among ${CANDIDATES} for ${stem} puts every block of ${BRANCHES.join(", ")} free and between ${PORT_FLOOR} and the ephemeral range at ${EPHEMERAL_FLOOR}`,
+  );
+}
+
+/** Every port bound on loopback, or none of them. */
+function hold(ports: readonly number[]): Bun.TCPSocketListener<undefined>[] | null {
+  const held: Bun.TCPSocketListener<undefined>[] = [];
+  for (const port of ports) {
+    try {
+      held.push(Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } }));
+    } catch {
+      // Claimed by another run, or by anything else on this machine: either way
+      // not this name's to use.
+      for (const listener of held) listener.stop(true);
+      return null;
+    }
+  }
+  return held;
+}
 
 /**
  * A `dev` script that binds what it was told to bind, and echoes every name the
@@ -75,7 +148,7 @@ export interface Scratch extends AsyncDisposable {
   /** Where the records are, so a case can read one or check that it is gone. */
   readonly state: string;
   /** A linked worktree on a branch of its own, ready to run the CLI. */
-  worktree(branch: string): Promise<string>;
+  worktree(branch: (typeof BRANCHES)[number]): Promise<string>;
   /** `bun run dev-server <args>` in a worktree, exactly as a person would type it. */
   devServer(cwd: string, ...args: readonly string[]): Promise<Run>;
   /** Two of them at once, started as close together as this can arrange. */
@@ -157,10 +230,12 @@ function slay(pid: number): void {
 }
 
 export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch> {
-  const home = join(FIXTURES, `${made}`);
-  const name = `dev-server-fixture-${DIGEST}-${made++}`;
+  const claim = claimBlocks(`dev-server-fixture-${made++}`);
+  const { name } = claim;
+  const home = join(FIXTURES, name);
   // Whatever a killed run left at this exact path, rather than a sweep of the
-  // directory: a sweep is how two runs sharing a machine delete each other's work.
+  // directory: a sweep is how two runs sharing a machine delete each other's
+  // work. The claim makes the path this run's alone.
   await rm(home, { recursive: true, force: true });
   const root = join(home, "repo");
   await mkdir(root, { recursive: true });
@@ -231,7 +306,7 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
     root,
     state,
     paths,
-    async worktree(branch: string): Promise<string> {
+    async worktree(branch: (typeof BRANCHES)[number]): Promise<string> {
       // Numbered, because the point of several of these cases is two branches
       // whose readable form is the same one.
       const path = join(home, `wt-${worktrees.size}-${branch.replaceAll(/[^A-Za-z0-9]+/g, "-")}`);
@@ -270,6 +345,14 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
     async [Symbol.asyncDispose](): Promise<void> {
       await remember();
       for (const pid of seen) slay(pid);
+      // The blocks go back only once nothing of this fixture can still hold a
+      // port in them, or the next run to claim one finds it taken.
+      for (const pid of seen) {
+        if (!(await settles(() => groupGone(pid)))) {
+          throw new Error(`process group ${pid} outlived SIGKILL, so its blocks stay claimed`);
+        }
+      }
+      claim[Symbol.dispose]();
       await rm(home, { recursive: true, force: true });
     },
   };
@@ -360,6 +443,17 @@ export function running(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Whether no process is left in the group a server leads, which is when its ports are free. */
+function groupGone(pid: number): boolean {
+  try {
+    process.kill(-real(pid), 0);
+    return false;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") return true;
+    throw error;
   }
 }
 

@@ -9,7 +9,8 @@
  * twenty seconds where a server is meant to come up, two where the case is about
  * one that never does.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,10 +25,11 @@ import {
   recordStem,
   worktreeSlug,
 } from "../dev-server-derive.ts";
-import { lock } from "../file-lock.ts";
 import {
   answers,
+  BRANCHES,
   bystander,
+  claimBlocks,
   EXITS_AT_ONCE,
   holderOf,
   killBehindItsBack,
@@ -44,34 +46,6 @@ import {
 
 /** Long enough for `bun run dev` to boot a fixture server, short enough to fail a hung suite. */
 const CASE_MS = 60_000;
-
-/**
- * One run of this suite at a time per machine, because two concurrent runs
- * collide: two runs of one checkout share every fixture, and runs of two
- * checkouts, whose 33 port blocks each are names hashed into one of 4000, share
- * a block in one pair of checkouts in five (measured over 20,000 pairs), where
- * `up` probing a port free races the other run's server binding it. The path
- * carries no checkout, so every checkout waits on the same lock.
- */
-const SUITE_LOCK = join(tmpdir(), "dev-config-dev-server-suite.lock");
-
-/**
- * How long a run waits for the one holding the lock, which takes about fifteen
- * seconds when nothing hangs. The hook outlasts it so the lock's own refusal,
- * naming the holder, is what the log shows.
- */
-const SUITE_PATIENCE_MS = 600_000;
-
-let release = async (): Promise<void> => {};
-
-beforeAll(async () => {
-  const held = await lock(SUITE_LOCK, SUITE_PATIENCE_MS);
-  release = async () => await held[Symbol.asyncDispose]();
-}, SUITE_PATIENCE_MS + CASE_MS);
-
-afterAll(async () => {
-  await release();
-});
 
 /** A worktree on a branch, as the two derivations take one. */
 const named = (worktree: string, branch: string) => ({ worktree, branch, detached: false });
@@ -882,6 +856,23 @@ describe("the argument list", () => {
 });
 
 describe("the fixture's own guards", () => {
+  test("hands two runs at once different blocks, none the kernel gives a connection", () => {
+    // Two wrong implementations. One names fixtures alike in every run, or
+    // forgets the claim it took, and two runs on one machine bind each other's
+    // ports. The other lets a block into the ephemeral range, where an outgoing
+    // connection on another address holds the port that the HOST case binds on
+    // 0.0.0.0 after `up` has probed it free on 127.0.0.1.
+    const range = readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8");
+    const ephemeral = Number(range.trim().split(/\s+/)[0]);
+    using first = claimBlocks("guard");
+    using second = claimBlocks("guard");
+
+    expect(second.name).not.toBe(first.name);
+    const all = [...first.bases, ...second.bases];
+    expect(new Set(all).size).toBe(BRANCHES.length * 2);
+    for (const base of all) expect(base + PORTS_PER_WORKTREE).toBeLessThanOrEqual(ephemeral);
+  });
+
   test("refuses to signal a pid that is not one", () => {
     // `killBehindItsBack(record?.pid ?? 0)` sent SIGKILL to the caller's own
     // process group: against an implementation that writes no record, this suite
