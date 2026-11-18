@@ -1,12 +1,15 @@
 /**
  * What both carriers of request timing share: the operation, the waits it
- * accumulates, and the record it closes into. No export names this file. The
- * plain carrier re-exports its public half, and the Effect carrier reaches the
- * one function a carrier needs, `beginWait`, which no app or connector calls.
+ * accumulates, the record it closes into, and the plain carrier's storage,
+ * which the Effect carrier reads once, where a plain handler hands its Effect
+ * to a runtime. No export names this file. The plain carrier re-exports its
+ * public half, and the Effect carrier reaches `beginWait` and `plainStorage`,
+ * which no app or connector calls.
  *
- * It imports nothing at all, so the plain export stays free of `effect` and the
- * Effect export stays free of `node:async_hooks`.
+ * It imports nothing but `node:async_hooks`, so the plain export stays free of
+ * `effect`.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 
 /**
  * The schema version every record carries under `requestTiming`. The reader
@@ -212,6 +215,13 @@ export function requestTiming(options: TimingOptions): Timing {
   const now = options.now ?? monotonic;
   return { open: () => openOperation(now, options.sink) };
 }
+
+/**
+ * The plain carrier: which operation is current in a plain async program. Read
+ * by the plain `measure` and `inOperation`, and by the Effect carrier's
+ * `carryOperation` at the one moment it is still right.
+ */
+export const plainStorage = new AsyncLocalStorage<Operation>();
 
 /**
  * One operation from open to close: what it waited on, and the record it

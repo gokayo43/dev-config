@@ -1,5 +1,12 @@
-import { a as OperationName, c as Timing, d as WAIT_KINDS, f as WaitKind, h as requestTiming, i as Operation, l as TimingOptions, m as methodOf, n as Ending, o as RECORD_VERSION, p as Waited, r as Method, s as Sink, t as Clock, u as TimingRecord } from "./request-timing-operation-BLYTP7sS.js";
+import { a as OperationName, c as Timing, d as WAIT_KINDS, f as WaitKind, h as requestTiming, i as Operation, l as TimingOptions, m as methodOf, n as Ending, o as RECORD_VERSION, p as Waited, r as Method, s as Sink, t as Clock, u as TimingRecord } from "./request-timing-operation-BW73YQNi.js";
 //#region request-timing.d.ts
+/**
+ * Whether an operation is current. An entry connector asks it before opening
+ * one and opens nothing when it answers true, so work a page runs in-process
+ * during its own request, such as a server function it calls, counts in the
+ * page's operation and operations never nest.
+ */
+export declare function inOperation(): boolean;
 /**
  * Runs `handler` with `operation` as the current one, and answers what it
  * answers, unchanged. Every `measure` called from it, or from anything it

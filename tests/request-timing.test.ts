@@ -13,10 +13,12 @@ import { check } from "../property.ts";
 import * as effectCarrier from "../request-timing-effect.ts";
 import {
   type Ending,
+  inOperation,
   measure,
   methodOf,
   OperationName,
   requestTiming,
+  type Timing,
   type TimingRecord,
   type WaitKind,
   within,
@@ -137,6 +139,95 @@ describe("an operation closes into one record", () => {
         "not an HTTP status",
       );
     }
+    expect(records).toEqual([]);
+  });
+});
+
+describe("an entry connector opens nothing inside a current operation", () => {
+  /** An entry connector as the docs page has one written: it asks before it opens. */
+  const servePlain = async <T>(timing: Timing, handler: () => Promise<T>): Promise<T> => {
+    if (inOperation()) return handler();
+    const operation = timing.open();
+    try {
+      return await within(operation, handler);
+    } finally {
+      operation.close(ended());
+    }
+  };
+
+  /** The same connector in the Effect carrier. */
+  const serveEffect = <A>(timing: Timing, handler: Effect.Effect<A>): Effect.Effect<A> =>
+    Effect.flatMap(effectCarrier.inOperation, (inside) => {
+      if (inside) return handler;
+      return Effect.suspend(() => {
+        const operation = timing.open();
+        return Effect.ensuring(
+          effectCarrier.within(operation, handler),
+          Effect.sync(() => operation.close(ended())),
+        );
+      });
+    });
+
+  const expected = [{ db: { waitMs: 0, count: 2 }, out: { waitMs: 0, count: 1 } }];
+
+  test("in a plain async program", async () => {
+    const { records, timing } = recorded(virtualClock().now);
+    await servePlain(timing, async () => {
+      await measure("db", async () => "row");
+      await servePlain(timing, async () => {
+        await measure("db", async () => "row");
+        await measure("out", async () => "answer");
+      });
+    });
+    expect(records).toMatchObject(expected);
+  });
+
+  test("in an Effect program", async () => {
+    const { records, timing } = recorded(virtualClock().now);
+    await Effect.runPromise(
+      serveEffect(
+        timing,
+        Effect.zipRight(
+          effectCarrier.measure("db", Effect.succeed("row")),
+          serveEffect(
+            timing,
+            Effect.zipRight(
+              effectCarrier.measure("db", Effect.succeed("row")),
+              effectCarrier.measure("out", Effect.succeed("answer")),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(records).toMatchObject(expected);
+  });
+
+  test("across the crossing from a plain handler into an Effect program", async () => {
+    const { records, timing } = recorded(virtualClock().now);
+    await servePlain(timing, async () => {
+      await measure("db", async () => "row");
+      await Effect.runPromise(
+        effectCarrier.carryOperation(
+          serveEffect(
+            timing,
+            Effect.zipRight(
+              effectCarrier.measure("db", Effect.succeed("row")),
+              effectCarrier.measure("out", Effect.succeed("answer")),
+            ),
+          ),
+        ),
+      );
+    });
+    expect(records).toMatchObject(expected);
+  });
+
+  test("and the crossing changes nothing where no operation is current", async () => {
+    const { records } = recorded(virtualClock().now);
+    const program = effectCarrier.measure("db", Effect.succeed("row"));
+    expect(effectCarrier.carryOperation(program)).toBe(program);
+    expect(await Effect.runPromise(effectCarrier.carryOperation(effectCarrier.inOperation))).toBe(
+      false,
+    );
     expect(records).toEqual([]);
   });
 });

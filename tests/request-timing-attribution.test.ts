@@ -276,6 +276,30 @@ const storageCarrier: EffectCarrier = {
     }),
 };
 
+/**
+ * The crossing an app with plain handlers makes: the entry connector opens the
+ * operation in the plain carrier, and the handler hands its program to the
+ * runtime through `carryOperation`, after which only the fiber is read.
+ */
+const crossingCarrier: EffectCarrier = {
+  serve: (operation, handler) =>
+    plainCarrier.within(operation, () => Effect.runPromise(effectCarrier.carryOperation(handler))),
+  measure: effectCarrier.measure,
+};
+
+/**
+ * A crossing that leaves the operation in `AsyncLocalStorage` alone: the
+ * handler hands its program to the runtime as it is, and a wait in it takes the
+ * fiber's operation where there is one and the storage's where there is not.
+ */
+const storageCrossing: EffectCarrier = {
+  serve: (operation, handler) => plainCarrier.within(operation, () => Effect.runPromise(handler)),
+  measure: (waited, wait) =>
+    Effect.flatMap(effectCarrier.inOperation, (carried) =>
+      carried ? effectCarrier.measure(waited, wait) : storageCarrier.measure(waited, wait),
+    ),
+};
+
 const yields = (count: number) =>
   Effect.forEach(Array.from({ length: count }), () => Effect.yieldNow(), { discard: true });
 
@@ -340,6 +364,15 @@ describe("every wait is counted in the record of the operation that issued it, a
 
   test("in an Effect program, carried in the fiber", () =>
     attributed((plan) => runEffect(plan, fiberCarrier)));
+
+  test("in an Effect program a plain handler hands to its runtime through the crossing", () =>
+    attributed((plan) => runEffect(plan, crossingCarrier)));
+
+  test("and not through a crossing that leaves the operation in AsyncLocalStorage", async () => {
+    await expect(attributed((plan) => runEffect(plan, storageCrossing))).rejects.toThrow(
+      "Property failed",
+    );
+  });
 
   test("and not in an Effect program carried in AsyncLocalStorage", async () => {
     await expect(attributed((plan) => runEffect(plan, storageCarrier))).rejects.toThrow(
