@@ -1,8 +1,8 @@
 /**
  * What both carriers of request timing share: the operation, the waits it
  * accumulates, the record it closes into, and the plain carrier's storage,
- * which the Effect carrier reads once, where a plain handler hands its Effect
- * to a runtime. No export names this file. The plain carrier re-exports its
+ * which the Effect carrier reads where a plain handler hands its Effect to a
+ * runtime and sets where an Effect hands a thunk back to plain code. No export names this file. The plain carrier re-exports its
  * public half, and the Effect carrier reaches `beginWait` and `plainStorage`,
  * which no app or connector calls.
  *
@@ -218,8 +218,9 @@ export function requestTiming(options: TimingOptions): Timing {
 
 /**
  * The plain carrier: which operation is current in a plain async program. Read
- * by the plain `measure` and `inOperation`, and by the Effect carrier's
- * `carryOperation` at the one moment it is still right.
+ * by the plain `measure` and `inOperation`, read by the Effect carrier's
+ * `carryOperation` at the one moment it is still right, and set or cleared by
+ * its `tryPromiseCarried` for the length of a thunk.
  */
 export const plainStorage = new AsyncLocalStorage<Operation>();
 

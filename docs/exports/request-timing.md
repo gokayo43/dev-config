@@ -43,7 +43,7 @@ In this order:
    counts in the page's operation, and the page's record holds every wait of
    the request.
 
-3. **Make the crossing**, where a plain handler (a tRPC procedure, a server
+3. **Make the crossing in**, where a plain handler (a tRPC procedure, a server
    function) runs an Effect program with a runtime. The entry connector opened
    the operation in the plain carrier, and `AsyncLocalStorage` holds it only up
    to the call that hands the program to the runtime; after that only the fiber
@@ -63,7 +63,28 @@ In this order:
    never once at module scope: a program carried once keeps the operation it
    was carried with.
 
-4. **Wrap every wait**: the database client, the store client and the outbound
+4. **Make the crossing back out**, where an Effect program hands a
+   promise-returning thunk to plain async code: the one service that wraps the
+   database client, and the one outbound send. Use `tryPromiseCarried` there in
+   place of `Effect.tryPromise`; it takes the same arguments and answers the
+   same, and runs the thunk under the plain carrier with the fiber's operation:
+
+   ```ts
+   import { tryPromiseCarried } from "@gokayo43/dev-config/request-timing/effect";
+
+   const use = <A>(f: (client: Client) => Promise<A>) =>
+     tryPromiseCarried({ try: () => f(client), catch: (cause) => new DbError({ cause }) });
+   ```
+
+   Every query a plain connector measures inside the thunk, across all of its
+   awaits, a whole transaction included, counts in the fiber's operation, each
+   as one wait. A fiber with no operation runs the thunk under none, so a wait
+   in it counts nowhere, whatever `AsyncLocalStorage` holds where the fiber runs.
+   Measuring with the Effect `measure` at the service instead would count one
+   wait per service call, so a transaction of five queries would read as one and
+   a query repeated in a loop would not show in the count.
+
+5. **Wrap every wait**: the database client, the store client and the outbound
    `fetch` through their connectors, and any wait no connector covers (an SDK,
    SMTP) with `measure` directly:
 
@@ -73,22 +94,16 @@ In this order:
    const sent = await measure("out", () => mailer.send(message));
    ```
 
-   In an Effect program, from `@gokayo43/dev-config/request-timing/effect`:
+   A plain connector reached from an Effect program counts correctly only
+   inside a thunk run by `tryPromiseCarried`. A wait that is itself an Effect,
+   with no plain code under it, is measured with the Effect `measure` from
+   `@gokayo43/dev-config/request-timing/effect`:
 
    ```ts
-   const send = (message: Message) =>
-     measure(
-       "out",
-       Effect.tryPromise(() => mailer.send(message)),
-     );
+   const cached = (key: string) => measure("store", cache.get(key));
    ```
 
-   Inside an Effect program every wait is measured with the Effect `measure`, at
-   the service that wraps the client. A wait measured by the plain carrier
-   inside the program reads `AsyncLocalStorage`, which after the crossing may
-   hold another request's operation, so it can land in the wrong record.
-
-5. **Run the conformance kit** in the app's own suite against its booted server
+6. **Run the conformance kit** in the app's own suite against its booted server
    (below).
 
 ### Which carrier
@@ -98,15 +113,18 @@ Which operation a wait belongs to is carried for it, by what the code is:
 - Plain async code: `within`, `measure` and `inOperation` from
   `@gokayo43/dev-config/request-timing`, which carry the operation in
   `AsyncLocalStorage`.
-- An Effect program: `within`, `measure`, `inOperation` and `carryOperation`
-  from `@gokayo43/dev-config/request-timing/effect`, which carry it in the
-  fiber. That file is the only one that imports `effect`, so an app without
-  Effect never loads it. A fiber resumed by another (on a semaphore, a
-  Deferred, a queue, or Effect's own scheduler) runs on that fiber's stack and
-  reads its `AsyncLocalStorage`, so nothing in an Effect program reads that
-  storage after the crossing. An edge that is itself an Effect program opens
-  the operation and enters it with the Effect `within`; an edge that is plain
-  enters it with the plain `within` and crosses with `carryOperation`.
+- An Effect program: `within`, `measure`, `inOperation`, `carryOperation` and
+  `tryPromiseCarried` from `@gokayo43/dev-config/request-timing/effect`, which
+  carry it in the fiber. That file is the only one that imports `effect`, so an
+  app without Effect never loads it. A fiber resumed by another (on a
+  semaphore, a Deferred, a queue, or Effect's own scheduler) runs on that
+  fiber's stack and holds its `AsyncLocalStorage`, so the Effect carrier never
+  trusts that storage inside a program. It crosses at two places only. In:
+  `carryOperation` reads the storage at the call that hands the program to the
+  runtime, the last moment it is right. Out: `tryPromiseCarried` sets the
+  storage from the fiber for the length of a thunk, and clears it when the
+  fiber has no operation. An edge that is itself an Effect program opens the
+  operation and enters it with the Effect `within` instead of crossing in.
 
 ## Elysia
 
@@ -211,18 +229,19 @@ body is not part of the wait, and is in the rest.
 
 ## The interface a connector builds on
 
-| Name                                  | What it is                                                                                                                                                                                                               |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `requestTiming({ sink, now? })`       | switches it on; answers `{ open(): Operation }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                                                                                        |
-| `Operation.close(ending)`             | emits the record through the sink, once                                                                                                                                                                                  |
-| `within(operation, handler)`          | runs `handler` under `operation` and answers what it answers; one per carrier (a thunk for the plain one, an Effect for the Effect one)                                                                                  |
-| `inOperation`                         | whether an operation is current: `inOperation(): boolean` plain, `inOperation: Effect<boolean>` Effect; an entry connector opens nothing while it is true                                                                |
-| `carryOperation(program)`             | Effect only: `program` with the plain carrier's current operation, read at the call, carried in its fiber; `program` itself when none is current                                                                         |
-| `measure(kind, wait)`                 | runs `wait` unchanged and adds its duration to the current operation, or to nothing; one per carrier (`() => PromiseLike<T>` plain, an Effect for Effect)                                                                |
-| `OperationName.registered(pattern)`   | the name a router registered; refuses, without quoting it, a pattern that is empty, longer than 256 UTF-16 code units, holds a space or a character that does not print, or holds a query string, a fragment or a scheme |
-| `OperationName.unmatched`             | the fixed name of a request no route matched                                                                                                                                                                             |
-| `methodOf(written)`                   | a request's method as a record carries it: `GET` `HEAD` `POST` `PUT` `PATCH` `DELETE` `OPTIONS`, or `OTHER`                                                                                                              |
-| `RECORD_VERSION`, `WAIT_KINDS`, types | the schema version, the three kinds, and `TimingRecord`, `Ending`, `Sink`, `Clock`, `Method`, `WaitKind`, `Waited`, `Timing`, `TimingOptions`, `Operation`                                                               |
+| Name                                                               | What it is                                                                                                                                                                                                               |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `requestTiming({ sink, now? })`                                    | switches it on; answers `{ open(): Operation }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                                                                                        |
+| `Operation.close(ending)`                                          | emits the record through the sink, once                                                                                                                                                                                  |
+| `within(operation, handler)`                                       | runs `handler` under `operation` and answers what it answers; one per carrier (a thunk for the plain one, an Effect for the Effect one)                                                                                  |
+| `inOperation`                                                      | whether an operation is current: `inOperation(): boolean` plain, `inOperation: Effect<boolean>` Effect; an entry connector opens nothing while it is true                                                                |
+| `tryPromiseCarried(evaluate)`, `tryPromiseCarried({ try, catch })` | Effect only: `Effect.tryPromise`, with the promise run under the plain carrier holding the fiber's operation, or under none when the fiber has none                                                                      |
+| `carryOperation(program)`                                          | Effect only: `program` with the plain carrier's current operation, read at the call, carried in its fiber; `program` itself when none is current                                                                         |
+| `measure(kind, wait)`                                              | runs `wait` unchanged and adds its duration to the current operation, or to nothing; one per carrier (`() => PromiseLike<T>` plain, an Effect for Effect)                                                                |
+| `OperationName.registered(pattern)`                                | the name a router registered; refuses, without quoting it, a pattern that is empty, longer than 256 UTF-16 code units, holds a space or a character that does not print, or holds a query string, a fragment or a scheme |
+| `OperationName.unmatched`                                          | the fixed name of a request no route matched                                                                                                                                                                             |
+| `methodOf(written)`                                                | a request's method as a record carries it: `GET` `HEAD` `POST` `PUT` `PATCH` `DELETE` `OPTIONS`, or `OTHER`                                                                                                              |
+| `RECORD_VERSION`, `WAIT_KINDS`, types                              | the schema version, the three kinds, and `TimingRecord`, `Ending`, `Sink`, `Clock`, `Method`, `WaitKind`, `Waited`, `Timing`, `TimingOptions`, `Operation`                                                               |
 
 What a connector author has to hold:
 

@@ -3,12 +3,14 @@
  * carried in the fiber. Never in `AsyncLocalStorage`: a fiber that waits on a
  * shared semaphore, Deferred or queue resumes on the stack of the fiber that
  * released it and inherits that fiber's store (measured on Bun 1.4.4 with
- * effect 3.22.1: 38 of 40 queries attributed to the wrong request). The one
- * place it reads that storage is `carryOperation`, synchronously, in the
- * caller's context, before any fiber runs.
+ * effect 3.22.1: 38 of 40 queries attributed to the wrong request). It
+ * touches that storage at the two crossings alone: `carryOperation` reads it,
+ * synchronously, in the caller's context, before any fiber runs, and
+ * `tryPromiseCarried` sets it from the fiber, or clears it, for the length of
+ * one thunk.
  * `docs/exports/request-timing.md` is how an app adopts it.
  */
-import { Effect, FiberRef } from "effect";
+import { type Cause, Effect, FiberRef } from "effect";
 
 import {
   beginWait,
@@ -75,4 +77,48 @@ export const inOperation: Effect.Effect<boolean> = FiberRef.getWith(current, (op
 export function carryOperation<A, E, R>(program: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
   const operation = plainStorage.getStore();
   return operation === undefined ? program : within(operation, program);
+}
+
+/** Runs `evaluate` under the plain carrier with `operation`, or under none at all. */
+const carriedOut =
+  <A>(operation: Operation | undefined, evaluate: (signal: AbortSignal) => PromiseLike<A>) =>
+  (signal: AbortSignal): PromiseLike<A> =>
+    operation === undefined
+      ? plainStorage.exit(() => evaluate(signal))
+      : plainStorage.run(operation, () => evaluate(signal));
+
+/**
+ * The crossing back from an Effect program into plain async code: exactly
+ * `Effect.tryPromise`, with the promise run under the plain carrier holding the
+ * fiber's operation, so every wait a plain connector measures inside it,
+ * across all of its awaits, counts in the fiber's operation. With no operation
+ * in the fiber the promise runs under no operation, whatever
+ * `AsyncLocalStorage` holds where the fiber happens to run, so a stale store
+ * from another request never leaks in. Rejection, a synchronous throw, the
+ * abort signal and interruption are `Effect.tryPromise`'s: a driver's
+ * rejection is an expected failure the wrapping service maps to its own error,
+ * where `Effect.promise` would make it a defect.
+ */
+export function tryPromiseCarried<A, E>(options: {
+  readonly try: (signal: AbortSignal) => PromiseLike<A>;
+  readonly catch: (error: unknown) => E;
+}): Effect.Effect<A, E>;
+export function tryPromiseCarried<A>(
+  evaluate: (signal: AbortSignal) => PromiseLike<A>,
+): Effect.Effect<A, Cause.UnknownException>;
+export function tryPromiseCarried<A, E>(
+  given:
+    | ((signal: AbortSignal) => PromiseLike<A>)
+    | {
+        readonly try: (signal: AbortSignal) => PromiseLike<A>;
+        readonly catch: (error: unknown) => E;
+      },
+): Effect.Effect<A, E | Cause.UnknownException> {
+  return FiberRef.getWith(current, (operation): Effect.Effect<A, E | Cause.UnknownException> => {
+    const evaluate = typeof given === "function" ? given : given.try;
+    const carried = carriedOut(operation, evaluate);
+    return typeof given === "function"
+      ? Effect.tryPromise(carried)
+      : Effect.tryPromise({ try: carried, catch: given.catch });
+  });
 }

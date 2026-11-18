@@ -6,7 +6,7 @@
  * `request-timing-attribution.test.ts`.
  */
 import { describe, expect, test } from "bun:test";
-import { Deferred, Effect, Fiber } from "effect";
+import { type Cause, Deferred, Effect, Exit, Fiber } from "effect";
 import { asyncProperty, property, record, string, webPath, webQueryParameters } from "fast-check";
 
 import { check } from "../property.ts";
@@ -514,4 +514,76 @@ describe("measure answers what the wait answers", () => {
       expect(await settled(() => measure("db", wait))).toEqual(settles);
     });
   }
+});
+
+describe("the way back out to plain code behaves as Effect.tryPromise does", () => {
+  const refused = new Error("refused");
+  const thrown = new Error("thrown");
+  const thunks: readonly { readonly name: string; readonly thunk: () => Promise<string> }[] = [
+    { name: "a value", thunk: async () => "row" },
+    { name: "a rejection", thunk: () => Promise.reject(refused) },
+    {
+      name: "a synchronous throw",
+      thunk: () => {
+        throw thrown;
+      },
+    },
+  ];
+  const mapped = (error: unknown) => ({ mapped: error });
+  for (const { name, thunk } of thunks) {
+    test(`${name}, bare and with a catch`, async () => {
+      expect(await Effect.runPromiseExit(effectCarrier.tryPromiseCarried(thunk))).toEqual(
+        await Effect.runPromiseExit(Effect.tryPromise(thunk)),
+      );
+      expect(
+        await Effect.runPromiseExit(effectCarrier.tryPromiseCarried({ try: thunk, catch: mapped })),
+      ).toEqual(await Effect.runPromiseExit(Effect.tryPromise({ try: thunk, catch: mapped })));
+    });
+  }
+
+  /**
+   * Interrupts a fiber while the thunk it handed out is pending, under an
+   * operation that is closed once the fiber has ended. The thunk calls out once
+   * before the close, holds a query open across it, and makes one more after. Answers how the fiber ended, whether the thunk saw its signal
+   * aborted, and the records.
+   */
+  const interrupted = async (
+    run: (
+      thunk: (signal: AbortSignal) => Promise<void>,
+    ) => Effect.Effect<void, Cause.UnknownException>,
+  ) => {
+    const { records, timing } = recorded(virtualClock().now);
+    const operation = timing.open();
+    const started = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    let seen: AbortSignal | undefined;
+    const finished = Promise.withResolvers<void>();
+    const thunk = async (signal: AbortSignal) => {
+      seen = signal;
+      await measure("out", async () => "before the close");
+      const pending = measure("db", () => gate.promise);
+      started.resolve();
+      await pending;
+      await measure("db", async () => "after the close");
+      finished.resolve();
+    };
+    const fiber = Effect.runFork(effectCarrier.within(operation, run(thunk)));
+    await started.promise;
+    const exit = await Effect.runPromise(Fiber.interrupt(fiber));
+    operation.close(ended());
+    gate.resolve();
+    await finished.promise;
+    return { interrupted: Exit.isInterrupted(exit), aborted: seen?.aborted, records };
+  };
+
+  test("an interruption while the thunk is pending, whose waits follow the seal", async () => {
+    const carried = await interrupted((thunk) => effectCarrier.tryPromiseCarried(thunk));
+    const { records, ...ending } = await interrupted((thunk) => Effect.tryPromise(thunk));
+    expect({ interrupted: carried.interrupted, aborted: carried.aborted }).toEqual(ending);
+    expect(ending).toEqual({ interrupted: true, aborted: true });
+    expect(carried.records).toMatchObject([
+      { out: { waitMs: 0, count: 1 }, db: { waitMs: 0, count: 0 } },
+    ]);
+    expect(records).toHaveLength(1);
+  });
 });
