@@ -51,6 +51,7 @@ async function script(client: SQL) {
     unsafe: await outcome(
       async () => await client.unsafe<unknown>("select $1::int as n", [7]).values(),
     ),
+    // duplicate-code-allow -- the steps the mysql2 suite's differential runs, over drizzle's Postgres dialect, whose table and database types the MySQL one shares none of
     committed: await outcome(() =>
       db.transaction(async (tx) => {
         await tx.insert(presets).values({ label: "third" });

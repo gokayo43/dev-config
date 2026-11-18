@@ -8,16 +8,9 @@
 import type { AnyRouter } from "@tanstack/react-router";
 
 import { must } from "./narrowing.ts";
-import { watched } from "./request-timing-entry.ts";
+import { endings, watched } from "./request-timing-entry.ts";
 import { type Operation, plainStorage } from "./request-timing-operation.ts";
-import { inOperation, methodOf, OperationName, type Timing, within } from "./request-timing.ts";
-
-/** How a response ended, short of its name and method, which the request carries. */
-interface Ended {
-  readonly status: number;
-  readonly aborted: boolean;
-  readonly streamed: boolean;
-}
+import { inOperation, OperationName, type Timing, within } from "./request-timing.ts";
 
 /**
  * The operation of a server function called over HTTP, waiting for the
@@ -143,30 +136,13 @@ export function timedStartHandler<Options>(
       const matched = routeName(pathname);
       name = () => matched;
     }
-    const { promise: ending, resolve: end } = Promise.withResolvers<Ended>();
-    // The one place the operation closes, on the first ending to arrive. A
-    // sink that throws rejects here, out of band of the response it measured,
-    // which the client has already been answered with.
-    void ending.then((ended) => {
-      operation.close({ method: methodOf(request.method), name: name(), ...ended });
-    });
-    let produced: Response | undefined;
-    request.signal.addEventListener(
-      "abort",
-      () =>
-        end({
-          status: produced?.status ?? 499,
-          aborted: true,
-          streamed: produced !== undefined && isStreamed(produced),
-        }),
-      { once: true },
-    );
+    const { end, produced } = endings(operation, request, name, isStreamed);
     const answered = new Promise<Response>((resolve) =>
       resolve(within(operation, () => handler(request, handlerOptions))),
     );
     return answered.then(
       (response) => {
-        produced = response;
+        produced(response);
         const streamed = isStreamed(response);
         // Copied before the body is read: Bun drops a content type it derived
         // from a buffered body, a typed Blob's or form data's, from the

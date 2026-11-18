@@ -1,7 +1,7 @@
 import { must } from "./narrowing.js";
-import { a as methodOf, o as plainStorage, t as OperationName } from "./request-timing-operation-Cvj5mYAc.js";
+import { o as plainStorage, t as OperationName } from "./request-timing-operation-Cvj5mYAc.js";
 import { inOperation, within } from "./request-timing.js";
-import { t as watched } from "./request-timing-entry-u8SyDwvB.js";
+import { n as watched, t as endings } from "./request-timing-entry-B2ruS9dh.js";
 //#region request-timing-tanstack-start.ts
 /**
 * Every open operation of a server-function request, by the operation. The
@@ -74,22 +74,9 @@ function timedStartHandler(timing, handler, getRouter, options = {}) {
 			const matched = routeName(pathname);
 			name = () => matched;
 		}
-		const { promise: ending, resolve: end } = Promise.withResolvers();
-		ending.then((ended) => {
-			operation.close({
-				method: methodOf(request.method),
-				name: name(),
-				...ended
-			});
-		});
-		let produced;
-		request.signal.addEventListener("abort", () => end({
-			status: produced?.status ?? 499,
-			aborted: true,
-			streamed: produced !== void 0 && isStreamed(produced)
-		}), { once: true });
+		const { end, produced } = endings(operation, request, name, isStreamed);
 		return new Promise((resolve) => resolve(within(operation, () => handler(request, handlerOptions)))).then((response) => {
-			produced = response;
+			produced(response);
 			const streamed = isStreamed(response);
 			const headers = new Headers(response.headers);
 			if (!headers.has("content-type") || response.body === null) {

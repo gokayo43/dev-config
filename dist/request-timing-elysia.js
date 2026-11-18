@@ -1,7 +1,7 @@
 import { must } from "./narrowing.js";
-import { a as methodOf, t as OperationName } from "./request-timing-operation-Cvj5mYAc.js";
+import { t as OperationName } from "./request-timing-operation-Cvj5mYAc.js";
 import { inOperation, within } from "./request-timing.js";
-import { t as watched } from "./request-timing-entry-u8SyDwvB.js";
+import { n as watched, t as endings } from "./request-timing-entry-B2ruS9dh.js";
 //#region request-timing-elysia.ts
 /**
 * A body Elysia streams is one it sends chunked with no length: every
@@ -42,24 +42,13 @@ function requestTimingPlugin(timing) {
 	};
 	const serve = (handle, request) => {
 		const operation = timing.open();
-		const { promise: ending, resolve: end } = Promise.withResolvers();
-		ending.then((ended) => {
+		const { end, produced } = endings(operation, request, () => {
 			const pattern = matchedRoutes.get(request);
-			operation.close({
-				method: methodOf(request.method),
-				name: pattern === void 0 ? OperationName.unmatched : nameOf(pattern),
-				...ended
-			});
-		});
-		let produced;
-		request.signal.addEventListener("abort", () => end({
-			status: produced?.status ?? 499,
-			aborted: true,
-			streamed: produced !== void 0 && isStreamed(produced)
-		}), { once: true });
+			return pattern === void 0 ? OperationName.unmatched : nameOf(pattern);
+		}, isStreamed);
 		return new Promise((resolve) => resolve(within(operation, () => handle(request)))).then((response) => {
 			if (!(response instanceof Response)) throw new TypeError("request timing: Elysia answered a request with no Response");
-			produced = response;
+			produced(response);
 			if (!isStreamed(response) || response.body === null) {
 				const status = upgraded.has(request) ? 101 : response.status;
 				end({
