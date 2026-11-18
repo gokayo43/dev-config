@@ -426,7 +426,7 @@ a change to a rule usually lands here too.
 ```sh
 bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites
-bun run build   # rewrites the committed dist/ from the six built exports
+bun run build   # rewrites the committed dist/ from the exports tsdown.config.ts builds
 ```
 
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's

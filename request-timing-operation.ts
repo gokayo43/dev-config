@@ -17,11 +17,23 @@ import { AsyncLocalStorage } from "node:async_hooks";
  */
 export const RECORD_VERSION = 1;
 
-/** What an operation waited on: its database, an outside HTTP service, or an in-memory store such as Redis. */
-export type WaitKind = "db" | "out" | "store";
+/**
+ * Every kind of wait, in the order the record and the reader list them: the
+ * database, an outside HTTP service, an in-memory store such as Redis. A new
+ * kind is an entry here and one in `perKind`, which the compiler then asks for.
+ */
+export const WAIT_KINDS = ["db", "out", "store"] as const;
 
-/** Every kind, in the order the record and the reader list them. */
-export const WAIT_KINDS: readonly WaitKind[] = ["db", "out", "store"];
+/** What an operation waited on. */
+export type WaitKind = (typeof WAIT_KINDS)[number];
+
+/** One value for each kind of wait. */
+export type PerKind<T> = { [Kind in WaitKind]: T };
+
+/** One value per kind of wait, each `of` that kind. */
+export function perKind<T>(of: (kind: WaitKind) => T) {
+  return { db: of("db"), out: of("out"), store: of("store") } satisfies PerKind<T>;
+}
 
 /**
  * The request method a record carries. A method outside the standard set is
@@ -102,7 +114,7 @@ export class OperationName {
   /**
    * The name a router registered. Throws where `patternProblem` names one: a
    * pattern shaped like a URL is a connector handing over the request's own
-   * address, which carries a customer's ids and search terms, so the error says
+   * address, which carries a person's ids and search terms, so the error says
    * what shape was refused and quotes none of it.
    */
   static registered(pattern: string): OperationName {
@@ -129,7 +141,7 @@ export interface Waited {
  * text, parameter, query string, header, body or outside host can be
  * represented in it.
  */
-export interface TimingRecord {
+export interface TimingRecord extends Readonly<PerKind<Waited>> {
   /** The schema version, `RECORD_VERSION`; its presence is what makes a line a record. */
   readonly requestTiming: typeof RECORD_VERSION;
   /** When the record was emitted, as an ISO 8601 UTC timestamp. */
@@ -143,9 +155,6 @@ export interface TimingRecord {
   readonly totalMs: number;
   /** The time during which at least one of the operation's waits was in flight; the rest is `totalMs - inFlightMs`. */
   readonly inFlightMs: number;
-  readonly db: Waited;
-  readonly out: Waited;
-  readonly store: Waited;
   /** The client went away before the response finished. */
   readonly aborted: boolean;
   /** The response body was streamed. */
@@ -184,19 +193,39 @@ export let beginWait: (operation: Operation, kind: WaitKind) => EndWait;
 
 let openOperation: (now: Clock, sink: Sink) => Operation;
 
-/** What switching request timing on answers: the one way to open an operation. */
+/**
+ * Where a fault in closing an operation goes: a sink that threw, a name or a
+ * status the core refused, a second close. The app supplies it, so a fault is
+ * logged the app's way and never turns a served response into a failed one.
+ */
+export type Fault = (error: unknown) => void;
+
+/** What switching request timing on answers: the one way to open an operation, and the way a connector closes one. */
 export interface Timing {
   /**
    * Opens an operation now. The connector that opens it runs the handler under
-   * it with a carrier's `within` and closes it once its response has finished.
+   * it with a carrier's `within` and closes it with `finish` once its response
+   * has finished.
    */
   readonly open: () => Operation;
+  /**
+   * Closes `operation` with the ending `ended` builds, handing anything that
+   * throws to the app's `fault` instead of the caller: `ended` itself, where
+   * the name it registers is refused, and `close`, where the status is
+   * refused, the sink throws or the operation was closed already. So a
+   * connector closing after the response, in a callback or a `then`, never
+   * leaves an unhandled rejection or a failed response. A `fault` that throws
+   * is the app's own error and is not caught.
+   */
+  readonly finish: (operation: Operation, ended: () => Ending) => void;
 }
 
 /** What `requestTiming` takes. */
 export interface TimingOptions {
   /** Where each record goes: the app writes it as one JSON line on stdout. */
   readonly sink: Sink;
+  /** Where a fault in closing an operation goes, through `Timing.finish`: the app logs it. */
+  readonly fault: Fault;
   /**
    * The clock every duration is read from. Unset is the process's monotonic
    * clock on the epoch, `performance.timeOrigin + performance.now()`; a test
@@ -213,7 +242,16 @@ const monotonic: Clock = () => performance.timeOrigin + performance.now();
  */
 export function requestTiming(options: TimingOptions): Timing {
   const now = options.now ?? monotonic;
-  return { open: () => openOperation(now, options.sink) };
+  return {
+    open: () => openOperation(now, options.sink),
+    finish: (operation, ended) => {
+      try {
+        operation.close(ended());
+      } catch (error) {
+        options.fault(error);
+      }
+    },
+  };
 }
 
 /**
@@ -234,8 +272,8 @@ export class Operation {
   readonly #now: Clock;
   readonly #sink: Sink;
   readonly #openedAt: number;
-  readonly #sums: Record<WaitKind, number> = { db: 0, out: 0, store: 0 };
-  readonly #counts: Record<WaitKind, number> = { db: 0, out: 0, store: 0 };
+  readonly #sums = perKind(() => 0);
+  readonly #counts = perKind(() => 0);
   #sealed = false;
   /** Waits begun and not yet ended. */
   #active = 0;
@@ -243,6 +281,9 @@ export class Operation {
   #busySince = 0;
   #inFlight = 0;
 
+  // The one place a module function can reach a `#private` member. A public
+  // `begin` would be on the exported `Operation` type, and a WeakMap from
+  // operation to state would need a lookup no operation can miss.
   static {
     beginWait = (operation, kind) => operation.#begin(kind);
     openOperation = (now, sink) => new Operation(now, sink);
@@ -303,9 +344,7 @@ export class Operation {
       status: ending.status,
       totalMs: micro(closedAt - this.#openedAt),
       inFlightMs: micro(inFlight),
-      db: waited("db"),
-      out: waited("out"),
-      store: waited("store"),
+      ...perKind(waited),
       aborted: ending.aborted,
       streamed: ending.streamed,
     });

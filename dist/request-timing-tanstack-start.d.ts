@@ -1,4 +1,4 @@
-import { c as Timing } from "./request-timing-operation-BW73YQNi.js";
+import { l as Timing } from "./request-timing-operation-BG4yllkT.js";
 import "./request-timing.js";
 import { AnyRouter } from "@tanstack/react-router";
 //#region request-timing-tanstack-start.d.ts

@@ -13,6 +13,8 @@ import { methodOf, OperationName, requestTiming } from "../request-timing.ts";
 
 export const DB_WAITS = 2;
 export const PATTERN = "/presets/:id";
+/** The operation the kit reads up to, served the same way by every adoption. */
+export const SENTINEL = "/health";
 
 /** How the server adopts the export. */
 export type Adoption =
@@ -23,7 +25,11 @@ export type Adoption =
   /** A second operation is opened around the handler's. */
   | "doubled"
   /** The operation is named by the request's path rather than the route. */
-  | "misnamed";
+  | "misnamed"
+  /** The sink writes every record twice, as two copies of the export in one process would. */
+  | "echoed"
+  /** Two operations are opened and closed for each request, one after the other, each counting both queries. */
+  | "twice";
 
 /** Lines in the order the sink writes them, taken one at a time. */
 export function lines() {
@@ -70,9 +76,13 @@ const query = async () => [{ id: 1 }];
 export function presetServer(adoption: Adoption) {
   const sink = lines();
   const timing = requestTiming({
+    fault: (error) => {
+      throw error;
+    },
     sink: (record) => {
       sink.write(JSON.stringify({ level: "info", msg: "served" }));
       sink.write(JSON.stringify({ service: "fixture", ...record }));
+      if (adoption === "echoed") sink.write(JSON.stringify({ service: "fixture", ...record }));
     },
   });
   const handlePlain = async (measured: number) => {
@@ -91,6 +101,18 @@ export function presetServer(adoption: Adoption) {
     port: 0,
     hostname: "127.0.0.1",
     routes: {
+      [SENTINEL]: async (request) => {
+        const operation = timing.open();
+        const response = await plainCarrier.within(operation, async () => new Response("ok"));
+        operation.close({
+          method: methodOf(request.method),
+          name: OperationName.registered(SENTINEL),
+          status: response.status,
+          aborted: false,
+          streamed: false,
+        });
+        return response;
+      },
       [PATTERN]: async (request) => {
         const path = new URL(request.url).pathname;
         const close = (operation: plainCarrier.Operation, status: number, name = PATTERN) =>
@@ -105,6 +127,14 @@ export function presetServer(adoption: Adoption) {
         if (adoption === "effect") {
           const response = await Effect.runPromise(effectCarrier.within(operation, handleEffect));
           close(operation, response.status);
+          return response;
+        }
+        if (adoption === "twice") {
+          await plainCarrier.within(operation, () => handlePlain(DB_WAITS));
+          close(operation, 200);
+          const again = timing.open();
+          const response = await plainCarrier.within(again, () => handlePlain(DB_WAITS));
+          close(again, response.status);
           return response;
         }
         if (adoption === "doubled") {
@@ -127,6 +157,10 @@ export function presetServer(adoption: Adoption) {
   return {
     drive: async () => void (await (await fetch(new URL("/presets/42", server.url))).text()),
     next: sink.next,
+    sentinel: {
+      operation: SENTINEL,
+      drive: async () => void (await (await fetch(new URL(SENTINEL, server.url))).text()),
+    },
     [Symbol.asyncDispose]: () => server.stop(true),
   };
 }

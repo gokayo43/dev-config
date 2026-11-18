@@ -200,7 +200,13 @@ function channel() {
 
 async function runPlain(plan: Plan): Promise<readonly TimingRecord[]> {
   const records: TimingRecord[] = [];
-  const timing = requestTiming({ sink: (made) => void records.push(made), now: () => 0 });
+  const timing = requestTiming({
+    fault: (error) => {
+      throw error;
+    },
+    sink: (made) => void records.push(made),
+    now: () => 0,
+  });
   const lock = mutex();
   const handoffs = plan.signals.map((via) => {
     if (via === "deferred") {
@@ -390,7 +396,13 @@ const yields = (count: number) =>
 
 async function runEffect(plan: Plan, carrier: EffectCarrier): Promise<readonly TimingRecord[]> {
   const records: TimingRecord[] = [];
-  const timing = requestTiming({ sink: (made) => void records.push(made), now: () => 0 });
+  const timing = requestTiming({
+    fault: (error) => {
+      throw error;
+    },
+    sink: (made) => void records.push(made),
+    now: () => 0,
+  });
   const lock = Effect.runSync(Effect.makeSemaphore(1));
   const handoffs = plan.signals.map((via) => {
     if (via === "deferred") {

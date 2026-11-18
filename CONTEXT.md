@@ -30,6 +30,13 @@ takes the repo's implementation and the resources it needs, and the repo's own
 `bun test` is what runs it. Distinct from a gate: nothing in CI knows it exists
 until the suite it is part of fails.
 
+**Conformance kit** — an export a repo's own test calls against its booted
+server, which asserts with bun:test's `expect` and registers no test of its
+own: request timing's, which grades one operation's record. Distinct from a
+conformance suite, which registers its tests, and known to CI: the repo
+contract requires a live repo that serves HTTP and owns a database to call it,
+or to say at the call site how its operations are timed otherwise.
+
 **Deny tier** — the rules set to `error`. `warn` is advisory and cannot fail a
 build, so the deny tier is the whole of what a lint config enforces.
 
@@ -140,7 +147,7 @@ whoever settles it.
 
 **Record** — the one line of JSON an operation closes into when its response has
 finished: its name, method, status, total time, and per kind of wait the summed
-time and the count. It is derived, never edited, and nothing of a customer can
+time and the count. It is derived, never edited, and nothing of a person can
 be represented in it.
 
 **The rest** — an operation's total time minus the time during which at least

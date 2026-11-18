@@ -24,6 +24,7 @@ const conforms = async (adoption: Adoption) => {
     dbWaits: DB_WAITS,
     drive: server.drive,
     next: server.next,
+    sentinel: server.sentinel,
   });
 };
 
@@ -34,20 +35,27 @@ describe("the conformance kit", () => {
 
   for (const adoption of ["uncounted", "doubled", "misnamed"] as const) {
     test(`fails a ${adoption} adoption`, async () => {
-      await expect(conforms(adoption)).rejects.toThrow("the record the");
+      await expect(conforms(adoption)).rejects.toThrow("the records one request was answered by");
     });
   }
 
-  test("refuses an operation that makes no database wait", async () => {
+  for (const adoption of ["echoed", "twice"] as const) {
+    test(`fails a server that writes two records for one request: ${adoption}`, async () => {
+      await expect(conforms(adoption)).rejects.toThrow("the records one request was answered by");
+    });
+  }
+
+  test("refuses a sentinel named as the operation it reads up to", async () => {
     await expect(
       requestTimingConforms({
         method: "GET",
         operation: PATTERN,
-        dbWaits: 0,
+        dbWaits: DB_WAITS,
         drive: async () => undefined,
         next: async () => "",
+        sentinel: { operation: PATTERN, drive: async () => undefined },
       }),
-    ).rejects.toThrow("at least one database wait");
+    ).rejects.toThrow("as both");
   });
 });
 
@@ -61,7 +69,7 @@ const routeFile = (pattern?: string) =>
     : [
         `import { requestTimingRoute } from "${join(ROOT, "request-timing-next.ts")}";`,
         `import { requestTiming } from "${join(ROOT, "request-timing.ts")}";`,
-        "const timedRoute = requestTimingRoute(requestTiming({ sink: () => undefined }));",
+        "const timedRoute = requestTimingRoute(requestTiming({ fault: (error) => { throw error; }, sink: () => undefined }));",
         `export const GET = timedRoute("${pattern}", () => new Response("timed"));`,
         "",
       ].join("\n");

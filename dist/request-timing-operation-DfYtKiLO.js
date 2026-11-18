@@ -16,12 +16,24 @@ import { AsyncLocalStorage } from "node:async_hooks";
 * knows this version alone, and stops on a record of any other.
 */
 const RECORD_VERSION = 1;
-/** Every kind, in the order the record and the reader list them. */
+/**
+* Every kind of wait, in the order the record and the reader list them: the
+* database, an outside HTTP service, an in-memory store such as Redis. A new
+* kind is an entry here and one in `perKind`, which the compiler then asks for.
+*/
 const WAIT_KINDS = [
 	"db",
 	"out",
 	"store"
 ];
+/** One value per kind of wait, each `of` that kind. */
+function perKind(of) {
+	return {
+		db: of("db"),
+		out: of("out"),
+		store: of("store")
+	};
+}
 /** Every method a record can carry. */
 const METHODS = [
 	"GET",
@@ -72,7 +84,7 @@ var OperationName = class OperationName {
 	/**
 	* The name a router registered. Throws where `patternProblem` names one: a
 	* pattern shaped like a URL is a connector handing over the request's own
-	* address, which carries a customer's ids and search terms, so the error says
+	* address, which carries a person's ids and search terms, so the error says
 	* what shape was refused and quotes none of it.
 	*/
 	static registered(pattern) {
@@ -97,7 +109,16 @@ const monotonic = () => performance.timeOrigin + performance.now();
 */
 function requestTiming(options) {
 	const now = options.now ?? monotonic;
-	return { open: () => openOperation(now, options.sink) };
+	return {
+		open: () => openOperation(now, options.sink),
+		finish: (operation, ended) => {
+			try {
+				operation.close(ended());
+			} catch (error) {
+				options.fault(error);
+			}
+		}
+	};
 }
 /**
 * The plain carrier: which operation is current in a plain async program. Read
@@ -110,16 +131,8 @@ const plainStorage = new AsyncLocalStorage();
 	#now;
 	#sink;
 	#openedAt;
-	#sums = {
-		db: 0,
-		out: 0,
-		store: 0
-	};
-	#counts = {
-		db: 0,
-		out: 0,
-		store: 0
-	};
+	#sums = perKind(() => 0);
+	#counts = perKind(() => 0);
 	#sealed = false;
 	/** Waits begun and not yet ended. */
 	#active = 0;
@@ -175,9 +188,7 @@ const plainStorage = new AsyncLocalStorage();
 			status: ending.status,
 			totalMs: micro(closedAt - this.#openedAt),
 			inFlightMs: micro(inFlight),
-			db: waited("db"),
-			out: waited("out"),
-			store: waited("store"),
+			...perKind(waited),
 			aborted: ending.aborted,
 			streamed: ending.streamed
 		});

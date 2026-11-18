@@ -21,6 +21,7 @@ export {
 export type {
   Clock,
   Ending,
+  Fault,
   Method,
   Operation,
   Sink,

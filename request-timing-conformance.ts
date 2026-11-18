@@ -1,7 +1,8 @@
 /**
  * The request-timing conformance kit: an adopting app's own suite runs it
- * against its own booted server, to show that one operation which makes a known
- * number of database waits closes into exactly one record carrying that number.
+ * against its own booted server, to show that one request for an operation
+ * which makes a known number of database waits is answered by exactly one
+ * record carrying that number.
  *
  * ```ts
  * test("request timing", () =>
@@ -11,60 +12,81 @@
  *     dbWaits: 2,
  *     drive: async () => void (await (await fetch(`${server.url}presets/1`)).text()),
  *     next: () => lines.next(),
+ *     sentinel: {
+ *       operation: "/health",
+ *       drive: async () => void (await (await fetch(`${server.url}health`)).text()),
+ *     },
  *   }));
  * ```
  *
- * It drives the operation twice, one request after the other, and reads the
- * lines the server's sink writes in between, skipping every line that is not a
- * record. Each request must be answered by one record, of the method and
- * operation named, with `dbWaits` database waits: a second record for one
- * request is read in place of the next request's, and a connector that misses
- * a wait or opens a second operation around the handler leaves a record with
- * the wrong count. A server that writes no record leaves `next` waiting, and
- * the test fails at its timeout.
+ * "Exactly one" needs a point after which the request can have written
+ * nothing more, and a record carries nothing that tells one request's from
+ * another's, so the kit takes a second operation of the same server, the
+ * sentinel, as that point. It drives the sentinel and reads up to its record,
+ * so whatever the server wrote before the kit began is behind it; drives the
+ * operation; drives the sentinel again; and requires the records between the
+ * two sentinel records to be exactly one, of the method and operation named,
+ * with `dbWaits` database waits. A server that writes two records for one
+ * request, whatever they hold, fails it, and so does one that misses a wait or
+ * names the operation by its URL. Its one assumption is that a record is
+ * written by the time the server has answered a later request. A server that
+ * writes no record leaves `next` waiting, and the test fails at its timeout.
  */
 import { expect } from "bun:test";
 import { join } from "node:path";
 
-import type { Method } from "./request-timing-operation.ts";
+import type { Method, TimingRecord } from "./request-timing-operation.ts";
 import { markOf } from "./request-timing-route.ts";
 import { parseRecord } from "./request-timing-summary.ts";
 
-/** One operation of the app's booted server, and the way to read what its sink writes. */
+/** One operation of the app's booted server, a second one to read up to, and the way to read what its sink writes. */
 export interface ConformanceTarget {
   readonly method: Method;
   /** The name the router registered for the operation, as the record carries it. */
   readonly operation: string;
-  /** How many database waits one request for the operation makes, at least 1. */
+  /** How many database waits one request for the operation makes. */
   readonly dbWaits: number;
   /** Sends one request for the operation, resolving once its response has been read to the end. */
   readonly drive: () => Promise<void>;
   /** Resolves with the next line the server's sink writes, in the order written. */
   readonly next: () => Promise<string>;
+  /** Another operation of the same server, under another name, that the kit reads up to. Nothing else may reach the server while the kit runs. */
+  readonly sentinel: {
+    readonly operation: string;
+    /** Sends one request for it, resolving once its response has been read to the end. */
+    readonly drive: () => Promise<void>;
+  };
 }
 
-async function nextRecord(target: ConformanceTarget) {
+/** Drives the sentinel and answers every record read before the sentinel's own. */
+async function readToSentinel(target: ConformanceTarget): Promise<TimingRecord[]> {
+  await target.sentinel.drive();
+  const before: TimingRecord[] = [];
   for (;;) {
     const record = parseRecord(await target.next());
-    if (record !== undefined) return record;
+    if (record?.operation === target.sentinel.operation) return before;
+    if (record !== undefined) before.push(record);
   }
 }
 
-/** Rejects, through bun:test's `expect`, unless each of two requests for the operation is answered by its one record. */
+/** Rejects, through bun:test's `expect`, unless one request for the operation is answered by exactly one record, carrying `dbWaits`. */
 export async function requestTimingConforms(target: ConformanceTarget): Promise<void> {
-  if (!Number.isInteger(target.dbWaits) || target.dbWaits < 1) {
+  if (target.sentinel.operation === target.operation) {
     throw new Error(
-      `requestTimingConforms takes an operation that makes at least one database wait, and was given dbWaits ${target.dbWaits}: with none, a second operation opened around the handler writes a record no different from the first`,
+      `requestTimingConforms reads up to a sentinel operation, and was given ${target.operation} as both: name another operation of the server`,
     );
   }
-  for (const request of ["first", "second"]) {
-    await target.drive();
-    const record = await nextRecord(target);
-    expect(
-      { method: record.method, operation: record.operation, dbWaits: record.db.count },
-      `the record the ${request} request was answered by`,
-    ).toEqual({ method: target.method, operation: target.operation, dbWaits: target.dbWaits });
-  }
+  await readToSentinel(target);
+  await target.drive();
+  const written = await readToSentinel(target);
+  expect(
+    written.map((record) => ({
+      method: record.method,
+      operation: record.operation,
+      dbWaits: record.db.count,
+    })),
+    "the records one request was answered by",
+  ).toEqual([{ method: target.method, operation: target.operation, dbWaits: target.dbWaits }]);
 }
 
 /** The handlers a `route.ts` can export, one per method Next.js routes to it. */

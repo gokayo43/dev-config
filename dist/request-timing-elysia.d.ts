@@ -1,4 +1,4 @@
-import { c as Timing } from "./request-timing-operation-BW73YQNi.js";
+import { l as Timing } from "./request-timing-operation-BG4yllkT.js";
 import "./request-timing.js";
 import { AnyElysia } from "elysia";
 //#region request-timing-elysia.d.ts

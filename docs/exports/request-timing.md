@@ -16,18 +16,23 @@ operation (startup, background jobs, timers) is in no record.
 
 In this order:
 
-1. **Switch it on with a sink**, once, at the app's entry point. The sink is the
-   app's; the export writes nothing itself. It writes the record as one JSON
-   object on one line of stdout, with any fields of the app's own beside the
-   reserved names, and spreads the record last so a reserved name is never
-   overwritten. An app whose other log lines are not JSON still writes this one
-   as JSON.
+1. **Switch it on with a sink and a fault handler**, once, at the app's entry
+   point. Both are the app's; the export writes nothing itself. The sink writes
+   the record as one JSON object on one line of stdout, with any fields of the
+   app's own beside the reserved names, and spreads the record last so a
+   reserved name is never overwritten. An app whose other log lines are not
+   JSON still writes this one as JSON. `fault` receives what goes wrong in
+   closing an operation after its response has been answered: a sink that
+   threw, a name or a status the core refused, a second close. It logs it the
+   app's way, and the response stands. A `fault` that throws is the app's own
+   error, and nothing catches it.
 
    ```ts
    import { requestTiming } from "@gokayo43/dev-config/request-timing";
 
    export const timing = requestTiming({
      sink: (record) => console.log(JSON.stringify({ service: "api", ...record })),
+     fault: (error) => console.error("request timing:", error),
    });
    ```
 
@@ -478,8 +483,9 @@ body is not part of the wait, and is in the rest.
 
 | Name                                                               | What it is                                                                                                                                                                                                               |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `requestTiming({ sink, now? })`                                    | switches it on; answers `{ open(): Operation }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                                                                                        |
-| `Operation.close(ending)`                                          | emits the record through the sink, once                                                                                                                                                                                  |
+| `requestTiming({ sink, fault, now? })`                             | switches it on; answers `{ open(): Operation, finish(operation, ended) }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                                                              |
+| `timing.finish(operation, ended)`                                  | how a connector closes: builds the ending with `ended()` and closes `operation` with it, handing anything either throws to `fault`                                                                                       |
+| `Operation.close(ending)`                                          | emits the record through the sink, once; throws on a second close, a refused status or a sink that throws, which a connector's own suite reads                                                                           |
 | `within(operation, handler)`                                       | runs `handler` under `operation` and answers what it answers; one per carrier (a thunk for the plain one, an Effect for the Effect one)                                                                                  |
 | `inOperation`                                                      | whether an operation is current: `inOperation(): boolean` plain, `inOperation: Effect<boolean>` Effect; an entry connector opens nothing while it is true                                                                |
 | `tryPromiseCarried(evaluate)`, `tryPromiseCarried({ try, catch })` | Effect only: `Effect.tryPromise`, with the promise run under the plain carrier holding the fiber's operation, or under none when the fiber has none                                                                      |
@@ -488,19 +494,26 @@ body is not part of the wait, and is in the rest.
 | `OperationName.registered(pattern)`                                | the name a router registered; refuses, without quoting it, a pattern that is empty, longer than 256 UTF-16 code units, holds a space or a character that does not print, or holds a query string, a fragment or a scheme |
 | `OperationName.unmatched`                                          | the fixed name of a request no route matched                                                                                                                                                                             |
 | `methodOf(written)`                                                | a request's method as a record carries it: `GET` `HEAD` `POST` `PUT` `PATCH` `DELETE` `OPTIONS`, or `OTHER`                                                                                                              |
-| `RECORD_VERSION`, `WAIT_KINDS`, types                              | the schema version, the three kinds, and `TimingRecord`, `Ending`, `Sink`, `Clock`, `Method`, `WaitKind`, `Waited`, `Timing`, `TimingOptions`, `Operation`                                                               |
+| `RECORD_VERSION`, `WAIT_KINDS`, types                              | the schema version, the three kinds, and `TimingRecord`, `Ending`, `Sink`, `Fault`, `Clock`, `Method`, `WaitKind`, `Waited`, `Timing`, `TimingOptions`, `Operation`                                                      |
 
 What a connector author has to hold:
 
 - **No nesting.** Ask `inOperation` before opening, and when it answers true
   run the handler as it is: no `open`, no `within`, no `close`.
-- **Open, run, close.** `timing.open()` starts the clock. The handler runs under
-  it with the carrier's `within`. `operation.close({ method, name, status,
-aborted, streamed })` is called once the response has finished: the last byte
-  written, or the client gone (`aborted: true`), a streamed body included. The
-  name and method are given at the close, so a connector that wraps the whole
-  request before the router has matched it names the operation once it knows.
-  `status` is the status the client received, a handler that threw included.
+- **Open, run, finish.** `timing.open()` starts the clock. The handler runs
+  under it with the carrier's `within`. `timing.finish(operation, () => ({
+method, name, status, aborted, streamed }))` is called once the response has
+  finished: the last byte written, or the client gone (`aborted: true`), a
+  streamed body included. The name and method are given at the close, so a
+  connector that wraps the whole request before the router has matched it
+  names the operation once it knows, and builds the name inside `ended`, where
+  a name the core refuses goes to `fault` with the rest. `status` is the
+  status the client received, a handler that threw included.
+- **Nothing a connector does turns a served response into a failed one.** It
+  closes with `finish`, never `close`: `finish` hands a refused name, a refused
+  status (`Response.error()` has status 0), a sink that throws and a second
+  close to the app's `fault`, so no rejection goes unhandled and no response
+  fails for its record.
 - **Close once.** A second `close` throws and emits nothing; so does a status
   outside 100 to 599. A sink that throws throws out of `close`, after the
   operation is sealed. An operation never closed writes no record, so a
@@ -557,6 +570,13 @@ registered (`/presets/:id`, never `/presets/42`). No query text, parameter,
 query string, header, body or host of an outside call reaches one, since
 `measure` sees none of them and `OperationName` can only be made from a pattern.
 
+`status` is the status the client received, a handler that threw included,
+with two exceptions, each named under its connector: a call inside a tRPC
+batch carries its own call's status, the one it would receive sent alone,
+while the batch's response has one status for all; and a Next.js route
+handler that ends by calling `notFound()` or another of `next/navigation`'s
+throwing helpers is recorded with 500, which the route-tree check refuses.
+
 A record that is wrong is an issue on this repo: it is derived, never edited.
 
 ## Reading a log
@@ -580,18 +600,25 @@ journald). It prints:
 
 A record is read only in the shape the export writes: an `operation` that
 `OperationName.registered` would refuse, a `method` outside the closed set, or
-an `at` not in `toISOString`'s form stops the reader with status 1, and the
-refused operation is not quoted. So a crafted line cannot put a terminal escape
-or a fake row into what the reader prints, in either mode.
+an `at` not in `toISOString`'s form stops the reader with status 1. What it
+defends is its own output: nothing it prints, in either mode, carries a
+control character, a bidi override or any other text a log line chose, since
+every printed name passed that rule and no error message quotes a value off a
+line. What it trusts is that the lines it is given were written by the app's
+sink: any line carrying `requestTiming` in a valid shape is a record, so a
+forged one is summed like any other, and a log anyone else can write to is not
+one to read with it. One record of a schema version it does not know stops the
+whole report, by design, since a summary that skipped it would describe a
+window it had not read.
 
 `--json` prints the same summary as one JSON object, `Summary` in
 `request-timing-summary.ts`, for an agent to parse.
 
-| Status | Meaning                                                                            |
-| ------ | ---------------------------------------------------------------------------------- |
-| 0      | the summary was printed                                                            |
-| 1      | a record it cannot read, a schema version it does not know (named), or an argument |
-| 2      | the input held no record, so an empty window is never read as a fast one           |
+| Status | Meaning                                                                                                       |
+| ------ | ------------------------------------------------------------------------------------------------------------- |
+| 0      | the summary was printed                                                                                       |
+| 1      | a record it cannot read, a schema version it does not know (named where it is a whole number), or an argument |
+| 2      | the input held no record, so an empty window is never read as a fast one                                      |
 
 ## The conformance kit
 
@@ -608,16 +635,28 @@ test("request timing", () =>
     dbWaits: 2,
     drive: async () => void (await (await fetch(`${server.url}presets/1`)).text()),
     next: () => stdoutLines.next(),
+    sentinel: {
+      operation: "/health",
+      drive: async () => void (await (await fetch(`${server.url}health`)).text()),
+    },
   }));
 ```
 
-`drive` sends one request for an operation that makes `dbWaits` database waits,
-at least one, and resolves once the response has been read to the end. `next`
-resolves with the next line the server's sink wrote. The kit drives the
-operation twice and requires each request to be answered by one record of that
-method, name and database count, so a second record for one request, a missed
-wait and a URL used as the name each fail it. A server that writes no record
-leaves `next` waiting, and the test fails at its timeout.
+`drive` sends one request for an operation that makes `dbWaits` database waits
+and resolves once the response has been read to the end. `next` resolves with
+the next line the server's sink wrote. `sentinel` is a second operation of the
+same server, any other route, which the kit reads up to: a record carries
+nothing that tells one request's from another's, so "exactly one" needs a point
+after which the graded request can have written nothing more. The kit drives
+the sentinel and reads to its record, so whatever the server wrote before is
+behind it; drives the operation; drives the sentinel again; and requires the
+records between the two sentinel records to be exactly one, of that method,
+name and database count. So a server that writes two records for one request,
+whatever they hold, fails it, as two copies of the export in one process do,
+and so do a missed wait and a URL used as the name. It assumes a record is
+written by the time the server has answered a later request, and that nothing
+else reaches the server while it runs. A server that writes no record leaves
+`next` waiting, and the test fails at its timeout.
 
 A Next.js app runs the kit's route-tree check too, over its own `app`
 directory, since each route states its own pattern:

@@ -11,6 +11,9 @@ import { requestTiming } from "../../../request-timing.ts";
 import { timed } from "./env.ts";
 
 const timing = requestTiming({
+  fault: (error) => {
+    throw error;
+  },
   sink: (record) => process.stdout.write(`${JSON.stringify({ service: "fixture", ...record })}\n`),
 });
 

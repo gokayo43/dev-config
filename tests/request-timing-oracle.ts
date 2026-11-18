@@ -29,7 +29,12 @@ export async function counted<T>(
   work: () => Promise<T>,
 ): Promise<{ answer: T; counts: Counts; inFlightMs: number }> {
   const records: TimingRecord[] = [];
-  const operation = requestTiming({ sink: (record) => void records.push(record) }).open();
+  const operation = requestTiming({
+    fault: (error) => {
+      throw error;
+    },
+    sink: (record) => void records.push(record),
+  }).open();
   const answer = await within(operation, work);
   operation.close({
     method: "GET",

@@ -33,6 +33,7 @@ test("request timing", () =>
     dbWaits: 1,
     drive: async () => void (await (await fetch("http://localhost:3000/presets/1")).text()),
     next: async () => "",
+    sentinel: { operation: "/health", drive: async () => undefined },
   }));
 `;
 

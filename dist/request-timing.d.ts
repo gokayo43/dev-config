@@ -1,4 +1,4 @@
-import { a as OperationName, c as Timing, d as WAIT_KINDS, f as WaitKind, h as requestTiming, i as Operation, l as TimingOptions, m as methodOf, n as Ending, o as RECORD_VERSION, p as Waited, r as Method, s as Sink, t as Clock, u as TimingRecord } from "./request-timing-operation-BW73YQNi.js";
+import { a as Operation, c as Sink, d as TimingRecord, f as WAIT_KINDS, g as requestTiming, h as methodOf, i as Method, l as Timing, m as Waited, n as Ending, o as OperationName, p as WaitKind, r as Fault, s as RECORD_VERSION, t as Clock, u as TimingOptions } from "./request-timing-operation-BG4yllkT.js";
 //#region request-timing.d.ts
 /**
  * Whether an operation is current. An entry connector asks it before opening
@@ -23,4 +23,4 @@ export declare function within<T>(operation: Operation, handler: () => T): T;
  */
 export declare function measure<T>(kind: WaitKind, wait: () => PromiseLike<T>): Promise<T>;
 //#endregion
-export { type Clock, type Ending, type Method, type Operation, OperationName, RECORD_VERSION, type Sink, type Timing, type TimingOptions, type TimingRecord, WAIT_KINDS, type WaitKind, type Waited, methodOf, requestTiming };
+export { type Clock, type Ending, type Fault, type Method, type Operation, OperationName, RECORD_VERSION, type Sink, type Timing, type TimingOptions, type TimingRecord, WAIT_KINDS, type WaitKind, type Waited, methodOf, requestTiming };

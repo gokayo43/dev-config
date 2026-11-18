@@ -48,6 +48,9 @@ export async function presetApp(timed: boolean, connectionLimit = 4) {
   });
   const sink = lines();
   const timing = requestTiming({
+    fault: (error) => {
+      throw error;
+    },
     sink: (record) => {
       sink.write(JSON.stringify({ level: "info", msg: "served" }));
       sink.write(JSON.stringify({ service: "fixture", ...record }));
