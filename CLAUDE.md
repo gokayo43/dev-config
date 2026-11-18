@@ -154,10 +154,10 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Sixteen of them are **exports** it imports and
+  gates, which run over it from CI. Eighteen of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
   `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
-  `dev-server-derive.ts` is the module the first imports. Five more reach it
+  `dev-server-derive.ts` is the module the first imports. Six more reach it
   only inside those, and no specifier exports any of them. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
   command decide by — which the build bundles into `dist/count-budget.js`, a
@@ -174,7 +174,10 @@ a change to a rule usually lands here too.
   feeds stdin and the conformance kit parses a record with;
   `request-timing-wait.ts` is what every wait connector is built from, the
   Proxy that answers a client as itself with some members standing in and the
-  one way a call is measured, which the build makes a chunk beside them. Each export is reachable through
+  one way a call is measured, which the build makes a chunk beside them;
+  `request-timing-entry.ts` is what every entry connector is built from, a
+  response body passed through and watched for its end, which the build makes
+  a chunk beside them too. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is the protocol between an app and the two floors
@@ -187,7 +190,8 @@ a change to a rule usually lands here too.
   so an app without it never loads it; `request-timing-conformance.ts` is the
   check an adopting app runs against its booted server, and the bin
   `request-timing-report.ts` reads a log of the records; the connectors
-  `request-timing-elysia.ts`, `request-timing-mysql2.ts`,
+  `request-timing-elysia.ts`, `request-timing-tanstack-start.ts`,
+  `request-timing-mysql2.ts`, `request-timing-bun-sql.ts`,
   `request-timing-bun-redis.ts` and `request-timing-fetch.ts` are an app's entry and its waits, each importing
   its framework or driver as types only, so the package gains no runtime
   dependency;
@@ -220,11 +224,11 @@ a change to a rule usually lands here too.
   is a value one call can grade, and a limiter is a sequence of attempts against
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
-  to is this package's business rather than a caller's: ten of them are built and
+  to is this package's business rather than a caller's: twelve of them are built and
   eight ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect,request-timing-elysia,request-timing-mysql2,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
   and the chunks the request-timing ones share;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
@@ -369,11 +373,20 @@ a change to a rule usually lands here too.
   adoption the kit names. The connectors' suites run against real servers:
   `request-timing-elysia.test.ts` boots the Elysia app
   `request-timing-elysia-fixture.ts` builds over MySQL, Redis and an outside
-  service, once with timing off as the differential's oracle, and
-  `request-timing-mysql2.test.ts`, `request-timing-bun-redis.test.ts` and
-  `request-timing-fetch.test.ts` grade one driver each;
-  `request-timing-servers.ts` is their one reader of `TEST_MYSQL_URL` and
-  `TEST_REDIS_URL`.
+  service, once with timing off as the differential's oracle;
+  `request-timing-tanstack-start.test.ts` boots the Start app
+  `request-timing-start-app/` holds, which `request-timing-start-build.ts`
+  builds with Vite and the Start plugin once per run into
+  `node_modules/.cache` and `request-timing-start-server.ts` serves with Bun,
+  in-process with timing on and in a process of its own through
+  `request-timing-start-serve.ts` with timing off, as the differential's
+  oracle; and `request-timing-mysql2.test.ts`, `request-timing-bun-sql.test.ts`,
+  `request-timing-bun-redis.test.ts` and `request-timing-fetch.test.ts` grade
+  one driver each. `request-timing-servers.ts` is their one reader of
+  `TEST_MYSQL_URL` and `TEST_REDIS_URL`, `request-timing-postgres.ts` makes the
+  Postgres databases on the server `postgres.ts` reads, and
+  `request-timing-oracle.ts` is how each reads what an operation counted and
+  what a differential step settled with, needing no server of its own.
   `git-free-environment.ts` is the one file here that is not a suite and not a
   fixture: `bunfig.toml` preloads it, so it runs before the first test file of
   every `bun test`. It takes the whole `GIT_` prefix out of the environment,
@@ -420,8 +433,9 @@ is not with them.
 `bun test` needs a Postgres, a MySQL, a Redis, a chromium and passwordless
 sudo. The Postgres because the replay gate's property is what two databases end
 up holding and the semantic fixtures' is what a real migration does to a real
-row; the MySQL because the request-timing connectors are graded on what mysql2
-and drizzle do against a real server; the Redis because a limiter's bucket is
+row, and the request-timing Bun.sql and Start connectors on what Bun.sql and
+drizzle do against one; the MySQL because the request-timing connectors are
+graded on what mysql2 and drizzle do against a real server; the Redis because a limiter's bucket is
 shared by two processes and its Redis can be gone; the chromium because what
 the invariant sweep claims is what a browser reports; the sudo because the
 test-suite gate seals a run in a network namespace and nothing short of taking

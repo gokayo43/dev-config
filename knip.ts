@@ -8,7 +8,14 @@ const config: KnipConfig = {
   // it. Splitting the entry point out of the gate module is also what lets the
   // coverage floor mean something: a module the suite drives reports its own
   // coverage, rather than carrying an entry block no test can reach.
-  entry: [".github/actions/*/*.main.ts", "tests/*.ts"],
+  // The TanStack Start fixture's server entry and Start instance are found
+  // by the Start plugin at their paths, as an app's are, and imported by no
+  // file.
+  entry: [
+    ".github/actions/*/*.main.ts",
+    "tests/*.ts",
+    "tests/request-timing-start-app/src/{server,start}.ts",
+  ],
   project: [".github/actions/**/*.ts", "anti-slop/**/*.js", "tests/**/*.ts"],
   // The mutation lane's own two packages, which its suite drives against this
   // repo's install. The names come from the base rather than from here;
@@ -17,9 +24,7 @@ const config: KnipConfig = {
   // suite links it into its fixture, because no-unknown-classes asks the
   // project's own Tailwind which classes exist. The package also switches on
   // knip's Tailwind plugin, which compiles stylesheets this repo does not have.
-  // react-dom is the count budget's fixture app, which the suite builds from
-  // source held in a string, so no file here imports it.
-  ignoreDependencies: [...mutationLaneDependencies, "tailwindcss", "react-dom"],
+  ignoreDependencies: [...mutationLaneDependencies, "tailwindcss"],
   tailwind: false,
   // capacity.js is not this repo's program: it runs inside k6, against modules
   // built into that runtime and resolvable from no package.json anywhere. The

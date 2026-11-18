@@ -7,14 +7,8 @@
 import type { AnyElysia, Elysia } from "elysia";
 
 import { must } from "./narrowing.ts";
-import { inOperation, methodOf, OperationName, type Timing, within } from "./request-timing.ts";
-
-/** How a response ended, short of its name and method, which the request carries. */
-interface Ended {
-  readonly status: number;
-  readonly aborted: boolean;
-  readonly streamed: boolean;
-}
+import { endings, watched } from "./request-timing-entry.ts";
+import { inOperation, OperationName, type Timing, within } from "./request-timing.ts";
 
 /**
  * A body Elysia streams is one it sends chunked with no length: every
@@ -23,35 +17,6 @@ interface Ended {
  */
 const isStreamed = (response: Response): boolean =>
   response.headers.get("transfer-encoding") === "chunked";
-
-/**
- * `body`, passed through chunk for chunk, calling `ended` once the last chunk
- * has been taken or the client has cancelled it. Elysia ends a source that
- * fails as though it had finished, so a read never rejects here. A
- * high-water mark of nothing reads no chunk ahead of the client, so the source
- * is pulled exactly as it was before the connector stood in front of it.
- */
-function watched<Chunk>(
-  body: ReadableStream<Chunk>,
-  ended: (aborted: boolean) => void,
-): ReadableStream<Chunk> {
-  const reader = body.getReader();
-  return new ReadableStream<Chunk>(
-    {
-      pull: (controller) =>
-        reader.read().then((chunk) => {
-          if (!chunk.done) return controller.enqueue(chunk.value);
-          controller.close();
-          return ended(false);
-        }),
-      cancel: (reason) => {
-        ended(true);
-        return reader.cancel(reason);
-      },
-    },
-    { highWaterMark: 0 },
-  );
-}
 
 /**
  * The plugin, for `timing`: `app.use(requestTimingPlugin(timing))`, mounted
@@ -91,28 +56,14 @@ export function requestTimingPlugin(timing: Timing) {
 
   const serve = (handle: (request: Request) => object, request: Request): Promise<Response> => {
     const operation = timing.open();
-    const { promise: ending, resolve: end } = Promise.withResolvers<Ended>();
-    // The one place the operation closes, on the first ending to arrive. A
-    // sink that throws rejects here, out of band of the response it measured,
-    // which the client has already been answered with.
-    void ending.then((ended) => {
-      const pattern = matchedRoutes.get(request);
-      operation.close({
-        method: methodOf(request.method),
-        name: pattern === undefined ? OperationName.unmatched : nameOf(pattern),
-        ...ended,
-      });
-    });
-    let produced: Response | undefined;
-    request.signal.addEventListener(
-      "abort",
-      () =>
-        end({
-          status: produced?.status ?? 499,
-          aborted: true,
-          streamed: produced !== undefined && isStreamed(produced),
-        }),
-      { once: true },
+    const { end, produced } = endings(
+      operation,
+      request,
+      () => {
+        const pattern = matchedRoutes.get(request);
+        return pattern === undefined ? OperationName.unmatched : nameOf(pattern);
+      },
+      isStreamed,
     );
     const answered = new Promise<object>((resolve) =>
       resolve(within(operation, () => handle(request))),
@@ -124,7 +75,7 @@ export function requestTimingPlugin(timing: Timing) {
         if (!(response instanceof Response)) {
           throw new TypeError("request timing: Elysia answered a request with no Response");
         }
-        produced = response;
+        produced(response);
         // `isStreamed` first: reading `body` turns a buffered body into a
         // stream, which Bun then sends as `application/octet-stream`.
         if (!isStreamed(response) || response.body === null) {

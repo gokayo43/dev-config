@@ -1,6 +1,5 @@
 /**
- * The real servers the request-timing connector suites run against, and the
- * one way those suites read what an operation counted.
+ * The real MySQL and Redis the request-timing connector suites run against.
  *
  * `TEST_MYSQL_URL` and `TEST_REDIS_URL` are refused rather than defaulted, for
  * the reason `tests/postgres.ts` gives: `localhost` on the box these suites run
@@ -11,14 +10,6 @@
 import { createPool, type Pool } from "mysql2/promise";
 
 import { required } from "../.github/actions/_lib/gate.ts";
-import { only } from "../narrowing.ts";
-import {
-  OperationName,
-  requestTiming,
-  type TimingRecord,
-  type WaitKind,
-  within,
-} from "../request-timing.ts";
 
 export const MYSQL_URL = required(
   "TEST_MYSQL_URL",
@@ -67,33 +58,3 @@ export function keyPrefix(): string {
   prefixes += 1;
   return `request-timing:${process.pid}:${prefixes}:`;
 }
-
-/** What one kind of wait came to in a record: its count alone, the part a real server makes deterministic. */
-export type Counts = Readonly<Record<WaitKind, number>>;
-
-const countsOf = (record: TimingRecord): Counts => ({
-  db: record.db.count,
-  out: record.out.count,
-  store: record.store.count,
-});
-
-/**
- * Runs `work` as one operation and answers what it answered with the counts
- * its record carries.
- */
-export async function counted<T>(work: () => Promise<T>): Promise<{ answer: T; counts: Counts }> {
-  const records: TimingRecord[] = [];
-  const operation = requestTiming({ sink: (record) => void records.push(record) }).open();
-  const answer = await within(operation, work);
-  operation.close({
-    method: "GET",
-    name: OperationName.registered("/counted"),
-    status: 200,
-    aborted: false,
-    streamed: false,
-  });
-  return { answer, counts: countsOf(only(records)) };
-}
-
-/** No wait of any kind. */
-export const NONE: Counts = { db: 0, out: 0, store: 0 };

@@ -44,6 +44,26 @@ export function lines() {
   };
 }
 
+/** A latch a handler waits on, which tells the case once the handler is waiting. */
+export function latch() {
+  let reached = Promise.withResolvers<void>();
+  let opened = Promise.withResolvers<void>();
+  return {
+    /** What the handler awaits. */
+    wait: () => {
+      reached.resolve();
+      return opened.promise;
+    },
+    /** Resolves once a handler is waiting on the latch. */
+    reached: () => reached.promise,
+    open: () => {
+      opened.resolve();
+      reached = Promise.withResolvers<void>();
+      opened = Promise.withResolvers<void>();
+    },
+  };
+}
+
 const query = async () => [{ id: 1 }];
 
 /** Serves `/presets/:id` on a free loopback port, adopting the export as `adoption` says. */

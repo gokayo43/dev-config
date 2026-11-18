@@ -168,6 +168,85 @@ export const app = new Elysia().use(errorHandler).use(requestTimingPlugin(timing
   `app.handle` called from a handler, opens no operation of its own: its waits
   count in the operation of the request that made it.
 
+## TanStack Start
+
+`@gokayo43/dev-config/request-timing/tanstack-start` is the entry connector for
+a TanStack Start app. An app mounts its two halves once each: the server
+entry's handler, wrapped, and a function middleware that names the operation of
+a server function called over HTTP.
+
+```ts
+// src/server.ts
+import { createStartHandler, defaultStreamHandler } from "@tanstack/react-start/server";
+import { timedStartHandler } from "@gokayo43/dev-config/request-timing/tanstack-start";
+
+export default {
+  fetch: timedStartHandler(timing, createStartHandler(defaultStreamHandler), getRouter),
+};
+```
+
+```ts
+// src/start.ts
+import { createCsrfMiddleware, createMiddleware, createStart } from "@tanstack/react-start";
+import { nameServerFunction } from "@gokayo43/dev-config/request-timing/tanstack-start";
+
+export const startInstance = createStart(() => ({
+  requestMiddleware: [
+    createCsrfMiddleware({ filter: (context) => context.handlerType === "serverFn" }),
+  ],
+  functionMiddleware: [createMiddleware({ type: "function" }).server(nameServerFunction)],
+}));
+```
+
+Start mounts its own CSRF check on server functions only while an app has no
+`src/start.ts`, so an app that adds the file lists the check there, as above.
+`nameServerFunction` goes first among the function middleware.
+
+- Every request the app serves is one operation, from the call of the handler
+  to the last byte of its response: a page, a server route, and a server
+  function called over HTTP. The path that carries server-function calls opens
+  no operation of its own; a call's operation is the function's.
+- A page or a server route is named by the route the router matched, as it was
+  registered: `/presets/$id`. `getRouter` is called once, when the handler is
+  wrapped, and every route it registers is named then, so a pattern the core
+  refuses throws at startup. The router is asked about the request's path as it
+  arrived, so an app whose router sets a `basepath` or a `rewrite` records
+  every request as `unmatched`.
+- A server function is named by its file and variable as Start's compiler
+  records them, `src/server/presets.ts:listPresets`, which no build changes;
+  the id in its URL is a hash in a build. A function in a file whose path the core refuses,
+  one holding a space, `?` or `#`, fails on every call.
+- A request no route matched is `unmatched`, and so is a call to a server
+  function that does not exist, or one refused before the function ran, as by
+  the CSRF check.
+- A page that renders on the server and calls server functions in-process, from
+  a loader, is one operation, the page's. The in-process calls open nothing and
+  name nothing, and their waits count in the page's record. So does a request
+  served in-process by calling the handler while an operation is current.
+- The status is the one the client received. A page or a server route whose
+  handler throws leaves the server to answer, and the record says 500, which is
+  Bun's answer to a fetch that throws; a server that answers otherwise leaves
+  its records disagreeing with its clients. A server function that throws is answered by Start,
+  200 with the error in its body, and the record says 200.
+- A response closes after the last chunk of its body. It is `streamed` when it
+  is sent over time: a `text/event-stream`, a server function's framed answer
+  (a stream, an async iterable or an unresolved promise it returns), or any
+  response that says `transfer-encoding: chunked`. A rendered page is not
+  `streamed`: its time to the last byte is its own work.
+- A response whose headers name no content type, as a string or bytes answered
+  bare, closes when it is handed to the server, because Bun gives its body a
+  content type of its own as it sends it, which a watched copy would not get.
+  What a stream answered that way waits on after the hand-over is in no record;
+  name its content type.
+- A client that goes away closes the operation then, with `aborted: true` and
+  the status the handler had produced, or 499 where it had produced none. The
+  connector reads that from `request.signal`, which Bun's server fires when the
+  client goes away.
+- An app that sets `serverFns.base` in the Start plugin, or a router
+  `basepath`, passes the path server functions are called on as the fourth
+  argument, `{ serverFnBase: "/rpc/" }`; unset, it is Start's own,
+  `/_serverFn/`.
+
 ## mysql2
 
 `@gokayo43/dev-config/request-timing/mysql2` wraps a pool `mysql2/promise`
@@ -194,6 +273,47 @@ and `commit` or `rollback`. Streamed rows, drizzle's `.iterator()`, are the
 checkout alone: the rows are read through the callback connection beneath, and
 the time between them is in the rest. Everything else is the pool's own, so
 `release`, `releaseConnection`, the events and the escapes are what they were.
+
+## Bun.sql
+
+`@gokayo43/dev-config/request-timing/bun-sql` wraps an `SQL` client. Use the
+answer wherever the client was used, drizzle and Better Auth's drizzle adapter
+included:
+
+```ts
+import { SQL } from "bun";
+import { drizzle } from "drizzle-orm/bun-sql";
+import { timedSql } from "@gokayo43/dev-config/request-timing/bun-sql";
+
+const client = timedSql(new SQL(env.DATABASE_URL));
+export const db = drizzle({ client, schema });
+```
+
+One `db` wait each:
+
+- a query, made by calling the client as a tagged template or with a string,
+  by `unsafe` or by `file`, from when it starts running until it settles, which
+  includes waiting for a pooled connection. A query starts on its first
+  `await`, `then`, `catch`, `finally` or `execute`, so one made and never run
+  counts nothing and one awaited twice counts once;
+- opening a transaction (`begin`, `transaction`, `beginDistributed`,
+  `distributed`), which takes the connection and sends BEGIN, until its
+  callback runs, and closing it, COMMIT or ROLLBACK, from when the callback's
+  answer settles. The queries of the client the callback is handed count one
+  each, and a savepoint on it is two more, opening and closing;
+- `reserve`, the checkout, answering a reserved connection whose queries count
+  one each;
+- `connect`, `listen` until the server confirms it, `notify`,
+  `commitDistributed` and `rollbackDistributed`.
+
+So a drizzle transaction of one insert is three, a savepoint inside it adds two
+beside its own queries, and a transaction that answers an array of queries is
+two and one per query. Every query is
+the driver's own object, with the members that start it standing in on it, so
+its type, `values`, `raw`, `simple`, `cancel` and every result are the
+driver's. The helpers a call makes of an object or an array, `array`, `json`,
+`release`, `close`, `end` and `flush` are the client's own, and so are a query's
+`readable` and `writable` copy streams, whose time is in the rest.
 
 ## Bun's Redis client
 
