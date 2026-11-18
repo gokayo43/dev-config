@@ -1,5 +1,5 @@
 /**
- * Why these ten entries, and why no others.
+ * Why these twelve entries, and why no others.
  *
  * `count-budget.ts`, `invariant-sweep.ts`, `narrowing.ts` and `route-log.ts`
  * are imported by a repo's Playwright specs. Playwright's runner is node, and node refuses to
@@ -7,7 +7,7 @@
  * excludes that directory outright, which is where every consumer has this
  * package — so a specifier resolving to a `.ts` there cannot load at all
  * (dev-config#113). `request-timing.ts`, `request-timing-effect.ts` and the
- * four `request-timing-<connector>.ts` are imported by an app's own code,
+ * six `request-timing-<connector>.ts` are imported by an app's own code,
  * which Next.js and Vite bundle, and neither strips types under
  * `node_modules` either; the modules they share become chunks beside them.
  * Everything else here is imported by `bun test` or
@@ -37,6 +37,8 @@ export default defineConfig({
     "request-timing-elysia.ts",
     "request-timing-fetch.ts",
     "request-timing-mysql2.ts",
+    "request-timing-next.ts",
+    "request-timing-trpc.ts",
     "route-log.ts",
   ],
   platform: "neutral",

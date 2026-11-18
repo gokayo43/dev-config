@@ -1,11 +1,20 @@
 /**
  * The conformance kit against a booted server per carrier, which must pass it,
- * and against each wrong adoption the kit names, which must fail it.
+ * and against each wrong adoption the kit names, which must fail it; and its
+ * route-tree check against the Next.js fixture app's `app/` directory, which
+ * must pass it, and against a tree per wrong wrapping, which must fail it
+ * naming the file.
  */
 import { describe, expect, test } from "bun:test";
+import { dirname, join } from "node:path";
 
-import { requestTimingConforms } from "../request-timing-conformance.ts";
+import {
+  requestTimingConforms,
+  requestTimingRoutesConform,
+} from "../request-timing-conformance.ts";
 import { type Adoption, DB_WAITS, PATTERN, presetServer } from "./request-timing-fixture.ts";
+import { APP } from "./request-timing-next-fixture.ts";
+import { scratch } from "./tree.ts";
 
 const conforms = async (adoption: Adoption) => {
   await using server = presetServer(adoption);
@@ -40,4 +49,67 @@ describe("the conformance kit", () => {
       }),
     ).rejects.toThrow("at least one database wait");
   });
+});
+
+/** The repository's own sources, which a route file in a scratch tree imports by absolute path. */
+const ROOT = dirname(import.meta.dir);
+
+/** A route module whose `GET` is wrapped with `pattern`, or left bare where `pattern` is undefined. */
+const routeFile = (pattern?: string) =>
+  pattern === undefined
+    ? 'export function GET() { return new Response("bare"); }\n'
+    : [
+        `import { requestTimingRoute } from "${join(ROOT, "request-timing-next.ts")}";`,
+        `import { requestTiming } from "${join(ROOT, "request-timing.ts")}";`,
+        "const timedRoute = requestTimingRoute(requestTiming({ sink: () => undefined }));",
+        `export const GET = timedRoute("${pattern}", () => new Response("timed"));`,
+        "",
+      ].join("\n");
+
+/** An `app` directory of the route files `files` names, under a scratch root. */
+async function appTree(files: Readonly<Record<string, string>>): Promise<string> {
+  const app = join(await scratch(), "app");
+  for (const [path, contents] of Object.entries(files)) await Bun.write(join(app, path), contents);
+  return app;
+}
+
+/** Every route file a tree that passes holds: a group, an escaped underscore, a dynamic segment, a private folder and a build directory. */
+const PASSING = {
+  "route.ts": routeFile("/"),
+  "(shop)/api/presets/[id]/route.ts": routeFile("/api/presets/[id]"),
+  "%5F%5Froute-log/route.ts": routeFile("/__route-log"),
+  "api/files/[...path]/route.tsx": routeFile("/api/files/[...path]"),
+  "_lib/route.ts": routeFile(),
+  ".next/server/app/api/route.js": routeFile(),
+};
+
+describe("the conformance kit's route-tree check", () => {
+  test("passes the Next.js fixture app", () => requestTimingRoutesConform(join(APP, "app")));
+
+  test("passes every way Next.js routes a file, and skips what it routes nothing from", async () => {
+    await requestTimingRoutesConform(await appTree(PASSING));
+  });
+
+  const failing: [string, string, string, string][] = [
+    ["an unwrapped handler", "api/plain/route.ts", routeFile(), "GET is not wrapped"],
+    [
+      "a pattern other than the file's place gives",
+      "api/presets/[id]/route.ts",
+      routeFile("/api/presets/:id"),
+      'GET is wrapped with the pattern "/api/presets/:id", but its place under app/ routes it at "/api/presets/[id]"',
+    ],
+    [
+      "an envelope left unmarked",
+      "api/trpc/[trpc]/route.ts",
+      "const handler = (request: Request) => new Response(request.url);\nexport { handler as GET, handler as POST };\n",
+      "POST is not wrapped",
+    ],
+  ];
+  for (const [wrong, file, contents, problem] of failing) {
+    test(`fails ${wrong}, naming the file`, async () => {
+      const app = await appTree({ ...PASSING, [file]: contents });
+      const checked = requestTimingRoutesConform(app);
+      await expect(checked).rejects.toThrow(`${join(app, file)}: ${problem}`);
+    });
+  }
 });
