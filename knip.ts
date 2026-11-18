@@ -8,12 +8,14 @@ const config: KnipConfig = {
   // it. Splitting the entry point out of the gate module is also what lets the
   // coverage floor mean something: a module the suite drives reports its own
   // coverage, rather than carrying an entry block no test can reach.
-  // The TanStack Start fixture's server entry and Start instance are found
-  // by the Start plugin at their paths, as an app's are, and imported by no
-  // file.
+  // The Next.js fixture app's route files and config are Next's to load, and
+  // the TanStack Start fixture's server entry and Start instance are found by
+  // the Start plugin at their paths, as an app's are: nothing imports them.
   entry: [
     ".github/actions/*/*.main.ts",
     "tests/*.ts",
+    "tests/request-timing-next-app/next.config.ts",
+    "tests/request-timing-next-app/app/**/route.ts",
     "tests/request-timing-start-app/src/{server,start}.ts",
   ],
   project: [".github/actions/**/*.ts", "anti-slop/**/*.js", "tests/**/*.ts"],

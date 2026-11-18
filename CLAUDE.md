@@ -157,10 +157,10 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Eighteen of them are **exports** it imports and
+  gates, which run over it from CI. Twenty of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
   `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
-  `dev-server-derive.ts` is the module the first imports. Six more reach it
+  `dev-server-derive.ts` is the module the first imports. Seven more reach it
   only inside those, and no specifier exports any of them. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
   command decide by — which the build bundles into `dist/count-budget.js`, a
@@ -180,7 +180,10 @@ a change to a rule usually lands here too.
   one way a call is measured, which the build makes a chunk beside them;
   `request-timing-entry.ts` is what every entry connector is built from, a
   response body passed through and watched for its end, which the build makes
-  a chunk beside them too. Each export is reachable through
+  a chunk beside them too; `request-timing-route.ts` is the mark an entry
+  connector leaves on a route handler it wrapped, which the Next.js and tRPC
+  connectors' builds share as a chunk and the conformance kit's route-tree
+  check reads, from source. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is the protocol between an app and the two floors
@@ -194,6 +197,7 @@ a change to a rule usually lands here too.
   check an adopting app runs against its booted server, and the bin
   `request-timing-report.ts` reads a log of the records; the connectors
   `request-timing-elysia.ts`, `request-timing-tanstack-start.ts`,
+  `request-timing-next.ts`, `request-timing-trpc.ts`,
   `request-timing-mysql2.ts`, `request-timing-bun-sql.ts`,
   `request-timing-bun-redis.ts` and `request-timing-fetch.ts` are an app's entry and its waits, each importing
   its framework or driver as types only, so the package gains no runtime
@@ -227,11 +231,11 @@ a change to a rule usually lands here too.
   is a value one call can grade, and a limiter is a sequence of attempts against
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
-  to is this package's business rather than a caller's: twelve of them are built and
+  to is this package's business rather than a caller's: fourteen of them are built and
   eight ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-next,request-timing-trpc,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
   and the chunks the request-timing ones share;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
@@ -385,7 +389,13 @@ a change to a rule usually lands here too.
   `node_modules/.cache` and `request-timing-start-server.ts` serves with Bun,
   in-process with timing on and in a process of its own through
   `request-timing-start-serve.ts` with timing off, as the differential's
-  oracle; and `request-timing-mysql2.test.ts`, `request-timing-bun-sql.test.ts`,
+  oracle; `request-timing-next.test.ts` and `request-timing-trpc.test.ts` boot
+  the Next.js app `request-timing-next-app/`, shaped as the warehouse with tRPC
+  and Effect over MySQL and an outside service, which
+  `request-timing-next-fixture.ts` builds once per run with `next build` and
+  starts per suite with `bun --bun next start`, once more with timing off as
+  the differentials' oracle, its build output gitignored and its route files
+  knip entries since only Next.js loads them; and `request-timing-mysql2.test.ts`, `request-timing-bun-sql.test.ts`,
   `request-timing-bun-redis.test.ts` and `request-timing-fetch.test.ts` grade
   one driver each. `request-timing-servers.ts` is their one reader of
   `TEST_MYSQL_URL` and `TEST_REDIS_URL`, `request-timing-postgres.ts` makes the

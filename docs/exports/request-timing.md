@@ -111,8 +111,8 @@ In this order:
    const cached = (key: string) => measure("store", cache.get(key));
    ```
 
-6. **Run the conformance kit** in the app's own suite against its booted server
-   (below).
+6. **Run the conformance kit** in the app's own suite against its booted server,
+   and in a Next.js app its route-tree check over `app/` (below).
 
 ### Which carrier
 
@@ -255,6 +255,124 @@ Start mounts its own CSRF check on server functions only while an app has no
   `basepath`, passes the path server functions are called on as the fourth
   argument, `{ serverFnBase: "/rpc/" }`; unset, it is Start's own,
   `/_serverFn/`.
+
+## Next.js route handlers
+
+`@gokayo43/dev-config/request-timing/next` wraps each handler a `route.ts`
+exports. Make the wrapper once, beside the sink, and wrap every handler with
+the pattern its file's place under `app/` gives it:
+
+```ts
+import { requestTimingRoute } from "@gokayo43/dev-config/request-timing/next";
+
+export const timedRoute = requestTimingRoute(timing);
+```
+
+```ts
+// app/api/presets/[id]/route.ts
+export const GET = timedRoute("/api/presets/[id]", async (request, { params }) => ...);
+```
+
+- The name is the pattern as Next.js's own route literals write it
+  (`RouteContext<"/api/presets/[id]">`): each folder as written, dynamic
+  segments in brackets (`[id]`, `[...path]`, `[[...path]]`), route groups
+  `(name)` and slots `@name` left out, and a leading `%5F` read as the
+  underscore it stands for. Next.js tells a handler nothing of its own route,
+  so the app states it, and the conformance kit's route-tree check (below)
+  holds every statement to its file's place.
+- Next.js 16 offers no public way to see every request with its matched route
+  and run the handler inside a function of ours. `instrumentation.ts`'s
+  `register` runs once at boot, and its `onRequestError` sees a request only
+  when it failed, after the fact. The OpenTelemetry spans carry `next.route`,
+  but only to a tracer the app registers, which neither runs the handler under
+  an operation nor says when a streamed body has ended. `proxy.ts` runs before
+  routing and knows no route. Hence the wrapper.
+- A request the handler serves is one operation, from the call to the end of
+  its response: once the server has taken the last chunk of the body, or at
+  once where there is no body, or the request is a HEAD, whose body Next.js
+  never reads. A body's source runs in the context the handler made it in,
+  so what it waits on as it is pulled counts in the operation. A body is `streamed`
+  where it handed over a chunk and was not finished on the next read, so a
+  buffered body, one chunk and then its end, is not.
+- The status is the response's. A handler that throws is recorded with the
+  500 Next.js answers.
+- A client that goes away closes the operation then, with `aborted: true` and
+  the status the handler had produced, or 499 where it had produced none. What
+  the handler waits on after that is in no record.
+- A handler called while an operation is current runs as it is.
+- A pattern the core refuses throws when the route module loads, which
+  `next build` does for every route while it collects page data.
+- Left alone: a URL no route matches and a method a route does not export,
+  which Next.js answers without calling a handler, so this connector writes no
+  `unmatched` record; the `OPTIONS` Next.js answers itself; pages and server
+  components, whose render is in no record; and server actions, which no
+  connector covers.
+- Left alone, and wrong in the record: the status of a handler that ends by calling
+  `notFound()`, `redirect()`, `permanentRedirect()`, `forbidden()` or
+  `unauthorized()` from `next/navigation`. Each throws, and Next.js answers
+  with 404, 307, 308, 403 or 401 by means it does not make public, so the
+  record says 500 while the client received the other. The route-tree check
+  below refuses a `route.ts` that imports any of them; return the response
+  instead (`new Response(null, { status: 404 })`, `NextResponse.redirect(url)`).
+
+## tRPC
+
+`@gokayo43/dev-config/request-timing/trpc` is one middleware the app puts first
+on its base procedure, and the envelope it wraps the route that serves the
+router over HTTP in. tRPC's mapping of an error to an HTTP status,
+`getHTTPStatusCodeFromError`, is handed over by the app, since this package
+imports tRPC as types alone:
+
+```ts
+import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { requestTimingProcedures } from "@gokayo43/dev-config/request-timing/trpc";
+
+export const procedureTiming = requestTimingProcedures(timing, getHTTPStatusCodeFromError);
+export const procedure = t.procedure.use(procedureTiming.middleware);
+```
+
+```ts
+// app/api/trpc/[trpc]/route.ts
+const handler = procedureTiming.envelope(appRouter, (request: Request) =>
+  fetchRequestHandler({ endpoint: "/api/trpc", req: request, router: appRouter, createContext }),
+);
+
+export { handler as GET, handler as POST };
+```
+
+- Every call of a procedure built on the base procedure that arrives through
+  the envelope is one operation, alone or in a batch: a batch of three calls is
+  three records, and the envelope's route writes none. A call made in-process,
+  `createCaller` from a test, a page or a background job, opens none, and nor
+  does a call made while an operation is current.
+- The name is the procedure's path, `presets.byId`. The envelope checks every
+  path of the router when its route module loads, so a path the core refuses
+  fails `next build`; a lazily loaded router's paths are checked on their first
+  call.
+- The method is what an HTTP reader expects of the call's type, whatever the
+  client sent it with: a query is `GET`, also when sent as a POST for a long
+  input, a mutation `POST`, a subscription `GET`.
+- A call closes when its procedure has answered, with 200, or with the status
+  `getHTTPStatusCodeFromError` gives its error, which is the status the call
+  receives when sent alone. Inside a batch the response's own status is the
+  batch's, and each record still carries its own call's. A status an app's `responseMeta` sets is not seen.
+- Since the middleware is first, everything after it is inside the operation:
+  each middleware, the input's validation, and the procedure. A refusal there
+  is recorded with its status (403 for a `FORBIDDEN` a role check throws, 400
+  for an input its validator refused).
+- A client that goes away before the answer closes the call then, `aborted`,
+  with 499; what the procedure waits on after that is in no record.
+- A procedure that answers an async iterable, every subscription and a query
+  streamed over `httpBatchStreamLink`, closes when the iteration ends, with
+  200 and `streamed: true`, and each step of the iteration runs under the
+  operation, so the waits between two events count. A client that goes away
+  closes it `aborted`, and so does tRPC's own `sse.maxDurationMs`, which aborts
+  the same signal. A subscription that answers an observable, tRPC's older
+  form, closes when it is answered, and what it emits is in no record; so are
+  the promises a streamed answer settles after it was answered.
+- Left alone: a call tRPC refuses before any procedure runs, an unknown path, a
+  context that throws, a method the procedure does not take, writes no record;
+  tRPC's `onError` sees it.
 
 ## mysql2
 
@@ -500,6 +618,29 @@ operation twice and requires each request to be answered by one record of that
 method, name and database count, so a second record for one request, a missed
 wait and a URL used as the name each fail it. A server that writes no record
 leaves `next` waiting, and the test fails at its timeout.
+
+A Next.js app runs the kit's route-tree check too, over its own `app`
+directory, since each route states its own pattern:
+
+```ts
+import { requestTimingRoutesConform } from "@gokayo43/dev-config/request-timing/conformance";
+
+test("every route handler is timed as its route", () =>
+  requestTimingRoutesConform(join(import.meta.dir, "../app")));
+```
+
+It imports every `route.{js,jsx,ts,tsx}` under the directory, skipping private
+folders `_name` and every directory whose name starts with a dot, and requires
+each handler it exports for a method to be wrapped by the route wrapper with
+the pattern the file's place gives it, or to be the tRPC envelope. A bare
+handler, a pattern the file's place does not give, and a tRPC route left
+unmarked each fail it, naming the file and the method, and so does a route file
+that imports `notFound`, `redirect`, `permanentRedirect`, `forbidden` or
+`unauthorized` from `next/navigation`, whose answer its record would get wrong.
+It reads the imports the file itself writes, so one of those called through a
+helper module is not seen. The route modules load
+in the suite's own process, so whatever a module does when it loads, it does
+there.
 
 ## Ships built
 
