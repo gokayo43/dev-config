@@ -126,6 +126,33 @@ router registered them (`/presets/:id`, not `/presets/42`). Only the router
 knows which route answered a URL, so it is the only honest source, and both
 floors over it are measured against it.
 
+**Operation** — the innermost named handler a server's framework dispatches: a
+matched route handler, one RPC procedure, one server function, named as its
+router registered it. A request that only carries procedures, such as a tRPC
+batch, is not one; each procedure in it is. Distinct from a request, which is
+what reached the server, and from background work, which belongs to no
+operation.
+
+**Wait** — a span in which an operation waits on something outside its own
+code: its database (`db`), an outside HTTP service (`out`) or an in-memory store
+such as Redis (`store`). A wait belongs to the operation that issued it,
+whoever settles it.
+
+**Record** — the one line of JSON an operation closes into when its response has
+finished: its name, method, status, total time, and per kind of wait the summed
+time and the count. It is derived, never edited, and nothing of a customer can
+be represented in it.
+
+**The rest** — an operation's total time minus the time during which at least
+one of its waits was in flight. It holds the code's own time and every wait
+nobody measured, so it is never called the app's code.
+
+**Carrier** — what tells a wait which operation is current: `AsyncLocalStorage`
+in a plain async program, the fiber in an Effect program. A program uses one.
+
+**Sink** — the function an app hands request timing when it switches it on,
+which writes each record to stdout. The export itself writes nothing.
+
 **Route snapshot** — a repo's committed `routes.snapshot.json`: its route table
 as of a commit, which is what makes the table readable at a ref nothing boots.
 The gate that reads it also generates it and refuses any difference from the

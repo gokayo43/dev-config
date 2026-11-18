@@ -8,7 +8,8 @@
     "url": "git+https://github.com/gokayo43/dev-config.git"
   },
   "bin": {
-    "dev-server": "./dev-server.ts"
+    "dev-server": "./dev-server.ts",
+    "request-timing-report": "./request-timing-report.ts"
   },
   "files": [
     "tsconfig.base.json",
@@ -25,6 +26,10 @@
     "interleaving.ts",
     "response-schema.ts",
     "characterization-net.ts",
+    "request-timing-conformance.ts",
+    "request-timing-operation.ts",
+    "request-timing-report.ts",
+    "request-timing-summary.ts",
     "bun-test.d.ts",
     "css-custom-properties.d.ts",
     "anti-slop"
@@ -52,6 +57,15 @@
       "types": "./dist/narrowing.d.ts",
       "default": "./dist/narrowing.js"
     },
+    "./request-timing": {
+      "types": "./dist/request-timing.d.ts",
+      "default": "./dist/request-timing.js"
+    },
+    "./request-timing/effect": {
+      "types": "./dist/request-timing-effect.d.ts",
+      "default": "./dist/request-timing-effect.js"
+    },
+    "./request-timing/conformance": "./request-timing-conformance.ts",
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
     "./interleaving": "./interleaving.ts",
