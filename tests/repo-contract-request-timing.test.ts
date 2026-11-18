@@ -1,10 +1,12 @@
 /**
  * What serving HTTP costs a live repo that owns a database: a test written
  * with request timing's conformance kit, or a reason in
- * `operations-timed-otherwise` saying how its operations are timed instead.
+ * `operations-timed-otherwise` saying how its operations are timed instead, or
+ * that it serves nothing a connector covers.
  * Mirrors `request-timing.ts`.
  */
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 
 import type { Contract } from "../.github/actions/repo-contract/repo-contract.ts";
 import { containing } from "./matchers.ts";
@@ -15,7 +17,7 @@ import {
   type PackageJson,
   workflow,
 } from "./repo-contract-fixture.ts";
-import type { Tree } from "./tree.ts";
+import { scratch, type Tree } from "./tree.ts";
 
 const KIT = "@gokayo43/dev-config/request-timing/conformance";
 
@@ -140,6 +142,7 @@ describe("the conformance test is owed", () => {
   test("and the problem names the kit, the doc and the waiver", async () => {
     expect(await graded(OWES)).toEqual([containing(`runs requestTimingConforms from ${KIT}`)]);
     expect(await graded(OWES)).toEqual([containing("`operations-timed-otherwise`")]);
+    expect(await graded(OWES)).toEqual([containing("serves nothing a connector covers")]);
   });
 });
 
@@ -188,6 +191,21 @@ describe("a test meets the rule by importing the kit", () => {
   // A spec is the Playwright lane, which never runs the kit.
   test("nor by a Playwright spec importing it", async () => {
     expect(await graded(OWES, { "e2e/timing.spec.ts": CONFORMS })).toEqual([containing(OWED)]);
+  });
+
+  // A file under review must not run inside the gate: `Transpiler.scan`
+  // evaluates a Bun macro, and a macro in the gate's realm can forge every
+  // contract verdict, since they are reported in one batch.
+  test("and reading the imports runs no macro the test file names", async () => {
+    const outside = await scratch();
+    const marker = join(outside, "ran");
+    await Bun.write(
+      join(outside, "macro.ts"),
+      `import { writeFileSync } from "node:fs";\nexport function f() { writeFileSync(${JSON.stringify(marker)}, "ran"); return 1; }\n`,
+    );
+    const macro = `import { f } from ${JSON.stringify(join(outside, "macro.ts"))} with { type: "macro" };\nexport const x = f();\n`;
+    expect(await graded(OWES, { [TIMING_TEST]: macro })).toEqual([containing(OWED)]);
+    expect(await Bun.file(marker).exists()).toBe(false);
   });
 
   test("and a test that will not parse is named, since what it imports is unknown", async () => {

@@ -8,7 +8,7 @@
  */
 import type { Manifest, Problem } from "../_lib/gate.ts";
 import { record, repoFiles } from "../_lib/gate.ts";
-import { ownsDatabase, SHIPPED_FIELDS } from "./live.ts";
+import { SHIPPED_FIELDS } from "./live.ts";
 
 /**
  * The frameworks request timing has an entry connector for. Read from what a
@@ -19,7 +19,7 @@ const SERVES_HTTP = ["elysia", "next", "@tanstack/react-start"] as const;
 
 const KIT = "@gokayo43/dev-config/request-timing/conformance";
 
-/** The input that says the operations are timed some other way, and how. */
+/** The input that says the operations are not timed by request timing, and why. */
 const TIMED_OTHERWISE = "operations-timed-otherwise";
 
 /**
@@ -46,14 +46,18 @@ type Imports = "kit" | "other" | "unparsed";
 /**
  * Whether a test file imports the kit, asked of Bun's own parser rather than
  * of the file's bytes: a specifier in a comment or a string is no import, and
- * a type-only import is erased and runs nothing. A file that will not parse is
- * reported back, since what it imports is then unknown rather than "nothing".
+ * a type-only import is erased and runs nothing. `scanImports` and never
+ * `scan`, which evaluates the Bun macros a file imports, running code from the
+ * tree under review inside the gate (probed, bun 1.4.4). It reads paths, not
+ * bindings, so it cannot tell `requestTimingConforms` from the route-tree
+ * check. A file that will not parse is reported back, since what it imports is
+ * then unknown rather than "nothing".
  */
 async function importsOf(root: string, file: string): Promise<Imports> {
   const loader = file.endsWith(".tsx") ? "tsx" : "ts";
   const text = await Bun.file(`${root}/${file}`).text();
   try {
-    const { imports } = new Bun.Transpiler({ loader }).scan(text);
+    const imports = new Bun.Transpiler({ loader }).scanImports(text);
     return imports.some(({ path }) => path === KIT) ? "kit" : "other";
   } catch {
     return "unparsed";
@@ -74,18 +78,20 @@ async function conformanceTests(root: string): Promise<{ kit: string[]; unparsed
 /**
  * The rule, and its waiver in every state. Owed by a live repo that owns a
  * database and ships one of the frameworks; met by a test importing the kit;
- * waived by a reason in `operations-timed-otherwise`, which is refused once it
- * waives nothing: on a repo that does not owe the rule, or beside a
- * conformance test that already meets it.
+ * waived by a reason in `operations-timed-otherwise` saying how the operations
+ * are timed instead, or that the repo serves nothing a connector covers. The
+ * waiver is refused once it waives nothing: on a repo that does not owe the
+ * rule, or beside a conformance test that already meets it.
+ * @param owned The database witness `ownsDatabase` found, asked only of a live repo.
  */
 export async function checkRequestTiming(
   root: string,
   all: readonly Manifest[],
   live: boolean,
+  owned: string | undefined,
   timedOtherwise: string,
 ): Promise<Problem[]> {
   const serving = servesHttp(all);
-  const owned = live && serving !== undefined ? await ownsDatabase(root, all) : undefined;
   const waived = timedOtherwise !== "";
 
   if (serving === undefined || owned === undefined) {
@@ -109,7 +115,7 @@ export async function checkRequestTiming(
       ? [
           {
             file: met,
-            message: `${TIMED_OTHERWISE} says this repo's operations are timed some other way — "${timedOtherwise}" — and ${met} runs the conformance kit anyway. Take the input out of the call site, or the test out of the suite, so one answer says how the operations are timed.`,
+            message: `${TIMED_OTHERWISE} says this repo's operations are not timed by request timing — "${timedOtherwise}" — and ${met} runs the conformance kit anyway. Take the input out of the call site, or the test out of the suite, so one answer says how the operations are timed.`,
           },
         ]
       : [];
@@ -123,7 +129,7 @@ export async function checkRequestTiming(
   return [
     {
       file: serving.file,
-      message: `a live repo that serves HTTP and owns a database proves its operations are timed — ${serving.file} ships ${serving.name} and ${owned}. Add a bun test that runs requestTimingConforms from ${KIT} against the booted server (docs/exports/request-timing.md, "Adopting it"), or, where the operations are timed some other way, say how in \`${TIMED_OTHERWISE}\` at the call site.${unread}`,
+      message: `a live repo that serves HTTP and owns a database proves its operations are timed — ${serving.file} ships ${serving.name} and ${owned}. Add a bun test that runs requestTimingConforms from ${KIT} against the booted server (docs/exports/request-timing.md, "Adopting it"), or say in \`${TIMED_OTHERWISE}\` at the call site how the operations are timed some other way, or that the repo serves nothing a connector covers.${unread}`,
     },
   ];
 }

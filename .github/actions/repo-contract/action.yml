@@ -45,9 +45,11 @@ inputs:
     default: ""
   operations-timed-otherwise:
     description: >-
-      How a live repo that serves HTTP and owns a database times its operations,
-      when it is not by request timing. Empty, which is every repo that uses
-      it, asks for a test importing @gokayo43/dev-config/request-timing/conformance.
+      Why a live repo that serves HTTP and owns a database is not timed by
+      request timing: how its operations are timed instead, or that it serves
+      nothing a connector covers, and what it serves. Empty, which is every repo
+      that uses it, asks for a test importing
+      @gokayo43/dev-config/request-timing/conformance.
       The reason is the waiver, and it is refused on a repo that does not owe
       the test or that has one.
     default: ""

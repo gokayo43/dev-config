@@ -498,24 +498,32 @@ for: `elysia`, `next` and `@tanstack/react-start`, in `dependencies` or
 `optionalDependencies` of any manifest in the workspace, the fields the crash
 SDK is read from. A library that takes one as a peer, or tests against one as a
 devDependency, serves nothing, and this repo is that case: its connector suites
-hold `elysia` and `@tanstack/react-start` as devDependencies.
+hold `elysia`, `next` and `@tanstack/react-start` as devDependencies.
 
 **The test is an import Bun's parser reads.** A live repo that owns a database
 and serves HTTP has at least one `*.test.ts` or `*.test.tsx` importing
 `@gokayo43/dev-config/request-timing/conformance`, which is where an app runs
 `requestTimingConforms` against its booted server. The file is read with
-`Bun.Transpiler`'s scan, so the specifier in a comment, a string or a template
-is no import, and nor is an `import type`, which is erased and runs nothing. A
-`*.spec.ts` does not count, since that is the Playwright lane and the kit is a
-`bun test` import. A test file that will not parse is named in the problem,
-because what it imports is then unknown. What the scan cannot see is whether the
-test calls the kit or is skipped: an import whose binding is never used, or a
-`test.skip` around the call, still passes, and review is what catches it.
+`Bun.Transpiler`'s `scanImports`, so the specifier in a comment, a string or a
+template is no import, and nor is an `import type`, which is erased and runs
+nothing. Never its `scan`, which evaluates the Bun macros a file imports and
+would run code from the tree under review inside the gate, where it could
+forge every verdict this contract reports. A `*.spec.ts` does not count, since
+that is the Playwright lane and the kit is a `bun test` import. A test file
+that will not parse is named in the problem, because what it imports is then
+unknown. What the scan cannot see is which of the kit's exports a test imports
+and whether it calls it: a test importing only `requestTimingRoutesConform`, the
+route-tree check, an import whose binding is never used, or a `test.skip`
+around the call all pass, and review is what catches them.
 
-**When the operations are timed some other way, `operations-timed-otherwise`
-says how.** It is `data-jobs-external`'s shape: the reason is the waiver, an
-empty or whitespace value is a repo that owes the test, and it is refused once
-it waives nothing. That is a repo that does not owe the rule, `dev` or with no
+**When request timing does not time the operations, `operations-timed-otherwise`
+says why.** Two reasons are honest, and the value names which: the operations
+are timed some other way, and it says how; or the repo serves nothing a
+connector covers, such as a Next app whose work is all pages, server components
+and server actions ([request timing's Next.js section](../exports/request-timing.md#nextjs-route-handlers)
+lists what its connector leaves alone), and it says what it serves. It is
+`data-jobs-external`'s shape: the reason is the waiver, an empty or whitespace
+value is a repo that owes the test, and it is refused once it waives nothing. That is a repo that does not owe the rule, `dev` or with no
 database or no HTTP, and a repo that has a conformance test beside it, whose two
 answers to how its operations are timed are one too many. It waives the
 conformance test and nothing else. A repo that has not declared its `lifecycle`
