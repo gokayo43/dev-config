@@ -154,11 +154,11 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Nine of them are **exports** it imports and
+  gates, which run over it from CI. Twelve of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
-  `types`, and the two `dev-server*` files below are a bin it runs and the module
-  that bin imports. Two more reach it only inside those, and no specifier
-  exports either. `count-ceilings.ts` is the count budget's ceiling rule — the
+  `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
+  `dev-server-derive.ts` is the module the first imports. Four more reach it
+  only inside those, and no specifier exports any of them. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
   command decide by — which the build bundles into `dist/count-budget.js`, a
   module of its own so `tests/count-ceilings.test.ts` can search it with
@@ -167,13 +167,23 @@ a change to a rule usually lands here too.
   count budget's write command take: the build bundles it into the count
   budget, `files` ships its source for the bin, and `tests/file-lock.test.ts`
   holds each waiter before every step through the `between` seam `lock` takes
-  for that suite's sake. Each export is reachable through
+  for that suite's sake. `request-timing-operation.ts` is what request timing's
+  two carriers share, the operation, its waits and its record, which the build
+  makes a chunk beside both and `files` ships as source for the summary;
+  `request-timing-summary.ts` is what the reader makes of a log, which the bin
+  feeds stdin and the conformance kit parses a record with. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is the protocol between an app and the two floors
   over its route table; `invariant-sweep.ts` replaces Playwright's browser
   context with one that watches every page it opens, popups included, and turns
   Playwright's own `video` on when the run sets `E2E_VIDEO=on`;
+  `request-timing.ts` records per operation where its time went,
+  carrying the operation in `AsyncLocalStorage`, and `request-timing-effect.ts`
+  is the same carrier in an Effect fiber, the only file that imports `effect`
+  so an app without it never loads it; `request-timing-conformance.ts` is the
+  check an adopting app runs against its booted server, and the bin
+  `request-timing-report.ts` reads a log of the records;
   `count-budget.ts` is that sweep's `test` with a `budget` fixture beside it,
   which counts a job's work per phase and holds each count exactly to a ceiling
   committed beside the spec, which the `COUNT_BUDGET=write` run lowers and
@@ -203,11 +213,12 @@ a change to a rule usually lands here too.
   is a value one call can grade, and a limiter is a sequence of attempts against
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
-  to is this package's business rather than a caller's: four of them are built and
-  seven ship their source, and no import says which. `tsdown.config.ts` is where
+  to is this package's business rather than a caller's: six of them are built and
+  eight ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing}.{js,d.ts}`;
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect}.{js,d.ts}`
+  and the chunk the last two share;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
 - `dev-server.ts` and `dev-server-derive.ts` — one supervised dev server per git
@@ -341,6 +352,14 @@ a change to a rule usually lands here too.
   `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
   fixture app's schemas with — is typebox under elysia's re-export.
+  Request timing's suites split by what each grades: `request-timing.test.ts`
+  the operation and its record through both carriers, `request-timing-attribution.test.ts`
+  the property that every wait lands in its own operation's record, run per
+  carrier and once against a carrier kept in `AsyncLocalStorage`, which must
+  fail it; `request-timing-summary.test.ts` the reader, the bin spawned for its
+  statuses; and `request-timing-conformance.test.ts` the kit, against the
+  servers `request-timing-fixture.ts` boots, one per carrier and one per wrong
+  adoption the kit names.
   `git-free-environment.ts` is the one file here that is not a suite and not a
   fixture: `bunfig.toml` preloads it, so it runs before the first test file of
   every `bun test`. It takes the whole `GIT_` prefix out of the environment,
@@ -365,7 +384,7 @@ a change to a rule usually lands here too.
 ```sh
 bun run check   # format:check + lint + typecheck + knip
 bun test        # the gate suites
-bun run build   # rewrites the committed dist/ from the four built exports
+bun run build   # rewrites the committed dist/ from the six built exports
 ```
 
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
@@ -379,8 +398,8 @@ them and then watches them run nowhere. What carries their duty instead is
 trees with the shipped binary — a block of cases per rule, and a check that the
 base enables exactly the rules the plugin defines.
 
-`tests/house-limiter.ts`, `dev-server.ts` and `property.ts` are out for the same
-reason and carry their duty the same way — a suite that spawns the real thing.
+`tests/house-limiter.ts`, `dev-server.ts`, `property.ts` and
+`request-timing-report.ts` are out for the same reason and carry their duty the same way — a suite that spawns the real thing.
 `bunfig.toml` names which suite, per file, and says why `dev-server-derive.ts`
 is not with them.
 

@@ -34,7 +34,7 @@ preload = ["./tests/git-free-environment.ts"]
 # docs/gates/test-suite.md.
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
-# Four files here are graded by a suite that spawns a process rather than by the
+# Five files here are graded by a suite that spawns a process rather than by the
 # runner watching them execute, so the coverage they report is not the coverage
 # they have. Each names the suite that carries its duty instead.
 #
@@ -63,6 +63,11 @@ coverageSkipTestFiles = true
 # happy path and nothing else, and a floor met that way is a floor measuring
 # somebody else's suite.
 #
+# `request-timing-report.ts` — the request-timing reader's bin, which is stdin,
+# stdout and an exit status around `request-timing-summary.ts`. The status is
+# its contract, and only a spawned process has one, so
+# `tests/request-timing-summary.test.ts` runs the bin and reads it back.
+#
 # `dev-server-derive.ts` is deliberately NOT here: everything that can be
 # answered without a machine was split into it for exactly that reason, and it is
 # graded by the floor like anything else.
@@ -71,4 +76,5 @@ coveragePathIgnorePatterns = [
   "tests/house-limiter.ts",
   "dev-server.ts",
   "property.ts",
+  "request-timing-report.ts",
 ]
