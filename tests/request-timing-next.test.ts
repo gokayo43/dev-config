@@ -18,29 +18,20 @@
  * `request-timing-trpc.test.ts`, whose lanes are procedures and a route
  * handler alike.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { must } from "../narrowing.ts";
 import { requestTimingConforms } from "../request-timing-conformance.ts";
 import { requestTimingRoute } from "../request-timing-next.ts";
 import { OperationName, requestTiming, type TimingRecord, within } from "../request-timing.ts";
 import {
+  bootedForSuite,
   countsOf,
   differential,
   type Ending,
-  type NextApp,
-  nextApp,
 } from "./request-timing-next-fixture.ts";
 
-let app: NextApp;
-// The first suite of a run to boot the app also builds it, which a cold
-// `next build` takes tens of seconds to do on a loaded box.
-beforeAll(async () => {
-  app = await nextApp(true);
-}, 300_000);
-afterAll(async () => {
-  await app[Symbol.asyncDispose]();
-});
+const suite = bootedForSuite();
 
 /** A response as a client reads it, less the one header that differs by the second it was sent. */
 async function read(response: Response) {
@@ -62,14 +53,14 @@ const SCRIPT: readonly [string, RequestInit][] = [
 
 /** The one record of `operation` among those written before the sentinel's. */
 async function onlyOne(operation: string): Promise<TimingRecord> {
-  const written = (await app.settle()).filter((record) => record.operation === operation);
+  const written = (await suite.app.settle()).filter((record) => record.operation === operation);
   expect(written).toHaveLength(1);
   return must(written[0]);
 }
 
 describe("the Next.js connector", () => {
   test("changes no response the app gives", async () => {
-    const { on, off } = await differential(app, SCRIPT, read);
+    const { on, off } = await differential(suite.app, SCRIPT, read);
     expect(on).toEqual(off);
   });
 
@@ -130,7 +121,7 @@ describe("the Next.js connector", () => {
   ];
   for (const [ending, path, init, expected, counts] of endings) {
     test(`closes ${ending} into one record`, async () => {
-      const response = await fetch(app.url(path), init);
+      const response = await fetch(suite.app.url(path), init);
       await response.text();
       const made = await onlyOne(must(expected.operation));
       expect(made).toMatchObject(expected);
@@ -141,40 +132,40 @@ describe("the Next.js connector", () => {
 
   test("closes a request whose client left before the response, as 499 and aborted", async () => {
     const client = new AbortController();
-    const response = fetch(app.url("/api/hang"), { signal: client.signal });
-    await (await fetch(app.url("/api/held"))).text();
+    const response = fetch(suite.app.url("/api/hang"), { signal: client.signal });
+    await (await fetch(suite.app.url("/api/held"))).text();
     client.abort();
     await expect(response).rejects.toMatchObject({ name: "AbortError" });
-    const made = await app.recordOf("/api/hang");
-    await (await fetch(app.url("/api/held"), { method: "POST" })).text();
+    const made = await suite.app.recordOf("/api/hang");
+    await (await fetch(suite.app.url("/api/held"), { method: "POST" })).text();
     expect(made).toMatchObject({ status: 499, aborted: true, streamed: false });
     expect(countsOf(made)).toEqual({ db: 1, out: 0, store: 0 });
-    expect((await app.settle()).map((record) => record.operation)).not.toContain("/api/hang");
+    expect((await suite.app.settle()).map((record) => record.operation)).not.toContain("/api/hang");
   });
 
   test("closes a body its client left midway, with the status it had sent", async () => {
     const client = new AbortController();
-    const response = await fetch(app.url("/api/drip"), { signal: client.signal });
+    const response = await fetch(suite.app.url("/api/drip"), { signal: client.signal });
     const reader = response.body?.getReader();
     const first: unknown = (await reader?.read())?.value;
     expect(first instanceof Uint8Array && new TextDecoder().decode(first)).toBe("drop;");
-    await (await fetch(app.url("/api/held"))).text();
+    await (await fetch(suite.app.url("/api/held"))).text();
     client.abort();
-    const made = await app.recordOf("/api/drip");
-    await (await fetch(app.url("/api/held"), { method: "POST" })).text();
+    const made = await suite.app.recordOf("/api/drip");
+    await (await fetch(suite.app.url("/api/held"), { method: "POST" })).text();
     expect(made).toMatchObject({ status: 200, aborted: true, streamed: true });
     expect(countsOf(made)).toEqual({ db: 0, out: 0, store: 0 });
-    expect((await app.settle()).map((record) => record.operation)).not.toContain("/api/drip");
+    expect((await suite.app.settle()).map((record) => record.operation)).not.toContain("/api/drip");
   });
 
   test("passes the conformance kit", async () => {
-    await app.settle();
+    await suite.app.settle();
     await requestTimingConforms({
       method: "GET",
       operation: "/api/presets/[id]",
       dbWaits: 2,
-      drive: async () => void (await (await fetch(app.url("/api/presets/1"))).text()),
-      next: app.nextLine,
+      drive: async () => void (await (await fetch(suite.app.url("/api/presets/1"))).text()),
+      next: suite.app.nextLine,
     });
   });
 

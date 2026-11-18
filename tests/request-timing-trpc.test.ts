@@ -20,7 +20,7 @@
  *   drizzle transaction, queue on a pool of four.
  * - The conformance kit, run against the app as an adopting app runs it.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { initTRPC } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
@@ -33,22 +33,13 @@ import { requestTimingProcedures } from "../request-timing-trpc.ts";
 import { OperationName, requestTiming, type TimingRecord, within } from "../request-timing.ts";
 import { LANES, TRPC_CODES } from "./request-timing-next-app/server/router.ts";
 import {
+  bootedForSuite,
   countsOf,
   differential,
   type Ending,
-  type NextApp,
-  nextApp,
 } from "./request-timing-next-fixture.ts";
 
-let app: NextApp;
-// The first suite of a run to boot the app also builds it, which a cold
-// `next build` takes tens of seconds to do on a loaded box.
-beforeAll(async () => {
-  app = await nextApp(true);
-}, 300_000);
-afterAll(async () => {
-  await app[Symbol.asyncDispose]();
-});
+const suite = bootedForSuite();
 
 /** One call as tRPC's HTTP link sends it alone. */
 const single = (path: string, input?: unknown) =>
@@ -119,7 +110,7 @@ async function restOf(reader: BodyReader): Promise<string> {
 
 /** The records written before the sentinel's, with none of the envelope's route among them. */
 async function settled(): Promise<TimingRecord[]> {
-  const written = await app.settle();
+  const written = await suite.app.settle();
   expect(written.filter((made) => made.operation.startsWith("/api/trpc"))).toEqual([]);
   return written;
 }
@@ -133,7 +124,7 @@ async function onlyOne(operation: string): Promise<TimingRecord> {
 
 describe("the tRPC connector", () => {
   test("changes no byte of any answer the app gives", async () => {
-    const { on, off } = await differential(app, SCRIPT, read);
+    const { on, off } = await differential(suite.app, SCRIPT, read);
     expect(on).toEqual(off);
   });
 
@@ -197,7 +188,7 @@ describe("the tRPC connector", () => {
   ];
   for (const [ending, path, init, expected, counts] of endings) {
     test(`closes ${ending} into one record of the status tRPC answered`, async () => {
-      const response = await fetch(app.url(path), init);
+      const response = await fetch(suite.app.url(path), init);
       await response.arrayBuffer();
       const made = await onlyOne(must(expected.operation));
       expect(made).toMatchObject(expected);
@@ -207,7 +198,7 @@ describe("the tRPC connector", () => {
   }
 
   test("writes no record for a call tRPC refuses before any procedure runs", async () => {
-    const response = await fetch(app.url(single("nowhere.at.all")));
+    const response = await fetch(suite.app.url(single("nowhere.at.all")));
     await response.arrayBuffer();
     expect(response.status).toBe(404);
     expect(await settled()).toEqual([]);
@@ -215,7 +206,7 @@ describe("the tRPC connector", () => {
 
   test("records each error code with the status tRPC answers it with alone", async () => {
     for (const code of TRPC_CODES) {
-      const response = await fetch(app.url(single("fail.code", code)));
+      const response = await fetch(suite.app.url(single("fail.code", code)));
       await response.arrayBuffer();
       const made = await onlyOne("fail.code");
       expect({ code, status: made.status, db: made.db.count }).toEqual({
@@ -232,11 +223,13 @@ describe("the tRPC connector", () => {
       { path: "presets.byId", input: { id: 999 }, db: 1 },
       { path: "fail.code", input: "CONFLICT", db: 1 },
     ];
-    await (await fetch(app.url(batch(calls.map((call) => [call.path, call.input]))))).arrayBuffer();
+    await (
+      await fetch(suite.app.url(batch(calls.map((call) => [call.path, call.input]))))
+    ).arrayBuffer();
     const ofBatch = await settled();
     const alone = [];
     for (const call of calls) {
-      const response = await fetch(app.url(single(call.path, call.input)));
+      const response = await fetch(suite.app.url(single(call.path, call.input)));
       await response.arrayBuffer();
       alone.push({ operation: call.path, status: response.status, db: call.db });
     }
@@ -252,19 +245,19 @@ describe("the tRPC connector", () => {
 
   test("closes a call whose client left before the answer, as 499 and aborted", async () => {
     const client = new AbortController();
-    const response = fetch(app.url(single("held.hang")), { signal: client.signal });
-    await (await fetch(app.url("/api/held"))).text();
+    const response = fetch(suite.app.url(single("held.hang")), { signal: client.signal });
+    await (await fetch(suite.app.url("/api/held"))).text();
     client.abort();
     await expect(response).rejects.toMatchObject({ name: "AbortError" });
-    const made = await app.recordOf("held.hang");
-    await (await fetch(app.url("/api/held"), { method: "POST" })).text();
+    const made = await suite.app.recordOf("held.hang");
+    await (await fetch(suite.app.url("/api/held"), { method: "POST" })).text();
     expect(made).toMatchObject({ method: "GET", status: 499, aborted: true, streamed: false });
     expect(countsOf(made)).toEqual({ db: 1, out: 0, store: 0 });
     expect((await settled()).map((written) => written.operation)).not.toContain("held.hang");
   });
 
   test("closes a subscription when its stream ends, with the waits between its events", async () => {
-    const response = await fetch(app.url(single("ticks.count")));
+    const response = await fetch(suite.app.url(single("ticks.count")));
     const body = await response.text();
     expect(body).toContain("data: 3");
     const made = await onlyOne("ticks.count");
@@ -274,14 +267,14 @@ describe("the tRPC connector", () => {
 
   test("closes a subscription its client left midway, as aborted", async () => {
     const client = new AbortController();
-    const response = await fetch(app.url(single("ticks.drip")), { signal: client.signal });
+    const response = await fetch(suite.app.url(single("ticks.drip")), { signal: client.signal });
     const reader = must(response.body).getReader();
     let seen = "";
     while (!seen.includes("drop")) seen += await nextText(reader);
-    await (await fetch(app.url("/api/held"))).text();
+    await (await fetch(suite.app.url("/api/held"))).text();
     client.abort();
-    const made = await app.recordOf("ticks.drip");
-    await (await fetch(app.url("/api/held"), { method: "POST" })).text();
+    const made = await suite.app.recordOf("ticks.drip");
+    await (await fetch(suite.app.url("/api/held"), { method: "POST" })).text();
     expect(made).toMatchObject({ method: "GET", status: 200, aborted: true, streamed: true });
     expect(countsOf(made)).toEqual({ db: 1, out: 0, store: 0 });
     expect((await settled()).map((written) => written.operation)).not.toContain("ticks.drip");
@@ -298,7 +291,7 @@ describe("the tRPC connector", () => {
         async (lanes, plans) => {
           // The latch: the semaphore's one permit, held by a request of its
           // own until every lane has queued for it.
-          const latch = await fetch(app.url(`/api/latch?lanes=${lanes.length}`));
+          const latch = await fetch(suite.app.url(`/api/latch?lanes=${lanes.length}`));
           const reader = must(latch.body).getReader();
           expect(await nextText(reader)).toBe("held;");
           const planned = lanes.map((lane) => {
@@ -314,7 +307,11 @@ describe("the tRPC connector", () => {
             // A transaction adds its checkout, its begin and its commit, as the
             // mysql2 connector's page counts them.
             const counted = { db: plan.tx ? plan.db + 3 : plan.db, out: plan.out };
-            return { operation, counted, answered: fetch(app.url(path)).then((r) => r.text()) };
+            return {
+              operation,
+              counted,
+              answered: fetch(suite.app.url(path)).then((r) => r.text()),
+            };
           });
           expect(await restOf(reader)).toBe("released");
           for (const lane of planned) expect(await lane.answered).toContain("done");
@@ -333,14 +330,14 @@ describe("the tRPC connector", () => {
     ));
 
   test("passes the conformance kit", async () => {
-    await app.settle();
+    await suite.app.settle();
     await requestTimingConforms({
       method: "GET",
       operation: "presets.byId",
       dbWaits: 2,
       drive: async () =>
-        void (await (await fetch(app.url(single("presets.byId", { id: 1 })))).text()),
-      next: app.nextLine,
+        void (await (await fetch(suite.app.url(single("presets.byId", { id: 1 })))).text()),
+      next: suite.app.nextLine,
     });
   });
 });

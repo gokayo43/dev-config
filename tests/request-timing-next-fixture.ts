@@ -6,6 +6,7 @@
  * each; booted with timing off it is the same app with the bare clients and no
  * wrapper, which the differentials take as their oracle.
  */
+import { afterAll, beforeAll } from "bun:test";
 import { join } from "node:path";
 
 import { must } from "../narrowing.ts";
@@ -192,4 +193,25 @@ export async function differential<T>(
   const answers = { on: await run(app), off: await run(off) };
   await app.settle();
   return answers;
+}
+
+/**
+ * The app with timing on, booted once for the suite that calls this and
+ * stopped after it; `app` is it, from the first case on. The first suite of a
+ * run to boot the app also builds it, which a cold `next build` takes tens of
+ * seconds to do on a loaded box.
+ */
+export function bootedForSuite(): { readonly app: NextApp } {
+  let booted: NextApp | undefined;
+  beforeAll(async () => {
+    booted = await nextApp(true);
+  }, 300_000);
+  afterAll(async () => {
+    await booted?.[Symbol.asyncDispose]();
+  });
+  return {
+    get app() {
+      return must(booted);
+    },
+  };
 }
