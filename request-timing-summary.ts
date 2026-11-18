@@ -5,6 +5,7 @@
  */
 import {
   METHODS,
+  patternProblem,
   RECORD_VERSION,
   type Method,
   type TimingRecord,
@@ -50,6 +51,9 @@ export interface Summary {
   /** Streamed operations, ranked apart by the same measure, so a minutes-long stream does not top the list above. */
   readonly streamed: readonly OperationSummary[];
 }
+
+/** The form `Date.prototype.toISOString` writes `at` in, and the only one read, since the day the reader prints is its first ten characters. */
+const EMITTED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 
 /** A parsed JSON object's fields, as nothing yet says what they are; nothing for any other value. */
 function fieldsOf(value: unknown): ReadonlyMap<string, unknown> {
@@ -107,8 +111,18 @@ export function parseRecord(line: string): TimingRecord | undefined {
       ? { waitMs, count }
       : wrong(kind);
   };
+  // Not `text`: a refused operation is never quoted back, since a crafted line
+  // can carry a terminal escape in it and a stray one can carry a customer's URL.
+  const refused = (why: string) =>
+    new UnreadableRecord(
+      `a version ${RECORD_VERSION} record whose operation is not a name a router registered: ${why}`,
+    );
+  const operation = fields.get("operation");
+  if (typeof operation !== "string") throw refused("it is not a string");
+  const problem = patternProblem(operation);
+  if (problem !== undefined) throw refused(problem);
   const at = text("at");
-  if (Number.isNaN(Date.parse(at))) wrong("at");
+  if (!EMITTED_AT.test(at) || Number.isNaN(Date.parse(at))) wrong("at");
   const method = METHODS.find((known) => known === fields.get("method")) ?? wrong("method");
   const status = number("status");
   if (!Number.isInteger(status) || status < 100 || status > 599) wrong("status");
@@ -119,7 +133,7 @@ export function parseRecord(line: string): TimingRecord | undefined {
     requestTiming: RECORD_VERSION,
     at,
     method,
-    operation: text("operation"),
+    operation,
     status,
     totalMs,
     inFlightMs,

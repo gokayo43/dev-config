@@ -13,6 +13,7 @@ import {
   Reader,
   SUMMARISED,
   UNREADABLE,
+  UnreadableRecord,
 } from "../request-timing-summary.ts";
 
 /** What a log line's JSON can hold, wrong types included. */
@@ -132,6 +133,7 @@ describe("the reader", () => {
 
   const broken: readonly [string, Parameters<typeof record>[0]][] = [
     ["at", { at: "yesterday" }],
+    ["at", { at: "Nov 17 2026 09:00" }],
     ["method", { method: "PROPFIND" }],
     ["status", { status: 42 }],
     ["totalMs", { totalMs: -1 }],
@@ -140,10 +142,38 @@ describe("the reader", () => {
     ["store", { store: { waitMs: 1, count: 0.5 } }],
     ["aborted", { aborted: "no" }],
     ["operation", { operation: undefined }],
+    ["operation", { operation: "" }],
   ];
   for (const [field, fields] of broken) {
     test(`stops on a version 1 record whose ${field} is not one`, () => {
       expect(() => parseRecord(record(fields))).toThrow(`record whose ${field} is`);
+    });
+  }
+
+  /** What `parseRecord` threw as unreadable for `line`, or nothing where it read it. */
+  const refusalOf = (line: string) => {
+    try {
+      parseRecord(line);
+      return undefined;
+    } catch (error) {
+      if (!(error instanceof UnreadableRecord)) throw error;
+      return error.message;
+    }
+  };
+
+  /** Operations no `OperationName` could have produced, each a way a crafted line reaches a terminal. */
+  const crafted = [
+    "/presets/\u001b[2J\u001b[31m:id",
+    "/presets/:id\n1     GET     /fake    1      0        0.1",
+    "/presets/42?email=someone@example.com",
+    `/${"x".repeat(256)}`,
+  ];
+  for (const operation of crafted) {
+    test(`stops on a record whose operation is ${JSON.stringify(operation.slice(0, 24))}, quoting none of it`, () => {
+      const said = refusalOf(record({ operation }));
+      expect(said).toContain("record whose operation is not a name a router registered");
+      expect(said).not.toMatch(/\p{C}/u);
+      expect(said).not.toContain(operation);
     });
   }
 });
@@ -183,6 +213,16 @@ describe("the reader's command", () => {
     const { stdout, stderr, status } = await report('listening on :3000\n{"level":"info"}\n');
     expect({ status, stdout }).toEqual({ status: NO_RECORD, stdout: "" });
     expect(stderr).toContain("no record in 2 lines");
+  });
+
+  test("prints nothing a crafted operation carries, in either mode", async () => {
+    const line = record({ operation: "/a\u001b[2J\n1  GET  /fake" });
+    for (const args of [[], ["--json"]]) {
+      const { stdout, stderr, status } = await report(`${line}\n`, args);
+      expect({ status, stdout }).toEqual({ status: UNREADABLE, stdout: "" });
+      expect(stderr).not.toContain("\u001b");
+      expect(stderr).not.toContain("/fake");
+    }
   });
 
   test("exits unreadable on a schema version it does not know", async () => {

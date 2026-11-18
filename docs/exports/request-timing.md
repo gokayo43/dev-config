@@ -81,16 +81,16 @@ carrier, by what the program is:
 
 ## The interface a connector builds on
 
-| Name                                  | What it is                                                                                                                                                 |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `requestTiming({ sink, now? })`       | switches it on; answers `{ open(): Operation }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                          |
-| `Operation.close(ending)`             | emits the record through the sink, once                                                                                                                    |
-| `within(operation, handler)`          | runs `handler` under `operation` and answers what it answers; one per carrier (a thunk for the plain one, an Effect for the Effect one)                    |
-| `measure(kind, wait)`                 | runs `wait` unchanged and adds its duration to the current operation, or to nothing; one per carrier (`() => PromiseLike<T>` plain, an Effect for Effect)  |
-| `OperationName.registered(pattern)`   | the name a router registered; refuses an empty one and one with a query string, a fragment or a scheme                                                     |
-| `OperationName.unmatched`             | the fixed name of a request no route matched                                                                                                               |
-| `methodOf(written)`                   | a request's method as a record carries it: `GET` `HEAD` `POST` `PUT` `PATCH` `DELETE` `OPTIONS`, or `OTHER`                                                |
-| `RECORD_VERSION`, `WAIT_KINDS`, types | the schema version, the three kinds, and `TimingRecord`, `Ending`, `Sink`, `Clock`, `Method`, `WaitKind`, `Waited`, `Timing`, `TimingOptions`, `Operation` |
+| Name                                  | What it is                                                                                                                                                                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `requestTiming({ sink, now? })`       | switches it on; answers `{ open(): Operation }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                                                                                        |
+| `Operation.close(ending)`             | emits the record through the sink, once                                                                                                                                                                                  |
+| `within(operation, handler)`          | runs `handler` under `operation` and answers what it answers; one per carrier (a thunk for the plain one, an Effect for the Effect one)                                                                                  |
+| `measure(kind, wait)`                 | runs `wait` unchanged and adds its duration to the current operation, or to nothing; one per carrier (`() => PromiseLike<T>` plain, an Effect for Effect)                                                                |
+| `OperationName.registered(pattern)`   | the name a router registered; refuses, without quoting it, a pattern that is empty, longer than 256 UTF-16 code units, holds a space or a character that does not print, or holds a query string, a fragment or a scheme |
+| `OperationName.unmatched`             | the fixed name of a request no route matched                                                                                                                                                                             |
+| `methodOf(written)`                   | a request's method as a record carries it: `GET` `HEAD` `POST` `PUT` `PATCH` `DELETE` `OPTIONS`, or `OTHER`                                                                                                              |
+| `RECORD_VERSION`, `WAIT_KINDS`, types | the schema version, the three kinds, and `TimingRecord`, `Ending`, `Sink`, `Clock`, `Method`, `WaitKind`, `Waited`, `Timing`, `TimingOptions`, `Operation`                                                               |
 
 What a connector author has to hold:
 
@@ -177,6 +177,12 @@ journald). It prints:
   operation by kind;
 - streamed operations in a ranking of their own, so a minutes-long stream does
   not top the list.
+
+A record is read only in the shape the export writes: an `operation` that
+`OperationName.registered` would refuse, a `method` outside the closed set, or
+an `at` not in `toISOString`'s form stops the reader with status 1, and the
+refused operation is not quoted. So a crafted line cannot put a terminal escape
+or a fake row into what the reader prints, in either mode.
 
 `--json` prints the same summary as one JSON object, `Summary` in
 `request-timing-summary.ts`, for an agent to parse.

@@ -38,10 +38,10 @@ declare class OperationName {
   readonly pattern: string;
   private constructor();
   /**
-   * The name a router registered. Throws on an empty pattern and on one shaped
-   * like a URL, with a query string, a fragment or a scheme in it: that is a
-   * connector handing over the request's own address, which carries a
-   * customer's ids and search terms.
+   * The name a router registered. Throws where `patternProblem` names one: a
+   * pattern shaped like a URL is a connector handing over the request's own
+   * address, which carries a customer's ids and search terms, so the error says
+   * what shape was refused and quotes none of it.
    */
   static registered(pattern: string): OperationName;
 }

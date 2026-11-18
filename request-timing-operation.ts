@@ -45,8 +45,39 @@ export function methodOf(written: string): Method {
   return METHODS.find((method) => method === upper) ?? "OTHER";
 }
 
+/**
+ * The longest name a record carries, in UTF-16 code units. A registered route
+ * or procedure name is a few dozen; the bound keeps one crafted log line from
+ * filling a reader's screen.
+ */
+export const MAX_PATTERN_LENGTH = 256;
+
 /** What marks a URL rather than a pattern: a query string, a fragment, a scheme. */
 const URL_SHAPED = /[?#]|:\/\//u;
+
+/** Every character that does not print as itself: control, format, unassigned and private-use characters, and every space or line separator. */
+const UNPRINTABLE = /[\p{C}\p{Z}]/u;
+
+/**
+ * Why `pattern` is not a name a router could have registered, or nothing where
+ * it is one. `OperationName.registered` and the reader both ask it, so every
+ * record a connector can write is one the reader reads, and a log line the
+ * reader prints cannot carry a terminal escape or a fake row. The answer never
+ * quotes the pattern, which on a refusal is likely a request's own address.
+ */
+export function patternProblem(pattern: string): string | undefined {
+  if (pattern === "") return "it is empty";
+  if (pattern.length > MAX_PATTERN_LENGTH) {
+    return `it is longer than ${MAX_PATTERN_LENGTH} characters`;
+  }
+  if (UNPRINTABLE.test(pattern)) {
+    return "it holds a space, a control character or another character that does not print";
+  }
+  if (URL_SHAPED.test(pattern)) {
+    return "it holds a query string, a fragment or a scheme, which makes it a request's own address";
+  }
+  return undefined;
+}
 
 /**
  * An operation's name as its router registered it: `/presets/:id`, never
@@ -66,15 +97,16 @@ export class OperationName {
   }
 
   /**
-   * The name a router registered. Throws on an empty pattern and on one shaped
-   * like a URL, with a query string, a fragment or a scheme in it: that is a
-   * connector handing over the request's own address, which carries a
-   * customer's ids and search terms.
+   * The name a router registered. Throws where `patternProblem` names one: a
+   * pattern shaped like a URL is a connector handing over the request's own
+   * address, which carries a customer's ids and search terms, so the error says
+   * what shape was refused and quotes none of it.
    */
   static registered(pattern: string): OperationName {
-    if (pattern === "" || URL_SHAPED.test(pattern)) {
+    const problem = patternProblem(pattern);
+    if (problem !== undefined) {
       throw new Error(
-        `request timing names an operation by the pattern its router registered, such as /presets/:id; ${JSON.stringify(pattern)} is not one`,
+        `request timing names an operation by the pattern its router registered, such as /presets/:id; this one was refused because ${problem}`,
       );
     }
     return new OperationName(pattern);

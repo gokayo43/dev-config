@@ -302,14 +302,39 @@ describe("a kind's sum is its waits, and the rest is the time no wait was in fli
 });
 
 describe("nothing a customer sent reaches a record", () => {
-  test("a pattern shaped like a URL is refused as a name", () => {
+  /** What `registered` threw for `pattern`, or nothing where it took it. */
+  const refusal = (pattern: string) => {
+    try {
+      OperationName.registered(pattern);
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+
+  test("a pattern shaped like a URL is refused, in words that quote none of it", () => {
     check(
       property(webPath(), webQueryParameters(), (path, query) => {
-        expect(() => OperationName.registered(`${path}?${query}`)).toThrow("not one");
-        expect(() => OperationName.registered(`https://shop.example${path}`)).toThrow("not one");
+        expect(refusal(`${path}?${query}`)).toBe(refusal("/a?b"));
+        expect(refusal(`https://shop.example${path}`)).toBe(refusal("https://a"));
       }),
     );
+    expect(refusal("/a?b")).toContain("query string");
   });
+
+  const unprintable = [
+    "/presets/\u001b[31m:id",
+    "/presets/:id\n1     GET     /fake",
+    `/${"x".repeat(256)}`,
+  ];
+  for (const pattern of unprintable) {
+    test(`a pattern a log line could not carry is refused: ${JSON.stringify(pattern.slice(0, 24))}`, () => {
+      const said = refusal(pattern);
+      expect(said).toBeString();
+      expect(said).not.toMatch(/\p{C}/u);
+      expect(said).not.toContain(pattern);
+    });
+  }
 
   test("a method is one of a closed set", () => {
     check(
