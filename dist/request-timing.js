@@ -1,4 +1,4 @@
-import { a as methodOf, i as beginWait, n as RECORD_VERSION, o as plainStorage, r as WAIT_KINDS, s as requestTiming, t as OperationName } from "./request-timing-operation-Dti3zFz_.js";
+import { a as methodOf, i as beginWait, n as RECORD_VERSION, o as plainStorage, r as WAIT_KINDS, s as requestTiming, t as OperationName } from "./request-timing-operation-Cvj5mYAc.js";
 //#region request-timing.ts
 /**
 * Request timing for a plain async program: which operation a wait belongs to,

@@ -121,14 +121,17 @@ const plans: Arbitrary<Plan> = record({
 
 const nameOf = (index: number) => OperationName.registered(`/participant/${index}`);
 
-/** What each operation's record must count, by operation name: the waits it issued itself. */
-function expected(plan: Plan) {
+/**
+ * What each operation's record must count, by operation name: the waits it
+ * issued itself, where one generated wait of `turns` is `callsPer(turns)` of them.
+ */
+function expected(plan: Plan, callsPer: (turns: number) => number = () => 1) {
   return plan.participants.flatMap((participant, index) => {
     if (!participant.operation) return [];
     const counts = { db: 0, out: 0, store: 0 };
     for (const step of participant.steps) {
-      if (step.do === "wait" || step.do === "locked") counts[step.kind] += 1;
-      if (step.do === "await") counts[step.afterwards] += 1;
+      if (step.do === "wait" || step.do === "locked") counts[step.kind] += callsPer(step.turns);
+      if (step.do === "await") counts[step.afterwards] += callsPer(0);
     }
     return [{ operation: nameOf(index).pattern, ...counts }];
   });
@@ -247,10 +250,17 @@ async function runPlain(plan: Plan): Promise<readonly TimingRecord[]> {
 
 // --- the Effect carrier ------------------------------------------------------
 
-/** What an Effect program's edge does with an operation, and how its waits are measured. */
+/**
+ * What an Effect program's edge does with an operation, and how one generated
+ * wait of `turns` is made: `measure` wraps an Effect that yields `turns` times,
+ * and `wait`, where given, makes the wait itself, as `callsPer(turns)` measured
+ * waits.
+ */
 interface EffectCarrier {
   readonly serve: (operation: Operation, handler: Effect.Effect<void>) => Promise<void>;
   readonly measure: (kind: WaitKind, wait: Effect.Effect<void>) => Effect.Effect<void>;
+  readonly wait?: (kind: WaitKind, turns: number) => Effect.Effect<void>;
+  readonly callsPer?: (turns: number) => number;
 }
 
 const fiberCarrier: EffectCarrier = {
@@ -300,6 +310,51 @@ const storageCrossing: EffectCarrier = {
     ),
 };
 
+/**
+ * The plain code an Effect program hands a promise-returning thunk to, as a
+ * `Db` service's `use` does: `count + 1` queries through a plain connector,
+ * each followed by an await of the thunk's own.
+ */
+const queries = (waited: WaitKind, count: number) => async () => {
+  for (let index = 0; index <= count; index += 1) {
+    await plainCarrier.measure(waited, () => turn(1));
+    await turn(1);
+  }
+};
+
+/**
+ * The round trip: in through `carryOperation`, and back out to plain code
+ * through `tryPromiseCarried` for every wait.
+ */
+const roundTrip: EffectCarrier = {
+  ...crossingCarrier,
+  wait: (waited, count) => Effect.orDie(effectCarrier.tryPromiseCarried(queries(waited, count))),
+  callsPer: (count) => count + 1,
+};
+
+/** The way back out as plain `Effect.tryPromise`, which carries nothing into the thunk. */
+const uncarriedReturn: EffectCarrier = {
+  ...roundTrip,
+  wait: (waited, count) => Effect.orDie(Effect.tryPromise(queries(waited, count))),
+};
+
+/**
+ * The way back out carrying the fiber's operation where it has one, and
+ * otherwise running the thunk as it is, under whatever store
+ * `AsyncLocalStorage` holds where the fiber happens to run.
+ */
+const unshieldedReturn: EffectCarrier = {
+  ...roundTrip,
+  wait: (waited, count) =>
+    Effect.flatMap(effectCarrier.inOperation, (carried) =>
+      Effect.orDie(
+        carried
+          ? effectCarrier.tryPromiseCarried(queries(waited, count))
+          : Effect.tryPromise(queries(waited, count)),
+      ),
+    ),
+};
+
 const yields = (count: number) =>
   Effect.forEach(Array.from({ length: count }), () => Effect.yieldNow(), { discard: true });
 
@@ -318,7 +373,8 @@ async function runEffect(plan: Plan, carrier: EffectCarrier): Promise<readonly T
     const queue = Effect.runSync(Queue.unbounded<void>());
     return { taken: Queue.take(queue), given: Effect.asVoid(Queue.offer(queue, undefined)) };
   });
-  const wait = (waited: WaitKind, count: number) => carrier.measure(waited, yields(count));
+  const wait = (waited: WaitKind, count: number) =>
+    carrier.wait?.(waited, count) ?? carrier.measure(waited, yields(count));
   const step = (taken: Step): Effect.Effect<void> => {
     switch (taken.do) {
       case "wait":
@@ -350,11 +406,14 @@ async function runEffect(plan: Plan, carrier: EffectCarrier): Promise<readonly T
   return records;
 }
 
-const attributed = (run: (plan: Plan) => Promise<readonly TimingRecord[]>) =>
+const attributed = (
+  run: (plan: Plan) => Promise<readonly TimingRecord[]>,
+  callsPer?: (turns: number) => number,
+) =>
   check(
     asyncProperty(plans, async (plan) => {
       expect(counted(await run(plan))).toEqual(
-        expected(plan).toSorted((a, b) => a.operation.localeCompare(b.operation)),
+        expected(plan, callsPer).toSorted((a, b) => a.operation.localeCompare(b.operation)),
       );
     }),
   );
@@ -367,6 +426,21 @@ describe("every wait is counted in the record of the operation that issued it, a
 
   test("in an Effect program a plain handler hands to its runtime through the crossing", () =>
     attributed((plan) => runEffect(plan, crossingCarrier)));
+
+  test("on a round trip from plain handlers into an Effect program and back out to plain queries", () =>
+    attributed((plan) => runEffect(plan, roundTrip), roundTrip.callsPer));
+
+  test("and not on a way back out that carries nothing", async () => {
+    await expect(
+      attributed((plan) => runEffect(plan, uncarriedReturn), roundTrip.callsPer),
+    ).rejects.toThrow("Property failed");
+  });
+
+  test("and not on a way back out that lets a stale store into a fiber with no operation", async () => {
+    await expect(
+      attributed((plan) => runEffect(plan, unshieldedReturn), roundTrip.callsPer),
+    ).rejects.toThrow("Property failed");
+  });
 
   test("and not through a crossing that leaves the operation in AsyncLocalStorage", async () => {
     await expect(attributed((plan) => runEffect(plan, storageCrossing))).rejects.toThrow(

@@ -1,4 +1,4 @@
-import { i as beginWait, o as plainStorage } from "./request-timing-operation-Dti3zFz_.js";
+import { i as beginWait, o as plainStorage } from "./request-timing-operation-Cvj5mYAc.js";
 import { Effect, FiberRef } from "effect";
 //#region request-timing-effect.ts
 /**
@@ -6,9 +6,11 @@ import { Effect, FiberRef } from "effect";
 * carried in the fiber. Never in `AsyncLocalStorage`: a fiber that waits on a
 * shared semaphore, Deferred or queue resumes on the stack of the fiber that
 * released it and inherits that fiber's store (measured on Bun 1.4.4 with
-* effect 3.22.1: 38 of 40 queries attributed to the wrong request). The one
-* place it reads that storage is `carryOperation`, synchronously, in the
-* caller's context, before any fiber runs.
+* effect 3.22.1: 38 of 40 queries attributed to the wrong request). It
+* touches that storage at the two crossings alone: `carryOperation` reads it,
+* synchronously, in the caller's context, before any fiber runs, and
+* `tryPromiseCarried` sets it from the fiber, or clears it, for the length of
+* one thunk.
 * `docs/exports/request-timing.md` is how an app adopts it.
 */
 /**
@@ -52,5 +54,17 @@ function carryOperation(program) {
 	const operation = plainStorage.getStore();
 	return operation === void 0 ? program : within(operation, program);
 }
+/** Runs `evaluate` under the plain carrier with `operation`, or under none at all. */
+const carriedOut = (operation, evaluate) => (signal) => operation === void 0 ? plainStorage.exit(() => evaluate(signal)) : plainStorage.run(operation, () => evaluate(signal));
+function tryPromiseCarried(given) {
+	return FiberRef.getWith(current, (operation) => {
+		const evaluate = typeof given === "function" ? given : given.try;
+		const carried = carriedOut(operation, evaluate);
+		return typeof given === "function" ? Effect.tryPromise(carried) : Effect.tryPromise({
+			try: carried,
+			catch: given.catch
+		});
+	});
+}
 //#endregion
-export { carryOperation, inOperation, measure, within };
+export { carryOperation, inOperation, measure, tryPromiseCarried, within };
