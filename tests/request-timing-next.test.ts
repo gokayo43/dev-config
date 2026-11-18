@@ -166,17 +166,33 @@ describe("the Next.js connector", () => {
       dbWaits: 2,
       drive: async () => void (await (await fetch(suite.app.url("/api/presets/1"))).text()),
       next: suite.app.nextLine,
+      sentinel: {
+        operation: "/api/sentinel",
+        drive: async () => void (await (await fetch(suite.app.url("/api/sentinel"))).text()),
+      },
     });
   });
 
   test("refuses, when the route module loads, a pattern the core will not take", () => {
-    const timedRoute = requestTimingRoute(requestTiming({ sink: () => undefined }));
+    const timedRoute = requestTimingRoute(
+      requestTiming({
+        fault: (error) => {
+          throw error;
+        },
+        sink: () => undefined,
+      }),
+    );
     expect(() => timedRoute("/api/presets?id", () => new Response())).toThrow("query string");
   });
 
   test("opens no operation for a handler called while one is current", async () => {
     const records: TimingRecord[] = [];
-    const timing = requestTiming({ sink: (record) => void records.push(record) });
+    const timing = requestTiming({
+      fault: (error) => {
+        throw error;
+      },
+      sink: (record) => void records.push(record),
+    });
     const inner = requestTimingRoute(timing)("/inner", () => new Response("inner"));
     const outer = timing.open();
     const answer = await within(outer, () => inner(new Request("http://in-process/inner"), {}));

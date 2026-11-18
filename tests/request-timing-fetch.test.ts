@@ -73,6 +73,9 @@ describe("the fetch connector", () => {
     let at = 0;
     const records: TimingRecord[] = [];
     const operation = requestTiming({
+      fault: (error) => {
+        throw error;
+      },
       sink: (record) => void records.push(record),
       now: () => at,
     }).open();

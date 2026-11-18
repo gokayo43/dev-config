@@ -14,5 +14,8 @@ const written = lines();
 export const nextLine = written.next;
 
 export const timing = requestTiming({
+  fault: (error) => {
+    throw error;
+  },
   sink: (record) => written.write(JSON.stringify({ service: "fixture", ...record })),
 });

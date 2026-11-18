@@ -257,7 +257,12 @@ describe("the Bun.sql connector", () => {
           await using bare = new SQL({ url: scratch.url, max: 1 });
           const client = timedSql(bare);
           const records: TimingRecord[] = [];
-          const timing = requestTiming({ sink: (made) => void records.push(made) });
+          const timing = requestTiming({
+            fault: (error) => {
+              throw error;
+            },
+            sink: (made) => void records.push(made),
+          });
           // The latch: the pool's one connection, held outside any operation
           // until every operation's first query has started, so each started
           // query is waiting for it. `execute` starts a query as it is called,

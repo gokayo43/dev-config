@@ -5,10 +5,16 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * knows this version alone, and stops on a record of any other.
  */
 declare const RECORD_VERSION = 1;
-/** What an operation waited on: its database, an outside HTTP service, or an in-memory store such as Redis. */
-type WaitKind = "db" | "out" | "store";
-/** Every kind, in the order the record and the reader list them. */
-declare const WAIT_KINDS: readonly WaitKind[];
+/**
+ * Every kind of wait, in the order the record and the reader list them: the
+ * database, an outside HTTP service, an in-memory store such as Redis. A new
+ * kind is an entry here and one in `perKind`, which the compiler then asks for.
+ */
+declare const WAIT_KINDS: readonly ["db", "out", "store"];
+/** What an operation waited on. */
+type WaitKind = (typeof WAIT_KINDS)[number];
+/** One value for each kind of wait. */
+type PerKind<T> = { [Kind in WaitKind]: T; };
 /**
  * The request method a record carries. A method outside the standard set is
  * `OTHER`, since a request line's method is the client's to write and nothing a
@@ -32,7 +38,7 @@ declare class OperationName {
   /**
    * The name a router registered. Throws where `patternProblem` names one: a
    * pattern shaped like a URL is a connector handing over the request's own
-   * address, which carries a customer's ids and search terms, so the error says
+   * address, which carries a person's ids and search terms, so the error says
    * what shape was refused and quotes none of it.
    */
   static registered(pattern: string): OperationName;
@@ -49,7 +55,7 @@ interface Waited {
  * text, parameter, query string, header, body or outside host can be
  * represented in it.
  */
-interface TimingRecord {
+interface TimingRecord extends Readonly<PerKind<Waited>> {
   /** The schema version, `RECORD_VERSION`; its presence is what makes a line a record. */
   readonly requestTiming: typeof RECORD_VERSION;
   /** When the record was emitted, as an ISO 8601 UTC timestamp. */
@@ -63,9 +69,6 @@ interface TimingRecord {
   readonly totalMs: number;
   /** The time during which at least one of the operation's waits was in flight; the rest is `totalMs - inFlightMs`. */
   readonly inFlightMs: number;
-  readonly db: Waited;
-  readonly out: Waited;
-  readonly store: Waited;
   /** The client went away before the response finished. */
   readonly aborted: boolean;
   /** The response body was streamed. */
@@ -84,18 +87,37 @@ interface Ending {
   readonly aborted: boolean;
   readonly streamed: boolean;
 }
-/** What switching request timing on answers: the one way to open an operation. */
+/**
+ * Where a fault in closing an operation goes: a sink that threw, a name or a
+ * status the core refused, a second close. The app supplies it, so a fault is
+ * logged the app's way and never turns a served response into a failed one.
+ */
+type Fault = (error: unknown) => void;
+/** What switching request timing on answers: the one way to open an operation, and the way a connector closes one. */
 interface Timing {
   /**
    * Opens an operation now. The connector that opens it runs the handler under
-   * it with a carrier's `within` and closes it once its response has finished.
+   * it with a carrier's `within` and closes it with `finish` once its response
+   * has finished.
    */
   readonly open: () => Operation;
+  /**
+   * Closes `operation` with the ending `ended` builds, handing anything that
+   * throws to the app's `fault` instead of the caller: `ended` itself, where
+   * the name it registers is refused, and `close`, where the status is
+   * refused, the sink throws or the operation was closed already. So a
+   * connector closing after the response, in a callback or a `then`, never
+   * leaves an unhandled rejection or a failed response. A `fault` that throws
+   * is the app's own error and is not caught.
+   */
+  readonly finish: (operation: Operation, ended: () => Ending) => void;
 }
 /** What `requestTiming` takes. */
 interface TimingOptions {
   /** Where each record goes: the app writes it as one JSON line on stdout. */
   readonly sink: Sink;
+  /** Where a fault in closing an operation goes, through `Timing.finish`: the app logs it. */
+  readonly fault: Fault;
   /**
    * The clock every duration is read from. Unset is the process's monotonic
    * clock on the epoch, `performance.timeOrigin + performance.now()`; a test
@@ -128,4 +150,4 @@ declare class Operation {
   close(ending: Ending): void;
 }
 //#endregion
-export { OperationName as a, Timing as c, WAIT_KINDS as d, WaitKind as f, requestTiming as h, Operation as i, TimingOptions as l, methodOf as m, Ending as n, RECORD_VERSION as o, Waited as p, Method as r, Sink as s, Clock as t, TimingRecord as u };
+export { Operation as a, Sink as c, TimingRecord as d, WAIT_KINDS as f, requestTiming as g, methodOf as h, Method as i, Timing as l, Waited as m, Ending as n, OperationName as o, WaitKind as p, Fault as r, RECORD_VERSION as s, Clock as t, TimingOptions as u };

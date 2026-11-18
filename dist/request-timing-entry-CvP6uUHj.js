@@ -1,4 +1,4 @@
-import { a as methodOf } from "./request-timing-operation-gsGVMm95.js";
+import { a as methodOf } from "./request-timing-operation-DfYtKiLO.js";
 import "./request-timing.js";
 //#region request-timing-entry.ts
 /**

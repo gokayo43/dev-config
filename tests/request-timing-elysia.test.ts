@@ -260,17 +260,31 @@ describe("the Elysia connector", () => {
       dbWaits: 2,
       drive: async () => void (await (await fetch(app.url("/presets/1"))).text()),
       next: app.nextLine,
+      sentinel: {
+        operation: "/stream",
+        drive: async () => void (await (await fetch(app.url("/stream"))).text()),
+      },
     }));
 
   test("refuses to mount behind a route it could not name", () => {
-    const timing = requestTiming({ sink: () => undefined });
+    const timing = requestTiming({
+      fault: (error) => {
+        throw error;
+      },
+      sink: () => undefined,
+    });
     expect(() =>
       new Elysia().get("/early", () => "early").use(requestTimingPlugin(timing)),
     ).toThrow("GET /early");
   });
 
   test("refuses at listen a route whose pattern the core will not take", () => {
-    const timing = requestTiming({ sink: () => undefined });
+    const timing = requestTiming({
+      fault: (error) => {
+        throw error;
+      },
+      sink: () => undefined,
+    });
     const optional = new Elysia()
       .use(requestTimingPlugin(timing))
       .get("/presets/:id?", () => "one");

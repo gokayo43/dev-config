@@ -306,6 +306,7 @@ describe("the TanStack Start connector", () => {
       dbWaits: 2,
       drive: async () => void (await (await fetch(url("/presets/1"))).text()),
       next: on.app.fixture.nextLine,
+      sentinel: { operation: "/", drive: async () => void (await (await fetch(url("/"))).text()) },
     }));
 
   test("passes the conformance kit on a server function", () =>
@@ -316,6 +317,7 @@ describe("the TanStack Start connector", () => {
       drive: async () =>
         void (await (await fetch(url(on.app.fixture.urls.list), { headers: SERVER_FN })).text()),
       next: on.app.fixture.nextLine,
+      sentinel: { operation: "/", drive: async () => void (await (await fetch(url("/"))).text()) },
     }));
 
   test("refuses at startup a route whose pattern the core will not take", () => {
@@ -323,7 +325,12 @@ describe("the TanStack Start connector", () => {
     const router = createRouter({
       routeTree: root.addChildren([createRoute({ getParentRoute: () => root, path: "/a b" })]),
     });
-    const timing = requestTiming({ sink: () => undefined });
+    const timing = requestTiming({
+      fault: (error) => {
+        throw error;
+      },
+      sink: () => undefined,
+    });
     expect(() =>
       timedStartHandler(
         timing,
@@ -335,7 +342,12 @@ describe("the TanStack Start connector", () => {
 
   test("names a server function under the base an app configured, and no call made in-process", async () => {
     const records: TimingRecord[] = [];
-    const timing = requestTiming({ sink: (made) => void records.push(made) });
+    const timing = requestTiming({
+      fault: (error) => {
+        throw error;
+      },
+      sink: (made) => void records.push(made),
+    });
     const meta = (id: string) => ({ id, name: `fn${id}`, filename: "src/rpc.ts" });
     // Start's handler, as far as the connector sees it: the function the path
     // names runs its global middleware, after one called in-process has.

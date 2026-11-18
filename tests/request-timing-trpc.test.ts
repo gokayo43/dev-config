@@ -338,6 +338,10 @@ describe("the tRPC connector", () => {
       drive: async () =>
         void (await (await fetch(suite.app.url(single("presets.byId", { id: 1 })))).text()),
       next: suite.app.nextLine,
+      sentinel: {
+        operation: "/api/sentinel",
+        drive: async () => void (await (await fetch(suite.app.url("/api/sentinel"))).text()),
+      },
     });
   });
 });
@@ -348,7 +352,12 @@ describe("the tRPC connector, in-process", () => {
   test("opens no operation for a call that did not arrive through the envelope", async () => {
     const records: TimingRecord[] = [];
     const timing = requestTimingProcedures(
-      requestTiming({ sink: (made) => void records.push(made) }),
+      requestTiming({
+        fault: (error) => {
+          throw error;
+        },
+        sink: (made) => void records.push(made),
+      }),
       getHTTPStatusCodeFromError,
     );
     const router = t.router({ ping: t.procedure.use(timing.middleware).query(() => "pong") });
@@ -358,7 +367,12 @@ describe("the tRPC connector, in-process", () => {
 
   test("opens one operation per call through the envelope, and none while one is current", async () => {
     const records: TimingRecord[] = [];
-    const timing = requestTiming({ sink: (made) => void records.push(made) });
+    const timing = requestTiming({
+      fault: (error) => {
+        throw error;
+      },
+      sink: (made) => void records.push(made),
+    });
     const procedures = requestTimingProcedures(timing, getHTTPStatusCodeFromError);
     const router = t.router({ ping: t.procedure.use(procedures.middleware).query(() => "pong") });
     const handler = procedures.envelope(router, (request: Request) =>
@@ -380,7 +394,12 @@ describe("the tRPC connector, in-process", () => {
 
   test("refuses, when the route module loads, a procedure path the core will not take", () => {
     const timing = requestTimingProcedures(
-      requestTiming({ sink: () => undefined }),
+      requestTiming({
+        fault: (error) => {
+          throw error;
+        },
+        sink: () => undefined,
+      }),
       getHTTPStatusCodeFromError,
     );
     const router = t.router({ "a?path": t.procedure.query(() => "never") });

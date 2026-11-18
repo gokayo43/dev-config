@@ -1,11 +1,12 @@
 /**
  * The operation and its record, through both carriers: the record's fields
  * (invariant 6's list), sealing at emission (invariant 4), sums against the
- * rest on a virtual clock (invariant 5), and that nothing a customer sent can
+ * rest on a virtual clock (invariant 5), and that nothing a person sent can
  * reach a record (invariant 6). Attribution under overlap, invariant 3, is
  * `request-timing-attribution.test.ts`.
  */
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { type Cause, Deferred, Effect, Exit, Fiber } from "effect";
 import { asyncProperty, property, record, string, webPath, webQueryParameters } from "fast-check";
 
@@ -38,7 +39,16 @@ function virtualClock(start = Date.UTC(2026, 10, 18)) {
 /** Timing switched on with a sink that keeps what it is handed. */
 function recorded(now: () => number) {
   const records: TimingRecord[] = [];
-  return { records, timing: requestTiming({ sink: (made) => void records.push(made), now }) };
+  return {
+    records,
+    timing: requestTiming({
+      fault: (error) => {
+        throw error;
+      },
+      sink: (made) => void records.push(made),
+      now,
+    }),
+  };
 }
 
 const ended = (status = 200): Ending => ({
@@ -392,7 +402,7 @@ describe("a kind's sum is its waits, and the rest is the time no wait was in fli
   }
 });
 
-describe("nothing a customer sent reaches a record", () => {
+describe("nothing a person sent reaches a record", () => {
   /** What `registered` threw for `pattern`, or nothing where it took it. */
   const refusal = (pattern: string) => {
     try {
@@ -438,7 +448,7 @@ describe("nothing a customer sent reaches a record", () => {
   });
 
   /**
-   * Two runs of one operation that differ in every value a customer could have
+   * Two runs of one operation that differ in every value a person could have
    * put in a wait, its query text, its parameters, the rows it answered and the
    * error it failed with, close into the same record. A record that is the same
    * whatever those values were cannot hold any of them.
@@ -614,5 +624,101 @@ describe("the way back out to plain code behaves as Effect.tryPromise does", () 
       { out: { waitMs: 0, count: 1 }, db: { waitMs: 0, count: 0 } },
     ]);
     expect(records).toHaveLength(1);
+  });
+});
+
+describe("finish hands a fault in closing an operation to the app, never to the caller", () => {
+  /** Timing whose faults are kept, with a sink that throws while `refusing` says so. */
+  function faulted() {
+    const faults: unknown[] = [];
+    const records: TimingRecord[] = [];
+    let refusing = false;
+    const timing = requestTiming({
+      sink: (made) => {
+        if (refusing) throw new Error("the sink refused");
+        records.push(made);
+      },
+      fault: (error) => void faults.push(error),
+      now: virtualClock().now,
+    });
+    return { timing, faults, records, refuse: () => void (refusing = true) };
+  }
+  const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+  test("a sink that throws", () => {
+    const { timing, faults, refuse } = faulted();
+    refuse();
+    expect(() => timing.finish(timing.open(), () => ended())).not.toThrow();
+    expect(faults.map(message)).toEqual(["the sink refused"]);
+  });
+
+  test("a name the core refuses when the request ends", () => {
+    const { timing, faults, records } = faulted();
+    const ending = () => ({ ...ended(), name: OperationName.registered("/presets?id=42") });
+    expect(() => timing.finish(timing.open(), ending)).not.toThrow();
+    expect(faults).toHaveLength(1);
+    expect(faults.map(message).join("\n")).toContain("query string");
+    expect(records).toEqual([]);
+  });
+
+  test("a status the core refuses, as Response.error() answers", () => {
+    const { timing, faults, records } = faulted();
+    expect(() => timing.finish(timing.open(), () => ended(Response.error().status))).not.toThrow();
+    expect(faults).toHaveLength(1);
+    expect(faults.map(message).join("\n")).toContain("not an HTTP status");
+    expect(records).toEqual([]);
+  });
+
+  test("a second close, while the first record stands", () => {
+    const { timing, faults, records } = faulted();
+    const operation = timing.open();
+    timing.finish(operation, () => ended());
+    timing.finish(operation, () => ended());
+    expect(faults).toHaveLength(1);
+    expect(faults.map(message).join("\n")).toContain("closed twice");
+    expect(records).toHaveLength(1);
+  });
+
+  test("and a fault function that throws is the app's own error", () => {
+    const timing = requestTiming({
+      sink: () => undefined,
+      fault: () => {
+        throw new Error("the app's fault handler failed");
+      },
+    });
+    expect(() => timing.finish(timing.open(), () => ended(0))).toThrow(
+      "the app's fault handler failed",
+    );
+  });
+
+  /**
+   * A connector closes in a `then`, after the response. Closing there with
+   * `close` and a status the core refuses ends the process on the unhandled
+   * rejection; closing with `finish` hands the fault to the app and the
+   * process lives on.
+   */
+  const closingAfterTheResponse = async (closing: string) => {
+    const script = [
+      `import { OperationName, requestTiming } from ${JSON.stringify(join(import.meta.dir, "..", "request-timing.ts"))};`,
+      `const timing = requestTiming({ sink: () => undefined, fault: (error) => console.log("fault:", error.message) });`,
+      `const operation = timing.open();`,
+      `const ending = () => ({ method: "GET", name: OperationName.registered("/presets/:id"), status: 0, aborted: false, streamed: false });`,
+      `void Promise.resolve().then(() => ${closing});`,
+      `await new Promise((resolve) => setTimeout(resolve, 0));`,
+      `console.log("alive");`,
+    ].join("\n");
+    const run = Bun.spawn(["bun", "--eval", script], { stdout: "pipe", stderr: "pipe" });
+    const [said, status] = await Promise.all([new Response(run.stdout).text(), run.exited]);
+    return { said: said.trim(), status };
+  };
+
+  test("so a connector closing in a then keeps the process alive", async () => {
+    expect(await closingAfterTheResponse("operation.close(ending())")).toMatchObject({
+      status: 1,
+    });
+    expect(await closingAfterTheResponse("timing.finish(operation, ending)")).toEqual({
+      said: "fault: request timing: GET /presets/:id closed with status 0, which is not an HTTP status\nalive",
+      status: 0,
+    });
   });
 });

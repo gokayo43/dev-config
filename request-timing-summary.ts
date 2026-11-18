@@ -6,6 +6,7 @@
 import {
   METHODS,
   patternProblem,
+  perKind,
   RECORD_VERSION,
   type Method,
   type TimingRecord,
@@ -69,8 +70,10 @@ const numberIn = (fields: ReadonlyMap<string, unknown>, key: string) => {
  * The record a log line holds, or nothing for a line that is not one: not JSON,
  * not an object, or an object without `requestTiming`. Throws `UnreadableRecord`
  * on a record of a schema version other than `RECORD_VERSION`, naming that
- * version, and on a record of this version missing a field or holding one of
- * the wrong type.
+ * version where it is a whole number, and on a record of this version missing a
+ * field or holding one of the wrong type. No message quotes a value off the
+ * line: what an agent reads on stderr is the reader's words and the field's
+ * name, never text a log line put there.
  */
 export function parseRecord(line: string): TimingRecord | undefined {
   // Most lines of a log are not records, and this is the cheap way past them.
@@ -86,12 +89,12 @@ export function parseRecord(line: string): TimingRecord | undefined {
   const version = fields.get("requestTiming");
   if (version !== RECORD_VERSION) {
     throw new UnreadableRecord(
-      `a record of schema version ${JSON.stringify(version)}; this reader knows version ${RECORD_VERSION} alone, so read this log with the @gokayo43/dev-config that wrote it`,
+      `a record of ${Number.isSafeInteger(version) ? `schema version ${String(version)}` : "a schema version that is not a whole number"}; this reader knows version ${RECORD_VERSION} alone, so read this log with the @gokayo43/dev-config that wrote it`,
     );
   }
   const wrong = (field: string): never => {
     throw new UnreadableRecord(
-      `a version ${RECORD_VERSION} record whose ${field} is ${fields.has(field) ? JSON.stringify(fields.get(field)) : "absent"}`,
+      `a version ${RECORD_VERSION} record whose ${field} is ${fields.has(field) ? "not what that version holds there" : "absent"}`,
     );
   };
   const number = (field: string): number => numberIn(fields, field) ?? wrong(field);
@@ -111,8 +114,8 @@ export function parseRecord(line: string): TimingRecord | undefined {
       ? { waitMs, count }
       : wrong(kind);
   };
-  // Not `text`: a refused operation is never quoted back, since a crafted line
-  // can carry a terminal escape in it and a stray one can carry a customer's URL.
+  // Not `text`: an operation is refused with `patternProblem`'s reason, the
+  // one rule the core names operations by.
   const refused = (why: string) =>
     new UnreadableRecord(
       `a version ${RECORD_VERSION} record whose operation is not a name a router registered: ${why}`,
@@ -137,9 +140,7 @@ export function parseRecord(line: string): TimingRecord | undefined {
     status,
     totalMs,
     inFlightMs,
-    db: waited("db"),
-    out: waited("out"),
-    store: waited("store"),
+    ...perKind(waited),
     aborted: flag("aborted"),
     streamed: flag("streamed"),
   };
@@ -194,8 +195,8 @@ export class Reader {
       aborted: 0,
       totalMs: 0,
       restMs: 0,
-      waitMs: { db: 0, out: 0, store: 0 },
-      waits: { db: 0, out: 0, store: 0 },
+      waitMs: perKind(() => 0),
+      waits: perKind(() => 0),
     };
     sums.count += 1;
     sums.aborted += record.aborted ? 1 : 0;
@@ -237,17 +238,8 @@ function summarise(sums: Sums): OperationSummary {
     aborted: sums.aborted,
     totalMs: sums.totalMs,
     meanMs: sums.totalMs / sums.count,
-    shares: {
-      db: share(sums.waitMs.db),
-      out: share(sums.waitMs.out),
-      store: share(sums.waitMs.store),
-      rest: share(sums.restMs),
-    },
-    waitsPerOperation: {
-      db: sums.waits.db / sums.count,
-      out: sums.waits.out / sums.count,
-      store: sums.waits.store / sums.count,
-    },
+    shares: { ...perKind((kind) => share(sums.waitMs[kind])), rest: share(sums.restMs) },
+    waitsPerOperation: perKind((kind) => sums.waits[kind] / sums.count),
   };
 }
 
@@ -259,13 +251,9 @@ const HEADER = [
   "aborted",
   "mean ms",
   "total ms",
-  "db",
-  "out",
-  "store",
+  ...WAIT_KINDS,
   "rest",
-  "db/op",
-  "out/op",
-  "store/op",
+  ...WAIT_KINDS.map((kind) => `${kind}/op`),
 ];
 
 const percent = (share: number) => `${Math.round(share * 100)}%`;
@@ -281,13 +269,9 @@ function table(rows: readonly OperationSummary[]): string {
       String(row.aborted),
       row.meanMs.toFixed(1),
       row.totalMs.toFixed(0),
-      percent(row.shares.db),
-      percent(row.shares.out),
-      percent(row.shares.store),
+      ...WAIT_KINDS.map((kind) => percent(row.shares[kind])),
       percent(row.shares.rest),
-      row.waitsPerOperation.db.toFixed(1),
-      row.waitsPerOperation.out.toFixed(1),
-      row.waitsPerOperation.store.toFixed(1),
+      ...WAIT_KINDS.map((kind) => row.waitsPerOperation[kind].toFixed(1)),
     ]),
   ];
   const widths = HEADER.map((_, column) =>
