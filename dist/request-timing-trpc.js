@@ -1,5 +1,5 @@
-import { t as OperationName } from "./request-timing-operation-DfYtKiLO.js";
 import { inOperation, within } from "./request-timing.js";
+import { n as registeredNames, t as endings } from "./request-timing-entry-D56lhQUm.js";
 import { t as marked } from "./request-timing-route-BhLXYn3w.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 //#region request-timing-trpc.ts
@@ -69,14 +69,7 @@ function iterated(source, operation, ended) {
 function requestTimingProcedures(timing, statusOf) {
 	/** Holds while a request the envelope serves runs, so only a call over HTTP opens an operation. */
 	const carried = new AsyncLocalStorage();
-	const names = /* @__PURE__ */ new Map();
-	const nameOf = (path) => {
-		const known = names.get(path);
-		if (known !== void 0) return known;
-		const name = OperationName.registered(path);
-		names.set(path, name);
-		return name;
-	};
+	const nameOf = registeredNames();
 	/**
 	* The middleware. Every call of a procedure built on it, that arrives
 	* through the envelope while no operation is current, is one operation
@@ -93,21 +86,12 @@ function requestTimingProcedures(timing, statusOf) {
 	const middleware = async (call) => {
 		if (carried.getStore() === void 0 || inOperation()) return call.next();
 		const operation = timing.open();
-		const { promise: ending, resolve: end } = Promise.withResolvers();
-		const name = nameOf(call.path);
-		ending.then((ended) => {
-			operation.close({
-				method: METHOD_OF[call.type],
-				name,
-				...ended
-			});
-		});
 		let streaming = false;
-		call.signal?.addEventListener("abort", () => end({
+		const end = endings(timing, operation, METHOD_OF[call.type], () => nameOf(call.path), call.signal, () => ({
 			status: streaming ? 200 : 499,
 			aborted: true,
 			streamed: streaming
-		}), { once: true });
+		}));
 		const result = await within(operation, call.next);
 		if (!result.ok) {
 			end({
@@ -142,7 +126,8 @@ function requestTimingProcedures(timing, statusOf) {
 	* for the conformance kit's route-tree check. It opens no operation itself.
 	* Every procedure's path is checked as a name here, when the route module is
 	* loaded, so a path the core refuses fails `next build` rather than a call;
-	* a lazily loaded router's paths are checked on their first call.
+	* a lazily loaded router's paths are checked when a call closes, where a
+	* refused one goes to the app's `fault` and the call writes no record.
 	*/
 	const envelope = (router, handler) => {
 		for (const path of Object.keys(router._def.procedures)) nameOf(path);

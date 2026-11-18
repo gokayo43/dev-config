@@ -31,13 +31,10 @@ import { check } from "../property.ts";
 import { requestTimingConforms } from "../request-timing-conformance.ts";
 import { requestTimingProcedures } from "../request-timing-trpc.ts";
 import { OperationName, requestTiming, type TimingRecord, within } from "../request-timing.ts";
-import { LANES, TRPC_CODES } from "./request-timing-next-app/server/router.ts";
-import {
-  bootedForSuite,
-  countsOf,
-  differential,
-  type Ending,
-} from "./request-timing-next-fixture.ts";
+import { LANES, REFUSED_PROCEDURE, TRPC_CODES } from "./request-timing-next-app/server/router.ts";
+import { read } from "./request-timing-fixture.ts";
+import { bootedForSuite, differential, type Ending } from "./request-timing-next-fixture.ts";
+import { countsOf } from "./request-timing-oracle.ts";
 
 const suite = bootedForSuite();
 
@@ -60,11 +57,8 @@ const mutation = (label: string): RequestInit => ({
   body: JSON.stringify(label),
 });
 
-/** A response as a client reads it, byte for byte, less the one header that differs by the second it was sent. */
-async function read(response: Response) {
-  const headers = [...response.headers].filter(([name]) => name !== "date");
-  return { status: response.status, headers, body: new Uint8Array(await response.arrayBuffer()) };
-}
+/** A body as a client reads it, byte for byte. */
+const bytes = async (response: Response) => new Uint8Array(await response.arrayBuffer());
 
 /** The scripted sequence the differential runs against both apps. */
 const SCRIPT: readonly [string, RequestInit][] = [
@@ -88,6 +82,8 @@ const SCRIPT: readonly [string, RequestInit][] = [
   [single("ticks.count"), {}],
   [single("lanes.l0", { db: 2, out: 1, tx: false }), {}],
   [single("lanes.l1", { db: 2, out: 1, tx: true }), {}],
+  [single("faults.unwritten"), {}],
+  [single(REFUSED_PROCEDURE), {}],
 ];
 
 type BodyReader = Pick<ReadableStreamDefaultReader<Uint8Array>, "read">;
@@ -124,7 +120,7 @@ async function onlyOne(operation: string): Promise<TimingRecord> {
 
 describe("the tRPC connector", () => {
   test("changes no byte of any answer the app gives", async () => {
-    const { on, off } = await differential(suite.app, SCRIPT, read);
+    const { on, off } = await differential(suite.app, SCRIPT, (response) => read(response, bytes));
     expect(on).toEqual(off);
   });
 
@@ -329,6 +325,30 @@ describe("the tRPC connector", () => {
       { numRuns: 25 },
     ));
 
+  // What the app's `fault` is handed, and no record: the answer served as it
+  // is without timing (the differential above), and the app still serving.
+  const faulted: [string, string, string][] = [
+    ["a sink that throws", "faults.unwritten", "the sink refused the record"],
+    [
+      "a lazily loaded procedure's path the core refuses",
+      REFUSED_PROCEDURE,
+      "longer than 256 characters",
+    ],
+  ];
+  for (const [fault, path, message] of faulted) {
+    test(`hands ${fault} to the app's fault, once, and writes no record`, async () => {
+      await settled();
+      suite.app.faults();
+      const response = await fetch(suite.app.url(single(path)));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("served");
+      expect((await settled()).map((made) => made.operation)).not.toContain(path);
+      const reported = suite.app.faults();
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toContain(message);
+    });
+  }
+
   test("passes the conformance kit", async () => {
     await suite.app.settle();
     await requestTimingConforms({
@@ -365,7 +385,8 @@ describe("the tRPC connector, in-process", () => {
     expect(records).toEqual([]);
   });
 
-  test("opens one operation per call through the envelope, and none while one is current", async () => {
+  /** A router of one procedure, `ping`, on the middleware, served through the envelope, and the records it writes. */
+  function enveloped() {
     const records: TimingRecord[] = [];
     const timing = requestTiming({
       fault: (error) => {
@@ -378,6 +399,11 @@ describe("the tRPC connector, in-process", () => {
     const handler = procedures.envelope(router, (request: Request) =>
       fetchRequestHandler({ endpoint: "/trpc", req: request, router, createContext: () => ({}) }),
     );
+    return { records, timing, handler };
+  }
+
+  test("opens one operation per call through the envelope, and none while one is current", async () => {
+    const { records, timing, handler } = enveloped();
     const call = () => handler(new Request("http://in-process/trpc/ping"), {});
     expect((await call()).status).toBe(200);
     const outer = timing.open();
@@ -390,6 +416,13 @@ describe("the tRPC connector, in-process", () => {
       streamed: false,
     });
     expect(records.map((made) => made.operation)).toEqual(["ping", "/outer"]);
+  });
+
+  test("closes a call whose client had left before the middleware ran, as 499 and aborted", async () => {
+    const { records, handler } = enveloped();
+    const left = new Request("http://in-process/trpc/ping", { signal: AbortSignal.abort() });
+    await (await handler(left, {})).arrayBuffer();
+    expect(records).toMatchObject([{ operation: "ping", status: 499, aborted: true }]);
   });
 
   test("refuses, when the route module loads, a procedure path the core will not take", () => {

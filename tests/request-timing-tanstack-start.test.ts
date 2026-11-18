@@ -23,11 +23,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { array, asyncProperty, boolean, integer, record, uniqueArray } from "fast-check";
 
+import { must } from "../narrowing.ts";
 import { check } from "../property.ts";
 import { requestTimingConforms } from "../request-timing-conformance.ts";
-import { parseRecord } from "../request-timing-summary.ts";
 import { nameServerFunction, timedStartHandler } from "../request-timing-tanstack-start.ts";
 import { requestTiming, type TimingRecord } from "../request-timing.ts";
+import { read, recordsFrom } from "./request-timing-fixture.ts";
+import { countsOf } from "./request-timing-oracle.ts";
 import { LANES } from "./request-timing-start-app/src/lanes.ts";
 import { builtStartFixture } from "./request-timing-start-build.ts";
 import { scratchPostgres } from "./request-timing-postgres.ts";
@@ -37,18 +39,25 @@ type Built = Awaited<ReturnType<typeof builtStartFixture>>;
 type Database = Awaited<ReturnType<typeof scratchPostgres>>;
 type Served = Awaited<ReturnType<typeof startServer>>;
 
-let built: Built;
-let databases: Database[];
-let on: Served;
-let off: { readonly url: URL; readonly child: ReturnType<typeof Bun.spawn> };
+/**
+ * What `beforeAll` made, each set as it is made, so `afterAll` takes down
+ * exactly what exists when setup failed partway.
+ */
+const setup: {
+  built?: Built;
+  databases: Database[];
+  on?: Served;
+  off?: { readonly url: URL; readonly child: ReturnType<typeof Bun.spawn> };
+} = { databases: [] };
 
 /** Serves the build with timing off, in a process of its own on its own database, and answers where. */
 async function servedOff(entry: string, database: string) {
   const child = Bun.spawn(["bun", `${import.meta.dir}/request-timing-start-serve.ts`, entry], {
-    env: { ...process.env, DATABASE_URL: database, REQUEST_TIMING: "off" },
+    env: { ...process.env, FIXTURE_DATABASE_URL: database, FIXTURE_TIMING: "off" },
     stdout: "pipe",
     stderr: "inherit",
   });
+  setup.off = { url: new URL("http://unserved"), child };
   const reader = child.stdout.getReader();
   let written = "";
   while (!written.includes("\n")) {
@@ -61,45 +70,56 @@ async function servedOff(entry: string, database: string) {
 }
 
 beforeAll(async () => {
-  built = await builtStartFixture();
-  databases = [await scratchPostgres(), await scratchPostgres()];
-  const [timedDatabase, bareDatabase] = databases;
-  if (timedDatabase === undefined || bareDatabase === undefined) throw new Error("two databases");
+  setup.built = await builtStartFixture();
+  const timedDatabase = await scratchPostgres();
+  setup.databases.push(timedDatabase);
+  const bareDatabase = await scratchPostgres();
+  setup.databases.push(bareDatabase);
   // Read once, by the bundle, as it loads.
-  process.env["DATABASE_URL"] = timedDatabase.url;
-  on = await startServer(built.server);
-  off = await servedOff(built.server, bareDatabase.url);
+  process.env["FIXTURE_DATABASE_URL"] = timedDatabase.url;
+  setup.on = await startServer(setup.built.server);
+  setup.off = await servedOff(setup.built.server, bareDatabase.url);
 }, 60_000);
 
 afterAll(async () => {
-  off.child.kill();
-  await on.server.stop(true);
-  for (const database of databases) await database[Symbol.asyncDispose]();
-  await built[Symbol.asyncDispose]();
+  setup.off?.child.kill();
+  await setup.on?.server.stop(true);
+  for (const database of setup.databases) await database[Symbol.asyncDispose]();
+  await setup.built?.[Symbol.asyncDispose]();
 });
+
+const on = {
+  get app() {
+    return must(setup.on).app;
+  },
+  get server() {
+    return must(setup.on).server;
+  },
+};
 
 const url = (path: string, base: URL = on.server.url) => new URL(path, base);
 
-async function nextRecord(): Promise<TimingRecord> {
-  for (;;) {
-    const made = parseRecord(await on.app.fixture.nextLine());
-    if (made !== undefined) return made;
-  }
-}
+let reading: ReturnType<typeof recordsFrom> | undefined;
+
+/** The next record the timed app wrote, the faults read past kept for `faults`. */
+const nextRecord = (): Promise<TimingRecord> => {
+  reading ??= recordsFrom(on.app.fixture.nextLine);
+  return reading.next();
+};
+
+/** The faults the timed app's `fault` wrote among the lines read so far, taken. */
+const faults = (): string[] => reading?.faults() ?? [];
 
 /** The headers Start's own client sends with a server-function call, and the CSRF check asks for. */
 const SERVER_FN = { "x-tsr-serverFn": "true", "sec-fetch-site": "same-origin" };
 
 /**
- * A response as a client reads it, less what differs by when it was sent: the
- * `date` header, and the time each route's data was loaded, which a page
- * carries for the browser's router as `u:` and epoch milliseconds.
+ * A body as a client reads it, less the time each route's data was loaded,
+ * which a page carries for the browser's router as `u:` and epoch
+ * milliseconds.
  */
-async function read(response: Response) {
-  const headers = [...response.headers].filter(([name]) => name !== "date");
-  const body = (await response.text()).replaceAll(/\bu:\d+/gu, "u:<loaded at>");
-  return { status: response.status, headers, body };
-}
+const unstamped = async (response: Response) =>
+  (await response.text()).replaceAll(/\bu:\d+/gu, "u:<loaded at>");
 
 /** The scripted sequence the differential runs against both apps, by path or by server function. */
 const script = (): readonly [string, RequestInit][] => [
@@ -110,6 +130,9 @@ const script = (): readonly [string, RequestInit][] => [
   ["/stream", {}],
   ["/fail", {}],
   ["/nowhere/42?q=private", {}],
+  ["/unwritten", {}],
+  ["/errored", {}],
+  [on.app.fixture.urls.refused, { headers: SERVER_FN }],
   [on.app.fixture.urls.list, { headers: SERVER_FN }],
   [on.app.fixture.urls.failing, { headers: SERVER_FN }],
   [on.app.fixture.urls.streaming, { headers: SERVER_FN }],
@@ -121,15 +144,13 @@ describe("the TanStack Start connector", () => {
   test("changes no response the app gives", async () => {
     const answered = { on: [] as unknown[], off: [] as unknown[] };
     for (const [path, init] of script()) {
-      answered.off.push(await read(await fetch(url(path, off.url), init)));
-      answered.on.push(await read(await fetch(url(path), init)));
+      answered.off.push(await read(await fetch(url(path, must(setup.off).url), init), unstamped));
+      answered.on.push(await read(await fetch(url(path), init), unstamped));
     }
-    // One record per request the timed app answered, read before anything
-    // is compared, so a case that fails leaves none for the next.
-    const written = [];
-    for (const _ of script()) written.push((await nextRecord()).operation);
-    expect(answered.on).toEqual(answered.off);
-    expect(written).toEqual([
+    // One record per request the timed app answered that wrote one, and one
+    // fault for each that did not, read before anything is compared, so a
+    // case that fails leaves none for the next.
+    const expected = [
       "/",
       "/presets/$id",
       "/presets/$id",
@@ -142,7 +163,12 @@ describe("the TanStack Start connector", () => {
       "src/fns.ts:streamingFn",
       "unmatched",
       "unmatched",
-    ]);
+    ];
+    const written = [];
+    for (const _ of expected) written.push((await nextRecord()).operation);
+    expect(answered.on).toEqual(answered.off);
+    expect(written).toEqual(expected);
+    expect(faults()).toHaveLength(3);
   });
 
   /** The record `pending` resolves to, and that it is the only one: the sentinel's comes next. */
@@ -238,7 +264,7 @@ describe("the TanStack Start connector", () => {
       await (await fetch(url(path()), init)).text();
       const made = await recordOf(written);
       expect(made).toMatchObject(expected);
-      expect({ db: made.db.count, store: made.store.count, out: made.out.count }).toEqual({
+      expect(countsOf(made)).toEqual({
         db,
         store: 0,
         out: 0,
@@ -254,7 +280,7 @@ describe("the TanStack Start connector", () => {
     client.abort();
     await expect(response).rejects.toMatchObject({ name: "AbortError" });
     const made = await written;
-    on.app.fixture.held.open();
+    await on.app.fixture.held.open();
     expect(made).toMatchObject({ operation: "/hang", status: 499, aborted: true, streamed: false });
     expect(made.db.count).toBe(1);
     await recordOf(Promise.resolve(made));
@@ -319,6 +345,49 @@ describe("the TanStack Start connector", () => {
       next: on.app.fixture.nextLine,
       sentinel: { operation: "/", drive: async () => void (await (await fetch(url("/"))).text()) },
     }));
+
+  // What the app's `fault` is handed, and no record: the response served as
+  // it would be without timing, and the app still serving.
+  const faulted: [string, () => string, RequestInit, number, string][] = [
+    ["a sink that throws", () => "/unwritten", {}, 200, "the sink refused the record"],
+    ["a status no response is sent with", () => "/errored", {}, 500, "closed with status 0"],
+    [
+      "a server function's name the core refuses",
+      () => on.app.fixture.urls.refused,
+      { headers: SERVER_FN },
+      200,
+      "longer than 256 characters",
+    ],
+  ];
+  for (const [fault, path, init, status, message] of faulted) {
+    test(`hands ${fault} to the app's fault, once, and writes no record`, async () => {
+      const response = await fetch(url(path()), init);
+      await response.text();
+      expect(response.status).toBe(status);
+      await (await fetch(url("/presets/2"))).text();
+      expect((await nextRecord()).operation).toBe("/presets/$id");
+      const reported = faults();
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toContain(message);
+    });
+  }
+
+  test("refuses at startup a server-function path that is not one", () => {
+    const root = createRootRoute();
+    const timing = requestTiming({ fault: () => undefined, sink: () => undefined });
+    for (const serverFnBase of ["/_serverFn", "_serverFn/"]) {
+      expect(() =>
+        timedStartHandler(
+          timing,
+          () => new Response(),
+          () => createRouter({ routeTree: root }),
+          {
+            serverFnBase,
+          },
+        ),
+      ).toThrow('beginning and ending with "/"');
+    }
+  });
 
   test("refuses at startup a route whose pattern the core will not take", () => {
     const root = createRootRoute();

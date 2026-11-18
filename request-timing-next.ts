@@ -5,59 +5,22 @@
  * says how an app mounts it, what its records hold, and why the app states the
  * pattern itself.
  */
-import { endings } from "./request-timing-entry.ts";
+import { timedEntry } from "./request-timing-entry.ts";
 import { marked } from "./request-timing-route.ts";
-import { inOperation, OperationName, type Timing, within } from "./request-timing.ts";
+import { OperationName, type Timing } from "./request-timing.ts";
 
 /**
- * `body`, passed through chunk for chunk, with `ended` called once the last
- * chunk has been taken, the source has failed, or the client has cancelled.
- * Not `request-timing-entry.ts`'s `watched`, since Next.js sends every body
- * chunked and only the chunks the body hands over say whether it streamed.
- * The source still runs in the context it was made in, the handler's, so what
- * it waits on as it is pulled counts in the operation (measured on Bun 1.4.4
- * and Node 24: a stream's `pull` sees the store its constructor ran under, not
- * its reader's). A high-water mark of nothing reads no chunk ahead of
- * the server, so the source is pulled exactly as it was without the wrapper.
- *
- * A body counts as streamed once it has handed over a chunk and was then not
- * finished on the next read: a buffered body is one chunk and then its end.
- * `delivered` counts the chunks handed over, for the client's abort to read.
+ * Whether a body Next.js sends was sent over time. Next.js sends every body
+ * chunked, so only the chunks it hands over say: a buffered body is one chunk
+ * and then its end, and a body that was not finished on the read after its
+ * first chunk, or was still being read when it stopped, streamed. What a
+ * source waits on as it is pulled counts in the operation, since it runs in
+ * the context it was made in, the handler's (measured on Bun 1.4.4 and Node
+ * 24: a stream's `pull` sees the store its constructor ran under, not its
+ * reader's).
  */
-function counted(
-  body: ReadableStream<Uint8Array>,
-  delivered: { chunks: number },
-  ended: (how: { readonly aborted: boolean; readonly streamed: boolean }) => void,
-): ReadableStream<Uint8Array> {
-  const reader = body.getReader();
-  return new ReadableStream<Uint8Array>(
-    {
-      pull: (controller) =>
-        reader.read().then(
-          (chunk) => {
-            if (chunk.done) {
-              controller.close();
-              ended({ aborted: false, streamed: delivered.chunks > 1 });
-              return;
-            }
-            delivered.chunks += 1;
-            controller.enqueue(chunk.value);
-          },
-          (error: unknown) => {
-            // The client has its status and part of the body, and now the
-            // error Next.js gives a body that fails.
-            ended({ aborted: false, streamed: delivered.chunks > 0 });
-            controller.error(error);
-          },
-        ),
-      cancel: (reason) => {
-        ended({ aborted: true, streamed: delivered.chunks > 0 });
-        return reader.cancel(reason);
-      },
-    },
-    { highWaterMark: 0 },
-  );
-}
+const streamed = ({ finished, chunks }: { finished: boolean; chunks: number }): boolean =>
+  finished ? chunks > 1 : chunks > 0;
 
 /**
  * The wrapper, for `timing`. An app makes it once and wraps each handler a
@@ -83,38 +46,18 @@ export function requestTimingRoute(timing: Timing) {
     handler: (request: R, context: C) => Response | Promise<Response>,
   ): ((request: R, context: C) => Promise<Response>) => {
     const name = OperationName.registered(pattern);
-    const timed = (request: R, context: C): Promise<Response> => {
-      if (inOperation()) return Promise.resolve(handler(request, context));
-      const operation = timing.open();
-      const delivered = { chunks: 0 };
-      const { end, produced } = endings(
-        operation,
+    const timed = (request: R, context: C): Promise<Response> =>
+      timedEntry(
+        timing,
         request,
-        () => name,
-        () => delivered.chunks > 0,
-      );
-      const answered = new Promise<Response>((resolve) =>
-        resolve(within(operation, () => handler(request, context))),
-      );
-      return answered.then(
-        (response) => {
-          produced(response);
+        () => handler(request, context),
+        () => () => name,
+        (response) =>
           // Next.js answers a HEAD with the headers alone and never reads the body.
-          if (response.body === null || request.method === "HEAD") {
-            end({ status: response.status, aborted: false, streamed: false });
-            return response;
-          }
-          const body = counted(response.body, delivered, (how) =>
-            end({ status: response.status, ...how }),
-          );
-          return new Response(body, response);
-        },
-        (error: unknown) => {
-          end({ status: 500, aborted: false, streamed: false });
-          throw error;
-        },
+          response.body === null || request.method === "HEAD"
+            ? { close: { status: response.status, aborted: false, streamed: false } }
+            : { watch: response.body, streamed },
       );
-    };
     return marked(timed, { kind: "route", pattern });
   };
 }

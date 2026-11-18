@@ -17,6 +17,7 @@ import { listPresetsFn } from "./fns.ts";
 import { LANES } from "./lanes.ts";
 import { findPreset, held, lane, listPresets } from "./presets.ts";
 import { run } from "./runtime.ts";
+import { UNWRITTEN } from "./timing.ts";
 
 /** A refusal a server route throws, which leaves the server to answer 500. */
 class Refused extends Error {}
@@ -81,6 +82,19 @@ const outerRoute = createRoute({
   },
 });
 
+const unwrittenRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: UNWRITTEN,
+  server: { handlers: { GET: () => new Response("served") } },
+});
+
+/** A status no response can be sent with, which Bun answers with the server's own 500. */
+const erroredRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/errored",
+  server: { handlers: { GET: () => Response.error() } },
+});
+
 const encoder = new TextEncoder();
 
 const streamRoute = createRoute({
@@ -126,6 +140,7 @@ const hangRoute = createRoute({
         await run(listPresets);
         await held.wait();
         await run(listPresets);
+        held.done();
         return Response.json("too late");
       },
     },
@@ -155,6 +170,8 @@ const routeTree = rootRoute.addChildren([
   homeRoute,
   presetRoute,
   outerRoute,
+  unwrittenRoute,
+  erroredRoute,
   streamRoute,
   failRoute,
   hangRoute,

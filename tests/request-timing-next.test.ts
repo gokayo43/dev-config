@@ -24,20 +24,11 @@ import { must } from "../narrowing.ts";
 import { requestTimingConforms } from "../request-timing-conformance.ts";
 import { requestTimingRoute } from "../request-timing-next.ts";
 import { OperationName, requestTiming, type TimingRecord, within } from "../request-timing.ts";
-import {
-  bootedForSuite,
-  countsOf,
-  differential,
-  type Ending,
-} from "./request-timing-next-fixture.ts";
+import { read } from "./request-timing-fixture.ts";
+import { bootedForSuite, differential, type Ending } from "./request-timing-next-fixture.ts";
+import { countsOf } from "./request-timing-oracle.ts";
 
 const suite = bootedForSuite();
-
-/** A response as a client reads it, less the one header that differs by the second it was sent. */
-async function read(response: Response) {
-  const headers = [...response.headers].filter(([name]) => name !== "date");
-  return { status: response.status, headers, body: await response.text() };
-}
 
 /** The scripted sequence the differential runs against both apps. */
 const SCRIPT: readonly [string, RequestInit][] = [
@@ -49,6 +40,8 @@ const SCRIPT: readonly [string, RequestInit][] = [
   ["/api/lane?db=2&out=1&tx=false", {}],
   ["/api/lane?db=2&out=1&tx=true", {}],
   ["/api/presets/2", { method: "POST" }],
+  ["/api/unwritten", {}],
+  ["/api/errored", {}],
 ];
 
 /** The one record of `operation` among those written before the sentinel's. */
@@ -156,6 +149,39 @@ describe("the Next.js connector", () => {
     expect(made).toMatchObject({ status: 200, aborted: true, streamed: true });
     expect(countsOf(made)).toEqual({ db: 0, out: 0, store: 0 });
     expect((await suite.app.settle()).map((record) => record.operation)).not.toContain("/api/drip");
+  });
+
+  // What the app's `fault` is handed, and no record: the response served as
+  // it is without timing (the differential above), and the app still serving.
+  const faulted: [string, string, string][] = [
+    ["a sink that throws", "/api/unwritten", "the sink refused the record"],
+    ["a status no response is sent with", "/api/errored", "closed with status 0"],
+  ];
+  for (const [fault, path, message] of faulted) {
+    test(`hands ${fault} to the app's fault, once, and writes no record`, async () => {
+      await suite.app.settle();
+      suite.app.faults();
+      await (await fetch(suite.app.url(path))).arrayBuffer();
+      const written = await suite.app.settle();
+      expect(written.map((record) => record.operation)).not.toContain(path);
+      const reported = suite.app.faults();
+      expect(reported).toHaveLength(1);
+      expect(reported[0]).toContain(message);
+    });
+  }
+
+  test("closes a request whose client had left before the wrapper ran, as 499 and aborted", async () => {
+    const records: TimingRecord[] = [];
+    const timing = requestTiming({
+      fault: (error) => {
+        throw error;
+      },
+      sink: (record) => void records.push(record),
+    });
+    const route = requestTimingRoute(timing)("/left", () => new Response("too late"));
+    const left = new Request("http://in-process/left", { signal: AbortSignal.abort() });
+    expect(await (await route(left, {})).text()).toBe("too late");
+    expect(records).toMatchObject([{ operation: "/left", status: 499, aborted: true }]);
   });
 
   test("passes the conformance kit", async () => {

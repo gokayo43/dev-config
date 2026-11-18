@@ -10,6 +10,6 @@ const BOOTED = "the request-timing Next.js suite sets it when it boots the fixtu
 /** Whether request timing is on: the suite boots the app off as the differential's oracle. */
 export const timed = Bun.env.FIXTURE_TIMING !== "off";
 
-export const mysqlUrl = () => required("FIXTURE_MYSQL_URL", BOOTED);
+export const databaseUrl = () => required("FIXTURE_DATABASE_URL", BOOTED);
 
 export const outsideUrl = () => required("FIXTURE_OUTSIDE_URL", BOOTED);

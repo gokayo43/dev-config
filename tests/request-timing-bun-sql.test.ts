@@ -15,6 +15,9 @@
  * started, so each is handed the connection by another's release.
  */
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SQL } from "bun";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sql";
@@ -205,9 +208,14 @@ describe("the Bun.sql connector", () => {
     [
       "a query read from a file",
       async (client) => {
-        const path = `${process.env["TMPDIR"] ?? "/tmp"}/request-timing-${process.pid}.sql`;
-        await Bun.write(path, "select 1");
-        await client.file(path);
+        const directory = await mkdtemp(join(tmpdir(), "request-timing-"));
+        try {
+          const path = join(directory, "query.sql");
+          await Bun.write(path, "select 1");
+          await client.file(path);
+        } finally {
+          await rm(directory, { recursive: true });
+        }
       },
       1,
     ],

@@ -8,18 +8,26 @@
 import type { AnyRouter } from "@tanstack/react-router";
 
 import { must } from "./narrowing.ts";
-import { endings, watched } from "./request-timing-entry.ts";
+import { registeredNames, timedEntry } from "./request-timing-entry.ts";
 import { type Operation, plainStorage } from "./request-timing-operation.ts";
-import { inOperation, OperationName, type Timing, within } from "./request-timing.ts";
+import { OperationName, type Timing } from "./request-timing.ts";
+
+/** What Start's compiler records of a server function: its id, its variable name and its file. */
+interface ServerFnMeta {
+  readonly id: string;
+  readonly name: string;
+  readonly filename: string;
+}
 
 /**
  * The operation of a server function called over HTTP, waiting for the
- * function middleware to name it: `id` is the id the request's path carries,
- * and `name` is set by the run of the function with that id.
+ * function middleware: `id` is the id the request's path carries, and `meta`
+ * is set by the run of the function with that id. The name is made of it at
+ * the close, where a name the core refuses goes to the app's `fault`.
  */
 interface Awaiting {
   readonly id: string;
-  name: OperationName | undefined;
+  meta: ServerFnMeta | undefined;
 }
 
 /**
@@ -44,11 +52,9 @@ const DEFAULT_SERVER_FN_BASE = "/_serverFn/";
  * chunked` itself. A rendered page is not one, since its time to the last byte
  * is the page's own work.
  */
-const isStreamed = (response: Response): boolean =>
-  response.headers.get("transfer-encoding") === "chunked" ||
-  /^(?:text\/event-stream|application\/x-tss-framed)\b/u.test(
-    response.headers.get("content-type") ?? "",
-  );
+const isStreamed = (headers: Headers): boolean =>
+  headers.get("transfer-encoding") === "chunked" ||
+  /^(?:text\/event-stream|application\/x-tss-framed)\b/u.test(headers.get("content-type") ?? "");
 
 /** What the wrapper reads of a route in the router's table. */
 interface Named {
@@ -97,91 +103,72 @@ export function timedStartHandler<Options>(
   options: StartTimingOptions = {},
 ): StartHandler<Options> {
   const base = options.serverFnBase ?? DEFAULT_SERVER_FN_BASE;
+  if (!base.startsWith("/") || !base.endsWith("/")) {
+    throw new Error(
+      `request timing: serverFnBase is the path server functions are called on, beginning and ending with "/", such as "/_serverFn/"; it was given as ${JSON.stringify(base)}`,
+    );
+  }
   const router = getRouter();
-  const names = new Map<string, OperationName>();
+  const nameOf = registeredNames();
   // The router's table types every route as `AnyRoute`, generic in every
   // position; these two fields are the whole of what is read of one.
   const routes: readonly Named[] = Object.values(router.routesById);
-  for (const route of routes) {
-    if (!route.isRoot) names.set(route.fullPath, OperationName.registered(route.fullPath));
-  }
+  for (const route of routes) if (!route.isRoot) nameOf(route.fullPath);
 
   /**
    * The route the router matches for `pathname`, as Start's own handler asks
    * it. `**` among the params is Start's mark for a route that matched only a
-   * prefix of the path, which renders the not-found page and runs no handler.
+   * prefix of the path, which renders the not-found page and runs no handler,
+   * and the root route answers no path of its own: it is found only for a path
+   * no route matched.
    */
   const routeName = (pathname: string): OperationName => {
     const [, params, found] = router.getMatchedRoutes(pathname);
     const route: Named | undefined = found;
-    if (route === undefined || params["**"] !== undefined) return OperationName.unmatched;
-    // The root route is the one left out of the table: it answers no path of
-    // its own, and the router finds it only for a path no route matched.
-    return names.get(route.fullPath) ?? OperationName.unmatched;
+    if (route === undefined || route.isRoot || params["**"] !== undefined) {
+      return OperationName.unmatched;
+    }
+    return nameOf(route.fullPath);
   };
 
-  const serve = (request: Request, handlerOptions: Options | undefined): Promise<Response> => {
-    const operation = timing.open();
-    const { pathname } = new URL(request.url);
-    let name: () => OperationName;
-    if (pathname.startsWith(base)) {
+  /** How the operation serving a request to `pathname` is named, once it is open. */
+  const naming =
+    (pathname: string) =>
+    (operation: Operation): (() => OperationName) => {
+      if (!pathname.startsWith(base)) return () => routeName(pathname);
       // Start's own reading of the id: the path segment after the base.
       const awaiting: Awaiting = {
         id: must(pathname.slice(base.length).split("/")[0]),
-        name: undefined,
+        meta: undefined,
       };
       awaitingName.set(operation, awaiting);
-      name = () => awaiting.name ?? OperationName.unmatched;
-    } else {
-      const matched = routeName(pathname);
-      name = () => matched;
-    }
-    const { end, produced } = endings(operation, request, name, isStreamed);
-    const answered = new Promise<Response>((resolve) =>
-      resolve(within(operation, () => handler(request, handlerOptions))),
-    );
-    return answered.then(
-      (response) => {
-        produced(response);
-        const streamed = isStreamed(response);
-        // Copied before the body is read: Bun drops a content type it derived
-        // from a buffered body, a typed Blob's or form data's, from the
-        // headers once that body is read as a stream.
-        const headers = new Headers(response.headers);
+      return () =>
+        awaiting.meta === undefined
+          ? OperationName.unmatched
+          : nameOf(`${awaiting.meta.filename}:${awaiting.meta.name}`);
+    };
+
+  return (request, handlerOptions) =>
+    timedEntry(
+      timing,
+      request,
+      () => handler(request, handlerOptions),
+      naming(new URL(request.url).pathname),
+      (response, headers) => {
+        const streamed = isStreamed(headers);
         // Bun gives a body whose headers name no content type, a string's or
         // bytes', one of its own as it sends it, which a copy of the body
         // would not get; so such a response is closed as it is handed over.
-        if (!headers.has("content-type") || response.body === null) {
-          end({ status: response.status, aborted: false, streamed });
-          return response;
-        }
-        const body = watched(response.body, (aborted) =>
-          end({ status: response.status, aborted, streamed }),
-        );
-        return new Response(body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers,
-        });
-      },
-      (error: unknown) => {
-        // Start throws out of its handler only for a server route or page
-        // whose handler threw, and Bun answers a fetch that throws with 500.
-        end({ status: 500, aborted: false, streamed: false });
-        throw error;
+        return !headers.has("content-type") || response.body === null
+          ? { close: { status: response.status, aborted: false, streamed } }
+          : { watch: response.body, streamed: () => streamed };
       },
     );
-  };
-
-  return (request, handlerOptions) =>
-    // A request served in-process while an operation is current is part of it.
-    inOperation() ? handler(request, handlerOptions) : serve(request, handlerOptions);
 }
 
 /** What `nameServerFunction` reads of a server function's middleware call. */
 interface ServerFunctionCall<Next> {
-  /** Start's compile-time record of the function: its id, its variable name and its file. */
-  readonly serverFnMeta: { readonly id: string; readonly name: string; readonly filename: string };
+  readonly serverFnMeta: ServerFnMeta;
   readonly next: () => Next;
 }
 
@@ -195,16 +182,15 @@ interface ServerFunctionCall<Next> {
  * which Start's compiler records and which no build changes, where the id in
  * the request's path is a hash a reader cannot read back. The id is used only
  * to tell the call the request made from a call its handler makes in-process,
- * which names nothing. A file whose path the core refuses, one with a space, `?` or `#`,
- * throws on the function's every call.
+ * which names nothing. A name the core refuses, from a file path with a space,
+ * `?` or `#`, or longer than it takes, goes to the app's `fault` when the
+ * operation closes, and the call writes no record.
  */
 export function nameServerFunction<Next>(call: ServerFunctionCall<Next>): Next {
   const operation = plainStorage.getStore();
   const awaiting = operation === undefined ? undefined : awaitingName.get(operation);
-  if (awaiting?.name === undefined && awaiting?.id === call.serverFnMeta.id) {
-    awaiting.name = OperationName.registered(
-      `${call.serverFnMeta.filename}:${call.serverFnMeta.name}`,
-    );
+  if (awaiting?.meta === undefined && awaiting?.id === call.serverFnMeta.id) {
+    awaiting.meta = call.serverFnMeta;
   }
   return call.next();
 }

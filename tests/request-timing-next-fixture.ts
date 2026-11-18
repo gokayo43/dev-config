@@ -10,9 +10,8 @@ import { afterAll, beforeAll } from "bun:test";
 import { join } from "node:path";
 
 import { must } from "../narrowing.ts";
-import { parseRecord } from "../request-timing-summary.ts";
 import type { TimingRecord, WaitKind } from "../request-timing.ts";
-import { lines } from "./request-timing-fixture.ts";
+import { lines, recordsFrom } from "./request-timing-fixture.ts";
 import { scratchDatabase } from "./request-timing-servers.ts";
 
 /** The fixture app's directory. */
@@ -77,7 +76,7 @@ export async function nextApp(timed: boolean) {
     cwd: APP,
     env: childEnvironment({
       FIXTURE_TIMING: timed ? "on" : "off",
-      FIXTURE_MYSQL_URL: database.url,
+      FIXTURE_DATABASE_URL: database.url,
       FIXTURE_OUTSIDE_URL: outside.url.href,
     }),
     stdout: "pipe",
@@ -94,20 +93,26 @@ export async function nextApp(timed: boolean) {
     sink.write(text);
   });
   void eachLine(child.stderr, (text) => void errors.push(text));
-  void child.exited.then((status) =>
-    listening.reject(new Error(`next start exited with ${status}:\n${errors.join("\n")}`)),
-  );
-  const base = await listening.promise;
-  await ready.promise;
+  void child.exited.then((status) => {
+    const exited = new Error(`next start exited with ${status}:\n${errors.join("\n")}`);
+    listening.reject(exited);
+    ready.reject(exited);
+  });
+  let base: URL;
+  try {
+    base = await listening.promise;
+    await ready.promise;
+  } catch (error) {
+    // `next start` exited before it served: take down what was made for it.
+    await outside.stop(true);
+    await database[Symbol.asyncDispose]();
+    throw error;
+  }
 
   /** Records read ahead of the case that asked for one by name. */
   const unclaimed: TimingRecord[] = [];
-  const nextRecord = async (): Promise<TimingRecord> => {
-    for (;;) {
-      const record = parseRecord(await sink.next());
-      if (record !== undefined) return record;
-    }
-  };
+  const records = recordsFrom(sink.next);
+  const nextRecord = records.next;
 
   return {
     url: (path: string) => new URL(path, base),
@@ -143,6 +148,8 @@ export async function nextApp(timed: boolean) {
         before.push(record);
       }
     },
+    /** The faults the app's `fault` wrote among the lines read so far, taken. */
+    faults: records.faults,
     /** What the server wrote to its standard error. */
     errors: () => [...errors],
     [Symbol.asyncDispose]: async () => {
@@ -165,13 +172,6 @@ export type Ending = readonly [
   expected: Partial<TimingRecord>,
   counts: Partial<Record<WaitKind, number>>,
 ];
-
-/** How many waits of each kind a record counted. */
-export const countsOf = (record: TimingRecord) => ({
-  db: record.db.count,
-  out: record.out.count,
-  store: record.store.count,
-});
 
 /**
  * The differential: `script` sent, one request after the other, to `app` and

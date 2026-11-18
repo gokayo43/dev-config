@@ -10,22 +10,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { TRPCError, TRPCProcedureType, TRPCRouterRecord } from "@trpc/server";
 
+import { endings, registeredNames } from "./request-timing-entry.ts";
 import { marked } from "./request-timing-route.ts";
-import {
-  inOperation,
-  type Method,
-  type Operation,
-  OperationName,
-  type Timing,
-  within,
-} from "./request-timing.ts";
-
-/** How a call ended, short of its name and method. */
-interface Ended {
-  readonly status: number;
-  readonly aborted: boolean;
-  readonly streamed: boolean;
-}
+import { inOperation, type Method, type Operation, type Timing, within } from "./request-timing.ts";
 
 /** What tRPC's middleware is handed, as far as the connector reads it. */
 export interface ProcedureCall<Result> {
@@ -112,14 +99,7 @@ function iterated(
 export function requestTimingProcedures(timing: Timing, statusOf: (error: TRPCError) => number) {
   /** Holds while a request the envelope serves runs, so only a call over HTTP opens an operation. */
   const carried = new AsyncLocalStorage<true>();
-  const names = new Map<string, OperationName>();
-  const nameOf = (path: string): OperationName => {
-    const known = names.get(path);
-    if (known !== undefined) return known;
-    const name = OperationName.registered(path);
-    names.set(path, name);
-    return name;
-  };
+  const nameOf = registeredNames();
 
   /**
    * The middleware. Every call of a procedure built on it, that arrives
@@ -139,20 +119,16 @@ export function requestTimingProcedures(timing: Timing, statusOf: (error: TRPCEr
   ): Promise<Result> => {
     if (carried.getStore() === undefined || inOperation()) return call.next();
     const operation = timing.open();
-    const { promise: ending, resolve: end } = Promise.withResolvers<Ended>();
-    const name = nameOf(call.path);
-    // The one place the operation closes, on the first ending to arrive. A
-    // sink that throws rejects here, out of band of the call it measured. Not
-    // `request-timing-entry.ts`'s `endings`: a call in a batch has no request
-    // of its own, its method is its type's, and its abort signal is tRPC's.
-    void ending.then((ended) => {
-      operation.close({ method: METHOD_OF[call.type], name, ...ended });
-    });
     let streaming = false;
-    call.signal?.addEventListener(
-      "abort",
-      () => end({ status: streaming ? 200 : 499, aborted: true, streamed: streaming }),
-      { once: true },
+    // A call in a batch has no request of its own: its method is its type's,
+    // and its abort signal is tRPC's.
+    const end = endings(
+      timing,
+      operation,
+      METHOD_OF[call.type],
+      () => nameOf(call.path),
+      call.signal,
+      () => ({ status: streaming ? 200 : 499, aborted: true, streamed: streaming }),
     );
     const result = await within(operation, call.next);
     if (!result.ok) {
@@ -176,7 +152,8 @@ export function requestTimingProcedures(timing: Timing, statusOf: (error: TRPCEr
    * for the conformance kit's route-tree check. It opens no operation itself.
    * Every procedure's path is checked as a name here, when the route module is
    * loaded, so a path the core refuses fails `next build` rather than a call;
-   * a lazily loaded router's paths are checked on their first call.
+   * a lazily loaded router's paths are checked when a call closes, where a
+   * refused one goes to the app's `fault` and the call writes no record.
    */
   const envelope = <R extends Request, C>(
     router: { readonly _def: { readonly procedures: TRPCRouterRecord } },

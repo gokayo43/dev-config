@@ -22,10 +22,13 @@ In this order:
    app's own beside the reserved names, and spreads the record last so a
    reserved name is never overwritten. An app whose other log lines are not
    JSON still writes this one as JSON. `fault` receives what goes wrong in
-   closing an operation after its response has been answered: a sink that
-   threw, a name or a status the core refused, a second close. It logs it the
-   app's way, and the response stands. A `fault` that throws is the app's own
-   error, and nothing catches it.
+   closing an operation after its response has been answered: the error a sink
+   threw; the core's refusal of a name, which says what shape it refused and
+   never quotes it; its refusal of a status outside 100 to 599, as the 0 of
+   `Response.error()`; and its refusal of a second close. Each is one call of
+   `fault`, and that operation writes no record. It logs it the app's way, and
+   the response stands. A `fault` that throws is the app's own error, and
+   nothing catches it.
 
    ```ts
    import { requestTiming } from "@gokayo43/dev-config/request-timing";
@@ -155,8 +158,10 @@ export const app = new Elysia().use(errorHandler).use(requestTimingPlugin(timing
 - Every request the app serves is one operation, from before its `onRequest`
   hooks to the end of its response, whatever plugins run around the handler.
 - The name is the route as Elysia registered it. A request no route matched is
-  `unmatched`, and so is one whose body the route could not parse, which Elysia
-  refuses before the route's hooks run.
+  `unmatched`, and so is every request that ends before Elysia has matched its
+  route, which it does after reading the body: one whose body the route could
+  not parse, one whose client left while its body was being read, and one an
+  app's own `onRequest` hook answered.
 - The status is the one the client received, whichever error handler made it.
   A handler of errors that throws leaves the server to answer, and the record
   says 500, which is Bun's answer; an app that sets Bun's `error` option in
@@ -175,6 +180,15 @@ export const app = new Elysia().use(errorHandler).use(requestTimingPlugin(timing
   the handler waits on after that is in no record.
 - Mounting it behind a route throws, naming the route, and `listen` throws on a
   route whose pattern the core refuses, such as an optional parameter `/:id?`.
+  An app served by Bun with `app.fetch`, without `listen`, meets that pattern
+  at the route's first request: the refusal goes to `fault`, the response is
+  served, and the request writes no record. So does a response with a status
+  no response can be sent with, `Response.error()`'s 0, which Bun answers with
+  its own 500.
+- The connector runs the request inside Elysia's `.wrap()`, which Elysia's
+  source marks as private. A change to it breaks the connector without a type
+  error; this repo's Elysia suite, run on every Elysia bump, is what catches
+  it.
 - A WebSocket route's upgrade is one operation, recorded with the 101 the
   client received once Bun's server took the request over. The messages after
   it are in no record.
@@ -228,11 +242,15 @@ Start mounts its own CSRF check on server functions only while an app has no
   every request as `unmatched`.
 - A server function is named by its file and variable as Start's compiler
   records them, `src/server/presets.ts:listPresets`, which no build changes;
-  the id in its URL is a hash in a build. A function in a file whose path the core refuses,
-  one holding a space, `?` or `#`, fails on every call.
+  the id in its URL is a hash in a build. A name the core refuses, from a file
+  path holding a space, `?` or `#` or a name longer than it takes, goes to
+  `fault` when the call closes; the call is served, and writes no record.
 - A request no route matched is `unmatched`, and so is a call to a server
-  function that does not exist, or one refused before the function ran, as by
-  the CSRF check.
+  function that does not exist, one refused before the function ran, as by
+  the CSRF check, and one whose client left before the function ran, since its
+  name is known only once `nameServerFunction` has run.
+- A response with a status no response can be sent with, `Response.error()`'s
+  0, which Bun answers with its own 500, goes to `fault` and writes no record.
 - A page that renders on the server and calls server functions in-process, from
   a loader, is one operation, the page's. The in-process calls open nothing and
   name nothing, and their waits count in the page's record. So does a request
@@ -259,7 +277,8 @@ Start mounts its own CSRF check on server functions only while an app has no
 - An app that sets `serverFns.base` in the Start plugin, or a router
   `basepath`, passes the path server functions are called on as the fourth
   argument, `{ serverFnBase: "/rpc/" }`; unset, it is Start's own,
-  `/_serverFn/`.
+  `/_serverFn/`. A path that does not begin and end with `/` is refused, by
+  throwing, when the handler is wrapped.
 
 ## Next.js route handlers
 
@@ -302,8 +321,11 @@ export const GET = timedRoute("/api/presets/[id]", async (request, { params }) =
 - The status is the response's. A handler that throws is recorded with the
   500 Next.js answers.
 - A client that goes away closes the operation then, with `aborted: true` and
-  the status the handler had produced, or 499 where it had produced none. What
-  the handler waits on after that is in no record.
+  the status the handler had produced, or 499 where it had produced none, and
+  so does a client already gone when the wrapper runs. What the handler waits
+  on after that is in no record.
+- A response with a status no response can be sent with, `Response.error()`'s
+  0, goes to `fault` and writes no record; so does a sink that throws.
 - A handler called while an operation is current runs as it is.
 - A pattern the core refuses throws when the route module loads, which
   `next build` does for every route while it collects page data.
@@ -352,8 +374,9 @@ export { handler as GET, handler as POST };
   does a call made while an operation is current.
 - The name is the procedure's path, `presets.byId`. The envelope checks every
   path of the router when its route module loads, so a path the core refuses
-  fails `next build`; a lazily loaded router's paths are checked on their first
-  call.
+  fails `next build`. A lazily loaded router's paths are met when a call
+  closes: a refused one goes to `fault`, the call is answered, and it writes
+  no record.
 - The method is what an HTTP reader expects of the call's type, whatever the
   client sent it with: a query is `GET`, also when sent as a POST for a long
   input, a mutation `POST`, a subscription `GET`.
@@ -366,7 +389,9 @@ export { handler as GET, handler as POST };
   is recorded with its status (403 for a `FORBIDDEN` a role check throws, 400
   for an input its validator refused).
 - A client that goes away before the answer closes the call then, `aborted`,
-  with 499; what the procedure waits on after that is in no record.
+  with 499, and so does a client already gone when the middleware runs, as
+  while tRPC was still creating the context; what the procedure waits on after
+  that is in no record.
 - A procedure that answers an async iterable, every subscription and a query
   streamed over `httpBatchStreamLink`, closes when the iteration ends, with
   200 and `streamed: true`, and each step of the iteration runs under the

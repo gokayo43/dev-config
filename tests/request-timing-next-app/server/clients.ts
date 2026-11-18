@@ -9,7 +9,7 @@ import { createPool } from "mysql2/promise";
 
 import { timedFetch } from "../../../request-timing-fetch.ts";
 import { timedPool } from "../../../request-timing-mysql2.ts";
-import { mysqlUrl, outsideUrl, timed } from "./env.ts";
+import { databaseUrl, outsideUrl, timed } from "./env.ts";
 
 export const presets = mysqlTable("presets", {
   id: int().primaryKey().autoincrement(),
@@ -17,7 +17,7 @@ export const presets = mysqlTable("presets", {
 });
 
 function connect() {
-  const pool = createPool({ uri: mysqlUrl(), connectionLimit: 4 });
+  const pool = createPool({ uri: databaseUrl(), connectionLimit: 4 });
   const send = timed ? timedFetch(fetch) : fetch;
   const outside = outsideUrl();
   return {
