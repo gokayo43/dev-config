@@ -79,6 +79,100 @@ carrier, by what the program is:
   measured with the plain `measure` inside an Effect program whose edge used the
   Effect `within` is counted in no record rather than a wrong one.
 
+## Elysia
+
+`@gokayo43/dev-config/request-timing/elysia` is the entry connector for an
+Elysia app. Mount it once, after the error handler and ahead of every route,
+since Elysia applies a hook only to the routes registered after it:
+
+```ts
+import { requestTimingPlugin } from "@gokayo43/dev-config/request-timing/elysia";
+
+export const app = new Elysia().use(errorHandler).use(requestTimingPlugin(timing)).use(routes);
+```
+
+- Every request the app serves is one operation, from before its `onRequest`
+  hooks to the end of its response, whatever plugins run around the handler.
+- The name is the route as Elysia registered it. A request no route matched is
+  `unmatched`, and so is one whose body the route could not parse, which Elysia
+  refuses before the route's hooks run.
+- The status is the one the client received, whichever error handler made it.
+  A handler of errors that throws leaves the server to answer, and the record
+  says 500, which is Bun's answer; an app that sets Bun's `error` option in
+  Elysia's `serve` config answers 500 there too, or its records disagree with
+  its clients.
+- A buffered response closes its operation when Elysia hands it to Bun. A
+  streamed one, which is every generator, `ReadableStream` and `sse()` a handler
+  answers and every response that says `transfer-encoding: chunked`, closes
+  after its last chunk, with `streamed: true`.
+- A client that goes away closes the operation then, with `aborted: true` and
+  the status the handler had produced, or 499 where it had produced none. What
+  the handler waits on after that is in no record.
+- Mounting it behind a route throws, naming the route, and `listen` throws on a
+  route whose pattern the core refuses, such as an optional parameter `/:id?`.
+- A WebSocket route's upgrade is one operation, recorded with the status Elysia
+  answers it with, 200, though the client receives 101. The messages after it
+  are in no record.
+
+## mysql2
+
+`@gokayo43/dev-config/request-timing/mysql2` wraps a pool `mysql2/promise`
+made. Use the answer wherever the pool was used, drizzle included:
+
+```ts
+import { timedPool } from "@gokayo43/dev-config/request-timing/mysql2";
+
+export const pool = timedPool(mysql.createPool(options));
+export const db = drizzle(pool, { schema, mode: "default" });
+```
+
+One `db` wait each:
+
+- `pool.query` and `pool.execute`, with the checkout they make inside;
+- `pool.getConnection`, the checkout itself, which answers a connection whose
+  waits are counted in turn: `query`, `execute`, `beginTransaction`, `commit`,
+  `rollback`, `ping`, `reset`, `changeUser` and `prepare`, and the prepared
+  statement's `execute`. A named lock taken with `GET_LOCK` on such a
+  connection is one of its queries.
+
+So a drizzle transaction on the pool is its checkout, `begin`, each statement
+and `commit` or `rollback`. Streamed rows, drizzle's `.iterator()`, are the
+checkout alone: the rows are read through the callback connection beneath, and
+the time between them is in the rest. Everything else is the pool's own, so
+`release`, `releaseConnection`, the events and the escapes are what they were.
+
+## Bun's Redis client
+
+`@gokayo43/dev-config/request-timing/bun-redis` wraps a `Bun.RedisClient`:
+
+```ts
+import { timedBunRedis } from "@gokayo43/dev-config/request-timing/bun-redis";
+
+export const redis = timedBunRedis(new RedisClient(url));
+```
+
+Every method but `close` is one `store` wait: each command, `send`, `connect`,
+and `duplicate`, whose client is wrapped the same way. Bun's client has no batch
+object, so a MULTI sent with `send` is a wait, each command after it is one, and
+so is EXEC. `subscribe` is a wait until the server confirms it, and the messages
+its listener receives are not.
+
+## fetch
+
+`@gokayo43/dev-config/request-timing/fetch` wraps a `fetch`. An app uses the
+answer at its outbound calls or installs it as the global, handing it the
+global it replaces:
+
+```ts
+import { timedFetch } from "@gokayo43/dev-config/request-timing/fetch";
+
+globalThis.fetch = timedFetch(globalThis.fetch);
+```
+
+Each call is one `out` wait, from the call until its promise settles, which is
+when the response's headers have arrived or the call has failed. Reading the
+body is not part of the wait, and is in the rest.
+
 ## The interface a connector builds on
 
 | Name                                  | What it is                                                                                                                                                                                                               |
@@ -221,7 +315,7 @@ leaves `next` waiting, and the test fails at its timeout.
 
 ## Ships built
 
-The plain and the Effect carrier ship built, like [the route log](route-log.md):
-app code that Next.js and Vite bundle imports them, and neither strips types
-under `node_modules`. `tsdown.config.ts` carries why. The conformance kit and the
+The plain and the Effect carrier and every connector ship built, like
+[the route log](route-log.md): app code that Next.js and Vite bundle imports
+them, and neither strips types under `node_modules`. `tsdown.config.ts` carries why. The conformance kit and the
 command ship their source, since only Bun runs them.

@@ -65,6 +65,22 @@
       "types": "./dist/request-timing-effect.d.ts",
       "default": "./dist/request-timing-effect.js"
     },
+    "./request-timing/elysia": {
+      "types": "./dist/request-timing-elysia.d.ts",
+      "default": "./dist/request-timing-elysia.js"
+    },
+    "./request-timing/mysql2": {
+      "types": "./dist/request-timing-mysql2.d.ts",
+      "default": "./dist/request-timing-mysql2.js"
+    },
+    "./request-timing/bun-redis": {
+      "types": "./dist/request-timing-bun-redis.d.ts",
+      "default": "./dist/request-timing-bun-redis.js"
+    },
+    "./request-timing/fetch": {
+      "types": "./dist/request-timing-fetch.d.ts",
+      "default": "./dist/request-timing-fetch.js"
+    },
     "./request-timing/conformance": "./request-timing-conformance.ts",
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
@@ -104,6 +120,7 @@
     "fast-check": "4.9.0",
     "knip": "6.38.0",
     "lefthook": "2.1.10",
+    "mysql2": "3.24.6",
     "oxfmt": "0.63.0",
     "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2001",
