@@ -220,7 +220,7 @@ export function requestTiming(options: TimingOptions): Timing {
  * The plain carrier: which operation is current in a plain async program. Read
  * by the plain `measure` and `inOperation`, read by the Effect carrier's
  * `carryOperation` at the one moment it is still right, and set or cleared by
- * its `tryPromiseCarried` for the length of a thunk.
+ * its `tryPromiseCarried` while it calls a thunk and starts what it answers.
  */
 export const plainStorage = new AsyncLocalStorage<Operation>();
 

@@ -1,4 +1,4 @@
-import { i as beginWait, o as plainStorage } from "./request-timing-operation-Cvj5mYAc.js";
+import { i as beginWait, o as plainStorage } from "./request-timing-operation-gsGVMm95.js";
 import { Effect, FiberRef } from "effect";
 //#region request-timing-effect.ts
 /**
@@ -9,8 +9,8 @@ import { Effect, FiberRef } from "effect";
 * effect 3.22.1: 38 of 40 queries attributed to the wrong request). It
 * touches that storage at the two crossings alone: `carryOperation` reads it,
 * synchronously, in the caller's context, before any fiber runs, and
-* `tryPromiseCarried` sets it from the fiber, or clears it, for the length of
-* one thunk.
+* `tryPromiseCarried` sets it from the fiber, or clears it, while it calls a
+* thunk and starts what the thunk answers.
 * `docs/exports/request-timing.md` is how an app adopts it.
 */
 /**
@@ -54,8 +54,23 @@ function carryOperation(program) {
 	const operation = plainStorage.getStore();
 	return operation === void 0 ? program : within(operation, program);
 }
-/** Runs `evaluate` under the plain carrier with `operation`, or under none at all. */
-const carriedOut = (operation, evaluate) => (signal) => operation === void 0 ? plainStorage.exit(() => evaluate(signal)) : plainStorage.run(operation, () => evaluate(signal));
+/**
+* Calls `evaluate` and starts what it answers, both inside the scope. A lazy
+* thenable, such as a drizzle query, runs only once its `then` is called, and
+* `Effect.tryPromise` calls `then` after this function has returned, outside
+* any scope, so `then` is called here, once and synchronously, as
+* `Effect.tryPromise` would call it. A throw from `evaluate` leaves the scope
+* and reaches `Effect.tryPromise` as it would have; a throw from `then` rejects
+* the promise, which `Effect.tryPromise` fails with alike.
+*/
+const started = (evaluate, signal) => {
+	const answered = evaluate(signal);
+	return new Promise((resolve, reject) => {
+		answered.then(resolve, reject);
+	});
+};
+/** Runs and starts `evaluate` under the plain carrier with `operation`, or under none at all. */
+const carriedOut = (operation, evaluate) => (signal) => operation === void 0 ? plainStorage.exit(() => started(evaluate, signal)) : plainStorage.run(operation, () => started(evaluate, signal));
 function tryPromiseCarried(given) {
 	return FiberRef.getWith(current, (operation) => {
 		const evaluate = typeof given === "function" ? given : given.try;

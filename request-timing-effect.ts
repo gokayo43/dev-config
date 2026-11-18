@@ -6,8 +6,8 @@
  * effect 3.22.1: 38 of 40 queries attributed to the wrong request). It
  * touches that storage at the two crossings alone: `carryOperation` reads it,
  * synchronously, in the caller's context, before any fiber runs, and
- * `tryPromiseCarried` sets it from the fiber, or clears it, for the length of
- * one thunk.
+ * `tryPromiseCarried` sets it from the fiber, or clears it, while it calls a
+ * thunk and starts what the thunk answers.
  * `docs/exports/request-timing.md` is how an app adopts it.
  */
 import { type Cause, Effect, FiberRef } from "effect";
@@ -79,20 +79,37 @@ export function carryOperation<A, E, R>(program: Effect.Effect<A, E, R>): Effect
   return operation === undefined ? program : within(operation, program);
 }
 
-/** Runs `evaluate` under the plain carrier with `operation`, or under none at all. */
+/**
+ * Calls `evaluate` and starts what it answers, both inside the scope. A lazy
+ * thenable, such as a drizzle query, runs only once its `then` is called, and
+ * `Effect.tryPromise` calls `then` after this function has returned, outside
+ * any scope, so `then` is called here, once and synchronously, as
+ * `Effect.tryPromise` would call it. A throw from `evaluate` leaves the scope
+ * and reaches `Effect.tryPromise` as it would have; a throw from `then` rejects
+ * the promise, which `Effect.tryPromise` fails with alike.
+ */
+const started = <A>(evaluate: (signal: AbortSignal) => PromiseLike<A>, signal: AbortSignal) => {
+  const answered = evaluate(signal);
+  return new Promise<A>((resolve, reject) => {
+    answered.then(resolve, reject);
+  });
+};
+
+/** Runs and starts `evaluate` under the plain carrier with `operation`, or under none at all. */
 const carriedOut =
   <A>(operation: Operation | undefined, evaluate: (signal: AbortSignal) => PromiseLike<A>) =>
-  (signal: AbortSignal): PromiseLike<A> =>
+  (signal: AbortSignal): Promise<A> =>
     operation === undefined
-      ? plainStorage.exit(() => evaluate(signal))
-      : plainStorage.run(operation, () => evaluate(signal));
+      ? plainStorage.exit(() => started(evaluate, signal))
+      : plainStorage.run(operation, () => started(evaluate, signal));
 
 /**
  * The crossing back from an Effect program into plain async code: exactly
- * `Effect.tryPromise`, with the promise run under the plain carrier holding the
- * fiber's operation, so every wait a plain connector measures inside it,
- * across all of its awaits, counts in the fiber's operation. With no operation
- * in the fiber the promise runs under no operation, whatever
+ * `Effect.tryPromise`, with the thunk called, and what it answers started, under
+ * the plain carrier holding the fiber's operation, so every wait a plain
+ * connector measures inside it, across all of its awaits, counts in the
+ * fiber's operation, a lazy drizzle query handed straight back included. With
+ * no operation in the fiber both run under no operation, whatever
  * `AsyncLocalStorage` holds where the fiber happens to run, so a stale store
  * from another request never leaks in. Rejection, a synchronous throw, the
  * abort signal and interruption are `Effect.tryPromise`'s: a driver's

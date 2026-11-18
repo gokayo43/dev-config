@@ -194,6 +194,21 @@ async function report(input: string, args: readonly string[] = []) {
 }
 
 describe("the reader's command", () => {
+  test("is the package's request-timing-report bin, and ships with the modules it reads", async () => {
+    const manifest: unknown = await Bun.file(join(import.meta.dir, "..", "package.json")).json();
+    expect(manifest).toMatchObject({
+      bin: { "request-timing-report": "./request-timing-report.ts" },
+    });
+    expect(manifest).toHaveProperty(
+      "files",
+      expect.arrayContaining([
+        "request-timing-report.ts",
+        "request-timing-summary.ts",
+        "request-timing-operation.ts",
+      ]),
+    );
+  });
+
   test("prints the summary, with streamed operations under their own heading", async () => {
     const { stdout, status } = await report(LOG.join("\n"));
     expect(status).toBe(SUMMARISED);
