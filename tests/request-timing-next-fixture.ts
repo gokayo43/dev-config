@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { must } from "../narrowing.ts";
 import { parseRecord } from "../request-timing-summary.ts";
-import type { TimingRecord } from "../request-timing.ts";
+import type { TimingRecord, WaitKind } from "../request-timing.ts";
 import { lines } from "./request-timing-fixture.ts";
 import { scratchDatabase } from "./request-timing-servers.ts";
 
@@ -155,3 +155,41 @@ export async function nextApp(timed: boolean) {
 
 /** A booted fixture app. */
 export type NextApp = Awaited<ReturnType<typeof nextApp>>;
+
+/** One ending a case drives: what it is, the request, the record it closes into, and that record's wait counts. */
+export type Ending = readonly [
+  ending: string,
+  path: string,
+  init: RequestInit,
+  expected: Partial<TimingRecord>,
+  counts: Partial<Record<WaitKind, number>>,
+];
+
+/** How many waits of each kind a record counted. */
+export const countsOf = (record: TimingRecord) => ({
+  db: record.db.count,
+  out: record.out.count,
+  store: record.store.count,
+});
+
+/**
+ * The differential: `script` sent, one request after the other, to `app` and
+ * to the same app booted with timing off, each response read by `read`, and
+ * both runs' records then taken from `app`.
+ */
+export async function differential<T>(
+  app: NextApp,
+  script: readonly (readonly [string, RequestInit])[],
+  read: (response: Response) => Promise<T>,
+) {
+  const run = async (target: NextApp) => {
+    const responses: T[] = [];
+    for (const [path, init] of script)
+      responses.push(await read(await fetch(target.url(path), init)));
+    return responses;
+  };
+  await using off = await nextApp(false);
+  const answers = { on: await run(app), off: await run(off) };
+  await app.settle();
+  return answers;
+}

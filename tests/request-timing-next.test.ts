@@ -23,14 +23,14 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { must } from "../narrowing.ts";
 import { requestTimingConforms } from "../request-timing-conformance.ts";
 import { requestTimingRoute } from "../request-timing-next.ts";
+import { OperationName, requestTiming, type TimingRecord, within } from "../request-timing.ts";
 import {
-  OperationName,
-  requestTiming,
-  type TimingRecord,
-  type WaitKind,
-  within,
-} from "../request-timing.ts";
-import { type NextApp, nextApp } from "./request-timing-next-fixture.ts";
+  countsOf,
+  differential,
+  type Ending,
+  type NextApp,
+  nextApp,
+} from "./request-timing-next-fixture.ts";
 
 let app: NextApp;
 // The first suite of a run to boot the app also builds it, which a cold
@@ -60,20 +60,6 @@ const SCRIPT: readonly [string, RequestInit][] = [
   ["/api/presets/2", { method: "POST" }],
 ];
 
-const runScript = async (target: NextApp) => {
-  const responses = [];
-  for (const [path, init] of SCRIPT) {
-    responses.push(await read(await fetch(target.url(path), init)));
-  }
-  return responses;
-};
-
-const countsOf = (record: TimingRecord) => ({
-  db: record.db.count,
-  out: record.out.count,
-  store: record.store.count,
-});
-
 /** The one record of `operation` among those written before the sentinel's. */
 async function onlyOne(operation: string): Promise<TimingRecord> {
   const written = (await app.settle()).filter((record) => record.operation === operation);
@@ -83,18 +69,11 @@ async function onlyOne(operation: string): Promise<TimingRecord> {
 
 describe("the Next.js connector", () => {
   test("changes no response the app gives", async () => {
-    await using off = await nextApp(false);
-    expect(await runScript(app)).toEqual(await runScript(off));
-    await app.settle();
+    const { on, off } = await differential(app, SCRIPT, read);
+    expect(on).toEqual(off);
   });
 
-  const endings: [
-    string,
-    string,
-    RequestInit,
-    Partial<TimingRecord>,
-    Partial<Record<WaitKind, number>>,
-  ][] = [
+  const endings: Ending[] = [
     [
       "a normal response, with its waits on both sides of the Effect crossings",
       "/api/presets/1",

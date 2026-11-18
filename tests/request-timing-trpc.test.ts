@@ -30,15 +30,15 @@ import { must } from "../narrowing.ts";
 import { check } from "../property.ts";
 import { requestTimingConforms } from "../request-timing-conformance.ts";
 import { requestTimingProcedures } from "../request-timing-trpc.ts";
-import {
-  OperationName,
-  requestTiming,
-  type TimingRecord,
-  type WaitKind,
-  within,
-} from "../request-timing.ts";
+import { OperationName, requestTiming, type TimingRecord, within } from "../request-timing.ts";
 import { LANES, TRPC_CODES } from "./request-timing-next-app/server/router.ts";
-import { type NextApp, nextApp } from "./request-timing-next-fixture.ts";
+import {
+  countsOf,
+  differential,
+  type Ending,
+  type NextApp,
+  nextApp,
+} from "./request-timing-next-fixture.ts";
 
 let app: NextApp;
 // The first suite of a run to boot the app also builds it, which a cold
@@ -99,14 +99,6 @@ const SCRIPT: readonly [string, RequestInit][] = [
   [single("lanes.l1", { db: 2, out: 1, tx: true }), {}],
 ];
 
-const runScript = async (target: NextApp) => {
-  const responses = [];
-  for (const [path, init] of SCRIPT) {
-    responses.push(await read(await fetch(target.url(path), init)));
-  }
-  return responses;
-};
-
 type BodyReader = Pick<ReadableStreamDefaultReader<Uint8Array>, "read">;
 
 /** The next chunk of a body, as text. */
@@ -125,12 +117,6 @@ async function restOf(reader: BodyReader): Promise<string> {
   return text;
 }
 
-const countsOf = (made: TimingRecord) => ({
-  db: made.db.count,
-  out: made.out.count,
-  store: made.store.count,
-});
-
 /** The records written before the sentinel's, with none of the envelope's route among them. */
 async function settled(): Promise<TimingRecord[]> {
   const written = await app.settle();
@@ -147,18 +133,11 @@ async function onlyOne(operation: string): Promise<TimingRecord> {
 
 describe("the tRPC connector", () => {
   test("changes no byte of any answer the app gives", async () => {
-    await using off = await nextApp(false);
-    expect(await runScript(app)).toEqual(await runScript(off));
-    await app.settle();
+    const { on, off } = await differential(app, SCRIPT, read);
+    expect(on).toEqual(off);
   });
 
-  const endings: [
-    string,
-    string,
-    RequestInit,
-    Partial<TimingRecord>,
-    Partial<Record<WaitKind, number>>,
-  ][] = [
+  const endings: Ending[] = [
     [
       "a query's answer, with its waits on both sides of the Effect crossings",
       single("presets.byId", { id: 1 }),
