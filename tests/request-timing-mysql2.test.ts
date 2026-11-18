@@ -17,40 +17,13 @@ import type { Pool, RowDataPacket } from "mysql2/promise";
 
 import { rejectionOf } from "../narrowing.ts";
 import { timedPool } from "../request-timing-mysql2.ts";
-import { counted, MYSQL_URL, NONE, scratchDatabase } from "./request-timing-servers.ts";
+import { counted, NONE, outcome } from "./request-timing-oracle.ts";
+import { MYSQL_URL, scratchDatabase } from "./request-timing-servers.ts";
 
 const presets = mysqlTable("presets", {
   id: int().primaryKey().autoincrement(),
   label: varchar({ length: 64 }).notNull().unique(),
 });
-
-/** An error as two runs compare it: its own fields, and its cause's, which drizzle wraps mysql2's in. */
-interface Described {
-  readonly name: string;
-  readonly message: string;
-  /** Each own field as `name=value`. */
-  readonly fields: readonly string[];
-  readonly cause: Described | undefined;
-}
-
-function described(error: Error): Described {
-  return {
-    name: error.name,
-    message: error.message,
-    fields: Object.entries(error).map(([field, value]) => `${field}=${String(value)}`),
-    cause: error.cause instanceof Error ? described(error.cause) : undefined,
-  };
-}
-
-/** What a step settled with, in a form two runs can be compared by. */
-async function outcome(step: () => Promise<unknown>) {
-  try {
-    return { value: await step() };
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    return { error: described(error) };
-  }
-}
 
 class Refused extends Error {}
 

@@ -19,7 +19,7 @@ import { timedBunRedis } from "../request-timing-bun-redis.ts";
 import { timedPool } from "../request-timing-mysql2.ts";
 import { parseRecord } from "../request-timing-summary.ts";
 import { requestTiming, type TimingRecord } from "../request-timing.ts";
-import { lines } from "./request-timing-fixture.ts";
+import { latch, lines } from "./request-timing-fixture.ts";
 import { keyPrefix, REDIS_URL, scratchDatabase } from "./request-timing-servers.ts";
 
 const presets = mysqlTable("presets", {
@@ -35,26 +35,6 @@ class Broken extends Error {}
 
 /** How many lanes the overlap property can run at once, each a route of its own so its record names it. */
 export const LANES = 6;
-
-/** A latch a route waits on, which tells the case once the route is waiting. */
-function latch() {
-  let reached = Promise.withResolvers<void>();
-  let opened = Promise.withResolvers<void>();
-  return {
-    /** What the route awaits. */
-    wait: () => {
-      reached.resolve();
-      return opened.promise;
-    },
-    /** Resolves once a route is waiting on the latch. */
-    reached: () => reached.promise,
-    open: () => {
-      opened.resolve();
-      reached = Promise.withResolvers<void>();
-      opened = Promise.withResolvers<void>();
-    },
-  };
-}
 
 /** Boots the app on a free loopback port, with request timing on or off. */
 export async function presetApp(timed: boolean, connectionLimit = 4) {

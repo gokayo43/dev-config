@@ -1,6 +1,7 @@
 import { must } from "./narrowing.js";
 import { a as methodOf, t as OperationName } from "./request-timing-operation-Cvj5mYAc.js";
 import { inOperation, within } from "./request-timing.js";
+import { t as watched } from "./request-timing-entry-u8SyDwvB.js";
 //#region request-timing-elysia.ts
 /**
 * A body Elysia streams is one it sends chunked with no length: every
@@ -8,27 +9,6 @@ import { inOperation, within } from "./request-timing.js";
 * that says `transfer-encoding: chunked` itself.
 */
 const isStreamed = (response) => response.headers.get("transfer-encoding") === "chunked";
-/**
-* `body`, passed through chunk for chunk, calling `ended` once the last chunk
-* has been taken or the client has cancelled it. Elysia ends a source that
-* fails as though it had finished, so a read never rejects here. A
-* high-water mark of nothing reads no chunk ahead of the client, so the source
-* is pulled exactly as it was before the connector stood in front of it.
-*/
-function watched(body, ended) {
-	const reader = body.getReader();
-	return new ReadableStream({
-		pull: (controller) => reader.read().then((chunk) => {
-			if (!chunk.done) return controller.enqueue(chunk.value);
-			controller.close();
-			return ended(false);
-		}),
-		cancel: (reason) => {
-			ended(true);
-			return reader.cancel(reason);
-		}
-	}, { highWaterMark: 0 });
-}
 /**
 * The plugin, for `timing`: `app.use(requestTimingPlugin(timing))`, mounted
 * before the app's routes, since Elysia applies a hook only to the routes

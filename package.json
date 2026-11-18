@@ -81,6 +81,14 @@
       "types": "./dist/request-timing-fetch.d.ts",
       "default": "./dist/request-timing-fetch.js"
     },
+    "./request-timing/tanstack-start": {
+      "types": "./dist/request-timing-tanstack-start.d.ts",
+      "default": "./dist/request-timing-tanstack-start.js"
+    },
+    "./request-timing/bun-sql": {
+      "types": "./dist/request-timing-bun-sql.d.ts",
+      "default": "./dist/request-timing-bun-sql.js"
+    },
     "./request-timing/conformance": "./request-timing-conformance.ts",
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
@@ -112,6 +120,8 @@
     "@shadcn/lint": "0.2.0",
     "@sinclair/typebox": "0.34.52",
     "@stryker-mutator/core": "9.6.1",
+    "@tanstack/react-router": "1.170.46",
+    "@tanstack/react-start": "1.169.5",
     "@types/bun": "1.4.0",
     "@types/react": "19.3.0",
     "drizzle-orm": "0.45.2",
@@ -128,7 +138,8 @@
     "react-dom": "19.3.0",
     "tailwindcss": "4.3.3",
     "tsdown": "0.23.0",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vite": "8.3.8"
   },
   "peerDependencies": {
     "@playwright/test": ">=1.62",

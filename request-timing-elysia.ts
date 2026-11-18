@@ -7,6 +7,7 @@
 import type { AnyElysia, Elysia } from "elysia";
 
 import { must } from "./narrowing.ts";
+import { watched } from "./request-timing-entry.ts";
 import { inOperation, methodOf, OperationName, type Timing, within } from "./request-timing.ts";
 
 /** How a response ended, short of its name and method, which the request carries. */
@@ -23,35 +24,6 @@ interface Ended {
  */
 const isStreamed = (response: Response): boolean =>
   response.headers.get("transfer-encoding") === "chunked";
-
-/**
- * `body`, passed through chunk for chunk, calling `ended` once the last chunk
- * has been taken or the client has cancelled it. Elysia ends a source that
- * fails as though it had finished, so a read never rejects here. A
- * high-water mark of nothing reads no chunk ahead of the client, so the source
- * is pulled exactly as it was before the connector stood in front of it.
- */
-function watched<Chunk>(
-  body: ReadableStream<Chunk>,
-  ended: (aborted: boolean) => void,
-): ReadableStream<Chunk> {
-  const reader = body.getReader();
-  return new ReadableStream<Chunk>(
-    {
-      pull: (controller) =>
-        reader.read().then((chunk) => {
-          if (!chunk.done) return controller.enqueue(chunk.value);
-          controller.close();
-          return ended(false);
-        }),
-      cancel: (reason) => {
-        ended(true);
-        return reader.cancel(reason);
-      },
-    },
-    { highWaterMark: 0 },
-  );
-}
 
 /**
  * The plugin, for `timing`: `app.use(requestTimingPlugin(timing))`, mounted
