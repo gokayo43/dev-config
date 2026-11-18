@@ -1,13 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 //#region request-timing-operation.d.ts
-/**
- * What both carriers of request timing share: the operation, the waits it
- * accumulates, and the record it closes into. No export names this file. The
- * plain carrier re-exports its public half, and the Effect carrier reaches the
- * one function a carrier needs, `beginWait`, which no app or connector calls.
- *
- * It imports nothing at all, so the plain export stays free of `effect` and the
- * Effect export stays free of `node:async_hooks`.
- */
 /**
  * The schema version every record carries under `requestTiming`. The reader
  * knows this version alone, and stops on a record of any other.

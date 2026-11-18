@@ -2,11 +2,14 @@
  * Request timing for a plain async program: which operation a wait belongs to,
  * carried in `AsyncLocalStorage`. `docs/exports/request-timing.md` is how an
  * app adopts it; `request-timing-effect.ts` is the carrier for an Effect
- * program, which never reads this one's storage.
+ * program, which reads this one's storage only in `carryOperation`.
  */
-import { AsyncLocalStorage } from "node:async_hooks";
-
-import { beginWait, type Operation, type WaitKind } from "./request-timing-operation.ts";
+import {
+  beginWait,
+  type Operation,
+  plainStorage as current,
+  type WaitKind,
+} from "./request-timing-operation.ts";
 
 export {
   methodOf,
@@ -28,7 +31,15 @@ export type {
   Waited,
 } from "./request-timing-operation.ts";
 
-const current = new AsyncLocalStorage<Operation>();
+/**
+ * Whether an operation is current. An entry connector asks it before opening
+ * one and opens nothing when it answers true, so work a page runs in-process
+ * during its own request, such as a server function it calls, counts in the
+ * page's operation and operations never nest.
+ */
+export function inOperation(): boolean {
+  return current.getStore() !== undefined;
+}
 
 /**
  * Runs `handler` with `operation` as the current one, and answers what it
