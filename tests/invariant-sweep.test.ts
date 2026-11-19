@@ -244,8 +244,8 @@ const CASES = [
     "a violation's own text cannot carry an escape or a workflow command",
     `  await page.goto("/noisy-overflow");\n  await page.waitForTimeout(200);`,
   ),
-  // Overflow that arrives with an image's bytes, long after load and without a
-  // single change to the DOM.
+  // Overflow that arrives with an image's bytes, without a single change to
+  // the DOM.
   spec(
     "overflow that arrives with a subresource is swept",
     `  await page.goto("/late-image");\n  await page.waitForTimeout(700);`,

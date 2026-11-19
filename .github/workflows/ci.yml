@@ -22,7 +22,9 @@ concurrency:
 jobs:
   check:
     runs-on: [self-hosted, linux]
-    timeout-minutes: 15
+    # The suite's measured time plus one case hung to its bound, so that case is
+    # named before the job is cancelled: CLAUDE.md's Commands has the numbers.
+    timeout-minutes: 20
 
     # The replay gate's fixtures are two databases and what each ends up
     # holding, so the suite drives a real Postgres — see tests/replay.test.ts

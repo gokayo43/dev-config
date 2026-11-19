@@ -18,7 +18,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import { plainly } from "../.github/actions/_lib/gate.ts";
-import { IDENTITY, git, scratch } from "./tree.ts";
+import { IDENTITY, SPAWNED_CASE_MS, git, scratch } from "./tree.ts";
 
 const HERE = join(import.meta.dir, "..");
 
@@ -156,7 +156,7 @@ async function runs(exported: Record<string, string>): Promise<{ code: number; s
   const home = await scratch();
   const file = join(home, "committing.test.ts");
   await Bun.write(file, COMMITTING);
-  const proc = Bun.spawn([process.execPath, "test", file], {
+  const proc = Bun.spawn([process.execPath, "test", "--timeout", `${SPAWNED_CASE_MS}`, file], {
     cwd: HERE,
     // `TMPDIR` because the fixture registry derives its root from this worktree
     // and nothing else: without it the child reuses the roots the parent run is

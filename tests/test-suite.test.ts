@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 
 import { record } from "../.github/actions/_lib/gate.ts";
 import { BUNS } from "./buns.ts";
-import { materialise, type Tree } from "./tree.ts";
+import { materialise, SPAWNED_CASE_MS, type Tree } from "./tree.ts";
 
 /**
  * The gate is a shell script in a composite action, so the suite runs that
@@ -82,13 +82,18 @@ async function ran(tree: Tree, network = "", bun = "", nightly = "false"): Promi
   };
 }
 
+/**
+ * A suite that calls a live host. Its case names its limit for the reason
+ * `SLOW`'s does: a call bun's 5s cut short fails the suite as a sealed one
+ * would, and an unsealed step would pass for sealed.
+ */
 const REACHES: Tree = {
   "reaches.test.ts": `import { expect, test } from "bun:test";
 
 test("reaches a live host", async () => {
   const response = await fetch("https://example.com");
   expect(response.status).toBe(200);
-});
+}, ${SPAWNED_CASE_MS});
 `,
 };
 
@@ -126,9 +131,8 @@ async function running(marker: string): Promise<number> {
  * Polls until the count settles where the case needs it, or gives up and
  * returns what it last saw so the assertion reads the real number.
  *
- * Real time on purpose, and the one place in this repo that has to spend it:
- * what is being measured is a signal crossing three processes, which no clock
- * this suite could inject has any part in.
+ * Real time on purpose: what is being measured is a signal crossing three
+ * processes, which no clock this suite could inject has any part in.
  */
 async function settles(marker: string, wanted: (count: number) => boolean): Promise<number> {
   let count = await running(marker);
@@ -140,14 +144,19 @@ async function settles(marker: string, wanted: (count: number) => boolean): Prom
   return count;
 }
 
-/** A suite that outlives the step unless something takes it down with it. */
+/**
+ * A suite that outlives the step unless something takes it down with it. Its
+ * case names a limit past its sleep, because the step gives it bun's 5s, and a
+ * suite that timed itself out would leave the case below passing on a step
+ * that forwards nothing.
+ */
 const SLOW: Tree = {
   "slow.test.ts": `import { expect, test } from "bun:test";
 
 test("takes its time", async () => {
   await Bun.sleep(30000);
   expect(1).toBe(1);
-});
+}, ${SPAWNED_CASE_MS});
 `,
 };
 

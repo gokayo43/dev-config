@@ -6,6 +6,7 @@ import {
   endedProblem,
   LONGEST_CASE_LIMIT_MS,
 } from "../.github/actions/mutation-lane/mutation-lane.ts";
+import { nth } from "../narrowing.ts";
 import { containing } from "./matchers.ts";
 import {
   BEFORE,
@@ -63,11 +64,13 @@ test("counts down to nothing", () => {
  * (`Z`), dead, and a signal to its pid still reaches it.
  */
 async function stateOf(pid: number): Promise<string> {
-  const raw = await readFile(`/proc/${pid}/stat`, "utf8").catch((error: unknown) => {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
+  try {
+    const raw = await readFile(`/proc/${pid}/stat`, "utf8");
+    return nth(raw.slice(raw.lastIndexOf(")") + 2).split(" "), 0);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return "gone";
     throw error;
-  });
-  return raw === "" ? "gone" : (raw.slice(raw.lastIndexOf(")") + 2).split(" ")[0] ?? "");
+  }
 }
 
 describe("the clocks a mutation run keeps", () => {
@@ -249,7 +252,7 @@ test("never yields", () => {
   test.each([
     ["a grandchild that inherits the pipes", "sleep 60"],
     ["a grandchild that ignores the request to stop", "trap '' TERM; sleep 60"],
-  ])("%s is gone when the lane returns, inside the deadline and the grace", async (_, script) => {
+  ])("%s has ended when the lane returns, inside the deadline and the grace", async (_, script) => {
     const SPAWNS = `import { test } from "bun:test";
 
 test("waits on a child of its own", async () => {

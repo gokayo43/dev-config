@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 
 import { plainly } from "../.github/actions/_lib/gate.ts";
 import { RUNS_FACTOR, TIME_LIMIT } from "../property.ts";
-import { materialise } from "./tree.ts";
+import { materialise, SPAWNED_CASE_MS } from "./tree.ts";
 
 /**
  * The budget every property test goes through, driven the only way it can
@@ -48,7 +48,7 @@ interface Ran {
 async function run(body: string, environment: Record<string, string> = {}): Promise<Ran> {
   const root = await materialise({ "budget.test.ts": body });
   await symlink(NODE_MODULES, join(root, "node_modules"));
-  const proc = Bun.spawn(["bun", "test"], {
+  const proc = Bun.spawn(["bun", "test", "--timeout", `${SPAWNED_CASE_MS}`], {
     cwd: root,
     env: { ...plainly(process.env), ...environment },
     stdout: "pipe",

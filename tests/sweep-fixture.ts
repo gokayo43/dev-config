@@ -118,9 +118,12 @@ const PAINTED = `new Promise((painted) => new PerformanceObserver((list, observe
 const SHOWN = `Promise.all([new Promise((loaded) => addEventListener("load", loaded)), ${PAINTED}])`;
 
 /**
- * What the fixture server answers, by path. Each page is one invariant broken
- * one way, or a page that breaks none. `embed` is the *other* origin's, which
- * is what makes a cross-origin frame cross-origin.
+ * The fixture pages whose answer is a fixed body, by path. Each page is one
+ * invariant broken one way, or a page that breaks none. `embed` is the *other*
+ * origin's, which is what makes a cross-origin frame cross-origin. `serving`
+ * answers every path whose answer is more than a fixed body itself: a page
+ * with a header of its own, a page named per load, that page's report of its
+ * paint, and bytes held back on a clock or on that report.
  */
 function pagesFor(embed: string): Map<string, { readonly type: string; readonly body: string }> {
   return new Map(
@@ -452,7 +455,7 @@ export function serving(): Serving {
         );
       }
       if (path === "/slow.svg") {
-        // Bytes that arrive long after first paint, carrying the width with them.
+        // Bytes that arrive `LATE` ms after the request, carrying the width with them.
         await Bun.sleep(LATE);
         return new Response(
           `<svg xmlns="http://www.w3.org/2000/svg" width="${TOO_WIDE}" height="10"><rect width="100%" height="100%" fill="#333"/></svg>`,
@@ -583,6 +586,13 @@ function verdictsOf(spec: ConfigObject): boolean[] {
 /** The options a config's `use` block or a spec's `test.use` may set. */
 export type Use = Partial<PlaywrightTestOptions & PlaywrightWorkerOptions & InvariantSweep>;
 
+/**
+ * How long a spec's `expect` waits for what a page brings on a clock of its
+ * own, in ms, where Playwright's default is 5s: a late banner came 7.6s into
+ * that wait at a 5% CPU quota (measured 2026-11-19).
+ */
+const ARRIVES_WITHIN = 15_000;
+
 /** The fixture's config, with whatever a case adds to its `use` block, run `repeatEach` times. */
 function configWith(use: Use, repeatEach: number): string {
   return `import { defineConfig } from "@playwright/test";
@@ -592,6 +602,7 @@ export default defineConfig({
   testMatch: "*.spec.ts",
   workers: 4,
   repeatEach: ${repeatEach},
+  expect: { timeout: ${ARRIVES_WITHIN} },
   use: {
     baseURL: process.env.SWEEP_ORIGIN,
     viewport: { width: ${VIEWPORT.width}, height: ${VIEWPORT.height} },
