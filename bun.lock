@@ -37,6 +37,7 @@
       "peerDependencies": {
         "@playwright/test": ">=1.62",
         "@shadcn/lint": ">=0.2",
+        "effect": ">=4.1.4 <5",
         "eslint-import-resolver-typescript": ">=4",
         "eslint-plugin-boundaries": ">=7",
         "fast-check": ">=4",
@@ -48,6 +49,7 @@
       "optionalPeers": [
         "@playwright/test",
         "@shadcn/lint",
+        "effect",
         "eslint-import-resolver-typescript",
         "eslint-plugin-boundaries",
         "fast-check",

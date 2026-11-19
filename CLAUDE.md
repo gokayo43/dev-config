@@ -158,7 +158,7 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Nineteen of them are **exports** it imports and
+  gates, which run over it from CI. Twenty of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
   `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
   `dev-server-derive.ts` is the module the first imports. Eight more reach it
@@ -200,8 +200,8 @@ a change to a rule usually lands here too.
   program alike; `request-timing-conformance.ts` is the
   check an adopting app runs against its booted server, and
   `request-timing-conformance-effect.ts` the check of the app's own Effect, which
-  the app hands its `effect` module to, since no file here imports `effect` but
-  as types; the bin
+  the app hands its `effect` module to, since no request-timing file imports
+  `effect` but as types; the bin
   `request-timing-report.ts` reads a log of the records; the connectors
   `request-timing-elysia.ts`, `request-timing-tanstack-start.ts`,
   `request-timing-next.ts`, `request-timing-trpc.ts`,
@@ -219,7 +219,11 @@ a change to a rule usually lands here too.
   app's own route table; `characterization-net.ts` is the harness under a golden
   suite; `property.ts` is `fc.assert` with the run's budget applied — the one
   call every property test goes through, so a nightly can multiply how far each
-  of them searches with no test changing; `narrowing.ts` is
+  of them searches with no test changing; `interleaving.ts` runs an Effect 4
+  program under a `Scheduler` whose every choice comes from fast-check data, so
+  a property generates the order overlapping fibers run in, and imports
+  `effect` at runtime because it needs Effect's own values, which is why
+  `effect` is an optional peer; `narrowing.ts` is
   `only`, `nth`, `must` and `rejectionOf`, which hand back a value the compiler
   could not prove present or throw naming what they found, and import no test
   runner so a Playwright spec under node takes them too. `bun-test.d.ts` types
@@ -237,7 +241,7 @@ a change to a rule usually lands here too.
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
   to is this package's business rather than a caller's: fourteen of them are built and
-  seven ship their source, and no import says which. `tsdown.config.ts` is where
+  eight ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
   `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-conformance-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-next,request-timing-trpc,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
@@ -366,7 +370,16 @@ a change to a rule usually lands here too.
   bigger number and the only thing that says whether it worked is how many times
   the predicate ran; the default it multiplies is graded as a difference against
   `fc.assert` rather than against the literal 100, which is fast-check's to
-  change. `fuzz.test.ts` drives the fuzzer against a real server on a real
+  change. The export's suites split by subject: `interleaving.test.ts` the
+  order a run takes and how it ends; `interleaving-races.test.ts` the search of
+  the racy fixtures in `interleaving-fixtures.ts` on fresh seeds, sized and
+  counted by the rules on the export's page, the page's examples and its
+  regression probe on the torn read; and `interleaving-runtime.test.ts` a
+  process per runtime fact the export rests on, its `effect` replaced through a
+  Bun plugin by one with that fact made false, for the first `simulate` to name
+  it. The fixtures are a module of their own because
+  `interleaving-measure.ts`, which re-takes the page's measurement table, runs
+  them too. `fuzz.test.ts` drives the fuzzer against a real server on a real
   port, since each of its four invariants is a statement about a response — and the
   route that never answers is why that fixture disposes without awaiting
   `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:
@@ -382,7 +395,7 @@ a change to a rule usually lands here too.
   and one per wrong adoption the kit names; and
   `request-timing-conformance-effect.test.ts` the kit's Effect check, which a
   process of its own with `node:async_hooks` hidden from Effect must see fail,
-  and that nothing `files` ships imports `effect` at runtime. The connectors' suites run against real servers:
+  and that no request-timing file `files` ships imports `effect` at runtime. The connectors' suites run against real servers:
   `request-timing-elysia.test.ts` boots the Elysia app
   `request-timing-elysia-fixture.ts` builds over MySQL, Redis and an outside
   service, once with timing off as the differential's oracle;

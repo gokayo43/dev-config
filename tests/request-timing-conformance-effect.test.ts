@@ -1,5 +1,5 @@
 /**
- * The conformance kit's Effect check (invariants 3 and 9), and dev-config
+ * The conformance kit's Effect check (invariants 3 and 9), and request timing
  * shipping no Effect at runtime (invariant 10). The check must pass on this
  * repo's Effect, and fail, saying why, on an Effect that resumes a woken fiber
  * on the waker's stack, which is what Effect does when its one lookup of
@@ -93,12 +93,13 @@ async function shipped(): Promise<string[]> {
   return found;
 }
 
-describe("dev-config ships no Effect at runtime", () => {
+describe("request timing ships no Effect at runtime", () => {
   // The contract's own reading of an import: Bun's parser, which erases a
   // type-only import as the runtime does. A declaration file runs nothing.
-  test("no shipped module imports effect except as types", async () => {
+  test("no shipped request-timing module imports effect except as types", async () => {
     const modules = (await shipped()).filter(
-      (file) => /\.(?:[cm]?[jt]sx?)$/u.test(file) && !file.endsWith(".d.ts"),
+      (file) =>
+        /(?:^|\/)request-timing[^/]*\.(?:[cm]?[jt]sx?)$/u.test(file) && !file.endsWith(".d.ts"),
     );
     expect(modules).toContain("dist/request-timing-conformance-effect.js");
     const importing: string[] = [];
@@ -114,11 +115,12 @@ describe("dev-config ships no Effect at runtime", () => {
     expect(importing).toEqual([]);
   });
 
-  test("and package.json names effect as a devDependency alone", async () => {
+  test("and package.json installs no effect for an app: a devDependency, and a peer only as optional", async () => {
     const manifest = record(await Bun.file(join(ROOT, "package.json")).json());
     const naming = Object.entries(manifest)
       .filter(([, value]) => "effect" in record(value))
       .map(([field]) => field);
-    expect(naming).toEqual(["devDependencies"]);
+    expect(naming).toEqual(["devDependencies", "peerDependencies", "peerDependenciesMeta"]);
+    expect(record(manifest["peerDependenciesMeta"])["effect"]).toEqual({ optional: true });
   });
 });
