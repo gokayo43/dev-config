@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
 
 import { GRACE_MS } from "../.github/actions/mutation-lane/child.ts";
 import {
@@ -55,6 +56,20 @@ test("counts down to nothing", () => {
 });
 `;
 
+/**
+ * What `/proc` says a process is doing, as its state letter, or `gone`. A
+ * killed process the lane did not start is reaped by whatever adopted it, a
+ * subreaper or PID 1, on that process's own time: until then it is a zombie
+ * (`Z`), dead, and a signal to its pid still reaches it.
+ */
+async function stateOf(pid: number): Promise<string> {
+  const raw = await readFile(`/proc/${pid}/stat`, "utf8").catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return "";
+    throw error;
+  });
+  return raw === "" ? "gone" : (raw.slice(raw.lastIndexOf(")") + 2).split(" ")[0] ?? "");
+}
+
 describe("the clocks a mutation run keeps", () => {
   // Each of the three clocks, left at its default, ends the slow mutant's run
   // before the test does: bun's fails the case, which reads as a kill, and the
@@ -72,13 +87,16 @@ describe("the clocks a mutation run keeps", () => {
     ]);
 
     // Three of the four take the slow branch, and the fourth is the fast one
-    // nothing pins either.
-    expect(messages(verdict)).toEqual([
-      "src/domain/pause.ts: write the case that fails on `false` (ConditionalExpression) at line 2: this branch wrote that line and the suite passes either way",
-      "src/domain/pause.ts: write the case that fails on `true` (ConditionalExpression) at line 2: this branch wrote that line and the suite passes either way",
-      "src/domain/pause.ts: write the case that fails on `waiting >= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
-      "src/domain/pause.ts: write the case that fails on `waiting <= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
-    ]);
+    // nothing pins either. Compared as a set: Stryker reports a mutant it ran
+    // when that run finishes, so the order is the order they finished in.
+    expect(messages(verdict).toSorted()).toEqual(
+      [
+        "src/domain/pause.ts: write the case that fails on `false` (ConditionalExpression) at line 2: this branch wrote that line and the suite passes either way",
+        "src/domain/pause.ts: write the case that fails on `true` (ConditionalExpression) at line 2: this branch wrote that line and the suite passes either way",
+        "src/domain/pause.ts: write the case that fails on `waiting >= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
+        "src/domain/pause.ts: write the case that fails on `waiting <= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
+      ].toSorted(),
+    );
     expect(verdict.table).toEqual(containing("| Caught by timing out | 0 |"));
   });
 
@@ -253,7 +271,7 @@ test("waits on a child of its own", async () => {
     // the lane's own work bound the rest.
     expect(took).toBeLessThan(runDeadline + GRACE_MS + 1_000);
     const pid = Number(await Bun.file(`${root}/grandchild.pid`).text());
-    expect(() => process.kill(pid, 0)).toThrow("ESRCH");
+    expect(await stateOf(pid)).toBeOneOf(["gone", "Z"]);
   });
 
   // What the refusal of a run the deadline ended advises turns on Stryker's own

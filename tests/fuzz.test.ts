@@ -13,6 +13,7 @@ import {
   type Fuzzed,
   fuzzVerdict,
   INVARIANTS,
+  type Plan,
   requestFor,
   seedFrom,
 } from "../.github/actions/db-gate/fuzz.ts";
@@ -153,25 +154,39 @@ function serving(): App {
   };
 }
 
-/** Long enough for several rounds over the table, short enough that the suite is not a wait. */
+/**
+ * The budget of a run nothing else ends, which is a case about the budget
+ * itself or a table no route of which fails: long enough for a round over the
+ * table, short enough that the suite is not a wait.
+ */
 const BUDGET_MS = 900;
 
-/** Long enough that only a route which never answers reaches it. */
+/** The bound of a run with a route that never answers, which that route reaches with the budget left for a round over the rest. */
 const BOUND_MS = 250;
 
+/**
+ * The budget and the bound of every other run, which none reaches unless the
+ * fuzzer is wrong. A table with a route that always fails ends at the run's
+ * thousandth failure: 1,055 to 2,000 requests here, 0.2s on a quiet core and
+ * 11 to 15s at a 3% CPU quota, where one request to `/careful` also took past
+ * 250ms to be answered (measured 2026-11-19, bun 1.4.4).
+ */
+const UNREACHED_MS = 60_000;
+
+/** A run against `app`, which ends on its own count unless the case passes the clock it is about. */
 async function fuzzing(
   app: App,
   routes: readonly Route[],
-  seed = 1,
-  waived: ReadonlySet<string> = new Set(),
+  plan: Partial<Omit<Plan, "origin" | "routes">> = {},
 ): Promise<Fuzzed> {
   return await fuzz({
     origin: app.origin,
     routes,
-    waived,
-    seed,
-    budgetMs: BUDGET_MS,
-    boundMs: BOUND_MS,
+    waived: new Set(),
+    seed: 1,
+    budgetMs: UNREACHED_MS,
+    boundMs: UNREACHED_MS,
+    ...plan,
   });
 }
 
@@ -364,7 +379,7 @@ describe("the command a failure hands back", () => {
 
     for (const [named, attempt] of drawn) {
       const at = app.received().length;
-      await fetch(attempt.url, requestFor(attempt, BOUND_MS));
+      await fetch(attempt.url, requestFor(attempt, UNREACHED_MS));
       const { status, said } = await shell(curlFor(attempt));
       expect(`${named}: ${status} ${said}`).toBe(`${named}: 0 `);
       const [sent, replayed] = app.received().slice(at);
@@ -413,9 +428,11 @@ describe("what the fuzzer refuses", () => {
 
   test("a route that stops answering at all", async () => {
     using app = serving();
-    expect(against(await fuzzing(app, [HANGING, ...ROUTES]), HANGING)).toContainEqual(
-      containing("nothing arrived within"),
-    );
+    const hung = await fuzzing(app, [HANGING, ...ROUTES], {
+      budgetMs: BUDGET_MS,
+      boundMs: BOUND_MS,
+    });
+    expect(against(hung, HANGING)).toContainEqual(containing("nothing arrived within"));
   });
 
   // Round-robin, and this is what it buys: a route that eats the budget cannot
@@ -423,14 +440,14 @@ describe("what the fuzzer refuses", () => {
   // route, everything below `/hang` here would never be reached.
   test("and a route that eats the budget does not starve the rest", async () => {
     using app = serving();
-    await fuzzing(app, [HANGING, ...ROUTES]);
+    await fuzzing(app, [HANGING, ...ROUTES], { budgetMs: BUDGET_MS, boundMs: BOUND_MS });
     const hits = app.hits();
     for (const { path } of ROUTES) expect(hits.get(path) ?? 0).toBeGreaterThan(0);
   });
 
   test("a clean app is a clean run that still records its seed", async () => {
     using app = serving();
-    const result = await fuzzing(app, [OK], 4242);
+    const result = await fuzzing(app, [OK], { seed: 4242, budgetMs: BUDGET_MS });
     expect(result.failures).toEqual([]);
     expect(result.stopped).toBe(false);
     expect(result.requests).toBeGreaterThan(0);
@@ -473,7 +490,7 @@ describe("what the fuzzer refuses", () => {
   // floor quietly covering less than it claims.
   test("a route the ramp was told not to reach is not fuzzed either", async () => {
     using app = serving();
-    const result = await fuzzing(app, ROUTES, 1, new Set(["POST /strict/:id"]));
+    const result = await fuzzing(app, ROUTES, { waived: new Set(["POST /strict/:id"]) });
     expect(app.hits().get(STRICT.path)).toBeUndefined();
     expect(result.routes).toBe(ROUTES.length - 1);
     expect(result.waived).toBe(1);
@@ -485,7 +502,7 @@ describe("what the fuzzer refuses", () => {
   // either.
   test("and a table that is entirely waived is a run with nothing to send", async () => {
     using app = serving();
-    const result = await fuzzing(app, [OK], 1, new Set(["GET /ok/:id"]));
+    const result = await fuzzing(app, [OK], { waived: new Set(["GET /ok/:id"]) });
     expect(result.requests).toBe(0);
     expect(result.routes).toBe(0);
     expect(fuzzVerdict(result).problems).toEqual([]);
@@ -529,7 +546,7 @@ describe("what the fuzzer must not disturb", () => {
 
     const allowlist = allowlistFrom("", "route-allowlist");
     const first = routeCoverage(before, after, allowlist);
-    const run = await fuzzing(app, table);
+    const run = await fuzzing(app, table, { budgetMs: BUDGET_MS });
     const second = routeCoverage(before, after, allowlist);
 
     expect(run.requests).toBeGreaterThan(0);
