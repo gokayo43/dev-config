@@ -68,7 +68,8 @@ a change to a rule usually lands here too.
   the half of that word about pages rather than about a schema, which is a
   second subject reached through the one field;
   `repo-contract/request-timing.ts` is the conformance test a live repo owes
-  for serving HTTP out of a database, called from the contract rather than from
+  for serving HTTP out of a database, and the kit's Effect check beside it
+  where the repo ships `effect`, called from the contract rather than from
   `live.ts` because its waiver is graded in every lifecycle;
   `repo-contract/typecheck.ts` is what CI type-checks with — the script
   check.yml's typecheck lane reaches and the Bun `packageManager` names, one
@@ -171,8 +172,9 @@ a change to a rule usually lands here too.
   budget, `files` ships its source for the bin, and `tests/file-lock.test.ts`
   holds each waiter before every step through the `between` seam `lock` takes
   for that suite's sake. `request-timing-operation.ts` is what request timing's
-  two carriers share, the operation, its waits and its record, which the build
-  makes a chunk beside both and `files` ships as source for the summary;
+  modules share, the operation, its waits, its record and the
+  `AsyncLocalStorage` that carries the current operation, which the build makes
+  a chunk beside them and `files` ships as source for the summary;
   `request-timing-summary.ts` is what the reader makes of a log, which the bin
   feeds stdin and the conformance kit parses a record with;
   `request-timing-wait.ts` is what every wait connector is built from, the
@@ -191,10 +193,12 @@ a change to a rule usually lands here too.
   context with one that watches every page it opens, popups included, and turns
   Playwright's own `video` on when the run sets `E2E_VIDEO=on`;
   `request-timing.ts` records per operation where its time went,
-  carrying the operation in `AsyncLocalStorage`, and `request-timing-effect.ts`
-  is the same carrier in an Effect fiber, the only file that imports `effect`
-  so an app without it never loads it; `request-timing-conformance.ts` is the
-  check an adopting app runs against its booted server, and the bin
+  carrying the operation in `AsyncLocalStorage`, in plain code and in an Effect
+  program alike; `request-timing-conformance.ts` is the
+  check an adopting app runs against its booted server, and
+  `request-timing-conformance-effect.ts` the check of the app's own Effect, which
+  the app hands its `effect` module to, since no file here imports `effect` but
+  as types; the bin
   `request-timing-report.ts` reads a log of the records; the connectors
   `request-timing-elysia.ts`, `request-timing-tanstack-start.ts`,
   `request-timing-next.ts`, `request-timing-trpc.ts`,
@@ -233,7 +237,7 @@ a change to a rule usually lands here too.
   seven ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-next,request-timing-trpc,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-conformance-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-next,request-timing-trpc,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
   and the chunks the request-timing ones share;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
@@ -366,13 +370,16 @@ a change to a rule usually lands here too.
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
   fixture app's schemas with — is typebox under elysia's re-export.
   Request timing's suites split by what each grades: `request-timing.test.ts`
-  the operation and its record through both carriers, `request-timing-attribution.test.ts`
-  the property that every wait lands in its own operation's record, run per
-  carrier and once against a carrier kept in `AsyncLocalStorage`, which must
-  fail it; `request-timing-summary.test.ts` the reader, the bin spawned for its
-  statuses; and `request-timing-conformance.test.ts` the kit, against the
-  servers `request-timing-fixture.ts` boots, one per carrier and one per wrong
-  adoption the kit names. The connectors' suites run against real servers:
+  the operation and its record, in plain code and in an Effect program,
+  `request-timing-attribution.test.ts` the property that every wait lands in
+  its own operation's record, in plain code and through the kit's Effect
+  driver; `request-timing-summary.test.ts` the reader, the bin spawned for its
+  statuses; `request-timing-conformance.test.ts` the kit, against the
+  servers `request-timing-fixture.ts` boots, a plain one, one running Effect
+  and one per wrong adoption the kit names; and
+  `request-timing-conformance-effect.test.ts` the kit's Effect check, which a
+  process of its own with `node:async_hooks` hidden from Effect must see fail,
+  and that nothing `files` ships imports `effect` at runtime. The connectors' suites run against real servers:
   `request-timing-elysia.test.ts` boots the Elysia app
   `request-timing-elysia-fixture.ts` builds over MySQL, Redis and an outside
   service, once with timing off as the differential's oracle;

@@ -12,7 +12,7 @@
  */
 import type { SQL } from "bun";
 
-import { beginWait, type Operation, plainStorage } from "./request-timing-operation.ts";
+import { beginWait, type Operation, current } from "./request-timing-operation.ts";
 import { standingIn, waitOn } from "./request-timing-wait.ts";
 
 /**
@@ -125,7 +125,7 @@ const isCallback = (last: unknown): last is (client: SQL) => unknown => typeof l
  * its queries count in the operation that opened the transaction.
  */
 function transacting(open: Opens, args: readonly unknown[]): Promise<unknown> {
-  const operation = plainStorage.getStore();
+  const operation = current.getStore();
   const callback = args.at(-1);
   if (operation === undefined || !isCallback(callback)) return open(args);
   let opening: (() => void) | undefined = beginWait(operation, "db");
@@ -193,12 +193,11 @@ export function timedSql<Client extends SQL>(client: Client): Client {
   const standIns = new Map<PropertyKey, unknown>([
     [
       "unsafe",
-      (...args: Parameters<SQL["unsafe"]>) =>
-        issued(plainStorage.getStore(), client.unsafe(...args)),
+      (...args: Parameters<SQL["unsafe"]>) => issued(current.getStore(), client.unsafe(...args)),
     ],
     [
       "file",
-      (...args: Parameters<SQL["file"]>) => issued(plainStorage.getStore(), client.file(...args)),
+      (...args: Parameters<SQL["file"]>) => issued(current.getStore(), client.file(...args)),
     ],
     [
       "reserve",
@@ -222,7 +221,7 @@ export function timedSql<Client extends SQL>(client: Client): Client {
     // oxlint-disable-next-line anti-slop/no-unknown-returns -- a call answers a query or a helper as the client's overloads type it, which a trap cannot name
     apply: (_target, receiver, args: unknown[]): unknown => {
       const answer: unknown = Function.prototype.apply.call(client, receiver, args);
-      return isQuery(answer) ? issued(plainStorage.getStore(), answer) : answer;
+      return isQuery(answer) ? issued(current.getStore(), answer) : answer;
     },
   });
   return standingIn(called, standIns);

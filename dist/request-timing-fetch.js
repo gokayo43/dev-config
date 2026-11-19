@@ -1,4 +1,4 @@
-import { n as waitOn } from "./request-timing-wait-gFmmuV8F.js";
+import { n as waitOn } from "./request-timing-wait-BRu2po2h.js";
 //#region request-timing-fetch.ts
 /**
 * Request timing's `fetch` connector: every call, one `out` wait of the

@@ -1,5 +1,5 @@
 /**
- * The operation and its record, through both carriers: the record's fields
+ * The operation and its record, in plain code and in an Effect program: the record's fields
  * (invariant 6's list), sealing at emission (invariant 4), sums against the
  * rest on a virtual clock (invariant 5), and that nothing a person sent can
  * reach a record (invariant 6). Attribution under overlap, invariant 3, is
@@ -7,11 +7,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { type Cause, Deferred, Effect, Exit, Fiber } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import { asyncProperty, property, record, string, webPath, webQueryParameters } from "fast-check";
 
 import { check } from "../property.ts";
-import * as effectCarrier from "../request-timing-effect.ts";
 import {
   type Ending,
   inOperation,
@@ -106,18 +105,19 @@ describe("an operation closes into one record", () => {
     expect(Object.keys(records[0] ?? {}).toSorted()).toEqual(RESERVED.toSorted());
   });
 
-  test("in an Effect program", async () => {
+  test("in an Effect program a handler runs", async () => {
     const clock = virtualClock();
     const { records, timing } = recorded(clock.now);
     const operation = timing.open();
-    await Effect.runPromise(
-      effectCarrier.within(
-        operation,
+    await within(operation, () =>
+      Effect.runPromise(
         Effect.gen(function* () {
-          yield* effectCarrier.measure("db", Effect.succeed("row"));
-          yield* effectCarrier.measure("out", Effect.succeed("answer"));
-          // A wait in a fiber the handler forks is the handler's.
-          yield* Fiber.join(yield* Effect.fork(effectCarrier.measure("db", Effect.succeed("row"))));
+          yield* Effect.promise(() => measure("db", async () => "row"));
+          yield* Effect.tryPromise(() => measure("out", async () => "answer"));
+          // A wait in a fiber the program forks is the handler's.
+          yield* Fiber.join(
+            yield* Effect.forkChild(Effect.promise(() => measure("db", async () => "row"))),
+          );
           clock.set(7);
         }),
       ),
@@ -165,19 +165,6 @@ describe("an entry connector opens nothing inside a current operation", () => {
     }
   };
 
-  /** The same connector in the Effect carrier. */
-  const serveEffect = <A>(timing: Timing, handler: Effect.Effect<A>): Effect.Effect<A> =>
-    Effect.flatMap(effectCarrier.inOperation, (inside) => {
-      if (inside) return handler;
-      return Effect.suspend(() => {
-        const operation = timing.open();
-        return Effect.ensuring(
-          effectCarrier.within(operation, handler),
-          Effect.sync(() => operation.close(ended())),
-        );
-      });
-    });
-
   const expected = [{ db: { waitMs: 0, count: 2 }, out: { waitMs: 0, count: 1 } }];
 
   test("in a plain async program", async () => {
@@ -192,53 +179,22 @@ describe("an entry connector opens nothing inside a current operation", () => {
     expect(records).toMatchObject(expected);
   });
 
-  test("in an Effect program", async () => {
+  test("from inside an Effect program a handler runs", async () => {
     const { records, timing } = recorded(virtualClock().now);
-    await Effect.runPromise(
-      serveEffect(
-        timing,
-        Effect.zipRight(
-          effectCarrier.measure("db", Effect.succeed("row")),
-          serveEffect(
-            timing,
-            Effect.zipRight(
-              effectCarrier.measure("db", Effect.succeed("row")),
-              effectCarrier.measure("out", Effect.succeed("answer")),
-            ),
+    await servePlain(timing, () =>
+      Effect.runPromise(
+        Effect.andThen(
+          Effect.promise(() => measure("db", async () => "row")),
+          Effect.promise(() =>
+            servePlain(timing, async () => {
+              await measure("db", async () => "row");
+              await measure("out", async () => "answer");
+            }),
           ),
         ),
       ),
     );
     expect(records).toMatchObject(expected);
-  });
-
-  test("across the crossing from a plain handler into an Effect program", async () => {
-    const { records, timing } = recorded(virtualClock().now);
-    await servePlain(timing, async () => {
-      await measure("db", async () => "row");
-      await Effect.runPromise(
-        effectCarrier.carryOperation(
-          serveEffect(
-            timing,
-            Effect.zipRight(
-              effectCarrier.measure("db", Effect.succeed("row")),
-              effectCarrier.measure("out", Effect.succeed("answer")),
-            ),
-          ),
-        ),
-      );
-    });
-    expect(records).toMatchObject(expected);
-  });
-
-  test("and the crossing changes nothing where no operation is current", async () => {
-    const { records } = recorded(virtualClock().now);
-    const program = effectCarrier.measure("db", Effect.succeed("row"));
-    expect(effectCarrier.carryOperation(program)).toBe(program);
-    expect(await Effect.runPromise(effectCarrier.carryOperation(effectCarrier.inOperation))).toBe(
-      false,
-    );
-    expect(records).toEqual([]);
   });
 });
 
@@ -261,27 +217,33 @@ describe("a wait that settles after its record was emitted is counted in no reco
     expect(records).toMatchObject([{ db: { waitMs: 0, count: 0 } }]);
   });
 
-  test("in an Effect program", async () => {
+  test("in a detached fiber of an Effect program", async () => {
     const { records, timing } = recorded(virtualClock().now);
     const operation = timing.open();
     const write = Effect.runSync(Deferred.make<string>());
     const resume = Effect.runSync(Deferred.make<void>());
-    const detached = await Effect.runPromise(
-      effectCarrier.within(
-        operation,
-        Effect.forkDaemon(
+    const begun = Promise.withResolvers<void>();
+    const detached = await within(operation, () =>
+      Effect.runPromise(
+        Effect.forkDetach(
           Effect.gen(function* () {
-            const first = yield* effectCarrier.measure("db", Deferred.await(write));
+            const first = yield* Effect.promise(() =>
+              measure("db", () => {
+                begun.resolve();
+                return Effect.runPromise(Deferred.await(write));
+              }),
+            );
             yield* Deferred.await(resume);
-            const second = yield* effectCarrier.measure(
-              "db",
-              Effect.succeed("begun after the close"),
+            const second = yield* Effect.promise(() =>
+              measure("db", async () => "begun after the close"),
             );
             return [first, second];
           }),
         ),
       ),
     );
+    // The close comes while the first wait is in flight, not before it begins.
+    await begun.promise;
     operation.close(ended());
     await Effect.runPromise(Deferred.succeed(write, "written"));
     await Effect.runPromise(Deferred.succeed(resume, undefined));
@@ -524,107 +486,6 @@ describe("measure answers what the wait answers", () => {
       expect(await settled(() => measure("db", wait))).toEqual(settles);
     });
   }
-});
-
-/**
- * A query that does nothing until its `then` is called, as every drizzle query
- * does, and then does `run`.
- */
-class Lazy implements PromiseLike<string> {
-  readonly #run: () => Promise<string>;
-
-  constructor(run: () => Promise<string>) {
-    this.#run = run;
-  }
-
-  // oxlint-disable-next-line unicorn/no-thenable -- the subject: what the crossing out does with a lazy query
-  then<Fulfilled = string, Rejected = never>(
-    fulfilled?: ((row: string) => Fulfilled | PromiseLike<Fulfilled>) | null,
-    rejected?: ((reason: unknown) => Rejected | PromiseLike<Rejected>) | null,
-  ): PromiseLike<Fulfilled | Rejected> {
-    return this.#run().then(fulfilled, rejected);
-  }
-}
-
-describe("the way back out to plain code behaves as Effect.tryPromise does", () => {
-  const refused = new Error("refused");
-  const thrown = new Error("thrown");
-  const thunks: readonly { readonly name: string; readonly thunk: () => PromiseLike<string> }[] = [
-    { name: "a value", thunk: async () => "row" },
-    { name: "a rejection", thunk: () => Promise.reject(refused) },
-    {
-      name: "a synchronous throw",
-      thunk: () => {
-        throw thrown;
-      },
-    },
-    { name: "a lazy value", thunk: () => new Lazy(async () => "row") },
-    { name: "a lazy rejection", thunk: () => new Lazy(() => Promise.reject(refused)) },
-    {
-      name: "a lazy query whose then throws",
-      thunk: () =>
-        new Lazy(() => {
-          throw thrown;
-        }),
-    },
-  ];
-  const mapped = (error: unknown) => ({ mapped: error });
-  for (const { name, thunk } of thunks) {
-    test(`${name}, bare and with a catch`, async () => {
-      expect(await Effect.runPromiseExit(effectCarrier.tryPromiseCarried(thunk))).toEqual(
-        await Effect.runPromiseExit(Effect.tryPromise(thunk)),
-      );
-      expect(
-        await Effect.runPromiseExit(effectCarrier.tryPromiseCarried({ try: thunk, catch: mapped })),
-      ).toEqual(await Effect.runPromiseExit(Effect.tryPromise({ try: thunk, catch: mapped })));
-    });
-  }
-
-  /**
-   * Interrupts a fiber while the thunk it handed out is pending, under an
-   * operation that is closed once the fiber has ended. The thunk calls out once
-   * before the close, holds a query open across it, and makes one more after. Answers how the fiber ended, whether the thunk saw its signal
-   * aborted, and the records.
-   */
-  const interrupted = async (
-    run: (
-      thunk: (signal: AbortSignal) => Promise<void>,
-    ) => Effect.Effect<void, Cause.UnknownException>,
-  ) => {
-    const { records, timing } = recorded(virtualClock().now);
-    const operation = timing.open();
-    const started = Promise.withResolvers<void>();
-    const gate = Promise.withResolvers<void>();
-    let seen: AbortSignal | undefined;
-    const finished = Promise.withResolvers<void>();
-    const thunk = async (signal: AbortSignal) => {
-      seen = signal;
-      await measure("out", async () => "before the close");
-      const pending = measure("db", () => gate.promise);
-      started.resolve();
-      await pending;
-      await measure("db", async () => "after the close");
-      finished.resolve();
-    };
-    const fiber = Effect.runFork(effectCarrier.within(operation, run(thunk)));
-    await started.promise;
-    const exit = await Effect.runPromise(Fiber.interrupt(fiber));
-    operation.close(ended());
-    gate.resolve();
-    await finished.promise;
-    return { interrupted: Exit.isInterrupted(exit), aborted: seen?.aborted, records };
-  };
-
-  test("an interruption while the thunk is pending, whose waits follow the seal", async () => {
-    const carried = await interrupted((thunk) => effectCarrier.tryPromiseCarried(thunk));
-    const { records, ...ending } = await interrupted((thunk) => Effect.tryPromise(thunk));
-    expect({ interrupted: carried.interrupted, aborted: carried.aborted }).toEqual(ending);
-    expect(ending).toEqual({ interrupted: true, aborted: true });
-    expect(carried.records).toMatchObject([
-      { out: { waitMs: 0, count: 1 }, db: { waitMs: 0, count: 0 } },
-    ]);
-    expect(records).toHaveLength(1);
-  });
 });
 
 describe("finish hands a fault in closing an operation to the app, never to the caller", () => {

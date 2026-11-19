@@ -278,3 +278,86 @@ describe("operations-timed-otherwise", () => {
     ]);
   });
 });
+
+// Invariant 9: a repo the contract holds to request timing, and that runs
+// Effect, cannot pass while its Effect miscounts, and the kit's Effect check
+// is what says so. Its import is read as the kit's is.
+describe("the kit's Effect check is owed beside the kit where a manifest ships effect", () => {
+  const CHECK = `${KIT}/effect`;
+  const OWED_CHECK = "proves its Effect counts each wait in its own operation";
+  const CHECK_TEST = "src/request-timing-effect.test.ts";
+  const CHECKS = `import { test } from "bun:test";
+import * as effect from "effect";
+import { requestTimingEffectConforms } from "${CHECK}";
+
+test("request timing counts an Effect program's waits", () => requestTimingEffectConforms(effect));
+`;
+  const shipsEffect = (contents: PackageJson): void => {
+    contents.dependencies = { ...contents.dependencies, effect: "4.1.4" };
+  };
+  const noEffect = (): void => {};
+
+  test.each([
+    ["effect shipped and the check imported", shipsEffect, { [CHECK_TEST]: CHECKS }, []],
+    [
+      "effect shipped and the check imported dynamically",
+      shipsEffect,
+      {
+        [CHECK_TEST]: `test("t", async () => (await import("${CHECK}")).requestTimingEffectConforms(effect));\n`,
+      },
+      [],
+    ],
+    ["effect shipped and no check", shipsEffect, {}, [containing(OWED_CHECK)]],
+    [
+      "effect shipped and the check imported as a type alone, which runs nothing",
+      shipsEffect,
+      {
+        [CHECK_TEST]: `import type { EffectModule } from "${CHECK}";\nexport const m: EffectModule | undefined = undefined;\n`,
+      },
+      [containing(OWED_CHECK)],
+    ],
+    ["no effect and no check", noEffect, {}, []],
+    [
+      "effect a devDependency alone, which the app does not ship",
+      (contents: PackageJson): void => {
+        contents.devDependencies = { ...contents.devDependencies, effect: "4.1.4" };
+      },
+      {},
+      [],
+    ],
+    [
+      "effect in the lockfile alone, reached through another package",
+      noEffect,
+      { "bun.lock": '{ "packages": { "effect": ["effect@4.1.4", "", {}, ""] } }\n' },
+      [],
+    ],
+    [
+      "effect shipped by a workspace manifest and no check",
+      noEffect,
+      { "apps/api/package.json": JSON.stringify({ dependencies: { effect: "4.1.4" } }) },
+      [containing("apps/api/package.json ships effect")],
+    ],
+  ])("%s", async (_what, change, extra, expected) => {
+    expect(await graded(OWES, { [TIMING_TEST]: CONFORMS, ...extra }, {}, change)).toEqual(expected);
+  });
+
+  test("and with neither test, each is its own problem", async () => {
+    expect(await graded(OWES, {}, {}, shipsEffect)).toEqual([
+      containing(OWED),
+      containing(OWED_CHECK),
+    ]);
+  });
+
+  test("and nothing is owed of a repo that does not owe the kit", async () => {
+    expect(await graded({ ...OWES, live: false }, {}, {}, shipsEffect)).toEqual([]);
+  });
+
+  test.each([
+    ["effect shipped and the check imported", shipsEffect, { [CHECK_TEST]: CHECKS }],
+    ["effect shipped and no check", shipsEffect, {}],
+    ["no effect and no check", noEffect, {}],
+  ])("operations-timed-otherwise waives it with the kit: %s", async (_what, change, extra) => {
+    const otherwise = { operationsTimedOtherwise: "an OpenTelemetry exporter to the collector" };
+    expect(await graded(OWES, extra, otherwise, change)).toEqual([]);
+  });
+});

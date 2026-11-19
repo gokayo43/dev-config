@@ -3,7 +3,7 @@
  * of database waits, and the latches the suite holds them at.
  */
 import { count, eq } from "drizzle-orm";
-import { Effect } from "effect";
+import { Effect, Semaphore } from "effect";
 
 import { latch } from "../../request-timing-fixture.ts";
 import { Db, type DbError, type Preset, presets } from "./db.ts";
@@ -47,8 +47,8 @@ export interface Plan {
 
 /**
  * A lane: it arrives at the contended permit and, holding it, makes its
- * plan's waits. The permit is the shared resource the Effect carrier exists
- * for: a lane resumed on it runs on the stack of the fiber that released it.
+ * plan's waits. The permit is the shared resource attribution is graded
+ * through: a lane waiting on it is woken by the fiber that released it.
  */
 export const lane = (plan: Plan, label: string): Effect.Effect<string, DbError, Db | Contended> =>
   Effect.gen(function* () {
@@ -58,7 +58,9 @@ export const lane = (plan: Plan, label: string): Effect.Effect<string, DbError, 
       arrivals.waiting += 1;
       if (arrivals.waiting === arrivals.wanted) arrivals.all.resolve();
     });
-    yield* semaphore.withPermits(1)(
+    yield* Semaphore.withPermits(
+      semaphore,
+      1,
       Effect.gen(function* () {
         for (let query = 0; query < plan.queries; query += 1) {
           yield* use((db) => db.select().from(presets).where(eq(presets.id, 1)));
@@ -76,6 +78,6 @@ export const lane = (plan: Plan, label: string): Effect.Effect<string, DbError, 
 /** Takes the contended permit outside every operation, answering what gives it back. */
 export const holdPermit = Effect.gen(function* () {
   const { semaphore } = yield* Contended;
-  yield* semaphore.take(1);
-  return semaphore.release(1);
+  yield* Semaphore.take(semaphore, 1);
+  return Semaphore.release(semaphore, 1);
 });

@@ -6,10 +6,13 @@
  * strip types from anything under `node_modules` — `--experimental-strip-types`
  * excludes that directory outright, which is where every consumer has this
  * package — so a specifier resolving to a `.ts` there cannot load at all
- * (dev-config#113). `request-timing.ts`, `request-timing-effect.ts` and the
- * eight `request-timing-<connector>.ts` are imported by an app's own code,
- * which Next.js and Vite bundle, and neither strips types under
- * `node_modules` either; the modules they share become chunks beside them.
+ * (dev-config#113). `request-timing.ts` and the eight
+ * `request-timing-<connector>.ts` are imported by an app's own code, which
+ * Next.js and Vite bundle, and neither strips types under `node_modules`
+ * either; the modules they share become chunks beside them.
+ * `request-timing-conformance-effect.ts` is imported by an app's suite, but
+ * it runs the core, whose source does not ship, so it is built and takes the
+ * core from the same chunk.
  * Everything else here is imported by `bun test` or
  * run by Bun, which strips types, and its source is what ships.
  *
@@ -17,8 +20,14 @@
  * for a git dependency, under the shared UI library; `tests/dist.test.ts` is
  * this repo's half of it.
  *
- * `deps.neverBundle` names node's built-in modules because the neutral platform
- * resolves none of them, and warns on each import it leaves as it was.
+ * `deps.neverBundle` leaves every package import as it was written: node's
+ * built-in modules, which the neutral platform resolves none of, and every
+ * other package, since the build would otherwise inline a devDependency a
+ * built file imports at runtime. A connector imports its framework, and the
+ * kit's Effect check imports `effect`, as types alone; a runtime import of one
+ * then stays an import in `dist/`, where
+ * `tests/request-timing-conformance-effect.test.ts` reads it, rather than a
+ * second copy of the package inside the file.
  *
  * `deps.dts.neverBundle` because the declaration pass resolves a type it is
  * handed rather than leaving it to the peer: without it `@playwright/test`'s
@@ -34,7 +43,7 @@ export default defineConfig({
     "request-timing.ts",
     "request-timing-bun-redis.ts",
     "request-timing-bun-sql.ts",
-    "request-timing-effect.ts",
+    "request-timing-conformance-effect.ts",
     "request-timing-elysia.ts",
     "request-timing-fetch.ts",
     "request-timing-mysql2.ts",
@@ -45,5 +54,5 @@ export default defineConfig({
   ],
   platform: "neutral",
   dts: true,
-  deps: { neverBundle: [/^node:/], dts: { neverBundle: true } },
+  deps: { neverBundle: [/^[^./]/], dts: { neverBundle: true } },
 });

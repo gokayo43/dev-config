@@ -61,10 +61,6 @@
       "types": "./dist/request-timing.d.ts",
       "default": "./dist/request-timing.js"
     },
-    "./request-timing/effect": {
-      "types": "./dist/request-timing-effect.d.ts",
-      "default": "./dist/request-timing-effect.js"
-    },
     "./request-timing/elysia": {
       "types": "./dist/request-timing-elysia.d.ts",
       "default": "./dist/request-timing-elysia.js"
@@ -98,6 +94,10 @@
       "default": "./dist/request-timing-bun-sql.js"
     },
     "./request-timing/conformance": "./request-timing-conformance.ts",
+    "./request-timing/conformance/effect": {
+      "types": "./dist/request-timing-conformance-effect.d.ts",
+      "default": "./dist/request-timing-conformance-effect.js"
+    },
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
     "./response-schema": "./response-schema.ts",

@@ -1,5 +1,5 @@
 import { must } from "./narrowing.js";
-import { measure } from "./request-timing.js";
+import { n as measure } from "./request-timing-B_ojSNZ_.js";
 //#region request-timing-wait.ts
 /**
 * What every wait connector is built from: a client the app already made,

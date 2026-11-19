@@ -1,5 +1,5 @@
-import { i as beginWait, o as plainStorage } from "./request-timing-operation-DfYtKiLO.js";
-import { n as waitOn, t as standingIn } from "./request-timing-wait-gFmmuV8F.js";
+import { c as current, s as beginWait } from "./request-timing-B_ojSNZ_.js";
+import { n as waitOn, t as standingIn } from "./request-timing-wait-BRu2po2h.js";
 //#region request-timing-bun-sql.ts
 /**
 * Calls `ended` once `pending` settles, either way, through `Promise`'s own
@@ -87,7 +87,7 @@ const isCallback = (last) => typeof last === "function";
 * its queries count in the operation that opened the transaction.
 */
 function transacting(open, args) {
-	const operation = plainStorage.getStore();
+	const operation = current.getStore();
 	const callback = args.at(-1);
 	if (operation === void 0 || !isCallback(callback)) return open(args);
 	let opening = beginWait(operation, "db");
@@ -155,8 +155,8 @@ const WAITS = /* @__PURE__ */ new Set([
 */
 function timedSql(client) {
 	const standIns = /* @__PURE__ */ new Map([
-		["unsafe", (...args) => issued(plainStorage.getStore(), client.unsafe(...args))],
-		["file", (...args) => issued(plainStorage.getStore(), client.file(...args))],
+		["unsafe", (...args) => issued(current.getStore(), client.unsafe(...args))],
+		["file", (...args) => issued(current.getStore(), client.file(...args))],
 		["reserve", (...args) => waitOn("db", () => client.reserve(...args)).then(timedSql)]
 	]);
 	for (const [key, own] of Object.entries(Object.getOwnPropertyDescriptors(client))) {
@@ -168,7 +168,7 @@ function timedSql(client) {
 	}
 	const called = new Proxy(client, { apply: (_target, receiver, args) => {
 		const answer = Function.prototype.apply.call(client, receiver, args);
-		return isQuery(answer) ? issued(plainStorage.getStore(), answer) : answer;
+		return isQuery(answer) ? issued(current.getStore(), answer) : answer;
 	} });
 	return standingIn(called, standIns);
 }

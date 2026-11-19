@@ -49,9 +49,11 @@ inputs:
       request timing: how its operations are timed instead, or that it serves
       nothing a connector covers, and what it serves. Empty, which is every repo
       that uses it, asks for a test importing
-      @gokayo43/dev-config/request-timing/conformance.
-      The reason is the waiver, and it is refused on a repo that does not owe
-      the test or that has one.
+      @gokayo43/dev-config/request-timing/conformance, and where a manifest
+      ships effect, one importing
+      @gokayo43/dev-config/request-timing/conformance/effect.
+      The reason is the waiver of both, and it is refused on a repo that does
+      not owe the test or that has the first.
     default: ""
 
 runs:

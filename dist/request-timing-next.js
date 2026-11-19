@@ -1,6 +1,5 @@
-import { t as OperationName } from "./request-timing-operation-DfYtKiLO.js";
-import "./request-timing.js";
-import { r as timedEntry } from "./request-timing-entry-D56lhQUm.js";
+import { i as OperationName } from "./request-timing-B_ojSNZ_.js";
+import { r as timedEntry } from "./request-timing-entry-BhItGF6N.js";
 import { t as marked } from "./request-timing-route-BhLXYn3w.js";
 //#region request-timing-next.ts
 /**

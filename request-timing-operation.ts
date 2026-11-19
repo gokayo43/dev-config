@@ -1,13 +1,9 @@
 /**
- * What both carriers of request timing share: the operation, the waits it
- * accumulates, the record it closes into, and the plain carrier's storage,
- * which the Effect carrier reads where a plain handler hands its Effect to a
- * runtime and sets where an Effect hands a thunk back to plain code. No export names this file. The plain carrier re-exports its
- * public half, and the Effect carrier reaches `beginWait` and `plainStorage`,
- * which no app or connector calls.
- *
- * It imports nothing but `node:async_hooks`, so the plain export stays free of
- * `effect`.
+ * What request timing's modules share: the operation, the waits it
+ * accumulates, the record it closes into, and the storage that carries the
+ * current operation. No export names this file. `request-timing.ts`
+ * re-exports its public half, and `beginWait` is for the connectors that
+ * measure a driver's query object without the thunk form of `measure`.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
@@ -186,8 +182,9 @@ const ignored: EndWait = () => undefined;
 const micro = (ms: number): number => Math.round(ms * 1000) / 1000;
 
 /**
- * Starts a wait of `kind` against `operation`, answering what ends it. A
- * carrier's half of `measure`, exported for the Effect carrier's sake.
+ * Starts a wait of `kind` against `operation`, answering what ends it: the
+ * half of `measure` a connector calls where a driver's query object cannot be
+ * wrapped in a thunk.
  */
 export let beginWait: (operation: Operation, kind: WaitKind) => EndWait;
 
@@ -204,7 +201,7 @@ export type Fault = (error: unknown) => void;
 export interface Timing {
   /**
    * Opens an operation now. The connector that opens it runs the handler under
-   * it with a carrier's `within` and closes it with `finish` once its response
+   * it with `within` and closes it with `finish` once its response
    * has finished.
    */
   readonly open: () => Operation;
@@ -254,17 +251,12 @@ export function requestTiming(options: TimingOptions): Timing {
   };
 }
 
-/**
- * The plain carrier: which operation is current in a plain async program. Read
- * by the plain `measure` and `inOperation`, read by the Effect carrier's
- * `carryOperation` at the one moment it is still right, and set or cleared by
- * its `tryPromiseCarried` while it calls a thunk and starts what it answers.
- */
-export const plainStorage = new AsyncLocalStorage<Operation>();
+/** Which operation is current, read by `measure` and `inOperation` and set by `within`. */
+export const current = new AsyncLocalStorage<Operation>();
 
 /**
  * One operation from open to close: what it waited on, and the record it
- * closes into. Opened by `Timing.open`, carried by either carrier's `within`,
+ * closes into. Opened by `Timing.open`, made current by `within`,
  * and closed by the connector that opened it, once, when the response has
  * finished.
  */
