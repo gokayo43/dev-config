@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Effect, Fiber, Scheduler } from "effect";
 import { join } from "node:path";
 
 describe("loud when Effect changes", () => {
@@ -88,5 +89,53 @@ describe("loud when Effect changes", () => {
     expect(await underBrokenEffect("real", "3.22.0")).toBe(
       "@gokayo43/dev-config/interleaving runs on effect 4, and this process's effect is 3.22.0: Effect 3 schedules fibers in a way simulate cannot drive",
     );
+  });
+});
+
+describe("the interruption Effect 4.1.4 loses, outside simulate", () => {
+  /**
+   * The root forks a child and interrupts it before the child's first slice
+   * runs, under a scheduler that runs every task from a queue of its own and
+   * yields every fiber but the root at the first step of a slice. Answers
+   * whether the root and the child ended once no task was left.
+   */
+  function interruptBeforeStart() {
+    const queue: (() => void)[] = [];
+    let root: Fiber.Fiber<unknown, unknown> | undefined;
+    const scheduler: Scheduler.Scheduler = {
+      executionMode: "sync",
+      shouldYield: (fiber) => {
+        root ??= fiber;
+        return fiber !== root && fiber.currentOpCount === 1;
+      },
+      makeDispatcher: () => ({
+        scheduleTask: (task) => void queue.push(task),
+        flush: () => undefined,
+      }),
+    };
+    let child: Fiber.Fiber<never> | undefined;
+    const running = Effect.runFork(
+      Effect.gen(function* () {
+        child = yield* Effect.forkChild(Effect.never);
+        yield* Fiber.interrupt(child);
+      }),
+      { scheduler },
+    );
+    for (let ran = 0; queue.length > 0 && ran < 100; ran++) queue.shift()?.();
+    return {
+      queued: queue.length,
+      rootEnded: running.pollUnsafe() !== undefined,
+      childEnded: child?.pollUnsafe() !== undefined,
+    };
+  }
+
+  // simulate never preempts the step this case yields at, because Effect
+  // 4.1.4 loses the interruption there: the child's queued first slice runs
+  // its program in the interruption's place, and the root waits on it
+  // forever. The day an Effect release fixes that, this case fails, and says
+  // the exclusion in interleaving.ts can go; the issue the main loop files on
+  // gokayo43/dev-config tracks it.
+  test("an interruption of a fiber yielded at its first step before it started is lost", () => {
+    expect(interruptBeforeStart()).toEqual({ queued: 0, rootEnded: false, childEnded: false });
   });
 });

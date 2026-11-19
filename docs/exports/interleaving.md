@@ -75,9 +75,10 @@ time. Like Effect's own scheduler, it also yields a fiber that has run
 `Scheduler.MaxOpsBeforeYield` ops in one slice, 2 048 unless the program sets
 it, so a fiber that busy-polls for another still lets it run.
 
-An op is one step of that loop, and a preemption falls exactly where Effect's
-runtime can switch fibers, no fewer places and no more: between any two steps
-of one fiber, two synchronous ones included, and inside an
+An op is one step of that loop. A preemption can fall wherever Effect's runtime
+can switch fibers and nowhere else, except at the one step where Effect 4.1.4
+loses an interruption, which "What a program may contain" describes. That is
+between any two steps of one fiber, two synchronous ones included, and inside an
 `Effect.uninterruptible` region, which stops interruption but not scheduling.
 That is the reach fast-check's own `fc.scheduler` lacks: it reorders only at the
 promises a test wraps, and in the prototype this export came from
@@ -182,18 +183,26 @@ scheduler too, so code that sleeps or times out is driven by it here. An adjust
 that runs before a sleep is registered wakes nothing, and the search finds that
 order, in which the sleeper parks.
 
-Effect 4.1.4 loses an interruption in one order: a fiber interrupted before its
-first step has run, and told by the scheduler to yield at the first step of the
-interruption, then runs its own program from its queued start, and whoever
-waits for it to end waits forever. Effect's default scheduler never yields a
-fiber that soon, but the interleaving may, so `simulate` reaches that order and
-reads it as parked. `TestClock` meets it: each sleep starts a fiber that warns
-when the clock is never adjusted, and an adjust interrupts that fiber, so a
-program on `TestClock` parks under a few interleavings even where its sleeps
-and adjusts cannot race. Until a release fixes it, a parked counterexample from
-a program on `TestClock` may be this order rather than a deadlock of the
-program's own. This repo's suite holds the order, and fails once a release no
-longer loses the interruption.
+Effect 4.1.4 loses an interruption in one order. A fiber is interrupted from
+another fiber's step before its own first slice has run, so Effect runs the
+interruption there and then, and the scheduler tells the fiber to yield at the
+interruption's first step. The fiber's first slice, still queued, then runs the
+fiber's own program in the interruption's place, and whoever waits for the
+fiber to end waits forever. Effect's default scheduler does not reach that
+order at any `Scheduler.MaxOpsBeforeYield`, 1 included, so a park there is
+Effect's bug and never the program's. `simulate` therefore never preempts that
+one step, and that is the one exception to its reach: a preemption falls at
+every point where the runtime can switch fibers except the first step of an
+interruption of a fiber the run has not yet seen start. It tells that step
+apart by the async context Effect gives a forked fiber, which keeps the context
+of the step that forked it; a fiber forked to start at once runs in its
+parent's step instead, and its first step can still be preempted. `TestClock`
+used to meet the order: each sleep starts a fiber that warns when the clock is
+never adjusted, an adjust interrupts that fiber, and a program on `TestClock`
+with no race of its own parked in 33 of 20 000 interleavings. This repo's suite
+holds the bug itself on a scheduler of its own, outside `simulate`, and that
+case fails once a release no longer loses the interruption, which is when the
+exception goes.
 
 For the run's duration `simulate` replaces `Math.random` with Effect's
 generator seeded by the interleaving's values, then puts it back, on a throw

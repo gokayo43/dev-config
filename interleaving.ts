@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 
 import { Context, Deferred, Effect, Exit, Fiber, Hash, Random, Scheduler, Tracer } from "effect";
@@ -216,6 +217,10 @@ class Run {
   /** The fiber just told to yield, whose continuation is the next task queued. */
   #yielding: AnyFiber | undefined;
   readonly #beneath: AnyFiber[] = [];
+  /** Which step, of those `#beneath` is in the middle of, each `#beneath` is; and the one running now. */
+  readonly #steps: number[] = [];
+  readonly #step = new AsyncLocalStorage<number>();
+  #stepCount = 0;
 
   readonly scheduler: Scheduler.Scheduler = {
     executionMode: "sync",
@@ -259,13 +264,18 @@ class Run {
       span: (options) => traced.span(options),
       context: (primitive, fiber) => {
         this.#fibers.add(fiber);
+        const step = this.#stepCount++;
         this.#beneath.push(fiber);
+        this.#steps.push(step);
         try {
-          return traced.context === undefined
-            ? primitive["~effect/Effect/evaluate"](fiber)
-            : traced.context(primitive, fiber);
+          return this.#step.run(step, () =>
+            traced.context === undefined
+              ? primitive["~effect/Effect/evaluate"](fiber)
+              : traced.context(primitive, fiber),
+          );
         } finally {
           this.#beneath.pop();
+          this.#steps.pop();
           const now = fiber.getRef(Tracer.Tracer);
           if (!this.#watched.has(now))
             fiber.setContext(Context.add(fiber.context, Tracer.Tracer, this.#watch(now)));
@@ -277,6 +287,7 @@ class Run {
   }
 
   #ask(fiber: AnyFiber): boolean {
+    if (this.#interruptedBeforeStart(fiber)) return false;
     this.#fibers.add(fiber);
     const task = this.#current;
     const first = task !== undefined && !this.#entered;
@@ -295,6 +306,21 @@ class Run {
     });
     if (yielding) this.#yielding = fiber;
     return yielding;
+  }
+
+  /**
+   * Whether `fiber` is taking its first step because another fiber's step
+   * interrupted it before its own first slice ran. Effect 4.1.4 loses that
+   * interruption when the fiber yields here: the fiber's first slice, still
+   * queued, then runs the fiber's program in its place. A fiber Effect forks
+   * keeps the async context of the step that forked it and runs its first
+   * step in it, so here, and only here, a fiber the run has never seen runs
+   * in a context other than the step it runs inside of. A fiber forked to
+   * start at once runs in that step's own.
+   */
+  #interruptedBeforeStart(fiber: AnyFiber): boolean {
+    const inside = this.#steps.at(-1);
+    return inside !== undefined && !this.#fibers.has(fiber) && this.#step.getStore() !== inside;
   }
 
   /**

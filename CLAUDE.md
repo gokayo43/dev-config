@@ -377,7 +377,8 @@ a change to a rule usually lands here too.
   regression probe on the torn read; and `interleaving-runtime.test.ts` a
   process per runtime fact the export rests on, its `effect` replaced through a
   Bun plugin by one with that fact made false, for the first `simulate` to name
-  it. The fixtures are a module of their own because
+  it, and on a scheduler of its own the interruption Effect 4.1.4 loses, whose
+  step `simulate` never preempts until a release fixes it. The fixtures are a module of their own because
   `interleaving-measure.ts`, which re-takes the page's measurement table, runs
   them too. `fuzz.test.ts` drives the fuzzer against a real server on a real
   port, since each of its four invariants is a statement about a response — and the

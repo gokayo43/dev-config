@@ -614,25 +614,49 @@ describe("how a run ends", () => {
   });
 
   /**
-   * The root forks a child and interrupts it at once. Effect runs the
-   * interruption on the spot, and when the scheduler tells the child to yield
-   * at that first step, the child's own start, still queued, runs its program
-   * in place of the interruption, and the root waits on it forever.
+   * The sleeper and an adjust made again until it has woken, which no order
+   * can park. Every adjust interrupts the warning fiber the sleep starts,
+   * sometimes before that fiber's first slice has run.
    */
-  // Pins the Effect 4.1.4 behaviour the page states, which no strategy here
-  // can tell from a deadlock: a release that fixes it fails this case.
-  test("an interruption of a fiber that has not started is lost when it yields at its first step", () => {
-    const interruptAtOnce = Effect.gen(function* () {
-      yield* Fiber.interrupt(yield* Effect.forkChild(Effect.never));
-      return "interrupted";
+  const sleptUntilWoken = Effect.gen(function* () {
+    const sleeper = yield* Effect.forkChild(Effect.sleep("1 second").pipe(Effect.as("woke")));
+    yield* TestClock.adjust("1 second").pipe(
+      Effect.repeat({ until: () => sleeper.pollUnsafe() !== undefined }),
+    );
+    return yield* Fiber.join(sleeper);
+  }).pipe(Effect.provide(TestClock.layer()));
+
+  // Regression: simulate preempted the first step of an interruption of a
+  // fiber that had not started, where Effect 4.1.4 loses the interruption, and
+  // parked this program in 33 of 20 000 interleavings on seed 1. The count is
+  // the page's sizing rule for that share. The fiber forked to start at once kills
+  // an exclusion wider than that step: its first step, inside the forking
+  // step, can still be preempted.
+  test("a program on TestClock with no race of its own never parks, and a fiber forked to start at once can still be preempted at its first step", () => {
+    check(
+      property(interleavingsOf(sleptUntilWoken), (interleaving) => {
+        expect(finished(sleptUntilWoken, interleaving)).toBe("woke");
+      }),
+      { numRuns: 8_400 },
+    );
+    const atOnce = Effect.suspend(() => {
+      const log: string[] = [];
+      return Effect.gen(function* () {
+        const child = yield* Effect.forkChild(note(log, "c"), { startImmediately: true });
+        yield* note(log, "r");
+        yield* Fiber.join(child);
+        return log.join(" ");
+      });
     });
-    expect(finished(interruptAtOnce, unpreempted)).toBe("interrupted");
-    const ops = simulate(interruptAtOnce, unpreempted).ops;
-    const parking = Array.from({ length: ops }, (_, op) =>
-      simulate(interruptAtOnce, { strategy: "walk", preemptAt: [op], picks: [] }),
-    ).filter((run) => run.parked);
-    expect(parking).not.toEqual([]);
-  });
+    const orders = new Set(
+      Array.from({ length: simulate(atOnce, unpreempted).ops }, (_, op) =>
+        finished(atOnce, { strategy: "walk", preemptAt: [op], picks: [] }),
+      ),
+    );
+    expect(orders).toEqual(new Set(["c r", "r c"]));
+    // 8 400 runs outlast bun's 5 s default here; the bound is the nightly's
+    // per-test one, which test-suite's action.yml sets for its longer search.
+  }, 600_000);
 
   const priority: Interleaving = { strategy: "priority", priorities: [], changeAt: [] };
 
