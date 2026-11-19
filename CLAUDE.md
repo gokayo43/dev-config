@@ -212,9 +212,7 @@ a change to a rule usually lands here too.
   app's own route table; `characterization-net.ts` is the harness under a golden
   suite; `property.ts` is `fc.assert` with the run's budget applied — the one
   call every property test goes through, so a nightly can multiply how far each
-  of them searches with no test changing; `interleaving.ts` runs an Effect
-  program under a `Scheduler` whose every choice comes from fast-check data, so
-  a property generates the order overlapping fibers run in; `narrowing.ts` is
+  of them searches with no test changing; `narrowing.ts` is
   `only`, `nth`, `must` and `rejectionOf`, which hand back a value the compiler
   could not prove present or throw naming what they found, and import no test
   runner so a Playwright spec under node takes them too. `bun-test.d.ts` types
@@ -232,7 +230,7 @@ a change to a rule usually lands here too.
   a live Redis that only a test framework can sequence.
   Every one is spelled **without an extension**, and what a specifier resolves
   to is this package's business rather than a caller's: fourteen of them are built and
-  eight ship their source, and no import says which. `tsdown.config.ts` is where
+  seven ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
   `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-next,request-timing-trpc,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
@@ -361,12 +359,7 @@ a change to a rule usually lands here too.
   bigger number and the only thing that says whether it worked is how many times
   the predicate ran; the default it multiplies is graded as a difference against
   `fc.assert` rather than against the literal 100, which is fast-check's to
-  change. `interleaving.test.ts` searches the racy fixtures in
-  `interleaving-fixtures.ts` on fresh seeds, sized and counted by the rules on
-  the export's page, and holds the page's regression probe on the torn read;
-  the fixtures are a module of their own because
-  `interleaving-measure.ts`, which re-takes the page's measurement table, runs
-  them too. `fuzz.test.ts` drives the fuzzer against a real server on a real
+  change. `fuzz.test.ts` drives the fuzzer against a real server on a real
   port, since each of its four invariants is a statement about a response — and the
   route that never answers is why that fixture disposes without awaiting
   `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:

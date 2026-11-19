@@ -23,7 +23,6 @@
     "file-lock.ts",
     "limiter-conformance.ts",
     "property.ts",
-    "interleaving.ts",
     "response-schema.ts",
     "characterization-net.ts",
     "request-timing-conformance.ts",
@@ -101,7 +100,6 @@
     "./request-timing/conformance": "./request-timing-conformance.ts",
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
-    "./interleaving": "./interleaving.ts",
     "./response-schema": "./response-schema.ts",
     "./characterization-net": "./characterization-net.ts",
     "./bun-test": {
@@ -135,7 +133,7 @@
     "@types/bun": "1.4.0",
     "@types/react": "19.3.0",
     "drizzle-orm": "0.45.2",
-    "effect": "3.22.0",
+    "effect": "4.1.4",
     "elysia": "1.4.29",
     "fast-check": "4.9.0",
     "knip": "6.38.0",
@@ -155,7 +153,6 @@
   "peerDependencies": {
     "@playwright/test": ">=1.62",
     "@shadcn/lint": ">=0.2",
-    "effect": ">=3.22 <4",
     "eslint-import-resolver-typescript": ">=4",
     "eslint-plugin-boundaries": ">=7",
     "fast-check": ">=4",
@@ -169,9 +166,6 @@
       "optional": true
     },
     "@shadcn/lint": {
-      "optional": true
-    },
-    "effect": {
       "optional": true
     },
     "eslint-import-resolver-typescript": {
