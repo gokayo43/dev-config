@@ -357,17 +357,13 @@ describe("the backfill check", () => {
     expect(await Bun.file(started.evidence.second).exists()).toBe(false);
   });
 
-  // Two full gate runs in one case, where every other case here is one, so this
-  // is the case that trips the default per-test timeout when the suite shares a
-  // machine with another run — which review does routinely. The timeout is what
-  // it takes for that to stop being a signal about the machine.
   test("the database it builds is gone whichever way it went", async () => {
     const clean = await ran(GUARDED);
     expect(await exists(clean.database)).toBe(false);
 
     const dirty = await ran(APPENDS);
     expect(await exists(dirty.database)).toBe(false);
-  }, 30_000);
+  });
 
   // The declared database is what the app boots against a few steps later, and
   // the seed's rows have no business being in it.

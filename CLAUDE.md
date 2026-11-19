@@ -425,13 +425,27 @@ a change to a rule usually lands here too.
 
 ```sh
 bun run check   # format:check + lint + typecheck + knip
-bun test        # the gate suites
+bun run test    # the gate suites, under the suite's per-test bound
 bun run build   # rewrites the committed dist/ from the exports tsdown.config.ts builds
 ```
 
 Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
-`--coverage` applies it, so `bun test --coverage` is the run CI makes —
+`--coverage` applies it, so `bun run test --coverage` is the run CI makes —
 `docs/gates/test-suite.md`.
+
+The `test` script is `bun test --timeout 120000`, and that bound is every case's
+and every hook's here unless one names its own. A case's time on this box is
+its CPU time over the share of a core it is given, and the live sites' weight
+pushes an agent's or a runner's share below 3% when the box is full: the Bun.sql
+differential needs about 0.1s of CPU, took 3.9s at a 3% quota, and timed out at
+bun's 5s default in a full run at load 40. So the bound is sized from the other
+end, as the most that still names a hung case inside CI's 15-minute job, whose
+suite step took 12.5 minutes on 2026-11-19. Only the flag reaches every file:
+bun 1.4.4 ignores a `timeout` key in `bunfig.toml`, and a `setDefaultTimeout`
+in a preload binds only the first file, so a bare `bun test` runs on 5s. The
+shorter bounds left in `tests/probe.test.ts` and
+`tests/mutation-lane-child.test.ts` are those cases' oracles, each killing an
+implementation that hangs.
 
 `anti-slop/**` sits outside that floor, in `bunfig.toml`: its rules run inside a
 spawned oxlint and never execute in the test process, so the runner instruments

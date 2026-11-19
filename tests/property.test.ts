@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -23,13 +23,6 @@ import { materialise } from "./tree.ts";
  * case asserting a literal would keep passing on the day the library changed
  * it — which is the day the claim stopped being true.
  */
-
-// Every case here is a `bun test` of its own over a fixture tree. With the
-// machine to itself each takes about 50ms and the one that spends its budget
-// takes a second, against a 5s default — so a case is one busy neighbour away
-// from reporting a timeout as a fault in the budget. The same 30s the mutation
-// lane's suite gives a spawn, for the same reason.
-setDefaultTimeout(30_000);
 
 const REPO = dirname(import.meta.dir);
 

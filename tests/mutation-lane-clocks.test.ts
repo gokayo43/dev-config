@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { GRACE_MS } from "../.github/actions/mutation-lane/child.ts";
 import {
@@ -17,10 +17,6 @@ import {
   TOTAL_TEST,
   WITH_FEE,
 } from "./mutation-lane-fixture.ts";
-
-// Real Stryker runs, timed out as the lane's other suites time them, and for
-// the reason given there.
-setDefaultTimeout(30_000);
 
 /**
  * A domain function whose one branch takes eleven seconds to wait out: past
@@ -84,7 +80,7 @@ describe("the clocks a mutation run keeps", () => {
       "src/domain/pause.ts: write the case that fails on `waiting <= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
     ]);
     expect(verdict.table).toEqual(containing("| Caught by timing out | 0 |"));
-  }, 90_000);
+  });
 
   // A mutant that hangs is caught by the clock, which the score counts as
   // caught and the note says it did: a score that rests on timeouts is one a

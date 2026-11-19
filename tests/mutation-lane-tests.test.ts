@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import { containing } from "./matchers.ts";
 import {
@@ -12,10 +12,6 @@ import {
   TOTAL_TEST,
   WITH_FEE,
 } from "./mutation-lane-fixture.ts";
-
-// Real Stryker runs, timed out as the lane's other suite times them, and for
-// the reason given there.
-setDefaultTimeout(30_000);
 
 describe("the tests a repo names in mutation-tests", () => {
   // A failing file whose path contains the named file's path: `bun test`

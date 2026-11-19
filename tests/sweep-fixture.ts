@@ -23,6 +23,7 @@ import type { PlaywrightTestOptions, PlaywrightWorkerOptions } from "@playwright
 import type { InvariantSweep } from "../invariant-sweep.ts";
 
 import { type ConfigObject, isList, plainly, record } from "../.github/actions/_lib/gate.ts";
+import { must } from "../narrowing.ts";
 import { ENDPOINT } from "../route-log.ts";
 import { materialise } from "./tree.ts";
 
@@ -39,7 +40,7 @@ function html(body: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>fixture</title><style>body{margin:0}</style></head><body>${body}</body></html>`;
 }
 
-/** How long the slow subresources take, in ms — long past first paint and past two frames. */
+/** How long the slow image takes to answer, in ms. */
 const LATE = 400;
 
 /**
@@ -67,23 +68,23 @@ const BEFORE_QUIET = 200;
 export const WRITTEN = 16;
 
 /**
- * How long after its own `load` event the late page moves, in ms: well inside
- * the window a document goes quiet in, so the drain is still waiting when it
- * lands.
+ * How long after it has loaded and painted (`SHOWN`) the late page moves, in
+ * ms: well inside the window a document goes quiet in, so the drain is still
+ * waiting when it lands.
  */
 const LATE_SHIFT = 300;
 
 /**
- * How long after the user acts the slow pages move, in ms: past the 500ms in
- * which a shift is still theirs, with room for the runner's own delay in
- * telling the page an action has returned.
+ * How long after the user acts on a page it has been shown the slow pages
+ * move, in ms: past the 500ms in which a shift is still theirs, with room for
+ * the runner's own delay in telling the page an action has returned.
  */
 export const LONG_AFTER = 900;
 
 /**
- * How long after its own `load` event the late form's field arrives, in ms:
- * long after its banner has moved the content, so an action waiting for the
- * field is waiting while the page moves.
+ * How long after it has loaded and painted the late form's field arrives, in
+ * ms: long after its banner has moved the content, so an action waiting for
+ * the field is waiting while the page moves.
  */
 const LATE_FIELD = 1_200;
 
@@ -98,6 +99,23 @@ const LATE_CONTROLS = `for (const [tag, id] of [["input", "field"], ["select", "
 
 /** A script that adds a `BLOCK`-high element above the content. */
 const PUSH = `const b = document.createElement("div"); b.id = "banner"; b.style.height = "${BLOCK}px"; document.body.prepend(b);`;
+
+/**
+ * A promise that settles once the document has painted its content. Content
+ * moved before its first paint is content nobody saw, and the browser records
+ * no shift for it, and a starved renderer paints seconds into a load (first
+ * contentful paint 2.2-5.8s in under a 10% CPU quota, after `load` and after a
+ * 400ms image had arrived), so a page that moved its content on a clock of its
+ * own shifted on some runs and not on others.
+ */
+const PAINTED = `new Promise((painted) => new PerformanceObserver((list, observer) => { if (list.getEntriesByName("first-contentful-paint").length > 0) { observer.disconnect(); painted(); } }).observe({ type: "paint", buffered: true }))`;
+
+/**
+ * A promise, evaluated as the page parses, that settles once the document has
+ * loaded and painted its content: where every page that moves its content on
+ * its own starts the clock that moves it.
+ */
+const SHOWN = `Promise.all([new Promise((loaded) => addEventListener("load", loaded)), ${PAINTED}])`;
 
 /**
  * What the fixture server answers, by path. Each page is one invariant broken
@@ -181,8 +199,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<div id="wide" style="width:${TOO_WIDE}px;height:10px"></div><script>document.getElementById("wide").className = String.fromCharCode(27) + "[31m" + String.fromCharCode(10) + "::error title=x::y";</script>`,
         ),
       },
-      // Overflow that arrives with the bytes of a subresource, well after first
-      // paint.
+      // Overflow that arrives with the bytes of a subresource.
       "/late-image": { type: "text/html", body: html(`<img id="slow" src="/slow.svg" alt="">`) },
       // A popup onto a page that breaks nothing, so a run that records it is
       // graded on its videos and not on a violation.
@@ -249,19 +266,12 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
           `<button id="open">open</button><script>document.getElementById("open").addEventListener("click", () => { for (let n = 0; n < ${WRITTEN}; n++) window.open().console.error("written popup " + n + " is unhappy"); })</script>`,
         ),
       },
-      // An image with no size of its own above the content: when its bytes
-      // arrive, before the document's `load`, it takes its height and pushes
-      // the content down.
-      "/image-shift": {
-        type: "text/html",
-        body: html(`<img id="hero" src="/slow-block.svg" alt="">${CONTENT}`),
-      },
       // A banner that arrives after the page has loaded, pushing the content
       // down: data that came back late.
       "/late-shift": {
         type: "text/html",
         body: html(
-          `${CONTENT}<a href="/clean">on</a><script>addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
+          `${CONTENT}<a href="/clean">on</a><script>${SHOWN}.then(() => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
         ),
       },
       // Everything here moves the content when the page is acted on: a click
@@ -278,14 +288,14 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/slow-fill": {
         type: "text/html",
         body: html(
-          `<input id="field" aria-label="field">${CONTENT}<script>document.getElementById("field").addEventListener("input", () => setTimeout(() => { ${PUSH} }, ${LONG_AFTER}))</script>`,
+          `<input id="field" aria-label="field">${CONTENT}<script>const shown = ${SHOWN}; document.getElementById("field").addEventListener("input", () => shown.then(() => setTimeout(() => { ${PUSH} }, ${LONG_AFTER})))</script>`,
         ),
       },
       // The page dispatches the event a filled field would, with nobody acting.
       "/self-input": {
         type: "text/html",
         body: html(
-          `<input id="field" aria-label="field">${CONTENT}<script>const field = document.getElementById("field"); field.addEventListener("input", () => { ${PUSH} }); addEventListener("load", () => setTimeout(() => field.dispatchEvent(new Event("input", { bubbles: true })), ${LATE_SHIFT}))</script>`,
+          `<input id="field" aria-label="field">${CONTENT}<script>const field = document.getElementById("field"); field.addEventListener("input", () => { ${PUSH} }); ${SHOWN}.then(() => setTimeout(() => field.dispatchEvent(new Event("input", { bubbles: true })), ${LATE_SHIFT}))</script>`,
         ),
       },
       // Replaces the sweep's reporter with one that drops everything, then
@@ -302,7 +312,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/late-form": {
         type: "text/html",
         body: html(
-          `<input id="now" aria-label="now">${CONTENT}<script>addEventListener("load", () => { setTimeout(() => { ${PUSH} }, ${LONG_AFTER}); setTimeout(() => { ${LATE_CONTROLS} }, ${LATE_FIELD}); })</script>`,
+          `<input id="now" aria-label="now">${CONTENT}<script>${SHOWN}.then(() => { setTimeout(() => { ${PUSH} }, ${LONG_AFTER}); setTimeout(() => { ${LATE_CONTROLS} }, ${LATE_FIELD}); })</script>`,
         ),
       },
       // The page dispatches an `input` event of its own and moves its content,
@@ -310,7 +320,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/self-input-wait": {
         type: "text/html",
         body: html(
-          `<input id="other" aria-label="other">${CONTENT}<script>addEventListener("load", () => { setTimeout(() => { document.getElementById("other").dispatchEvent(new Event("input", { bubbles: true })); ${PUSH} }, ${LATE_SHIFT}); setTimeout(() => { ${LATE_CONTROLS} }, ${LATE_FIELD}); })</script>`,
+          `<input id="other" aria-label="other">${CONTENT}<script>${SHOWN}.then(() => { setTimeout(() => { document.getElementById("other").dispatchEvent(new Event("input", { bubbles: true })); ${PUSH} }, ${LATE_SHIFT}); setTimeout(() => { ${LATE_CONTROLS} }, ${LATE_FIELD}); })</script>`,
         ),
       },
       // The click asks for a panel that arrives after the user's half-second is
@@ -318,7 +328,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/slow-panel": {
         type: "text/html",
         body: html(
-          `<button id="open">open</button>${CONTENT}<script>document.getElementById("open").addEventListener("click", () => setTimeout(() => { ${PUSH} }, ${LONG_AFTER}))</script>`,
+          `<button id="open">open</button>${CONTENT}<script>const shown = ${SHOWN}; document.getElementById("open").addEventListener("click", () => shown.then(() => setTimeout(() => { ${PUSH} }, ${LONG_AFTER})))</script>`,
         ),
       },
       // Three elements below a late banner, each with more class names than a
@@ -326,7 +336,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/long-names-shift": {
         type: "text/html",
         body: html(
-          `${["one", "two", "three"].map((n) => `<div id="moved-${n}" class="${["display", "spacing", "colour", "border"].map((what) => `${what}-utility-class-name-from-a-long-design-system-${n}`).join(" ")}">${n}</div>`).join("")}<script>addEventListener("load", () => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
+          `${["one", "two", "three"].map((n) => `<div id="moved-${n}" class="${["display", "spacing", "colour", "border"].map((what) => `${what}-utility-class-name-from-a-long-design-system-${n}`).join(" ")}">${n}</div>`).join("")}<script>${SHOWN}.then(() => setTimeout(() => { ${PUSH} }, ${LATE_SHIFT}))</script>`,
         ),
       },
       // A third-party embed that asks its host for more room once it has loaded
@@ -335,7 +345,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       "/shifting-embed": {
         type: "text/html",
         body: html(
-          `<iframe id="widget" src="${embed}/resizing.html" style="display:block;border:0;width:300px;height:20px"></iframe>${CONTENT}<script>addEventListener("message", (event) => { if (event.origin === ${JSON.stringify(embed)}) document.getElementById("widget").style.height = event.data + "px"; })</script>`,
+          `<iframe id="widget" src="${embed}/resizing.html" style="display:block;border:0;width:300px;height:20px"></iframe>${CONTENT}<script>const shown = ${SHOWN}; addEventListener("message", (event) => { if (event.origin === ${JSON.stringify(embed)}) shown.then(() => { document.getElementById("widget").style.height = event.data + "px"; }); })</script>`,
         ),
       },
     }),
@@ -399,6 +409,11 @@ export interface Serving {
 export function serving(): Serving {
   const other = embedding();
   const pages = pagesFor(other.origin);
+  // Each load of `/image-shift`, by the name the page carries, settled once that
+  // load has painted.
+  const painted = new Map<string, ReturnType<typeof Promise.withResolvers<void>>>();
+  const paintOf = (request: Request) =>
+    must(painted.get(must(new URL(request.url).searchParams.get("load"))));
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -410,9 +425,27 @@ export function serving(): Serving {
           headers: { "content-type": "text/html", "content-security-policy": "sandbox" },
         });
       }
+      if (path === "/image-shift") {
+        // An image with no size of its own above the content: its bytes are
+        // held until the page says it has painted the content, so when they
+        // arrive, before the document's `load`, the image takes its height and
+        // pushes content somebody saw down. The page's load is named so that the
+        // runs in flight at once each release their own image.
+        const load = crypto.randomUUID();
+        painted.set(load, Promise.withResolvers<void>());
+        return new Response(
+          html(
+            `<img id="hero" src="/slow-block.svg?load=${load}" alt="">${CONTENT}<script>${PAINTED}.then(() => fetch("/painted?load=${load}"))</script>`,
+          ),
+          { headers: { "content-type": "text/html" } },
+        );
+      }
+      if (path === "/painted") {
+        paintOf(request).resolve();
+        return new Response(null, { status: 204 });
+      }
       if (path === "/slow-block.svg") {
-        // An image whose height arrives with its bytes, after first paint.
-        await Bun.sleep(LATE);
+        await paintOf(request).promise;
         return new Response(
           `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="${BLOCK}"><rect width="100%" height="100%" fill="#333"/></svg>`,
           { headers: { "content-type": "image/svg+xml" } },

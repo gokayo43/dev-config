@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -12,14 +12,6 @@ import { materialise, type Tree } from "./tree.ts";
  * grade is whether the namespace the shipped YAML names actually holds, which
  * is the whole of what this gate claims.
  */
-// Every case here is a process tree: bash, two sudos, an unshare and a `bun
-// test` inside all of it. With the machine to itself the whole suite is under
-// three seconds, and inside a full run — behind the browser, the mutation lane
-// and three suites that drive a real Postgres — a single spawn has been seen to
-// pass five, which the default reports as a fault in the seal. The same 30s the
-// mutation lane's suite gives a spawn, for the reason it gives: what a shared
-// machine does to a spawn is not a signal about the code under test.
-setDefaultTimeout(30_000);
 
 const ACTION = new URL("../.github/actions/test-suite/action.yml", import.meta.url).pathname;
 

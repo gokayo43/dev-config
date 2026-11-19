@@ -119,7 +119,7 @@
     "typecheck": "bun check --no-script",
     "knip": "knip",
     "check": "bun run format:check && bun run lint && bun run typecheck && bun run knip",
-    "test": "bun test",
+    "test": "bun test --timeout 120000",
     "prepare": "lefthook install || true"
   },
   "devDependencies": {

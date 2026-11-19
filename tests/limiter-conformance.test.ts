@@ -126,15 +126,11 @@ describe("the limiter conformance suite", () => {
     const { passed, failed } = await conformance();
     expect(failed).toEqual([]);
     expect(passed).toBe(true);
-  }, 30_000);
+  });
 
-  test.each([...FLAWS])(
-    "refuses a limiter that %s",
-    async (flaw) => {
-      const { passed, failed } = await conformance(flaw);
-      expect(failed).toContainEqual(containing(CAUGHT_BY[flaw]));
-      expect(passed).toBe(false);
-    },
-    30_000,
-  );
+  test.each([...FLAWS])("refuses a limiter that %s", async (flaw) => {
+    const { passed, failed } = await conformance(flaw);
+    expect(failed).toContainEqual(containing(CAUGHT_BY[flaw]));
+    expect(passed).toBe(false);
+  });
 });

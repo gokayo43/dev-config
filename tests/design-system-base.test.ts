@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdir, symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -195,11 +195,6 @@ async function linted(tree: Tree): Promise<ReadonlyMap<string, readonly Diagnost
   await symlink(join(REPO, "node_modules", "tailwindcss"), join(modules, "tailwindcss"));
   return byFile(await lintAt(root));
 }
-
-// Each oxlint run here loads the plugin and the project's Tailwind, which takes
-// about two seconds with the machine to itself and passed bun's 5s default on a
-// shared runner under load, where every case reported a timeout as a fault.
-setDefaultTimeout(30_000);
 
 describe("the design-system base", () => {
   // One oxlint run for every page below, started by whichever case reads it

@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { constantFrom, integer, nat, property, tuple } from "fast-check";
 
 import type { Route, RouteLog } from "../route-log.ts";
@@ -33,13 +33,6 @@ import { containing } from "./matchers.ts";
  * and a socket that never answered — and a fake would be this suite asserting
  * against its own idea of each of them.
  */
-
-// A case that drives the fuzzer spends its budget and then some — the request
-// that was in flight when the budget ran out still has its bound to use. Under
-// a five-second default that is a fourfold margin, which is not one on a box
-// that also serves four stacks and every other repo's CI. The same 30s the two
-// suites that spawn a process tree take, for the same reason.
-setDefaultTimeout(30_000);
 
 const OK: Route = { method: "GET", path: "/ok/:id" };
 const CAREFUL: Route = { method: "POST", path: "/careful/:id" };

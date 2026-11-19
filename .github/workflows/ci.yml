@@ -7,7 +7,7 @@ on:
   # The fleet's 02:00 UTC slot, for the half of the nightly this repo can run on
   # itself: the filing below. The other half — the long property budget — is set
   # by the test-suite action, which this repo substitutes for (see the step that
-  # runs `bun test` and the exemptions above it), so the numbers stay in that
+  # runs the suite and the exemptions above it), so the numbers stay in that
   # action rather than being restated here for this suite's properties.
   schedule:
     - cron: "0 2 * * *"
@@ -151,7 +151,7 @@ jobs:
       # `--coverage` by hand: it is the one guarantee of the substituted action
       # this step does keep, and without it the floor above it declares is
       # applied to nothing. docs/gates/test-suite.md.
-      - run: bun test --coverage
+      - run: bun run test --coverage
         env:
           # None has a default, deliberately: the conformance suite flushes
           # its Redis and the database suites drop databases on their server,

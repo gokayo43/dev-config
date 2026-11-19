@@ -53,5 +53,5 @@ describe("the committed dist", () => {
         contents,
       );
     }
-  }, 60_000);
+  });
 });
