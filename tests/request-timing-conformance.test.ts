@@ -1,6 +1,7 @@
 /**
- * The conformance kit against a booted server per carrier, which must pass it,
- * and against each wrong adoption the kit names, which must fail it; and its
+ * The conformance kit against a booted server whose handler is plain and one
+ * whose handler runs an Effect program, which must pass it, and against each
+ * wrong adoption the kit names, which must fail it; and its
  * route-tree check against the Next.js fixture app's `app/` directory, which
  * must pass it, and against a tree per wrong wrapping, which must fail it
  * naming the file.

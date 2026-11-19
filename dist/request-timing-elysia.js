@@ -1,7 +1,6 @@
 import { must } from "./narrowing.js";
-import { t as OperationName } from "./request-timing-operation-DfYtKiLO.js";
-import "./request-timing.js";
-import { n as registeredNames, r as timedEntry } from "./request-timing-entry-D56lhQUm.js";
+import { i as OperationName } from "./request-timing-DPoxY8eA.js";
+import { n as registeredNames, r as timedEntry } from "./request-timing-entry-ChIyPZRq.js";
 //#region request-timing-elysia.ts
 /**
 * A body Elysia streams is one it sends chunked with no length: every

@@ -1,5 +1,4 @@
-import { l as Timing } from "./request-timing-operation-BG4yllkT.js";
-import "./request-timing.js";
+import { f as Timing } from "./request-timing-CGWxjLxw.js";
 //#region request-timing-next.d.ts
 /**
  * The wrapper, for `timing`. An app makes it once and wraps each handler a

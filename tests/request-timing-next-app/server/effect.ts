@@ -2,17 +2,26 @@
  * The app's Effect side, shaped as the warehouse's: a `Db` service whose `use`
  * takes a promise-returning thunk, an outbound send, and a token cache behind
  * a semaphore, all on one runtime, which procedures reach through `handle` and
- * route handlers through `handleRoute`. With timing on, the adapters cross in
- * with `carryOperation` and the services cross back out with
- * `tryPromiseCarried`; with it off they are the plain Effect calls.
+ * route handlers through `handleRoute`. Timing on or off, nothing here
+ * changes: the clients under the services are what timing wraps.
  */
 import { TRPCError } from "@trpc/server";
 import { count, eq, sql } from "drizzle-orm";
-import { Cause, Data, Deferred, Effect, Exit, Layer, ManagedRuntime, Option, Ref } from "effect";
+import {
+  Cause,
+  Context,
+  Data,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Ref,
+  Semaphore,
+} from "effect";
 
-import { carryOperation, tryPromiseCarried } from "../../../request-timing-effect.ts";
 import { clients, type Database, presets, type Transaction } from "./clients.ts";
-import { timed } from "./env.ts";
 
 class DbError extends Data.TaggedError("DbError")<{ readonly cause: unknown }> {}
 
@@ -22,33 +31,37 @@ class NotFound extends Data.TaggedError("NotFound")<{ readonly what: string }> {
 
 type AppError = DbError | OutsideError | NotFound;
 
-const tryPromise = timed ? tryPromiseCarried : Effect.tryPromise;
-
-const carry = <A, E, R>(program: Effect.Effect<A, E, R>) =>
-  timed ? carryOperation(program) : program;
-
-export class Db extends Effect.Service<Db>()("Db", {
-  sync: () => ({
-    use: <A>(f: (db: Database) => PromiseLike<A>) =>
-      tryPromise({ try: () => f(clients().db), catch: (cause) => new DbError({ cause }) }),
+export class Db extends Context.Service<
+  Db,
+  {
+    readonly use: <A>(f: (db: Database) => PromiseLike<A>) => Effect.Effect<A, DbError>;
     /** One interactive transaction, its body plain async over drizzle's transaction client. */
-    transaction: <A>(f: (tx: Transaction) => Promise<A>) =>
-      tryPromise({
-        try: () => clients().db.transaction(f),
-        catch: (cause) => new DbError({ cause }),
-      }),
-  }),
-}) {}
+    readonly transaction: <A>(f: (tx: Transaction) => Promise<A>) => Effect.Effect<A, DbError>;
+  }
+>()("Db") {}
 
-export class Outside extends Effect.Service<Outside>()("Outside", {
-  sync: () => ({
-    send: (path: string) =>
-      tryPromise({
-        try: async () => (await clients().send(path)).text(),
-        catch: (cause) => new OutsideError({ cause }),
-      }),
-  }),
-}) {}
+const DbLive = Layer.succeed(Db, {
+  use: (f) =>
+    Effect.tryPromise({ try: () => f(clients().db), catch: (cause) => new DbError({ cause }) }),
+  transaction: (f) =>
+    Effect.tryPromise({
+      try: () => clients().db.transaction(f),
+      catch: (cause) => new DbError({ cause }),
+    }),
+});
+
+export class Outside extends Context.Service<
+  Outside,
+  { readonly send: (path: string) => Effect.Effect<string, OutsideError> }
+>()("Outside") {}
+
+const OutsideLive = Layer.succeed(Outside, {
+  send: (path) =>
+    Effect.tryPromise({
+      try: async () => (await clients().send(path)).text(),
+      catch: (cause) => new OutsideError({ cause }),
+    }),
+});
 
 /** One round of the overlap case: how many lanes it waits for, and the deferred the last one completes. */
 interface Round {
@@ -59,12 +72,21 @@ interface Round {
 
 /**
  * The token cache's lock: one permit, which every lane takes in turn, so each
- * lane after the first resumes on the stack of the lane that released it. A
+ * lane after the first is woken by the lane that released it. A
  * round holds the permit until every lane it waits for has arrived at it.
  */
-export class Turns extends Effect.Service<Turns>()("Turns", {
-  effect: Effect.gen(function* () {
-    const permit = yield* Effect.makeSemaphore(1);
+export class Turns extends Context.Service<
+  Turns,
+  {
+    readonly hold: (lanes: number, holding: () => void) => Effect.Effect<void>;
+    readonly take: <A, E, R>(work: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  }
+>()("Turns") {}
+
+const TurnsLive = Layer.effect(
+  Turns,
+  Effect.gen(function* () {
+    const permit = yield* Semaphore.make(1);
     const round = yield* Ref.make<Round>({
       lanes: 0,
       arrived: 0,
@@ -78,7 +100,9 @@ export class Turns extends Effect.Service<Turns>()("Turns", {
        * the permit, so when the last has counted itself every lane is waiting.
        */
       hold: (lanes: number, holding: () => void) =>
-        permit.withPermits(1)(
+        Semaphore.withPermits(
+          permit,
+          1,
           Effect.gen(function* () {
             const all = yield* Deferred.make<void>();
             yield* Ref.set(round, { lanes, arrived: 0, all });
@@ -93,21 +117,26 @@ export class Turns extends Effect.Service<Turns>()("Turns", {
             arrived: current.arrived + 1,
           }));
           if (now.arrived === now.lanes) yield* Deferred.succeed(now.all, undefined);
-          return yield* permit.withPermits(1)(work);
+          return yield* Semaphore.withPermits(permit, 1, work);
         }),
     };
   }),
-}) {}
+);
 
-const runtime = ManagedRuntime.make(Layer.mergeAll(Db.Default, Outside.Default, Turns.Default));
+const runtime = ManagedRuntime.make(Layer.mergeAll(DbLive, OutsideLive, TurnsLive));
+
+// Built when the module loads, before any request: a runtime built on its
+// first run forks its layer's fibers inside that request's fiber, where they
+// keep its operation (docs/exports/request-timing.md, "Effect programs").
+await runtime.context();
 
 type AppServices = Db | Outside | Turns;
 
 /** The tRPC adapter: runs a program and raises what tRPC understands. */
 export async function handle<A>(program: Effect.Effect<A, AppError | TRPCError, AppServices>) {
-  const exit = await runtime.runPromiseExit(carry(program));
+  const exit = await runtime.runPromiseExit(program);
   if (Exit.isSuccess(exit)) return exit.value;
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   if (Option.isNone(failure)) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
   const error = failure.value;
   if (error instanceof TRPCError) throw error;
@@ -117,9 +146,9 @@ export async function handle<A>(program: Effect.Effect<A, AppError | TRPCError, 
 
 /** The route adapter: runs a program that answers a response, and answers a refusal when it fails. */
 export async function handleRoute(program: Effect.Effect<Response, AppError, AppServices>) {
-  const exit = await runtime.runPromiseExit(carry(program));
+  const exit = await runtime.runPromiseExit(program);
   if (Exit.isSuccess(exit)) return exit.value;
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   if (Option.isSome(failure) && failure.value._tag === "NotFound") {
     return Response.json({ error: failure.value.what }, { status: 404 });
   }
@@ -128,7 +157,7 @@ export async function handleRoute(program: Effect.Effect<Response, AppError, App
 
 /** Runs a program with no answer of its own to map, from plain code inside a handler. */
 export const run = <A>(program: Effect.Effect<A, AppError, AppServices>) =>
-  runtime.runPromise(carry(program));
+  runtime.runPromise(program);
 
 /** A preset and how many there are, and what the outside service says: two database waits and one outbound. */
 export const presetById = (id: number) =>

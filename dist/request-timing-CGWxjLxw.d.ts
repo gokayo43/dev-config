@@ -97,7 +97,7 @@ type Fault = (error: unknown) => void;
 interface Timing {
   /**
    * Opens an operation now. The connector that opens it runs the handler under
-   * it with a carrier's `within` and closes it with `finish` once its response
+   * it with `within` and closes it with `finish` once its response
    * has finished.
    */
   readonly open: () => Operation;
@@ -132,7 +132,7 @@ interface TimingOptions {
 declare function requestTiming(options: TimingOptions): Timing;
 /**
  * One operation from open to close: what it waited on, and the record it
- * closes into. Opened by `Timing.open`, carried by either carrier's `within`,
+ * closes into. Opened by `Timing.open`, made current by `within`,
  * and closed by the connector that opened it, once, when the response has
  * finished.
  */
@@ -150,4 +150,28 @@ declare class Operation {
   close(ending: Ending): void;
 }
 //#endregion
-export { Operation as a, Sink as c, TimingRecord as d, WAIT_KINDS as f, requestTiming as g, methodOf as h, Method as i, Timing as l, Waited as m, Ending as n, OperationName as o, WaitKind as p, Fault as r, RECORD_VERSION as s, Clock as t, TimingOptions as u };
+//#region request-timing.d.ts
+/**
+ * Whether an operation is current. An entry connector asks it before opening
+ * one and opens nothing when it answers true, so work a page runs in-process
+ * during its own request, such as a server function it calls, counts in the
+ * page's operation and operations never nest.
+ */
+declare function inOperation(): boolean;
+/**
+ * Runs `handler` with `operation` as the current one, and answers what it
+ * answers, unchanged. Every `measure` called from it, or from anything it
+ * starts that keeps its async context, counts in `operation`.
+ */
+declare function within<T>(operation: Operation, handler: () => T): T;
+/**
+ * Runs `wait` and adds its duration to the current operation under `kind`, or
+ * to nothing when no operation is current. The operation is read when
+ * `measure` is called, so a wait belongs to the operation that issued it
+ * whoever settles it. The answer settles as `wait`'s promise does, with its
+ * value or its rejection, and a synchronous throw is thrown on. `wait` is
+ * called once, and a thenable it answers has its `then` called once.
+ */
+declare function measure<T>(kind: WaitKind, wait: () => PromiseLike<T>): Promise<T>;
+//#endregion
+export { Waited as _, Ending as a, Operation as c, Sink as d, Timing as f, WaitKind as g, WAIT_KINDS as h, Clock as i, OperationName as l, TimingRecord as m, measure as n, Fault as o, TimingOptions as p, within as r, Method as s, inOperation as t, RECORD_VERSION as u, methodOf as v, requestTiming as y };

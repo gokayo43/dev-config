@@ -1,4 +1,4 @@
-import { Effect, Exit, Fiber, Ref } from "effect";
+import { Effect, Exit, Fiber, Ref, Semaphore } from "effect";
 import { type Interleaving, type Limits, simulate, unpreempted } from "../interleaving.ts";
 
 /** The run's exit value, throwing when the run did not finish with one. */
@@ -84,13 +84,13 @@ export const book = (left: number): readonly [boolean, number] =>
 export const booking = (locked: boolean): Effect.Effect<Booked> =>
   Effect.gen(function* () {
     const seats = yield* Ref.make(1);
-    const lock = yield* Effect.makeSemaphore(1);
+    const lock = yield* Semaphore.make(1);
     let clock = 0;
     const calls: Call<boolean>[] = [];
     const attempt = Effect.gen(function* () {
       const left = yield* Ref.get(seats);
       if (left === 0) return false;
-      yield* Effect.yieldNow();
+      yield* Effect.yieldNow;
       yield* Ref.set(seats, left - 1);
       return true;
     });
@@ -99,17 +99,18 @@ export const booking = (locked: boolean): Effect.Effect<Booked> =>
       const answer = yield* locked ? lock.withPermits(1)(attempt) : attempt;
       calls.push({ start, end: clock++, answer });
     });
-    const early = yield* Effect.fork(call);
-    const late = yield* Effect.fork(Effect.yieldNow().pipe(Effect.zipRight(call)));
+    const early = yield* Effect.forkChild(call);
+    const late = yield* Effect.forkChild(Effect.yieldNow.pipe(Effect.andThen(call)));
     yield* Fiber.join(early);
     yield* Fiber.join(late);
     return { calls, left: yield* Ref.get(seats) };
   });
 
 /**
- * A read and a write of one counter as two synchronous steps, with nothing
- * between them a test could wrap: only a preemption at the op boundary
- * reaches it. Answers the count, which two bumps leave at 2.
+ * A read and a write of one counter as two synchronous steps of `Effect.gen`,
+ * with nothing between them a test could wrap: only a preemption between the
+ * two ops reaches it. Answers the count, which two bumps
+ * leave at 2.
  */
 export const counter = (atomic: boolean): Effect.Effect<number> =>
   Effect.suspend(() => {
@@ -118,15 +119,14 @@ export const counter = (atomic: boolean): Effect.Effect<number> =>
       ? Effect.sync(() => {
           hits += 1;
         })
-      : Effect.sync(() => hits).pipe(
-          Effect.flatMap((seen) =>
-            Effect.sync(() => {
-              hits = seen + 1;
-            }),
-          ),
-        );
+      : Effect.gen(function* () {
+          const seen = yield* Effect.sync(() => hits);
+          yield* Effect.sync(() => {
+            hits = seen + 1;
+          });
+        });
     return Effect.gen(function* () {
-      yield* Fiber.joinAll([yield* Effect.fork(bump), yield* Effect.fork(bump)]);
+      yield* Fiber.joinAll([yield* Effect.forkChild(bump), yield* Effect.forkChild(bump)]);
       return hits;
     });
   });
@@ -146,7 +146,7 @@ export interface Read {
  */
 export const makeLedger = (locked: boolean, seam: Effect.Effect<void> = Effect.void) =>
   Effect.gen(function* () {
-    const lock = yield* Effect.makeSemaphore(1);
+    const lock = yield* Semaphore.make(1);
     let balance = 0;
     let entries = 0;
     const steps: string[] = [];
@@ -161,7 +161,7 @@ export const makeLedger = (locked: boolean, seam: Effect.Effect<void> = Effect.v
     return {
       deposit: guarded(
         step("credit", () => (balance += 1)).pipe(
-          Effect.zipRight(step("append", () => (entries += 1))),
+          Effect.andThen(step("append", () => (entries += 1))),
         ),
       ),
       read: guarded(
@@ -178,8 +178,8 @@ export const makeLedger = (locked: boolean, seam: Effect.Effect<void> = Effect.v
 export const depositAndRead = (locked: boolean): Effect.Effect<Read> =>
   Effect.gen(function* () {
     const ledger = yield* makeLedger(locked);
-    const deposit = yield* Effect.fork(ledger.deposit);
-    const read = yield* Effect.fork(ledger.read);
+    const deposit = yield* Effect.forkChild(ledger.deposit);
+    const read = yield* Effect.forkChild(ledger.read);
     yield* Fiber.join(deposit);
     return yield* Fiber.join(read);
   });
@@ -192,6 +192,37 @@ export const races: Race[] = [
   race("a check-then-act across a yield", booking, ({ calls, left }) =>
     serial(calls, 1, book, left),
   ),
-  race("a lost update between two synchronous ops", counter, (count) => count === 2),
+  race("a lost update between two synchronous steps", counter, (count) => count === 2),
   race("a torn read across a whole write", depositAndRead, covered),
 ];
+
+/**
+ * Where a fiber stood: finished once it has an exit, waiting once it has run
+ * an op and has none, and not started before its first op, when Effect's
+ * runtime has its op count at 0.
+ */
+export const stood = (
+  fiber: Fiber.Fiber<unknown, unknown>,
+): "finished" | "waiting" | "not started" =>
+  fiber.pollUnsafe() !== undefined
+    ? "finished"
+    : fiber.currentOpCount > 0
+      ? "waiting"
+      : "not started";
+
+/** The page's seats: `count` of them, each sold by one booking under a lock. */
+export const makeSeats = (count: number) =>
+  Effect.gen(function* () {
+    const left = yield* Ref.make(count);
+    const lock = yield* Semaphore.make(1);
+    return {
+      book: lock.withPermits(1)(
+        Effect.gen(function* () {
+          const seats = yield* Ref.get(left);
+          if (seats === 0) return false;
+          yield* Ref.set(left, seats - 1);
+          return true;
+        }),
+      ),
+    };
+  });

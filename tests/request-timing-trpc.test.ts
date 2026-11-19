@@ -1,6 +1,6 @@
 /**
- * The tRPC connector, with the Effect crossings and the mysql2 and `fetch`
- * connectors under it, through the real Next.js app `request-timing-next-app/`
+ * The tRPC connector, with procedures that run Effect programs and the mysql2
+ * and `fetch` connectors under them, through the real Next.js app `request-timing-next-app/`
  * serves its router from, booted as production serves it over a real MySQL and
  * a real outside service (`request-timing-next-fixture.ts`).
  *
@@ -15,7 +15,7 @@
  *   requests, each with a generated number of database and outbound waits,
  *   whose outbound waits are made in turn under one semaphore the case holds
  *   until every lane is provably queued for it, so each lane after the first
- *   resumes on the stack of the lane that let it go, and whose database waits,
+ *   is woken by the lane that let it go, and whose database waits,
  *   drizzle queries a `Db` thunk hands straight back or the statements of one
  *   drizzle transaction, queue on a pool of four.
  * - The conformance kit, run against the app as an adopting app runs it.
@@ -133,7 +133,7 @@ describe("the tRPC connector", () => {
 
   const endings: Ending[] = [
     [
-      "a query's answer, with its waits on both sides of the Effect crossings",
+      "a query's answer, with its waits made inside an Effect program",
       single("presets.byId", { id: 1 }),
       {},
       { method: "GET", operation: "presets.byId", status: 200, aborted: false, streamed: false },

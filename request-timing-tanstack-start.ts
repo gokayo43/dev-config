@@ -9,7 +9,7 @@ import type { AnyRouter } from "@tanstack/react-router";
 
 import { must } from "./narrowing.ts";
 import { registeredNames, timedEntry } from "./request-timing-entry.ts";
-import { type Operation, plainStorage } from "./request-timing-operation.ts";
+import { type Operation, current } from "./request-timing-operation.ts";
 import { OperationName, type Timing } from "./request-timing.ts";
 
 /** What Start's compiler records of a server function: its id, its variable name and its file. */
@@ -32,7 +32,7 @@ interface Awaiting {
 
 /**
  * Every open operation of a server-function request, by the operation. The
- * function middleware reaches it through the plain carrier, so both halves
+ * function middleware reaches it through `AsyncLocalStorage`, so both halves
  * agree on which request a call belongs to without either reading the other's
  * state.
  */
@@ -187,7 +187,7 @@ interface ServerFunctionCall<Next> {
  * operation closes, and the call writes no record.
  */
 export function nameServerFunction<Next>(call: ServerFunctionCall<Next>): Next {
-  const operation = plainStorage.getStore();
+  const operation = current.getStore();
   const awaiting = operation === undefined ? undefined : awaitingName.get(operation);
   if (awaiting?.meta === undefined && awaiting?.id === call.serverFnMeta.id) {
     awaiting.meta = call.serverFnMeta;

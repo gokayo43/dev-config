@@ -69,7 +69,8 @@ a change to a rule usually lands here too.
   the half of that word about pages rather than about a schema, which is a
   second subject reached through the one field;
   `repo-contract/request-timing.ts` is the conformance test a live repo owes
-  for serving HTTP out of a database, called from the contract rather than from
+  for serving HTTP out of a database, and the kit's Effect check beside it
+  where the repo ships `effect`, called from the contract rather than from
   `live.ts` because its waiver is graded in every lifecycle;
   `repo-contract/typecheck.ts` is what CI type-checks with — the script
   check.yml's typecheck lane reaches and the Bun `packageManager` names, one
@@ -158,10 +159,11 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Twenty of them are **exports** it imports and
+  gates, which run over it from CI, apart from `knip.base.ts`, a base above, and
+  `knip.ts` and `tsdown.config.ts`, this repo's own configs. Twenty of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
   `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
-  `dev-server-derive.ts` is the module the first imports. Seven more reach it
+  `dev-server-derive.ts` is the module the first imports. Nine more reach it
   only inside those, and no specifier exports any of them. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
   command decide by — which the build bundles into `dist/count-budget.js`, a
@@ -172,8 +174,9 @@ a change to a rule usually lands here too.
   budget, `files` ships its source for the bin, and `tests/file-lock.test.ts`
   holds each waiter before every step through the `between` seam `lock` takes
   for that suite's sake. `request-timing-operation.ts` is what request timing's
-  two carriers share, the operation, its waits and its record, which the build
-  makes a chunk beside both and `files` ships as source for the summary;
+  modules share, the operation, its waits, its record and the
+  `AsyncLocalStorage` that carries the current operation, which the build makes
+  a chunk beside them and `files` ships as source for the summary;
   `request-timing-summary.ts` is what the reader makes of a log, which the bin
   feeds stdin and the conformance kit parses a record with;
   `request-timing-wait.ts` is what every wait connector is built from, the
@@ -184,7 +187,13 @@ a change to a rule usually lands here too.
   a chunk beside them too; `request-timing-route.ts` is the mark an entry
   connector leaves on a route handler it wrapped, which the Next.js and tRPC
   connectors' builds share as a chunk and the conformance kit's route-tree
-  check reads, from source. Each export is reachable through
+  check reads, from source; `request-timing-effect-driver.ts` is the driver the
+  kit's Effect check runs its table through, which the build takes into the
+  check and `tests/request-timing-attribution.test.ts` runs generated plans
+  through; `interleaving-runtime.ts` is whether the process's `effect` is the
+  runtime `interleaving.ts` was written against, the version its import checks
+  and the facts the first `simulate` checks, each on Effect alone, which
+  `files` ships as source beside it. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is the protocol between an app and the two floors
@@ -192,10 +201,13 @@ a change to a rule usually lands here too.
   context with one that watches every page it opens, popups included, and turns
   Playwright's own `video` on when the run sets `E2E_VIDEO=on`;
   `request-timing.ts` records per operation where its time went,
-  carrying the operation in `AsyncLocalStorage`, and `request-timing-effect.ts`
-  is the same carrier in an Effect fiber, the only file that imports `effect`
-  so an app without it never loads it; `request-timing-conformance.ts` is the
-  check an adopting app runs against its booted server, and the bin
+  carrying the operation in `AsyncLocalStorage`, in plain code and in an Effect
+  program alike; `request-timing-conformance.ts` is the
+  check an adopting app runs against its booted server, and
+  `request-timing-conformance-effect.ts` the check of the app's own Effect, which
+  the app hands its `effect` module to, since no file here imports `effect` but
+  as types except `interleaving.ts` and `interleaving-runtime.ts`, the
+  interleaving export's; the bin
   `request-timing-report.ts` reads a log of the records; the connectors
   `request-timing-elysia.ts`, `request-timing-tanstack-start.ts`,
   `request-timing-next.ts`, `request-timing-trpc.ts`,
@@ -213,9 +225,11 @@ a change to a rule usually lands here too.
   app's own route table; `characterization-net.ts` is the harness under a golden
   suite; `property.ts` is `fc.assert` with the run's budget applied — the one
   call every property test goes through, so a nightly can multiply how far each
-  of them searches with no test changing; `interleaving.ts` runs an Effect
+  of them searches with no test changing; `interleaving.ts` runs an Effect 4
   program under a `Scheduler` whose every choice comes from fast-check data, so
-  a property generates the order overlapping fibers run in; `narrowing.ts` is
+  a property generates the order overlapping fibers run in, and imports
+  `effect` at runtime, as `interleaving-runtime.ts` does, because it needs
+  Effect's own values, which is why `effect` is an optional peer; `narrowing.ts` is
   `only`, `nth`, `must` and `rejectionOf`, which hand back a value the compiler
   could not prove present or throw naming what they found, and import no test
   runner so a Playwright spec under node takes them too. `bun-test.d.ts` types
@@ -236,7 +250,7 @@ a change to a rule usually lands here too.
   eight ship their source, and no import says which. `tsdown.config.ts` is where
   that decision lives and why — the same fact `anti-slop/` above turns on — and
   STACK.md's shared UI library is where a committed `dist/` is argued.
-  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-next,request-timing-trpc,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
+  `bun run build` writes `dist/{route-log,invariant-sweep,count-budget,narrowing,request-timing,request-timing-conformance-effect,request-timing-elysia,request-timing-tanstack-start,request-timing-next,request-timing-trpc,request-timing-mysql2,request-timing-bun-sql,request-timing-bun-redis,request-timing-fetch}.{js,d.ts}`
   and the chunks the request-timing ones share;
   `tests/dist.test.ts` holds that directory equal to a fresh build, and
   `.oxfmtrc.json`, `.oxlintrc.json` and `lefthook.yml` each say why they skip it.
@@ -361,10 +375,17 @@ a change to a rule usually lands here too.
   bigger number and the only thing that says whether it worked is how many times
   the predicate ran; the default it multiplies is graded as a difference against
   `fc.assert` rather than against the literal 100, which is fast-check's to
-  change. `interleaving.test.ts` searches the racy fixtures in
-  `interleaving-fixtures.ts` on fresh seeds, sized and counted by the rules on
-  the export's page, and holds the page's regression probe on the torn read;
-  the fixtures are a module of their own because
+  change. The `interleaving` export's suites split by subject: `interleaving.test.ts` the
+  order a run takes and how it ends; `interleaving-races.test.ts` the search of
+  the racy fixtures in `interleaving-fixtures.ts` on fresh seeds, sized and
+  counted by the rules on the export's page, the page's examples and its
+  regression probe on the torn read; and `interleaving-runtime.test.ts` a
+  process per runtime fact the export rests on, its `effect` or its host's
+  `node:async_hooks` replaced with that fact made false, for the first
+  `simulate` to name it, and on a scheduler of its own the interruption Effect
+  4.1.4 loses, whose op `simulate` never preempts: that case fails once a
+  release stops losing it, which is when the exclusion comes out of
+  `interleaving.ts` (dev-config#210). The fixtures are a module of their own because
   `interleaving-measure.ts`, which re-takes the page's measurement table, runs
   them too. `fuzz.test.ts` drives the fuzzer against a real server on a real
   port, since each of its four invariants is a statement about a response — and the
@@ -373,13 +394,17 @@ a change to a rule usually lands here too.
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
   fixture app's schemas with — is typebox under elysia's re-export.
   Request timing's suites split by what each grades: `request-timing.test.ts`
-  the operation and its record through both carriers, `request-timing-attribution.test.ts`
-  the property that every wait lands in its own operation's record, run per
-  carrier and once against a carrier kept in `AsyncLocalStorage`, which must
-  fail it; `request-timing-summary.test.ts` the reader, the bin spawned for its
-  statuses; and `request-timing-conformance.test.ts` the kit, against the
-  servers `request-timing-fixture.ts` boots, one per carrier and one per wrong
-  adoption the kit names. The connectors' suites run against real servers:
+  the operation and its record, in plain code and in an Effect program,
+  `request-timing-attribution.test.ts` the property that every wait lands in
+  its own operation's record, in plain code and through the kit's Effect
+  driver; `request-timing-summary.test.ts` the reader, the bin spawned for its
+  statuses; `request-timing-conformance.test.ts` the kit, against the
+  servers `request-timing-fixture.ts` boots, a plain one, one running Effect
+  and one per wrong adoption the kit names; and
+  `request-timing-conformance-effect.test.ts` the kit's Effect check, which a
+  process of its own with `node:async_hooks` hidden from Effect must see fail,
+  and that of everything `files` ships only `interleaving.ts` and
+  `interleaving-runtime.ts`, the interleaving export, import `effect` at runtime. The connectors' suites run against real servers:
   `request-timing-elysia.test.ts` boots the Elysia app
   `request-timing-elysia-fixture.ts` builds over MySQL, Redis and an outside
   service, once with timing off as the differential's oracle;
@@ -430,7 +455,7 @@ bun run test    # the gate suites, under the suite's per-test bound
 bun run build   # rewrites the committed dist/ from the exports tsdown.config.ts builds
 ```
 
-Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
+None of them is coverage-floored: `bunfig.toml` declares the threshold and CI's
 `--coverage` applies it, so `bun run test --coverage` is the run CI makes —
 `docs/gates/test-suite.md`.
 
@@ -467,9 +492,12 @@ Playwright runs, count-budget's including one with every core busy, each hook
 about 3m45s in those CI runs, and `tests/request-timing-next-fixture.ts` 300s
 for a cold `next build` and boot, about 10s there. A hang in either 300s hook
 ends inside the job, by 18m36s at the latest; one in the 600s hook ends at
-20m01s, and the job is cancelled with nothing named. The shorter bounds left, in `tests/probe.test.ts` and
-`tests/mutation-lane-child.test.ts`, are those cases' oracles, each killing an
-implementation that hangs.
+20m01s, and the job is cancelled with nothing named. One case names a longer
+bound too: `tests/interleaving.test.ts`'s search of 8 400 interleavings, 600s
+for about 7s of CPU, which a 3% share stretches past 120s, and a hang in it
+ends as the 600s hook's does. The shorter bounds left, in `tests/probe.test.ts`
+and `tests/mutation-lane-child.test.ts`, are those cases' oracles, each killing
+an implementation that hangs.
 
 `bun run test` needs a Postgres, a MySQL, a Redis, a chromium and passwordless
 sudo. The Postgres because the replay gate's property is what two databases end

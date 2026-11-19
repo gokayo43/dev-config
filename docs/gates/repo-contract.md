@@ -325,18 +325,19 @@ problem and the only one reported — a repo that has not said which it is gets
 graded against neither set of rules, because choosing for it is exactly what the
 field exists to prevent.
 
-| What `"live"` requires                                                   | When                                                        | Why it cannot wait                                                                                                                                              |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| a Sentry SDK among what the workspace ships                              | always                                                      | a failure only the user sees is one nobody fixes                                                                                                                |
-| the `check.yml` call passes `database: postgres` or `database: external` | the repo owns a database                                    | nothing replays the schema otherwise, and the gate below has no job to run in                                                                                   |
-| the `check.yml` call passes `upgrade-gate: true`                         | the repo owns a database, and the call is not `external`    | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
-| `scripts/backup.sh` exists and is executable                             | the repo owns a database, and `data-jobs-external` is empty | an undumped database is one nobody has                                                                                                                          |
-| `scripts/restore-drill.sh` exists and is executable                      | the repo owns a database, and `data-jobs-external` is empty | a backup nobody has restored is a backup nobody has                                                                                                             |
-| a timer/service pair that runs each of them                              | the repo owns a database, and `data-jobs-external` is empty | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
-| a test importing `@gokayo43/dev-config/request-timing/conformance`       | the repo owns a database and serves HTTP, unless waived     | an operation nobody times is one whose slow wait nobody can name (below)                                                                                        |
-| `@playwright/test` among what the workspace declares                     | the repo ships a browser surface: `react-dom` or `astro`    | a page nobody opens in CI is one that breaks in front of a user                                                                                                 |
-| a spec written with `@gokayo43/dev-config/invariant-sweep`               | the repo ships a browser surface: `react-dom` or `astro`    | a spec on Playwright's own `test` passes without noticing a console error, an uncaught error or a page scrolling sideways                                       |
-| a `ci.yml` step that runs `playwright test`                              | the repo ships a browser surface: `react-dom` or `astro`    | a suite CI never runs is one that ran the day it was written                                                                                                    |
+| What `"live"` requires                                                    | When                                                        | Why it cannot wait                                                                                                                                              |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| a Sentry SDK among what the workspace ships                               | always                                                      | a failure only the user sees is one nobody fixes                                                                                                                |
+| the `check.yml` call passes `database: postgres` or `database: external`  | the repo owns a database                                    | nothing replays the schema otherwise, and the gate below has no job to run in                                                                                   |
+| the `check.yml` call passes `upgrade-gate: true`                          | the repo owns a database, and the call is not `external`    | from the first deploy the migration lineage is a one-way record — editing a migration that has already run is a silent no-op on every database that has seen it |
+| `scripts/backup.sh` exists and is executable                              | the repo owns a database, and `data-jobs-external` is empty | an undumped database is one nobody has                                                                                                                          |
+| `scripts/restore-drill.sh` exists and is executable                       | the repo owns a database, and `data-jobs-external` is empty | a backup nobody has restored is a backup nobody has                                                                                                             |
+| a timer/service pair that runs each of them                               | the repo owns a database, and `data-jobs-external` is empty | a script nothing runs on a schedule is one that ran the day it was written (below)                                                                              |
+| a test importing `@gokayo43/dev-config/request-timing/conformance`        | the repo owns a database and serves HTTP, unless waived     | an operation nobody times is one whose slow wait nobody can name (below)                                                                                        |
+| a test importing `@gokayo43/dev-config/request-timing/conformance/effect` | as the row above, and a manifest ships `effect`             | an Effect that resumes a fiber in its waker's context counts waits in the wrong record, and no other gate sees it (below)                                       |
+| `@playwright/test` among what the workspace declares                      | the repo ships a browser surface: `react-dom` or `astro`    | a page nobody opens in CI is one that breaks in front of a user                                                                                                 |
+| a spec written with `@gokayo43/dev-config/invariant-sweep`                | the repo ships a browser surface: `react-dom` or `astro`    | a spec on Playwright's own `test` passes without noticing a console error, an uncaught error or a page scrolling sideways                                       |
+| a `ci.yml` step that runs `playwright test`                               | the repo ships a browser surface: `react-dom` or `astro`    | a suite CI never runs is one that ran the day it was written                                                                                                    |
 
 Only crash reporting is owed by every live repo. The rest is scoped to what the
 repo is: the data rules are about a database, and half this fleet is a static
@@ -514,7 +515,24 @@ that will not parse is named in the problem, because what it imports is then
 unknown. What the scan cannot see is which of the kit's exports a test imports
 and whether it calls it: a test importing only `requestTimingRoutesConform`, the
 route-tree check, an import whose binding is never used, or a `test.skip`
-around the call all pass, and review is what catches them.
+around the call all pass, and review is what catches them. The same holds for
+the Effect check below: the scan sees its import, not its call.
+
+**A repo that runs Effect also runs the kit's Effect check.** Where any
+manifest of the workspace names `effect` in `dependencies` or
+`optionalDependencies`, the fields "serves HTTP" is read from, the same scan
+asks for a test importing `@gokayo43/dev-config/request-timing/conformance/effect`,
+which is where an app runs `requestTimingEffectConforms` with its own `effect`.
+An `effect` that is a devDependency alone, or that reaches the app only through
+another package, does not count. The check is owed because request timing
+carries the operation in `AsyncLocalStorage` alone, which is right inside an
+Effect program only on effect 4.0.1 or later on a host whose
+`process.getBuiltinModule` finds `node:async_hooks`; elsewhere Effect resumes a
+woken fiber in the context of the fiber that woke it, the record counts the
+wait in the wrong operation, and every other gate stays green. A missing check
+is its own problem, beside the kit's where both are missing; it offers the
+waiver below only where the kit's test is missing too, since beside that test
+the waiver is refused.
 
 **When request timing does not time the operations, `operations-timed-otherwise`
 says why.** Two reasons are honest, and the value names which: the operations
@@ -524,9 +542,10 @@ and server actions ([request timing's Next.js section](../exports/request-timing
 lists what its connector leaves alone), and it says what it serves. It is
 `data-jobs-external`'s shape: the reason is the waiver, an empty or whitespace
 value is a repo that owes the test, and it is refused once it waives nothing. That is a repo that does not owe the rule, `dev` or with no
-database or no HTTP, and a repo that has a conformance test beside it, whose two
-answers to how its operations are timed are one too many. It waives the
-conformance test and nothing else. A repo that has not declared its `lifecycle`
+database or no HTTP, and a repo that has a test importing the kit or its Effect
+check beside it, whose two answers to how its operations are timed are one too
+many; the problem names that test. It waives the conformance test and the
+Effect check with it, and nothing else. A repo that has not declared its `lifecycle`
 is graded against neither set of rules, so the input is not graded there either.
 
 ### A scheduled job is three files
@@ -625,7 +644,7 @@ as well, and the two are compared:
 | `live`   | absent    | refused — the same edit, less visible      |
 
 Writing `dev` over `live`, or deleting the field, sheds backups, a rehearsed
-restore, crash reporting, the swept browser suite, the request-timing test and
+restore, crash reporting, the swept browser suite, the request-timing tests and
 the upgrade gate in one edit that reviews as a whitespace change. Deleting the manifest outright is
 refused a line earlier, by the rule that a repo has a `package.json` at all.
 

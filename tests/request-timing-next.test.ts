@@ -1,6 +1,6 @@
 /**
- * The Next.js connector, with the Effect crossings and the mysql2 and `fetch`
- * connectors under it, through a real Next.js app booted as production serves
+ * The Next.js connector, with route handlers that run Effect programs and the
+ * mysql2 and `fetch` connectors under them, through a real Next.js app booted as production serves
  * it over a real MySQL and a real outside service
  * (`request-timing-next-fixture.ts`).
  *
@@ -59,7 +59,7 @@ describe("the Next.js connector", () => {
 
   const endings: Ending[] = [
     [
-      "a normal response, with its waits on both sides of the Effect crossings",
+      "a normal response, with its waits made inside an Effect program",
       "/api/presets/1",
       {},
       {

@@ -1,6 +1,6 @@
 {
   "name": "@gokayo43/dev-config",
-  "version": "0.75.1",
+  "version": "0.76.1",
   "description": "Shared TypeScript, oxlint, oxfmt, knip, Renovate and Lighthouse configuration for Bun projects.",
   "license": "MIT",
   "repository": {
@@ -24,6 +24,7 @@
     "limiter-conformance.ts",
     "property.ts",
     "interleaving.ts",
+    "interleaving-runtime.ts",
     "response-schema.ts",
     "characterization-net.ts",
     "request-timing-conformance.ts",
@@ -62,10 +63,6 @@
       "types": "./dist/request-timing.d.ts",
       "default": "./dist/request-timing.js"
     },
-    "./request-timing/effect": {
-      "types": "./dist/request-timing-effect.d.ts",
-      "default": "./dist/request-timing-effect.js"
-    },
     "./request-timing/elysia": {
       "types": "./dist/request-timing-elysia.d.ts",
       "default": "./dist/request-timing-elysia.js"
@@ -99,6 +96,10 @@
       "default": "./dist/request-timing-bun-sql.js"
     },
     "./request-timing/conformance": "./request-timing-conformance.ts",
+    "./request-timing/conformance/effect": {
+      "types": "./dist/request-timing-conformance-effect.d.ts",
+      "default": "./dist/request-timing-conformance-effect.js"
+    },
     "./limiter-conformance": "./limiter-conformance.ts",
     "./property": "./property.ts",
     "./interleaving": "./interleaving.ts",
@@ -135,7 +136,7 @@
     "@types/bun": "1.4.0",
     "@types/react": "19.3.0",
     "drizzle-orm": "0.45.2",
-    "effect": "3.22.0",
+    "effect": "4.1.4",
     "elysia": "1.4.29",
     "fast-check": "4.9.0",
     "knip": "6.38.0",
@@ -155,7 +156,7 @@
   "peerDependencies": {
     "@playwright/test": ">=1.62",
     "@shadcn/lint": ">=0.2",
-    "effect": ">=3.22 <4",
+    "effect": ">=4.1.4 <5",
     "eslint-import-resolver-typescript": ">=4",
     "eslint-plugin-boundaries": ">=7",
     "fast-check": ">=4",

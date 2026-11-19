@@ -1,5 +1,4 @@
-import { l as Timing } from "./request-timing-operation-BG4yllkT.js";
-import "./request-timing.js";
+import { f as Timing } from "./request-timing-CGWxjLxw.js";
 import { AnyRouter } from "@tanstack/react-router";
 //#region request-timing-tanstack-start.d.ts
 /** What Start's compiler records of a server function: its id, its variable name and its file. */

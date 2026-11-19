@@ -1,11 +1,10 @@
 import { must } from "./narrowing.js";
-import { o as plainStorage, t as OperationName } from "./request-timing-operation-DfYtKiLO.js";
-import "./request-timing.js";
-import { n as registeredNames, r as timedEntry } from "./request-timing-entry-D56lhQUm.js";
+import { c as current, i as OperationName } from "./request-timing-DPoxY8eA.js";
+import { n as registeredNames, r as timedEntry } from "./request-timing-entry-ChIyPZRq.js";
 //#region request-timing-tanstack-start.ts
 /**
 * Every open operation of a server-function request, by the operation. The
-* function middleware reaches it through the plain carrier, so both halves
+* function middleware reaches it through `AsyncLocalStorage`, so both halves
 * agree on which request a call belongs to without either reading the other's
 * state.
 */
@@ -99,7 +98,7 @@ function timedStartHandler(timing, handler, getRouter, options = {}) {
 * operation closes, and the call writes no record.
 */
 function nameServerFunction(call) {
-	const operation = plainStorage.getStore();
+	const operation = current.getStore();
 	const awaiting = operation === void 0 ? void 0 : awaitingName.get(operation);
 	if (awaiting?.meta === void 0 && awaiting?.id === call.serverFnMeta.id) awaiting.meta = call.serverFnMeta;
 	return call.next();

@@ -1,15 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 //#region request-timing-operation.ts
 /**
-* What both carriers of request timing share: the operation, the waits it
-* accumulates, the record it closes into, and the plain carrier's storage,
-* which the Effect carrier reads where a plain handler hands its Effect to a
-* runtime and sets where an Effect hands a thunk back to plain code. No export names this file. The plain carrier re-exports its
-* public half, and the Effect carrier reaches `beginWait` and `plainStorage`,
-* which no app or connector calls.
-*
-* It imports nothing but `node:async_hooks`, so the plain export stays free of
-* `effect`.
+* What request timing's modules share: the operation, the waits it
+* accumulates, the record it closes into, and the storage that carries the
+* current operation. No export names this file. `request-timing.ts`
+* re-exports its public half, and `beginWait` is for the connectors that
+* measure a driver's query object without the thunk form of `measure`.
 */
 /**
 * The schema version every record carries under `requestTiming`. The reader
@@ -97,8 +93,9 @@ const ignored = () => void 0;
 /** Records carry microseconds: more digits are noise from the clock, and bytes in every log line. */
 const micro = (ms) => Math.round(ms * 1e3) / 1e3;
 /**
-* Starts a wait of `kind` against `operation`, answering what ends it. A
-* carrier's half of `measure`, exported for the Effect carrier's sake.
+* Starts a wait of `kind` against `operation`, answering what ends it: the
+* half of `measure` a connector calls where a driver's query object cannot be
+* wrapped in a thunk.
 */
 let beginWait;
 let openOperation;
@@ -120,13 +117,8 @@ function requestTiming(options) {
 		}
 	};
 }
-/**
-* The plain carrier: which operation is current in a plain async program. Read
-* by the plain `measure` and `inOperation`, read by the Effect carrier's
-* `carryOperation` at the one moment it is still right, and set or cleared by
-* its `tryPromiseCarried` while it calls a thunk and starts what it answers.
-*/
-const plainStorage = new AsyncLocalStorage();
+/** Which operation is current, read by `measure` and `inOperation` and set by `within`. */
+const current = new AsyncLocalStorage();
 (class Operation {
 	#now;
 	#sink;
@@ -195,4 +187,57 @@ const plainStorage = new AsyncLocalStorage();
 	}
 });
 //#endregion
-export { methodOf as a, beginWait as i, RECORD_VERSION as n, plainStorage as o, WAIT_KINDS as r, requestTiming as s, OperationName as t };
+//#region request-timing.ts
+/**
+* Request timing: which operation a wait belongs to, carried in
+* `AsyncLocalStorage`, in plain async code and in an Effect program alike.
+* `docs/exports/request-timing.md` is how an app adopts it, and
+* `request-timing-conformance-effect.ts` says why an Effect program needs
+* nothing more.
+*/
+/**
+* Whether an operation is current. An entry connector asks it before opening
+* one and opens nothing when it answers true, so work a page runs in-process
+* during its own request, such as a server function it calls, counts in the
+* page's operation and operations never nest.
+*/
+function inOperation() {
+	return current.getStore() !== void 0;
+}
+/**
+* Runs `handler` with `operation` as the current one, and answers what it
+* answers, unchanged. Every `measure` called from it, or from anything it
+* starts that keeps its async context, counts in `operation`.
+*/
+function within(operation, handler) {
+	return current.run(operation, handler);
+}
+/**
+* Runs `wait` and adds its duration to the current operation under `kind`, or
+* to nothing when no operation is current. The operation is read when
+* `measure` is called, so a wait belongs to the operation that issued it
+* whoever settles it. The answer settles as `wait`'s promise does, with its
+* value or its rejection, and a synchronous throw is thrown on. `wait` is
+* called once, and a thenable it answers has its `then` called once.
+*/
+function measure(kind, wait) {
+	const operation = current.getStore();
+	if (operation === void 0) return Promise.resolve(wait());
+	const end = beginWait(operation, kind);
+	let pending;
+	try {
+		pending = wait();
+	} catch (error) {
+		end();
+		throw error;
+	}
+	return Promise.resolve(pending).then((value) => {
+		end();
+		return value;
+	}, (error) => {
+		end();
+		throw error;
+	});
+}
+//#endregion
+export { RECORD_VERSION as a, current as c, requestTiming as d, OperationName as i, methodOf as l, measure as n, WAIT_KINDS as o, within as r, beginWait as s, inOperation as t, perKind as u };

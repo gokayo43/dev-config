@@ -51,56 +51,7 @@ In this order:
    counts in the page's operation, and the page's record holds every wait of
    the request.
 
-3. **Make the crossing in**, where a plain handler (a tRPC procedure, a server
-   function) runs an Effect program with a runtime. The entry connector opened
-   the operation in the plain carrier, and `AsyncLocalStorage` holds it only up
-   to the call that hands the program to the runtime; after that only the fiber
-   is right. Wrap the program in `carryOperation` at that call, in the one module
-   the app runs Effects from handlers through, its adapter:
-
-   ```ts
-   import { carryOperation } from "@gokayo43/dev-config/request-timing/effect";
-
-   export const handle = <A>(program: Effect.Effect<A, AppError, AppServices>) =>
-     runtime.runPromise(carryOperation(program.pipe(/* the app's error map */)));
-   ```
-
-   `carryOperation` reads the plain carrier's current operation when it is
-   called, in the handler's context, and carries it in the program's fiber.
-   With no current operation it answers the program unchanged. Call it per run,
-   never once at module scope: a program carried once keeps the operation it
-   was carried with.
-
-4. **Make the crossing back out**, where an Effect program hands a
-   promise-returning thunk to plain async code: the one service that wraps the
-   database client, and the one outbound send. Use `tryPromiseCarried` there in
-   place of `Effect.tryPromise`; it takes the same arguments and answers the
-   same, and runs the thunk, and starts what it answers, under the plain carrier
-   with the fiber's operation:
-
-   ```ts
-   import { tryPromiseCarried } from "@gokayo43/dev-config/request-timing/effect";
-
-   const use = <A>(f: (client: Client) => PromiseLike<A>) =>
-     tryPromiseCarried({ try: () => f(client), catch: (cause) => new DbError({ cause }) });
-
-   const presets = use((client) => client.select().from(presetsTable));
-   ```
-
-   A drizzle query handed straight back, as `presets` does, is a lazy thenable
-   that runs only when its `then` is called; `tryPromiseCarried` calls it,
-   once, inside the carrier, so the query counts like one awaited inside the
-   thunk.
-
-   Every query a plain connector measures inside the thunk, across all of its
-   awaits, a whole transaction included, counts in the fiber's operation, each
-   as one wait. A fiber with no operation runs the thunk under none, so a wait
-   in it counts nowhere, whatever `AsyncLocalStorage` holds where the fiber runs.
-   Measuring with the Effect `measure` at the service instead would count one
-   wait per service call, so a transaction of five queries would read as one and
-   a query repeated in a loop would not show in the count.
-
-5. **Wrap every wait**: the database client, the store client and the outbound
+3. **Wrap every wait**: the database client, the store client and the outbound
    `fetch` through their connectors, and any wait no connector covers (an SDK,
    SMTP) with `measure` directly:
 
@@ -110,38 +61,59 @@ In this order:
    const sent = await measure("out", () => mailer.send(message));
    ```
 
-   A plain connector reached from an Effect program counts correctly only
-   inside a thunk run by `tryPromiseCarried`. A wait that is itself an Effect,
-   with no plain code under it, is measured with the Effect `measure` from
-   `@gokayo43/dev-config/request-timing/effect`:
+4. **Build the Effect runtime before the first request**, in an app that runs
+   Effect programs: await its `context()` where the runtime is made, so its
+   layer is built while no operation is current.
 
    ```ts
-   const cached = (key: string) => measure("store", cache.get(key));
+   export const runtime = ManagedRuntime.make(AppLayer);
+   await runtime.context();
    ```
 
-6. **Run the conformance kit** in the app's own suite against its booted server,
-   and in a Next.js app its route-tree check over `app/` (below).
+   A fiber keeps the operation of the fiber that forked it until that
+   operation's record is emitted, and a `ManagedRuntime` left to itself builds
+   its layer on its first run, inside the first request's fiber, so a worker or
+   a poller the layer forks would count its waits in that request's record.
 
-### Which carrier
+5. **Run the conformance kit** in the app's own suite against its booted server,
+   in a Next.js app its route-tree check over `app/`, and in an app that runs
+   Effect its Effect check (below).
 
-Which operation a wait belongs to is carried for it, by what the code is:
+### Effect programs
 
-- Plain async code: `within`, `measure` and `inOperation` from
-  `@gokayo43/dev-config/request-timing`, which carry the operation in
-  `AsyncLocalStorage`.
-- An Effect program: `within`, `measure`, `inOperation`, `carryOperation` and
-  `tryPromiseCarried` from `@gokayo43/dev-config/request-timing/effect`, which
-  carry it in the fiber. That file is the only one that imports `effect`, so an
-  app without Effect never loads it. A fiber resumed by another (on a
-  semaphore, a Deferred, a queue, or Effect's own scheduler) runs on that
-  fiber's stack and holds its `AsyncLocalStorage`, so the Effect carrier never
-  trusts that storage inside a program. It crosses at two places only. In:
-  `carryOperation` reads the storage at the call that hands the program to the
-  runtime, the last moment it is right. Out: `tryPromiseCarried` sets the
-  storage from the fiber, or clears it when the fiber has no operation, while
-  it calls the thunk and the `then` of what the thunk answers, and everything
-  started there keeps that storage across its awaits. An edge that is itself an Effect program opens the
-  operation and enters it with the Effect `within` instead of crossing in.
+An app that runs Effect programs adopts with the same steps as one that does
+not, and builds its runtime at startup (step 4). The handler runs its program
+with its runtime, `runPromise` or a
+`ManagedRuntime`'s, and the program's services keep calling the app's
+clients under `Effect.tryPromise` or `Effect.promise`: the clients the
+connectors wrap measure every wait the program makes, in the operation of the
+request that runs it. Nothing crosses into the program or back out.
+
+That rests on Effect itself. From effect 4.0.1, a fiber keeps the async context
+it suspended in and resumes in it, so `AsyncLocalStorage` names the right
+operation inside a program, even for a fiber woken by another request's fiber
+through a shared semaphore, Deferred, queue, PubSub or pool. Effect finds what
+it needs for that through `process.getBuiltinModule("node:async_hooks")`,
+once, when its module loads; on a host where that finds nothing (Node before
+20.16, Node 22.0 to 22.2) and on Effect 3, a woken fiber runs in the context
+of the fiber that woke it, and its waits count in that request's record or in
+none. Effect states this in its 4.0.1 changelog, and no Effect page promises
+it, so an app that runs Effect runs the kit's Effect check, on its own Effect
+and its own runtime.
+
+What it leaves alone:
+
+- A wait that is itself an Effect, with no promise under it, cannot be
+  measured, and is in the rest.
+- An HTTP edge that is itself an Effect program has no way to open an
+  operation. Every entry connector here is for a framework the app's handlers
+  run under.
+- Work one fiber does for several requests, such as a `RequestResolver` batch
+  or an `Effect.cached` value, counts in the request whose fiber ran it.
+- A runtime built on its first run, rather than at startup, forks its layer's
+  fibers inside the first request's fiber: their waits count in that
+  request's record until it is emitted, and in no record after. Work forked
+  outside every operation, by a runtime built at startup, is in no record.
 
 ## Elysia
 
@@ -506,27 +478,25 @@ body is not part of the wait, and is in the rest.
 
 ## The interface a connector builds on
 
-| Name                                                               | What it is                                                                                                                                                                                                               |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `requestTiming({ sink, fault, now? })`                             | switches it on; answers `{ open(): Operation, finish(operation, ended) }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                                                              |
-| `timing.finish(operation, ended)`                                  | how a connector closes: builds the ending with `ended()` and closes `operation` with it, handing anything either throws to `fault`                                                                                       |
-| `Operation.close(ending)`                                          | emits the record through the sink, once; throws on a second close, a refused status or a sink that throws, which a connector's own suite reads                                                                           |
-| `within(operation, handler)`                                       | runs `handler` under `operation` and answers what it answers; one per carrier (a thunk for the plain one, an Effect for the Effect one)                                                                                  |
-| `inOperation`                                                      | whether an operation is current: `inOperation(): boolean` plain, `inOperation: Effect<boolean>` Effect; an entry connector opens nothing while it is true                                                                |
-| `tryPromiseCarried(evaluate)`, `tryPromiseCarried({ try, catch })` | Effect only: `Effect.tryPromise`, with the promise run under the plain carrier holding the fiber's operation, or under none when the fiber has none                                                                      |
-| `carryOperation(program)`                                          | Effect only: `program` with the plain carrier's current operation, read at the call, carried in its fiber; `program` itself when none is current                                                                         |
-| `measure(kind, wait)`                                              | runs `wait` unchanged and adds its duration to the current operation, or to nothing; one per carrier (`() => PromiseLike<T>` plain, an Effect for Effect)                                                                |
-| `OperationName.registered(pattern)`                                | the name a router registered; refuses, without quoting it, a pattern that is empty, longer than 256 UTF-16 code units, holds a space or a character that does not print, or holds a query string, a fragment or a scheme |
-| `OperationName.unmatched`                                          | the fixed name of a request no route matched                                                                                                                                                                             |
-| `methodOf(written)`                                                | a request's method as a record carries it: `GET` `HEAD` `POST` `PUT` `PATCH` `DELETE` `OPTIONS`, or `OTHER`                                                                                                              |
-| `RECORD_VERSION`, `WAIT_KINDS`, types                              | the schema version, the three kinds, and `TimingRecord`, `Ending`, `Sink`, `Fault`, `Clock`, `Method`, `WaitKind`, `Waited`, `Timing`, `TimingOptions`, `Operation`                                                      |
+| Name                                   | What it is                                                                                                                                                                                                               |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `requestTiming({ sink, fault, now? })` | switches it on; answers `{ open(): Operation, finish(operation, ended) }`. `now` is the clock, epoch milliseconds, for a test's virtual one                                                                              |
+| `timing.finish(operation, ended)`      | how a connector closes: builds the ending with `ended()` and closes `operation` with it, handing anything either throws to `fault`                                                                                       |
+| `Operation.close(ending)`              | emits the record through the sink, once; throws on a second close, a refused status or a sink that throws, which a connector's own suite reads                                                                           |
+| `within(operation, handler)`           | runs `handler`, a thunk, under `operation` and answers what it answers                                                                                                                                                   |
+| `inOperation`                          | `inOperation(): boolean`, whether an operation is current; an entry connector opens nothing while it is true                                                                                                             |
+| `measure(kind, wait)`                  | runs `wait`, a `() => PromiseLike<T>`, unchanged and adds its duration to the current operation, or to nothing                                                                                                           |
+| `OperationName.registered(pattern)`    | the name a router registered; refuses, without quoting it, a pattern that is empty, longer than 256 UTF-16 code units, holds a space or a character that does not print, or holds a query string, a fragment or a scheme |
+| `OperationName.unmatched`              | the fixed name of a request no route matched                                                                                                                                                                             |
+| `methodOf(written)`                    | a request's method as a record carries it: `GET` `HEAD` `POST` `PUT` `PATCH` `DELETE` `OPTIONS`, or `OTHER`                                                                                                              |
+| `RECORD_VERSION`, `WAIT_KINDS`, types  | the schema version, the three kinds, and `TimingRecord`, `Ending`, `Sink`, `Fault`, `Clock`, `Method`, `WaitKind`, `Waited`, `Timing`, `TimingOptions`, `Operation`                                                      |
 
 What a connector author has to hold:
 
 - **No nesting.** Ask `inOperation` before opening, and when it answers true
   run the handler as it is: no `open`, no `within`, no `close`.
 - **Open, run, finish.** `timing.open()` starts the clock. The handler runs
-  under it with the carrier's `within`. `timing.finish(operation, () => ({
+  under it with `within`. `timing.finish(operation, () => ({
 method, name, status, aborted, streamed }))` is called once the response has
   finished: the last byte written, or the client gone (`aborted: true`), a
   streamed body included. The name and method are given at the close, so a
@@ -548,20 +518,18 @@ method, name, status, aborted, streamed }))` is called once the response has
   in nothing. The time it was in flight before the close is in `inFlightMs`,
   since the operation was waiting then.
 - **`measure` reads the operation when it is called**, so a wait belongs to the
-  operation that issued it, whoever settles it. Plain: `wait` is called once,
+  operation that issued it, whoever settles it. `wait` is called once,
   synchronously; the answer is a new promise that settles as `wait`'s does, with
   its value or its rejection, and a synchronous throw is thrown on. A thenable
-  `wait` answers has its `then` called once. Effect: the wait ends when the
-  effect exits, by success, failure, defect or interruption, and a fiber forked
-  under an operation inherits it.
+  `wait` answers has its `then` called once.
 - **A callback handed on.** A driver that queues a callback and calls it from
   another request's stack (a pool handing a connection to its next waiter) runs
   that callback in the other request's `AsyncLocalStorage` context. Call
   `measure` at the call the app made, which covers the time queued, or bind the
   callback with `AsyncResource.bind`.
 - **Cost.** No I/O and no awaited step is added to an operation, and each wait
-  costs a fixed amount of work: two clock readings and a few additions. The
-  plain `measure`'s answer settles one microtask after `wait`'s promise does.
+  costs a fixed amount of work: two clock readings and a few additions.
+  `measure`'s answer settles one microtask after `wait`'s promise does.
 
 ## The record
 
@@ -596,11 +564,17 @@ query string, header, body or host of an outside call reaches one, since
 `measure` sees none of them and `OperationName` can only be made from a pattern.
 
 `status` is the status the client received, a handler that threw included,
-with two exceptions, each named under its connector: a call inside a tRPC
-batch carries its own call's status, the one it would receive sent alone,
-while the batch's response has one status for all; and a Next.js route
-handler that ends by calling `notFound()` or another of `next/navigation`'s
-throwing helpers is recorded with 500, which the route-tree check refuses.
+with these exceptions, each named under its connector:
+
+- A call inside a tRPC batch carries its own call's status, the one it would
+  receive sent alone, while the batch's response has one status for all; and a
+  status an app's tRPC `responseMeta` sets is not seen.
+- A Next.js route handler that ends by calling `notFound()` or another of
+  `next/navigation`'s throwing helpers is recorded with 500, which the
+  route-tree check refuses.
+- An Elysia app whose Bun `error` option answers a thrown error with other
+  than 500, and a TanStack Start server that answers a page's or a server
+  route's throw with other than Bun's 500, are recorded with 500 all the same.
 
 A record that is wrong is an issue on this repo: it is derived, never edited.
 
@@ -717,9 +691,39 @@ its own calls the handlers; one whose handlers run only in a server it spawns
 lists those routes in `coveragePathIgnorePatterns`, with the suite that grades
 them, as this repo does for its fixture apps in `bunfig.toml`.
 
+An app that runs Effect runs the kit's Effect check too, handing it the
+`effect` module it has installed:
+
+```ts
+import * as effect from "effect";
+import { requestTimingEffectConforms } from "@gokayo43/dev-config/request-timing/conformance/effect";
+
+test("request timing counts an Effect program's waits", () => requestTimingEffectConforms(effect));
+```
+
+It opens overlapping operations through the real core and runs in each an
+Effect program whose waits pass through a shared semaphore, pool, Deferred,
+queue, PubSub and stream, an interrupt whose finalizer waits, a detached fiber
+and a lazy thenable under `Effect.tryPromise`, beside work outside every
+operation,
+through `Effect.runPromise` and through a `ManagedRuntime` built before any
+operation. It rejects unless every record carries exactly its own waits,
+saying that Effect resumed a fiber in another request's context and that
+request timing needs effect 4.0.1 or later on a host whose
+`process.getBuiltinModule` finds `node:async_hooks`, followed by each case it
+counted wrong. Handed an Effect 3 module, it rejects at once, naming the
+modules Effect 4 has and it does not. It touches no server, so it runs once
+per suite in tens of milliseconds, and it takes the app's `effect` rather than
+importing one, so dev-config gains no runtime dependency.
+
 ## Ships built
 
-The plain and the Effect carrier and every connector ship built, like
-[the route log](route-log.md): app code that Next.js and Vite bundle imports
-them, and neither strips types under `node_modules`. `tsdown.config.ts` carries why. The conformance kit and the
-command ship their source, since only Bun runs them.
+The core and every connector ship built, like [the route log](route-log.md):
+app code that Next.js and Vite bundle imports them, and neither strips types
+under `node_modules`. The kit's Effect check ships built too: it runs the
+core's `within` and `measure`, which ship built alone, and built it takes them
+from the chunk the app's own `request-timing` import loads, so one copy of the
+core and of its `AsyncLocalStorage` serves both. `tsdown.config.ts` carries
+why. The rest of
+the conformance kit and the command ship their source, since only Bun runs
+them.

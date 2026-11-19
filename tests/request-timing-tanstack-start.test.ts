@@ -2,9 +2,9 @@
  * The TanStack Start connector, with the Bun.sql connector under it, through
  * the Start app `request-timing-start-app` holds, built by Vite as the
  * template is built and served by Bun, over a real Postgres. Its routes and
- * server functions run Effect programs through one bridge, which crosses in
- * with `carryOperation`, and reach the database through a `Db` service, which
- * crosses back out with `tryPromiseCarried`.
+ * server functions run Effect programs through one bridge, and reach the
+ * database through a `Db` service whose thunk runs drizzle under
+ * `Effect.tryPromise`.
  *
  * - Invariant 1, the differential: one scripted sequence of requests against
  *   the build with timing off, in a process of its own, and with it on,

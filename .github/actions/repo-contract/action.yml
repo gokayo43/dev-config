@@ -10,7 +10,8 @@ description: >-
   That last one is `lifecycle`, which reads "dev" or "live". "live" derives what
   a repo with users owes — crash reporting, and for one that owns migrations a
   backup script, a rehearsed restore and the upgrade gate, and for one that
-  also serves HTTP a request-timing conformance test — from the repo
+  also serves HTTP a request-timing conformance test, with the kit's Effect
+  check where it ships effect — from the repo
   itself rather than from this action's inputs, so none of it can be shed by
   editing the workflow those rules are about. It is also read at the base ref,
   because a field that only ever moves up cannot be tidied back down by a
@@ -49,9 +50,11 @@ inputs:
       request timing: how its operations are timed instead, or that it serves
       nothing a connector covers, and what it serves. Empty, which is every repo
       that uses it, asks for a test importing
-      @gokayo43/dev-config/request-timing/conformance.
-      The reason is the waiver, and it is refused on a repo that does not owe
-      the test or that has one.
+      @gokayo43/dev-config/request-timing/conformance, and where a manifest
+      ships effect, one importing
+      @gokayo43/dev-config/request-timing/conformance/effect.
+      The reason is the waiver of both, and it is refused on a repo that does
+      not owe the test or that has a test importing either.
     default: ""
 
 runs:

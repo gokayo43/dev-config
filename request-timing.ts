@@ -1,15 +1,11 @@
 /**
- * Request timing for a plain async program: which operation a wait belongs to,
- * carried in `AsyncLocalStorage`. `docs/exports/request-timing.md` is how an
- * app adopts it; `request-timing-effect.ts` is the carrier for an Effect
- * program, which reads this one's storage only in `carryOperation`.
+ * Request timing: which operation a wait belongs to, carried in
+ * `AsyncLocalStorage`, in plain async code and in an Effect program alike.
+ * `docs/exports/request-timing.md` is how an app adopts it, and
+ * `request-timing-conformance-effect.ts` says why an Effect program needs
+ * nothing more.
  */
-import {
-  beginWait,
-  type Operation,
-  plainStorage as current,
-  type WaitKind,
-} from "./request-timing-operation.ts";
+import { beginWait, current, type Operation, type WaitKind } from "./request-timing-operation.ts";
 
 export {
   methodOf,
