@@ -181,3 +181,12 @@ export async function git(cwd: string, args: readonly string[]): Promise<string>
   }
   return stdout;
 }
+
+/**
+ * The limit each case of a suite this one spawns over a fixture is given, in
+ * ms, where a bare `bun test` would give it bun's 5s: a spawned case of
+ * `git-free-environment.test.ts` took 4.5s at a 1% CPU quota (measured
+ * 2026-11-19, bun 1.4.4). Half this suite's own 120s, so a case the child
+ * times out is reported by name inside the case that spawned it.
+ */
+export const SPAWNED_CASE_MS = 60_000;

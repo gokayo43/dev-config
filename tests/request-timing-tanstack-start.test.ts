@@ -79,7 +79,7 @@ beforeAll(async () => {
   process.env["FIXTURE_DATABASE_URL"] = timedDatabase.url;
   setup.on = await startServer(setup.built.server);
   setup.off = await servedOff(setup.built.server, bareDatabase.url);
-}, 60_000);
+});
 
 afterAll(async () => {
   setup.off?.child.kill();

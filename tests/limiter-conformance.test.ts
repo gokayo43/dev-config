@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { plainly, required } from "../.github/actions/_lib/gate.ts";
 import { containing } from "./matchers.ts";
 import { type Flaw, FLAWS } from "./house-limiter.ts";
-import { materialise } from "./tree.ts";
+import { materialise, SPAWNED_CASE_MS } from "./tree.ts";
 
 /**
  * A throwaway Redis, refused rather than defaulted, for the reason
@@ -80,12 +80,15 @@ interface Run {
  */
 async function conformance(flaw?: Flaw): Promise<Run> {
   const root = await materialise({ "limiter.test.ts": fixture(flaw) });
-  const proc = Bun.spawn([process.execPath, "test", "limiter.test.ts"], {
-    cwd: root,
-    env: plainly(Bun.env),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const proc = Bun.spawn(
+    [process.execPath, "test", "--timeout", `${SPAWNED_CASE_MS}`, "limiter.test.ts"],
+    {
+      cwd: root,
+      env: plainly(Bun.env),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   const [out, err, status] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
@@ -126,15 +129,11 @@ describe("the limiter conformance suite", () => {
     const { passed, failed } = await conformance();
     expect(failed).toEqual([]);
     expect(passed).toBe(true);
-  }, 30_000);
+  });
 
-  test.each([...FLAWS])(
-    "refuses a limiter that %s",
-    async (flaw) => {
-      const { passed, failed } = await conformance(flaw);
-      expect(failed).toContainEqual(containing(CAUGHT_BY[flaw]));
-      expect(passed).toBe(false);
-    },
-    30_000,
-  );
+  test.each([...FLAWS])("refuses a limiter that %s", async (flaw) => {
+    const { passed, failed } = await conformance(flaw);
+    expect(failed).toContainEqual(containing(CAUGHT_BY[flaw]));
+    expect(passed).toBe(false);
+  });
 });

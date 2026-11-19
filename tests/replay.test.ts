@@ -177,33 +177,29 @@ describe("a lineage this branch stops migrating", () => {
   test.each([
     ["a clock of its own", 3_000],
     ["a clock the other lineage already has", 1_000],
-  ])(
-    "is refused when its journal has %s",
-    async (_label, when) => {
-      const repo = await history(
-        {
-          ...scripted(`bun run ${PER_SCHEMA} ./drizzle ./extra`),
-          ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
-          ...lineage("extra", { ...CREATES_NOTE, when }),
-        },
-        {
-          // db:migrate stops naming ./extra. The directory is still here, and a
-          // database deployed from the base ref still holds what it built.
-          ...scripted(`bun run ${PER_SCHEMA} ./drizzle`),
-          ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
-          ...lineage("extra", { ...CREATES_NOTE, when }),
-        },
-      );
+  ])("is refused when its journal has %s", async (_label, when) => {
+    const repo = await history(
+      {
+        ...scripted(`bun run ${PER_SCHEMA} ./drizzle ./extra`),
+        ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
+        ...lineage("extra", { ...CREATES_NOTE, when }),
+      },
+      {
+        // db:migrate stops naming ./extra. The directory is still here, and a
+        // database deployed from the base ref still holds what it built.
+        ...scripted(`bun run ${PER_SCHEMA} ./drizzle`),
+        ...lineage("drizzle", CREATES_THING, ADDS_SLUG),
+        ...lineage("extra", { ...CREATES_NOTE, when }),
+      },
+    );
 
-      expect(messages(await replay(repo, pushedOver(repo.revs[0] ?? "")))).toEqual([
-        containing("extra is in"),
-      ]);
-      expect(messages(await replay(repo, pushedOver(repo.revs[0] ?? "")))[0]).toContain(
-        "never applied it",
-      );
-    },
-    60_000,
-  );
+    expect(messages(await replay(repo, pushedOver(repo.revs[0] ?? "")))).toEqual([
+      containing("extra is in"),
+    ]);
+    expect(messages(await replay(repo, pushedOver(repo.revs[0] ?? "")))[0]).toContain(
+      "never applied it",
+    );
+  });
 
   // The other side of the same rule: both lineages still named, each with its
   // own journal, is the repo that is fine — and a matcher that refused whenever
@@ -219,7 +215,7 @@ describe("a lineage this branch stops migrating", () => {
     const verdict = await replay(repo, pushedOver(repo.revs[0] ?? ""));
     expect(messages(verdict)).toEqual([]);
     expect(verdict.note).toContain("reaches the same schema");
-  }, 60_000);
+  });
 });
 
 describe("replay gate", () => {

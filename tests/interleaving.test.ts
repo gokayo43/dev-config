@@ -763,8 +763,9 @@ describe("how a run ends", () => {
       ),
     );
     expect(orders).toEqual(new Set(["c r", "r c"]));
-    // 8 400 runs outlast bun's 5 s default here; the bound is the nightly's
-    // per-test one, which test-suite's action.yml sets for its longer search.
+    // 8 400 runs take about 7 s of CPU, which a 3% share of a core stretches
+    // past the suite's 120 s; the bound is the nightly's per-test one, which
+    // test-suite's action.yml sets for its longer search.
   }, 600_000);
 
   const priority: Interleaving = { strategy: "priority", priorities: [], changeAt: [] };

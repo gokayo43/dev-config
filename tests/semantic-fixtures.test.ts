@@ -169,20 +169,14 @@ async function present(name: string): Promise<boolean> {
   return found.length > 0;
 }
 
-const TIMEOUT = 60_000;
-
 describe("the semantic-fixture gate", () => {
-  test(
-    "legacy rows that still mean what they meant pass, and the note says so",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_UTC]);
+  test("legacy rows that still mean what they meant pass, and the note says so", async () => {
+    const verdict = await ran([READS_THEM_AS_UTC]);
 
-      expect(messages(verdict)).toEqual([]);
-      expect(verdict.note).toContain("reaches the same schema");
-      expect(verdict.note).toContain("every assertion coming back empty");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toContain("reaches the same schema");
+    expect(verdict.note).toContain("every assertion coming back empty");
+  });
 
   // The whole reason this gate exists, and the case the upgrade gate cannot
   // reach: both branches apply DDL that lands on `timestamptz`, so the schema
@@ -190,65 +184,53 @@ describe("the semantic-fixture gate", () => {
   // thirteen hours. An implementation that read the assertion's exit status
   // rather than its rows, or that took a non-empty answer as an answer rather
   // than as a violation, passes this too.
-  test(
-    "a migration that converges on the schema and moves the rows is refused",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_AUCKLAND]);
+  test("a migration that converges on the schema and moves the rows is refused", async () => {
+    const verdict = await ran([READS_THEM_AS_AUCKLAND]);
 
-      expect(messages(verdict)).toEqual([
-        containing("event 1 is no longer the instant it was written as"),
-      ]);
-      expect(messages(verdict)[0]).toContain("Fix the migration that produced it");
-      // The upgrade gate saw nothing, which is the point: it says the schemas
-      // agree in the same verdict this says the data does not.
-      expect(verdict.note).toContain("reaches the same schema");
-      expect(verdict.problems[0]?.file).toBe(`${FIXTURES}/01-legacy-events.assert.sql`);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing("event 1 is no longer the instant it was written as"),
+    ]);
+    expect(messages(verdict)[0]).toContain("Fix the migration that produced it");
+    // The upgrade gate saw nothing, which is the point: it says the schemas
+    // agree in the same verdict this says the data does not.
+    expect(verdict.note).toContain("reaches the same schema");
+    expect(verdict.problems[0]?.file).toBe(`${FIXTURES}/01-legacy-events.assert.sql`);
+  });
 
   // The property the whole gate rests on. A fixture that could name a column
   // only this branch adds would be a fixture written against HEAD — which is
   // application code's view of the data, testing the new semantics against
   // themselves. The database refuses it because the fixtures run before the
   // branch's migrations, and this case is what says they do.
-  test(
-    "a fixture that names a column this branch adds is refused as not base-compatible",
-    async () => {
-      const verdict = await ran([ADDS_A_KIND], {
-        [`${FIXTURES}/01-legacy-events.sql`]: `insert into "event" ("id", "at", "kind") values (1, '2026-01-01 12:00:00', 'note');\n`,
-        [`${FIXTURES}/01-legacy-events.assert.sql`]: STILL_NOON_UTC,
-      });
+  test("a fixture that names a column this branch adds is refused as not base-compatible", async () => {
+    const verdict = await ran([ADDS_A_KIND], {
+      [`${FIXTURES}/01-legacy-events.sql`]: `insert into "event" ("id", "at", "kind") values (1, '2026-01-01 12:00:00', 'note');\n`,
+      [`${FIXTURES}/01-legacy-events.assert.sql`]: STILL_NOON_UTC,
+    });
 
-      expect(messages(verdict)).toEqual([
-        containing(`${FIXTURES}/01-legacy-events.sql did not apply to a database built from`),
-      ]);
-      expect(messages(verdict)[0]).toContain(`column "kind" of relation "event" does not exist`);
-      expect(messages(verdict)[0]).toContain("may name only what");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing(`${FIXTURES}/01-legacy-events.sql did not apply to a database built from`),
+    ]);
+    expect(messages(verdict)[0]).toContain(`column "kind" of relation "event" does not exist`);
+    expect(messages(verdict)[0]).toContain("may name only what");
+  });
 
   // A migration is written against a database the developer has just rebuilt,
   // which is empty. Every deployed one has rows, and this is the class that
   // only ever fails on the deploy: the fixtures are what put rows there before
   // the branch's migrations run.
-  test(
-    "a migration that cannot apply to a database with rows in it says which rows",
-    async () => {
-      const verdict = await ran([DEMANDS_A_KIND]);
+  test("a migration that cannot apply to a database with rows in it says which rows", async () => {
+    const verdict = await ran([DEMANDS_A_KIND]);
 
-      expect(messages(verdict)).toEqual([
-        containing("failed applying this branch's migrations onto"),
-      ]);
-      expect(messages(verdict)[0]).toContain(`holding the rows ${FIXTURES} wrote`);
-      expect(messages(verdict)[0]).toContain("not to one that already has rows in it");
-      // Graded, not thrown: the upgrade path's own verdict is still in the
-      // envelope beside it.
-      expect(verdict.note).toContain("reaches the same schema");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing("failed applying this branch's migrations onto"),
+    ]);
+    expect(messages(verdict)[0]).toContain(`holding the rows ${FIXTURES} wrote`);
+    expect(messages(verdict)[0]).toContain("not to one that already has rows in it");
+    // Graded, not thrown: the upgrade path's own verdict is still in the
+    // envelope beside it.
+    expect(verdict.note).toContain("reaches the same schema");
+  });
 
   // The whole reason a migrator refusal is a verdict rather than a throw. This
   // branch carries two independent faults — an already-applied migration edited
@@ -256,121 +238,101 @@ describe("the semantic-fixture gate", () => {
   // has to be told about both in one run. A throw out of the fixture half
   // carries the schema half's finding away with it: the wrong implementation
   // here reports only the migrator, and the divergence vanishes.
-  test(
-    "a branch that both diverges and breaks its rows reports both faults",
-    async () => {
-      const repo = await history(
-        { ...migratesFrom(MIGRATOR, "drizzle"), ...lineage("drizzle", CREATES_EVENT) },
-        {
-          ...migratesFrom(MIGRATOR, "drizzle"),
-          // The applied migration, edited: fresh and upgraded part company.
-          ...lineage("drizzle", { ...CREATES_EVENT, sql: EVENT_WITH_TAG }, DEMANDS_A_KIND),
-          ...NOON_UTC_FIXTURE,
-        },
-      );
-      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
-      const verdict = await replayGate({
-        root: repo.root,
-        url: await emptyDatabase(),
-        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
-        fixtures: FIXTURES,
-      });
+  test("a branch that both diverges and breaks its rows reports both faults", async () => {
+    const repo = await history(
+      { ...migratesFrom(MIGRATOR, "drizzle"), ...lineage("drizzle", CREATES_EVENT) },
+      {
+        ...migratesFrom(MIGRATOR, "drizzle"),
+        // The applied migration, edited: fresh and upgraded part company.
+        ...lineage("drizzle", { ...CREATES_EVENT, sql: EVENT_WITH_TAG }, DEMANDS_A_KIND),
+        ...NOON_UTC_FIXTURE,
+      },
+    );
+    databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+    const verdict = await replayGate({
+      root: repo.root,
+      url: await emptyDatabase(),
+      upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+      fixtures: FIXTURES,
+    });
 
-      expect(messages(verdict)).toEqual([
-        containing("does not reach the schema this branch builds from empty"),
-        containing("failed applying this branch's migrations onto"),
-      ]);
-      expect(messages(verdict)[1]).toContain(`holding the rows ${FIXTURES} wrote`);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing("does not reach the schema this branch builds from empty"),
+      containing("failed applying this branch's migrations onto"),
+    ]);
+    expect(messages(verdict)[1]).toContain(`holding the rows ${FIXTURES} wrote`);
+  });
 
   // Numbered because the order is part of the fixture: a row a later file
   // updates is a row an earlier one wrote, which is how a real history of rows
   // accumulates. Directory order is a fact about the filesystem, and an
   // implementation that took it would apply these two in whichever order the
   // machine handed them back.
-  test(
-    "fixtures apply in the order their names give them",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_UTC], {
-        [`${FIXTURES}/02-corrected.sql`]: `update "event" set "at" = '2026-01-01 12:00:00';\n`,
-        [`${FIXTURES}/02-corrected.assert.sql`]: STILL_NOON_UTC,
-        [`${FIXTURES}/01-legacy-events.sql`]: `insert into "event" ("id", "at") values (1, '1999-01-01 00:00:00');\n`,
-        [`${FIXTURES}/01-legacy-events.assert.sql`]:
-          `select 'event ' || "id" || ' was never corrected' as violation\n` +
-          `from "event" where "at" <> timestamptz '2026-01-01 12:00:00+00';\n`,
-      });
+  test("fixtures apply in the order their names give them", async () => {
+    const verdict = await ran([READS_THEM_AS_UTC], {
+      [`${FIXTURES}/02-corrected.sql`]: `update "event" set "at" = '2026-01-01 12:00:00';\n`,
+      [`${FIXTURES}/02-corrected.assert.sql`]: STILL_NOON_UTC,
+      [`${FIXTURES}/01-legacy-events.sql`]: `insert into "event" ("id", "at") values (1, '1999-01-01 00:00:00');\n`,
+      [`${FIXTURES}/01-legacy-events.assert.sql`]:
+        `select 'event ' || "id" || ' was never corrected' as violation\n` +
+        `from "event" where "at" <> timestamptz '2026-01-01 12:00:00+00';\n`,
+    });
 
-      expect(messages(verdict)).toEqual([]);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([]);
+  });
 
   // A fixture is a file, not a statement: the rows a deployed database holds
   // arrive as however many inserts it takes. The whole file goes to Postgres as
   // one query string, and the wrong implementation this kills is the one that
   // runs only the first statement in it — which passes every other case in this
   // suite, because every other fixture here has exactly one.
-  test(
-    "a fixture of several statements applies all of them",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_UTC], {
-        [`${FIXTURES}/01-legacy-events.sql`]:
-          `insert into "event" ("id", "at") values (1, '2026-01-01 12:00:00');\n` +
-          `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n` +
-          `insert into "event" ("id", "at") values (3, '2026-01-01 12:00:00');\n`,
-        [`${FIXTURES}/01-legacy-events.assert.sql`]:
-          `select 'the fixture left ' || count(*) || ' of its 3 rows' as violation\n` +
-          `from "event" having count(*) <> 3;\n`,
-      });
+  test("a fixture of several statements applies all of them", async () => {
+    const verdict = await ran([READS_THEM_AS_UTC], {
+      [`${FIXTURES}/01-legacy-events.sql`]:
+        `insert into "event" ("id", "at") values (1, '2026-01-01 12:00:00');\n` +
+        `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n` +
+        `insert into "event" ("id", "at") values (3, '2026-01-01 12:00:00');\n`,
+      [`${FIXTURES}/01-legacy-events.assert.sql`]:
+        `select 'the fixture left ' || count(*) || ' of its 3 rows' as violation\n` +
+        `from "event" having count(*) <> 3;\n`,
+    });
 
-      expect(messages(verdict)).toEqual([]);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([]);
+  });
 
-  test(
-    "the database the caller declared is untouched by any of it",
-    async () => {
-      const url = await emptyDatabase();
-      const repo = await repoWith([READS_THEM_AS_UTC], NOON_UTC_FIXTURE);
-      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
-      await replayGate({
-        root: repo.root,
-        url,
-        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
-        fixtures: FIXTURES,
-      });
+  test("the database the caller declared is untouched by any of it", async () => {
+    const url = await emptyDatabase();
+    const repo = await repoWith([READS_THEM_AS_UTC], NOON_UTC_FIXTURE);
+    databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+    await replayGate({
+      root: repo.root,
+      url,
+      upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+      fixtures: FIXTURES,
+    });
 
-      const declared = new SQL(url);
-      const found = await rows(declared, `select * from "event"`);
-      await declared.close();
-      expect(found).toEqual([]);
-    },
-    TIMEOUT,
-  );
+    const declared = new SQL(url);
+    const found = await rows(declared, `select * from "event"`);
+    await declared.close();
+    expect(found).toEqual([]);
+  });
 
   // Whichever way it went: a gate that left its database behind on a refusal
   // would leave one per red build on a server two runs share.
-  test(
-    "the database it builds is gone whichever way it went",
-    async () => {
-      const repo = await repoWith([READS_THEM_AS_AUCKLAND], NOON_UTC_FIXTURE);
-      const own = fixtureDatabase(repo.root);
-      databases.push(own, upgradeDatabase(repo.root));
-      const verdict = await replayGate({
-        root: repo.root,
-        url: await emptyDatabase(),
-        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
-        fixtures: FIXTURES,
-      });
+  test("the database it builds is gone whichever way it went", async () => {
+    const repo = await repoWith([READS_THEM_AS_AUCKLAND], NOON_UTC_FIXTURE);
+    const own = fixtureDatabase(repo.root);
+    databases.push(own, upgradeDatabase(repo.root));
+    const verdict = await replayGate({
+      root: repo.root,
+      url: await emptyDatabase(),
+      upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+      fixtures: FIXTURES,
+    });
 
-      expect(messages(verdict)).not.toEqual([]);
-      expect(await present(own)).toBe(false);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).not.toEqual([]);
+    expect(await present(own)).toBe(false);
+  });
 });
 
 /**
@@ -471,62 +433,50 @@ describe("the fixture directory", () => {
  * implementation each of them kills.
  */
 describe("a pair that asserts nothing", () => {
-  test(
-    "an assertion that is an insert rather than a select is refused",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
-        [`${FIXTURES}/01-legacy-events.sql`]: LEGACY_ROW,
-        [`${FIXTURES}/01-legacy-events.assert.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
-      });
+  test("an assertion that is an insert rather than a select is refused", async () => {
+    const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+      [`${FIXTURES}/01-legacy-events.sql`]: LEGACY_ROW,
+      [`${FIXTURES}/01-legacy-events.assert.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
+    });
 
-      expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
-      expect(messages(verdict)[0]).toContain("does not have a RETURNING clause");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
+    expect(messages(verdict)[0]).toContain("does not have a RETURNING clause");
+  });
 
   // The sharpest member: a `delete` answered `[]` exactly as an empty select
   // does, so the pair passed *and* took the next pair's rows with it — the
   // second assertion then found nothing to report either.
-  test(
-    "an assertion that deletes is refused, and the next pair's rows survive it",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
-        [`${FIXTURES}/01-first.sql`]: LEGACY_ROW,
-        [`${FIXTURES}/01-first.assert.sql`]: `delete from "event";\n`,
-        [`${FIXTURES}/02-second.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
-        [`${FIXTURES}/02-second.assert.sql`]: STILL_NOON_UTC,
-      });
+  test("an assertion that deletes is refused, and the next pair's rows survive it", async () => {
+    const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+      [`${FIXTURES}/01-first.sql`]: LEGACY_ROW,
+      [`${FIXTURES}/01-first.assert.sql`]: `delete from "event";\n`,
+      [`${FIXTURES}/02-second.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
+      [`${FIXTURES}/02-second.assert.sql`]: STILL_NOON_UTC,
+    });
 
-      expect(messages(verdict)).toEqual([
-        containing("01-first.assert.sql is not an assertion this can read"),
-        containing("event 1 is no longer the instant it was written as"),
-        containing("event 2 is no longer the instant it was written as"),
-      ]);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing("01-first.assert.sql is not an assertion this can read"),
+      containing("event 1 is no longer the instant it was written as"),
+      containing("event 2 is no longer the instant it was written as"),
+    ]);
+  });
 
   // The one write the wrapper cannot see. A nested data-modifying CTE is
   // refused by the wrapper itself — Postgres wants those at the top level — but
   // a plain `select` calling a VOLATILE function that writes parses cleanly and
   // has the same effect. The read-only session is what refuses it, which is why
   // both are here rather than either.
-  test(
-    "an assertion whose function writes is refused by the read-only session",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
-        [`${FIXTURES}/01-legacy-events.sql`]:
-          `create function "wipe"() returns integer as $$ begin delete from "event"; return 1; end; $$ language plpgsql volatile;\n` +
-          LEGACY_ROW,
-        [`${FIXTURES}/01-legacy-events.assert.sql`]: `select 'gone ' || "wipe"() as violation;\n`,
-      });
+  test("an assertion whose function writes is refused by the read-only session", async () => {
+    const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+      [`${FIXTURES}/01-legacy-events.sql`]:
+        `create function "wipe"() returns integer as $$ begin delete from "event"; return 1; end; $$ language plpgsql volatile;\n` +
+        LEGACY_ROW,
+      [`${FIXTURES}/01-legacy-events.assert.sql`]: `select 'gone ' || "wipe"() as violation;\n`,
+    });
 
-      expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
-      expect(messages(verdict)[0]).toContain("read-only transaction");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
+    expect(messages(verdict)[0]).toContain("read-only transaction");
+  });
 
   test.each([
     ["an empty fixture", ""],
@@ -535,35 +485,27 @@ describe("a pair that asserts nothing", () => {
       "a fixture whose insert matches nothing",
       `insert into "event" select * from "event" where false;\n`,
     ],
-  ])(
-    "%s writes no rows and is refused",
-    async (_written, fixture) => {
-      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
-        [`${FIXTURES}/01-legacy-events.sql`]: fixture,
-        [`${FIXTURES}/01-legacy-events.assert.sql`]: STILL_NOON_UTC,
-      });
+  ])("%s writes no rows and is refused", async (_written, fixture) => {
+    const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+      [`${FIXTURES}/01-legacy-events.sql`]: fixture,
+      [`${FIXTURES}/01-legacy-events.assert.sql`]: STILL_NOON_UTC,
+    });
 
-      expect(messages(verdict)).toEqual([
-        containing(`${FIXTURES}/01-legacy-events.sql wrote no rows`),
-      ]);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing(`${FIXTURES}/01-legacy-events.sql wrote no rows`),
+    ]);
+  });
 
   // A fixture that only reads has written nothing whatever row count the driver
   // reports for it, which is why the command tag decides rather than the count.
-  test(
-    "a fixture that only selects has written nothing",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
-        [`${FIXTURES}/01-legacy-events.sql`]: `select 1;\n`,
-        [`${FIXTURES}/01-legacy-events.assert.sql`]: STILL_NOON_UTC,
-      });
+  test("a fixture that only selects has written nothing", async () => {
+    const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+      [`${FIXTURES}/01-legacy-events.sql`]: `select 1;\n`,
+      [`${FIXTURES}/01-legacy-events.assert.sql`]: STILL_NOON_UTC,
+    });
 
-      expect(messages(verdict)).toEqual([containing("wrote no rows")]);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([containing("wrote no rows")]);
+  });
 });
 
 describe("what an assertion has to be", () => {
@@ -577,184 +519,152 @@ describe("what an assertion has to be", () => {
   // Not `select *`: a positional read would take whatever column came first as
   // a sentence about the data, and a fixture author renaming a column would
   // silently change what every violation says.
-  test(
-    "an assertion whose rows carry no violation column is refused",
-    async () => {
-      const verdict = await asserting(`select "id" from "event";\n`);
+  test("an assertion whose rows carry no violation column is refused", async () => {
+    const verdict = await asserting(`select "id" from "event";\n`);
 
-      expect(messages(verdict)).toEqual([
-        containing(`${FIXTURES}/01-legacy-events.assert.sql is not an assertion this can read`),
-      ]);
-      expect(messages(verdict)[0]).toContain("violation");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing(`${FIXTURES}/01-legacy-events.assert.sql is not an assertion this can read`),
+    ]);
+    expect(messages(verdict)[0]).toContain("violation");
+  });
 
   // Several statements come back as a list of answers rather than as rows, and
   // nothing can say which of them was the verdict. An implementation that read
   // the first, or the last, would be choosing for the author.
-  test(
-    "an assertion of several statements is refused rather than half-read",
-    async () => {
-      const verdict = await asserting(`select 1 as violation; ${STILL_NOON_UTC}`);
+  test("an assertion of several statements is refused rather than half-read", async () => {
+    const verdict = await asserting(`select 1 as violation; ${STILL_NOON_UTC}`);
 
-      expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
-      expect(messages(verdict)[0]).toContain("one `select` over the migrated schema");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
+    expect(messages(verdict)[0]).toContain("one `select` over the migrated schema");
+  });
 
-  test(
-    "an assertion the database refuses names the file rather than the driver",
-    async () => {
-      const verdict = await asserting(`select "nope" as violation from "event";\n`);
+  test("an assertion the database refuses names the file rather than the driver", async () => {
+    const verdict = await asserting(`select "nope" as violation from "event";\n`);
 
-      expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
-      expect(messages(verdict)[0]).toContain(`column "nope" does not exist`);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([containing("is not an assertion this can read")]);
+    expect(messages(verdict)[0]).toContain(`column "nope" does not exist`);
+  });
 });
 
 describe("what an assertion answers with", () => {
   // A row whose `violation` is NULL is a fault in the assertion — but reading
   // each row as text *threw* on it, and the throw took the real violations
   // found before it. Collected now, so both reach the author.
-  test(
-    "real violations before a null one are not lost with it",
-    async () => {
-      const verdict = await ran([READS_THEM_AS_AUCKLAND], {
-        [`${FIXTURES}/01-legacy-events.sql`]:
-          LEGACY_ROW + `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
-        [`${FIXTURES}/01-legacy-events.assert.sql`]:
-          `select case when "id" = 1 then 'event 1 moved' else null end::text as violation\n` +
-          `from "event" where "at" <> timestamptz '2026-01-01 12:00:00+00' order by "id";\n`,
-      });
+  test("real violations before a null one are not lost with it", async () => {
+    const verdict = await ran([READS_THEM_AS_AUCKLAND], {
+      [`${FIXTURES}/01-legacy-events.sql`]:
+        LEGACY_ROW + `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
+      [`${FIXTURES}/01-legacy-events.assert.sql`]:
+        `select case when "id" = 1 then 'event 1 moved' else null end::text as violation\n` +
+        `from "event" where "at" <> timestamptz '2026-01-01 12:00:00+00' order by "id";\n`,
+    });
 
-      expect(messages(verdict)).toEqual([
-        containing("event 1 moved"),
-        containing("whose `violation` is not text"),
-      ]);
-      expect(messages(verdict)[1]).toContain("(1 of 2)");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing("event 1 moved"),
+      containing("whose `violation` is not text"),
+    ]);
+    expect(messages(verdict)[1]).toContain("(1 of 2)");
+  });
 
   // The fixture wrote rows into that table a moment earlier, so a table that is
   // gone is a fact about this branch's migration rather than about the SQL in
   // the assertion. Telling the author their assertion is unreadable sends them
   // to the wrong file.
-  test(
-    "a table this branch's migration dropped names the migration, not the assertion",
-    async () => {
-      const verdict = await ran(
-        [{ tag: "0001_drop", when: 2_000, sql: `DROP TABLE "event";\n` }],
-        NOON_UTC_FIXTURE,
-      );
+  test("a table this branch's migration dropped names the migration, not the assertion", async () => {
+    const verdict = await ran(
+      [{ tag: "0001_drop", when: 2_000, sql: `DROP TABLE "event";\n` }],
+      NOON_UTC_FIXTURE,
+    );
 
-      expect(messages(verdict)).toEqual([
-        containing("asks about event, which this branch's migrations left the database without"),
-      ]);
-      expect(messages(verdict)[0]).toContain("not something a migration may drop");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing("asks about event, which this branch's migrations left the database without"),
+    ]);
+    expect(messages(verdict)[0]).toContain("not something a migration may drop");
+  });
 
   // The limit of the case above, said out loud: this gate grades the questions
   // the repo asked, so an assertion that stops asking about the dropped table
   // has nothing left to fail on. What a dropped table did to the rows is the
   // fixture author's to assert, not something the gate can infer.
-  test(
-    "an assertion that asks only about a surviving table passes, by design",
-    async () => {
-      const verdict = await ran(
-        [
-          {
-            tag: "0001_drop",
-            when: 2_000,
-            sql: `DROP TABLE "event";\nCREATE TABLE "record" ("id" integer PRIMARY KEY NOT NULL);\n`,
-          },
-        ],
+  test("an assertion that asks only about a surviving table passes, by design", async () => {
+    const verdict = await ran(
+      [
         {
-          [`${FIXTURES}/01-legacy-events.sql`]: LEGACY_ROW,
-          [`${FIXTURES}/01-legacy-events.assert.sql`]: `select 'record left over' as violation from "record";\n`,
+          tag: "0001_drop",
+          when: 2_000,
+          sql: `DROP TABLE "event";\nCREATE TABLE "record" ("id" integer PRIMARY KEY NOT NULL);\n`,
         },
-      );
+      ],
+      {
+        [`${FIXTURES}/01-legacy-events.sql`]: LEGACY_ROW,
+        [`${FIXTURES}/01-legacy-events.assert.sql`]: `select 'record left over' as violation from "record";\n`,
+      },
+    );
 
-      expect(messages(verdict)).toEqual([]);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([]);
+  });
 
   // The default decoder substitutes U+FFFD, which reaches the database as data
   // and comes back as a violation about a row the migration never touched — a
   // finding manufactured by the reader. Refused at the file instead.
-  test(
-    "a fixture that is not UTF-8 is refused rather than repaired",
-    async () => {
-      const repo = await repoWith([READS_THEM_AS_UTC], NOON_UTC_FIXTURE);
-      // A latin-1 'é' inside the string literal, written after the commit.
-      await Bun.write(
-        join(repo.root, FIXTURES, "01-legacy-events.sql"),
-        new Uint8Array([
-          ...new TextEncoder().encode(
-            `insert into "event" values (1, '2026-01-01 12:00:00'); -- caf`,
-          ),
-          0xe9,
-          10,
-        ]),
-      );
-      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
-      const verdict = await replayGate({
-        root: repo.root,
-        url: await emptyDatabase(),
-        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
-        fixtures: FIXTURES,
-      });
+  test("a fixture that is not UTF-8 is refused rather than repaired", async () => {
+    const repo = await repoWith([READS_THEM_AS_UTC], NOON_UTC_FIXTURE);
+    // A latin-1 'é' inside the string literal, written after the commit.
+    await Bun.write(
+      join(repo.root, FIXTURES, "01-legacy-events.sql"),
+      new Uint8Array([
+        ...new TextEncoder().encode(
+          `insert into "event" values (1, '2026-01-01 12:00:00'); -- caf`,
+        ),
+        0xe9,
+        10,
+      ]),
+    );
+    databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+    const verdict = await replayGate({
+      root: repo.root,
+      url: await emptyDatabase(),
+      upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+      fixtures: FIXTURES,
+    });
 
-      expect(messages(verdict)).toEqual([containing("is not UTF-8")]);
-      expect(messages(verdict)[0]).toContain("comes back as a violation");
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([containing("is not UTF-8")]);
+    expect(messages(verdict)[0]).toContain("comes back as a violation");
+  });
 
   // The same rule on the other half of the pair. An assertion is read after the
   // fixtures have already been written, so it is refused per file and the
   // fixtures beside it are still graded.
-  test(
-    "an assertion that is not UTF-8 is refused, and its neighbours are still graded",
-    async () => {
-      const repo = await repoWith([READS_THEM_AS_AUCKLAND], {
-        [`${FIXTURES}/01-broken.sql`]: LEGACY_ROW,
-        [`${FIXTURES}/01-broken.assert.sql`]: STILL_NOON_UTC,
-        [`${FIXTURES}/02-fine.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
-        [`${FIXTURES}/02-fine.assert.sql`]: STILL_NOON_UTC,
-      });
-      await Bun.write(
-        join(repo.root, FIXTURES, "01-broken.assert.sql"),
-        new Uint8Array([
-          ...new TextEncoder().encode(`select 'caf`),
-          0xe9,
-          ...new TextEncoder().encode(`' as violation;`),
-          10,
-        ]),
-      );
-      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
-      const verdict = await replayGate({
-        root: repo.root,
-        url: await emptyDatabase(),
-        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
-        fixtures: FIXTURES,
-      });
+  test("an assertion that is not UTF-8 is refused, and its neighbours are still graded", async () => {
+    const repo = await repoWith([READS_THEM_AS_AUCKLAND], {
+      [`${FIXTURES}/01-broken.sql`]: LEGACY_ROW,
+      [`${FIXTURES}/01-broken.assert.sql`]: STILL_NOON_UTC,
+      [`${FIXTURES}/02-fine.sql`]: `insert into "event" ("id", "at") values (2, '2026-01-01 12:00:00');\n`,
+      [`${FIXTURES}/02-fine.assert.sql`]: STILL_NOON_UTC,
+    });
+    await Bun.write(
+      join(repo.root, FIXTURES, "01-broken.assert.sql"),
+      new Uint8Array([
+        ...new TextEncoder().encode(`select 'caf`),
+        0xe9,
+        ...new TextEncoder().encode(`' as violation;`),
+        10,
+      ]),
+    );
+    databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+    const verdict = await replayGate({
+      root: repo.root,
+      url: await emptyDatabase(),
+      upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+      fixtures: FIXTURES,
+    });
 
-      expect(messages(verdict)).toEqual([
-        containing("01-broken.assert.sql is not UTF-8"),
-        containing("event 1 is no longer the instant it was written as"),
-        containing("event 2 is no longer the instant it was written as"),
-      ]);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([
+      containing("01-broken.assert.sql is not UTF-8"),
+      containing("event 1 is no longer the instant it was written as"),
+      containing("event 2 is no longer the instant it was written as"),
+    ]);
+  });
 });
 
 describe("what the fixtures ride on", () => {
@@ -781,59 +691,51 @@ describe("what the fixtures ride on", () => {
   // problems rather than a note: the base replay stopped short of a lineage, so
   // nothing was written into it. Silence here would read as fixtures that ran
   // and passed.
-  test(
-    "a lineage this branch's migrator never applies says the fixtures did not run either",
-    async () => {
-      const repo = await history(
-        {
-          ...migratesFrom(MIGRATOR, "drizzle", "extra"),
-          ...lineage("drizzle", CREATES_EVENT),
-          ...lineage("extra", CREATES_NOTE),
-        },
-        {
-          // The branch stops naming `extra`, so the base lineage it carried is
-          // never applied and the upgrade path cannot be built.
-          ...migratesFrom(MIGRATOR, "drizzle"),
-          ...lineage("drizzle", CREATES_EVENT, READS_THEM_AS_UTC),
-          ...lineage("extra", CREATES_NOTE),
-          ...NOON_UTC_FIXTURE,
-        },
-      );
-      databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
-      const verdict = await replayGate({
-        root: repo.root,
-        url: await emptyDatabase(),
-        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
-        fixtures: FIXTURES,
-      });
+  test("a lineage this branch's migrator never applies says the fixtures did not run either", async () => {
+    const repo = await history(
+      {
+        ...migratesFrom(MIGRATOR, "drizzle", "extra"),
+        ...lineage("drizzle", CREATES_EVENT),
+        ...lineage("extra", CREATES_NOTE),
+      },
+      {
+        // The branch stops naming `extra`, so the base lineage it carried is
+        // never applied and the upgrade path cannot be built.
+        ...migratesFrom(MIGRATOR, "drizzle"),
+        ...lineage("drizzle", CREATES_EVENT, READS_THEM_AS_UTC),
+        ...lineage("extra", CREATES_NOTE),
+        ...NOON_UTC_FIXTURE,
+      },
+    );
+    databases.push(fixtureDatabase(repo.root), upgradeDatabase(repo.root));
+    const verdict = await replayGate({
+      root: repo.root,
+      url: await emptyDatabase(),
+      upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+      fixtures: FIXTURES,
+    });
 
-      expect(messages(verdict)).toEqual([containing("never applied it")]);
-      expect(verdict.note).toContain(`neither are the ${FIXTURES} fixtures written into it`);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([containing("never applied it")]);
+    expect(verdict.note).toContain(`neither are the ${FIXTURES} fixtures written into it`);
+  });
 
-  test(
-    "a base ref with no lineage says the fixtures did not run either",
-    async () => {
-      const repo = await history(
-        { ...migratesFrom(MIGRATOR, "drizzle") },
-        {
-          ...migratesFrom(MIGRATOR, "drizzle"),
-          ...lineage("drizzle", CREATES_EVENT),
-          ...NOON_UTC_FIXTURE,
-        },
-      );
-      const verdict = await replayGate({
-        root: repo.root,
-        url: await emptyDatabase(),
-        upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
-        fixtures: FIXTURES,
-      });
+  test("a base ref with no lineage says the fixtures did not run either", async () => {
+    const repo = await history(
+      { ...migratesFrom(MIGRATOR, "drizzle") },
+      {
+        ...migratesFrom(MIGRATOR, "drizzle"),
+        ...lineage("drizzle", CREATES_EVENT),
+        ...NOON_UTC_FIXTURE,
+      },
+    );
+    const verdict = await replayGate({
+      root: repo.root,
+      url: await emptyDatabase(),
+      upgrade: { baseRef: "", before: repo.revs[0] ?? "" },
+      fixtures: FIXTURES,
+    });
 
-      expect(messages(verdict)).toEqual([]);
-      expect(verdict.note).toContain(`neither are the ${FIXTURES} fixtures written into it`);
-    },
-    TIMEOUT,
-  );
+    expect(messages(verdict)).toEqual([]);
+    expect(verdict.note).toContain(`neither are the ${FIXTURES} fixtures written into it`);
+  });
 });

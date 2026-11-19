@@ -1586,7 +1586,7 @@ extend itself by name, CI is that file rather than a call into `check.yml`
 because a commit cannot pin its own SHA, and there is no runtime environment to
 shape.
 
-The gates are TypeScript under `.github/actions/*/`, and `bun test` is what
+The gates are TypeScript under `.github/actions/*/`, and `bun run test` is what
 proves each one refuses a violating tree and passes a clean one — the suites
 build a real git repository per case, because the gates ask git what is tracked
 and what is ignored. Every other repo's gate is only as honest as those two

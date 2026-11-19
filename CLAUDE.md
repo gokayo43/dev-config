@@ -51,9 +51,10 @@ a change to a rule usually lands here too.
   step whose logic is TypeScript runs a `*.main.ts` over the modules the suite
   drives. A step that is shell runs it as a body: inline in `action.yml` for
   `secret-scan`, `install` and `test-suite`, or as a script beside it for
-  `build` (`build/build.sh`). A new shell action takes the script shape, since
-  a file is what the suite can run and the shell-scripts gate reads, where an
-  inline body is reached only by extracting it. `install` and `build` are the
+  `build` (`build/build.sh`); `install` also runs `known-hosts.main.ts`, so it
+  takes both. A new shell action takes the script shape, since a file is what
+  the suite can run and the shell-scripts gate reads, where an inline body is
+  reached only by extracting it. `install` and `build` are the
   two that grade nothing. `install` is `bun install --frozen-lockfile`, and —
   where the caller passed a key for a private git dependency — that key,
   written, used and removed inside the action's own shell so no lane after it
@@ -265,9 +266,8 @@ a change to a rule usually lands here too.
   only the bin is waived from the coverage floor in `bunfig.toml`.
   Its reference page is README's "One dev server per worktree" rather than a
   `docs/exports/` one, and `tests/dev-server.test.ts` drives it against real
-  worktrees and real detached processes — the one suite here that spends real
-  time, because a signal reaching a process group is not a thing any injected
-  clock has a part in.
+  worktrees and real detached processes, spending real time, because a signal
+  reaching a process group is not a thing any injected clock has a part in.
 - `db-gate/capacity.js` is the exception: it runs inside k6, not under this
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
@@ -432,7 +432,7 @@ a change to a rule usually lands here too.
   every `bun test`. It takes the whole `GIT_` prefix out of the environment,
   because git hands a command it runs the location of the repository it is
   acting on. No hook of this repo runs the suite, but
-  `git rebase --exec 'bun test'` does, and so would a developer's own hook —
+  `git rebase --exec 'bun run test'` does, and so would a developer's own hook —
   and with `GIT_DIR` set the fixtures are built inside that repository, which
   once rewrote a branch. Doing that to `process.env` reaches only the spawn
   sites that pass one, since bun's `env` default is the block the process
@@ -443,19 +443,20 @@ a change to a rule usually lands here too.
   have left out — `NODE_ENV`, which `bun test` sets after launch.
   `git-free-environment.test.ts` holds all of it from outside, against a
   sacrificial repository it builds.
-- `docs/gates/*.md` — a reference page per gate; `docs/exports/*.md` — one per
-  package export. README holds both maps.
+- `docs/gates/*.md` — a reference page per gate but `lint-workflows` and
+  `secret-scan`; `docs/exports/*.md` — one per extensionless export, the eleven
+  `request-timing` ones sharing `request-timing.md`. README holds both maps.
 
 ## Commands
 
 ```sh
 bun run check   # format:check + lint + typecheck + knip
-bun test        # the gate suites
+bun run test    # the gate suites, under the suite's per-test bound
 bun run build   # rewrites the committed dist/ from the exports tsdown.config.ts builds
 ```
 
 None of them is coverage-floored: `bunfig.toml` declares the threshold and CI's
-`--coverage` applies it, so `bun test --coverage` is the run CI makes —
+`--coverage` applies it, so `bun run test --coverage` is the run CI makes —
 `docs/gates/test-suite.md`.
 
 `anti-slop/**` sits outside that floor, in `bunfig.toml`: its rules run inside a
@@ -470,7 +471,35 @@ base enables exactly the rules the plugin defines.
 `bunfig.toml` names which suite, per file, and says why `dev-server-derive.ts`
 is not with them.
 
-`bun test` needs a Postgres, a MySQL, a Redis, a chromium and passwordless
+The `test` script is `bun test --timeout 120000`, and that bound is every case's
+and every hook's here unless one names its own. A case's time on this box is
+its CPU time over the share of a core it is given, and the live sites' weight
+pushes an agent's or a runner's share below 3% when the box is full: the Bun.sql
+differential needs about 0.1s of CPU, took 3.9s at a 3% quota, and timed out at
+bun's 5s default in a full run at load 40. So the bound is sized from the other
+end, by CI's job limit: the seven green runs of 2026-11-18 and 19 took 13m29s
+to 13m46s, their suite step 12m30s to 12m38s, so the slowest plus one case
+hung to 120s is 15m46s, and `ci.yml` gives the job 20 minutes so that the hung
+case is still named. Only the flag reaches every file: bun 1.4.4 ignores a
+`timeout` key in `bunfig.toml`, and a `setDefaultTimeout` in a preload binds
+only the first file, so a bare `bun test` runs on 5s. So does a `bun test` a
+case spawns, unless the spawn or its fixture names a limit, which every one
+whose time decides its case does (`SPAWNED_CASE_MS` in `tests/tree.ts`).
+
+Three hooks name longer bounds, each for a whole run of a tool:
+`tests/count-budget.test.ts` 600s and `tests/invariant-sweep.test.ts` 300s for
+Playwright runs, count-budget's including one with every core busy, each hook
+about 3m45s in those CI runs, and `tests/request-timing-next-fixture.ts` 300s
+for a cold `next build` and boot, about 10s there. A hang in either 300s hook
+ends inside the job, by 18m36s at the latest; one in the 600s hook ends at
+20m01s, and the job is cancelled with nothing named. One case names a longer
+bound too: `tests/interleaving.test.ts`'s search of 8 400 interleavings, 600s
+for about 7s of CPU, which a 3% share stretches past 120s, and a hang in it
+ends as the 600s hook's does. The shorter bounds left, in `tests/probe.test.ts`
+and `tests/mutation-lane-child.test.ts`, are those cases' oracles, each killing
+an implementation that hangs.
+
+`bun run test` needs a Postgres, a MySQL, a Redis, a chromium and passwordless
 sudo. The Postgres because the replay gate's property is what two databases end
 up holding and the semantic fixtures' is what a real migration does to a real
 row, and the request-timing Bun.sql and Start connectors on what Bun.sql and
