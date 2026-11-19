@@ -44,8 +44,27 @@ describe("the kit's Effect check", () => {
     expect(said).toStartWith(
       "Effect resumed a fiber in another request's context, so a wait was counted in the wrong record or in none; request timing needs effect 4.0.1 or later",
     );
-    expect(said).toContain("through a shared semaphore, run by runPromise");
-    expect(said).toContain("through a shared semaphore, run by managedRuntime");
+    // Every row but the detached fiber's, which starts on its parent's stack
+    // and so counts right even here, is a row this Effect gets wrong.
+    const rows = [
+      "a shared semaphore",
+      "a shared pool",
+      "a shared deferred",
+      "a shared queue",
+      "a shared pubsub",
+      "a shared stream",
+      "an interrupt whose finalizer waits",
+    ];
+    const failed = said
+      .trimEnd()
+      .split("\n")
+      .slice(1)
+      .map((line) => line.slice(0, line.indexOf(":")));
+    expect(failed).toEqual(
+      ["runPromise", "managedRuntime"].flatMap((entry) =>
+        rows.map((through) => `through ${through}, run by ${entry}`),
+      ),
+    );
   });
 
   test("refuses an effect without Effect 4's modules, as Effect 3 is", async () => {

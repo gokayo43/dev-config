@@ -61,14 +61,29 @@ In this order:
    const sent = await measure("out", () => mailer.send(message));
    ```
 
-4. **Run the conformance kit** in the app's own suite against its booted server,
+4. **Build the Effect runtime before the first request**, in an app that runs
+   Effect programs: await its `context()` where the runtime is made, so its
+   layer is built while no operation is current.
+
+   ```ts
+   export const runtime = ManagedRuntime.make(AppLayer);
+   await runtime.context();
+   ```
+
+   A fiber keeps the operation of the fiber that forked it until that
+   operation's record is emitted, and a `ManagedRuntime` left to itself builds
+   its layer on its first run, inside the first request's fiber, so a worker or
+   a poller the layer forks would count its waits in that request's record.
+
+5. **Run the conformance kit** in the app's own suite against its booted server,
    in a Next.js app its route-tree check over `app/`, and in an app that runs
    Effect its Effect check (below).
 
 ### Effect programs
 
 An app that runs Effect programs adopts with the same steps as one that does
-not. The handler runs its program with its runtime, `runPromise` or a
+not, and builds its runtime at startup (step 4). The handler runs its program
+with its runtime, `runPromise` or a
 `ManagedRuntime`'s, and the program's services keep calling the app's
 clients under `Effect.tryPromise` or `Effect.promise`: the clients the
 connectors wrap measure every wait the program makes, in the operation of the
@@ -95,6 +110,10 @@ What it leaves alone:
   run under.
 - Work one fiber does for several requests, such as a `RequestResolver` batch
   or an `Effect.cached` value, counts in the request whose fiber ran it.
+- A runtime built on its first run, rather than at startup, forks its layer's
+  fibers inside the first request's fiber: their waits count in that
+  request's record until it is emitted, and in no record after. Work forked
+  outside every operation, by a runtime built at startup, is in no record.
 
 ## Elysia
 
@@ -545,11 +564,17 @@ query string, header, body or host of an outside call reaches one, since
 `measure` sees none of them and `OperationName` can only be made from a pattern.
 
 `status` is the status the client received, a handler that threw included,
-with two exceptions, each named under its connector: a call inside a tRPC
-batch carries its own call's status, the one it would receive sent alone,
-while the batch's response has one status for all; and a Next.js route
-handler that ends by calling `notFound()` or another of `next/navigation`'s
-throwing helpers is recorded with 500, which the route-tree check refuses.
+with these exceptions, each named under its connector:
+
+- A call inside a tRPC batch carries its own call's status, the one it would
+  receive sent alone, while the batch's response has one status for all; and a
+  status an app's tRPC `responseMeta` sets is not seen.
+- A Next.js route handler that ends by calling `notFound()` or another of
+  `next/navigation`'s throwing helpers is recorded with 500, which the
+  route-tree check refuses.
+- An Elysia app whose Bun `error` option answers a thrown error with other
+  than 500, and a TanStack Start server that answers a page's or a server
+  route's throw with other than Bun's 500, are recorded with 500 all the same.
 
 A record that is wrong is an issue on this repo: it is derived, never edited.
 
@@ -677,9 +702,10 @@ test("request timing counts an Effect program's waits", () => requestTimingEffec
 ```
 
 It opens overlapping operations through the real core and runs in each an
-Effect program whose waits pass through a shared semaphore, Deferred and
-queue, an interrupt whose finalizer waits, a detached fiber and a lazy
-thenable under `Effect.tryPromise`, beside work outside every operation,
+Effect program whose waits pass through a shared semaphore, pool, Deferred,
+queue, PubSub and stream, an interrupt whose finalizer waits, a detached fiber
+and a lazy thenable under `Effect.tryPromise`, beside work outside every
+operation,
 through `Effect.runPromise` and through a `ManagedRuntime` built before any
 operation. It rejects unless every record carries exactly its own waits,
 saying that Effect resumed a fiber in another request's context and that
@@ -687,14 +713,17 @@ request timing needs effect 4.0.1 or later on a host whose
 `process.getBuiltinModule` finds `node:async_hooks`, followed by each case it
 counted wrong. Handed an Effect 3 module, it rejects at once, naming the
 modules Effect 4 has and it does not. It touches no server, so it runs once
-per suite in a few milliseconds, and it takes the app's `effect` rather than
+per suite in tens of milliseconds, and it takes the app's `effect` rather than
 importing one, so dev-config gains no runtime dependency.
 
 ## Ships built
 
 The core and every connector ship built, like [the route log](route-log.md):
 app code that Next.js and Vite bundle imports them, and neither strips types
-under `node_modules`. The kit's Effect check ships built too, since it runs the
-core, whose source does not ship. `tsdown.config.ts` carries why. The rest of
+under `node_modules`. The kit's Effect check ships built too: it runs the
+core's `within` and `measure`, which ship built alone, and built it takes them
+from the chunk the app's own `request-timing` import loads, so one copy of the
+core and of its `AsyncLocalStorage` serves both. `tsdown.config.ts` carries
+why. The rest of
 the conformance kit and the command ship their source, since only Bun runs
 them.

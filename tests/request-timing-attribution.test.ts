@@ -8,7 +8,7 @@
  * and laziness, some held under a contended semaphore or pool, and handoffs
  * between participants, after which the taking side's next wait is its own.
  * A plain async program runs them with promises; an Effect program runs them
- * through the kit's own driver, `runPlan`, whose handoffs pass through a
+ * through the kit's Effect driver, `runPlan`, whose handoffs pass through a
  * Deferred, a queue, a PubSub, a stream and an interrupt whose finalizer
  * waits, and whose waits are also made in detached fibers, through
  * `Effect.runPromise` and through a `ManagedRuntime` built before any
@@ -39,7 +39,7 @@ import {
   type Plan,
   runPlan,
   type Step,
-} from "../request-timing-conformance-effect.ts";
+} from "../request-timing-effect-driver.ts";
 import {
   measure,
   OperationName,

@@ -1,17 +1,29 @@
 import { nth } from "./narrowing.js";
-import { i as OperationName, n as measure, r as within, u as requestTiming } from "./request-timing-B_ojSNZ_.js";
-//#region request-timing-conformance-effect.ts
+import { d as requestTiming, i as OperationName, n as measure, r as within, u as perKind } from "./request-timing-DPoxY8eA.js";
+//#region request-timing-effect-driver.ts
+/** The modules of `effect` the driver runs on, every one of which Effect 4 has and Effect 3 lacks at least one of. */
+const MODULES = [
+	"Context",
+	"Deferred",
+	"Effect",
+	"Exit",
+	"Fiber",
+	"Layer",
+	"ManagedRuntime",
+	"Pool",
+	"PubSub",
+	"Queue",
+	"Scope",
+	"Semaphore",
+	"Stream"
+];
 const nameOf = (index) => OperationName.registered(`/participant/${index}`);
 const byOperation = (a, b) => a.operation.localeCompare(b.operation);
 /** What each operation's record must count: the waits its own script issued, and nothing else. */
 function expected(plan) {
 	return plan.participants.flatMap((participant, index) => {
 		if (!participant.operation) return [];
-		const counts = {
-			db: 0,
-			out: 0,
-			store: 0
-		};
+		const counts = perKind(() => 0);
 		for (const step of participant.steps) if (step.do === "await") counts[step.afterwards] += 1;
 		else if (step.do !== "signal") counts[step.kind] += 1;
 		return [{
@@ -24,9 +36,7 @@ function expected(plan) {
 function counted(records) {
 	return records.map((made) => ({
 		operation: made.operation,
-		db: made.db.count,
-		out: made.out.count,
-		store: made.store.count
+		...perKind((kind) => made[kind].count)
 	})).toSorted(byOperation);
 }
 const turn = async (count) => {
@@ -150,16 +160,18 @@ async function runPlan(effect, plan, entry) {
 	}
 	return records;
 }
-/** Waits that pass through each of Effect's shared resources, run by the check under both entries. */
+//#endregion
+//#region request-timing-conformance-effect.ts
+/** Waits that pass through each of Effect's shared resources the driver has, run by the check under both entries. */
 const TABLE = [
-	{
-		through: "a shared semaphore",
+	...[["locked", "a shared semaphore"], ["pooled", "a shared pool"]].map(([held, through]) => ({
+		through,
 		plan: {
 			participants: [{
 				operation: false,
 				startAfter: 0,
 				steps: [{
-					do: "locked",
+					do: held,
 					kind: "store",
 					turns: 3,
 					lazy: false
@@ -172,12 +184,12 @@ const TABLE = [
 				operation: true,
 				startAfter,
 				steps: [{
-					do: "locked",
+					do: held,
 					kind: "db",
 					turns: 2,
 					lazy: true
 				}, {
-					do: "locked",
+					do: held,
 					kind: "out",
 					turns: 1,
 					lazy: false
@@ -185,8 +197,13 @@ const TABLE = [
 			}))],
 			handoffs: []
 		}
-	},
-	...["deferred", "queue"].map((via) => ({
+	})),
+	...[
+		"deferred",
+		"queue",
+		"pubsub",
+		"stream"
+	].map((via) => ({
 		through: `a shared ${via}`,
 		plan: {
 			participants: [
@@ -295,30 +312,14 @@ const TABLE = [
 		}
 	}
 ];
-/** The modules `runPlan` takes from the app's `effect`, every one of which Effect 4 has. */
-const MODULES = [
-	"Context",
-	"Deferred",
-	"Effect",
-	"Exit",
-	"Fiber",
-	"Layer",
-	"ManagedRuntime",
-	"Pool",
-	"PubSub",
-	"Queue",
-	"Scope",
-	"Semaphore",
-	"Stream"
-];
 const NEEDS = "request timing needs effect 4.0.1 or later, on a host whose process.getBuiltinModule finds node:async_hooks: Bun, or Node 20.16 or later and not 22.0 to 22.2";
 /**
 * Rejects unless every wait of the table's Effect programs is counted in the
 * record of the operation that issued it and in no other, run on `effect`
 * through `Effect.runPromise` and through a `ManagedRuntime` alike. The
-* table passes waits through a shared semaphore, Deferred and queue, an
-* interrupt whose finalizer waits, a detached fiber, and lazy thenables under
-* `Effect.tryPromise`, beside work outside any operation.
+* table passes waits through a shared semaphore, pool, Deferred, queue, PubSub
+* and stream, an interrupt whose finalizer waits, a detached fiber, and lazy
+* thenables under `Effect.tryPromise`, beside work outside any operation.
 */
 async function requestTimingEffectConforms(effect) {
 	const missing = MODULES.filter((name) => !(name in effect));
@@ -332,4 +333,4 @@ async function requestTimingEffectConforms(effect) {
 	if (wrong.length > 0) throw new Error(`Effect resumed a fiber in another request's context, so a wait was counted in the wrong record or in none; ${NEEDS}.\n${wrong.join("\n")}`);
 }
 //#endregion
-export { counted, expected, requestTimingEffectConforms, runPlan };
+export { requestTimingEffectConforms };

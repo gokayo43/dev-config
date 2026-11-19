@@ -240,4 +240,4 @@ function measure(kind, wait) {
 	});
 }
 //#endregion
-export { RECORD_VERSION as a, current as c, OperationName as i, methodOf as l, measure as n, WAIT_KINDS as o, within as r, beginWait as s, inOperation as t, requestTiming as u };
+export { RECORD_VERSION as a, current as c, requestTiming as d, OperationName as i, methodOf as l, measure as n, WAIT_KINDS as o, within as r, beginWait as s, inOperation as t, perKind as u };

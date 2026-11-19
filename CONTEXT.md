@@ -30,12 +30,15 @@ takes the repo's implementation and the resources it needs, and the repo's own
 `bun test` is what runs it. Distinct from a gate: nothing in CI knows it exists
 until the suite it is part of fails.
 
-**Conformance kit** — an export a repo's own test calls against its booted
-server, which asserts with bun:test's `expect` and registers no test of its
-own: request timing's, which grades one operation's record. Distinct from a
-conformance suite, which registers its tests, and known to CI: the repo
-contract requires a live repo that serves HTTP and owns a database to call it,
-or to say at the call site how its operations are timed otherwise.
+**Conformance kit** — request timing's checks a repo's own test calls, which
+register no test of their own: one against its booted server, which grades one
+operation's record; one over a Next.js app's route files, which grades how each
+handler is wrapped; and one of the app's own Effect, which grades where its
+waits are counted. Distinct from a conformance suite, which registers its
+tests, and known to CI: the repo contract requires a live repo that serves HTTP
+and owns a database to have a test importing the kit, and one importing its
+Effect check where it ships `effect`, or to say at the call site how its
+operations are timed otherwise.
 
 **Deny tier** — the rules set to `error`. `warn` is advisory and cannot fail a
 build, so the deny tier is the whole of what a lint config enforces.
@@ -56,7 +59,7 @@ which is a thing that has happened, and from an exemption, which is about what a
 repo _is_ — this is about who it owes. `live` is what the crash reporting is
 derived from; the swept browser suite for a repo that ships pages; for a repo
 that owns migrations, the backups, the rehearsed restore and the upgrade gate as
-well; and for one that also serves HTTP, the request-timing conformance test.
+well; and for one that also serves HTTP, the request-timing conformance tests.
 All of it read from the repo rather than from a workflow input, so that going live is one word rather than a checklist somebody does half of, and
 cannot be undone by editing the workflow those rules govern. It only moves up:
 `dev` says nothing about anyone, `live` says people are on the other end, and a

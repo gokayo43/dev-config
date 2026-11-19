@@ -341,23 +341,42 @@ test("request timing counts an Effect program's waits", () => requestTimingEffec
     expect(await graded(OWES, { [TIMING_TEST]: CONFORMS, ...extra }, {}, change)).toEqual(expected);
   });
 
-  test("and with neither test, each is its own problem", async () => {
+  test("and with neither test, each is its own problem, and each offers the waiver", async () => {
     expect(await graded(OWES, {}, {}, shipsEffect)).toEqual([
       containing(OWED),
       containing(OWED_CHECK),
     ]);
+    expect(await graded(OWES, {}, {}, shipsEffect)).toEqual([
+      containing("`operations-timed-otherwise`"),
+      containing("`operations-timed-otherwise`"),
+    ]);
+  });
+
+  // Beside the kit's test the waiver is refused, so the problem does not offer it.
+  test("and beside the kit's test, the missing check does not offer the waiver", async () => {
+    const [problem] = await graded(OWES, { [TIMING_TEST]: CONFORMS }, {}, shipsEffect);
+    expect(problem).toEqual(containing(OWED_CHECK));
+    expect(problem).not.toContain("operations-timed-otherwise");
   });
 
   test("and nothing is owed of a repo that does not owe the kit", async () => {
     expect(await graded({ ...OWES, live: false }, {}, {}, shipsEffect)).toEqual([]);
   });
 
+  const OTHERWISE = { operationsTimedOtherwise: "an OpenTelemetry exporter to the collector" };
+
   test.each([
-    ["effect shipped and the check imported", shipsEffect, { [CHECK_TEST]: CHECKS }],
-    ["effect shipped and no check", shipsEffect, {}],
-    ["no effect and no check", noEffect, {}],
-  ])("operations-timed-otherwise waives it with the kit: %s", async (_what, change, extra) => {
-    const otherwise = { operationsTimedOtherwise: "an OpenTelemetry exporter to the collector" };
-    expect(await graded(OWES, extra, otherwise, change)).toEqual([]);
+    ["effect shipped and no check", shipsEffect],
+    ["no effect and no check", noEffect],
+  ])("operations-timed-otherwise waives it with the kit: %s", async (_what, change) => {
+    expect(await graded(OWES, {}, OTHERWISE, change)).toEqual([]);
+  });
+
+  // One answer says how the operations are timed: a test running the check is
+  // as much an answer as one running the kit.
+  test("operations-timed-otherwise is refused beside a test that runs the check", async () => {
+    expect(await graded(OWES, { [CHECK_TEST]: CHECKS }, OTHERWISE, shipsEffect)).toEqual([
+      containing(`${CHECK_TEST} runs the kit's Effect check anyway`),
+    ]);
   });
 });

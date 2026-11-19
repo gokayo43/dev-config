@@ -125,6 +125,11 @@ const TurnsLive = Layer.effect(
 
 const runtime = ManagedRuntime.make(Layer.mergeAll(DbLive, OutsideLive, TurnsLive));
 
+// Built when the module loads, before any request: a runtime built on its
+// first run forks its layer's fibers inside that request's fiber, where they
+// keep its operation (docs/exports/request-timing.md, "Effect programs").
+await runtime.context();
+
 type AppServices = Db | Outside | Turns;
 
 /** The tRPC adapter: runs a program and raises what tRPC understands. */

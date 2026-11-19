@@ -11,8 +11,10 @@
  * Next.js and Vite bundle, and neither strips types under `node_modules`
  * either; the modules they share become chunks beside them.
  * `request-timing-conformance-effect.ts` is imported by an app's suite, but
- * it runs the core, whose source does not ship, so it is built and takes the
- * core from the same chunk.
+ * it runs the core's `within` and `measure`, and `request-timing.ts` ships
+ * built alone: built, the check takes them from the chunk the app's own
+ * `request-timing` import loads, so one copy of the core, and of its
+ * `AsyncLocalStorage`, serves both.
  * Everything else here is imported by `bun test` or
  * run by Bun, which strips types, and its source is what ships.
  *
@@ -23,11 +25,11 @@
  * `deps.neverBundle` leaves every package import as it was written: node's
  * built-in modules, which the neutral platform resolves none of, and every
  * other package, since the build would otherwise inline a devDependency a
- * built file imports at runtime. A connector imports its framework, and the
- * kit's Effect check imports `effect`, as types alone; a runtime import of one
- * then stays an import in `dist/`, where
- * `tests/request-timing-conformance-effect.test.ts` reads it, rather than a
- * second copy of the package inside the file.
+ * built file imports at runtime. A connector is written to import its
+ * framework, and the kit's Effect check `effect`, as types alone; should one
+ * of them import it at runtime, that import stays an import in `dist/`, where
+ * `tests/request-timing-conformance-effect.test.ts` reads it, rather than
+ * becoming a second copy of the package inside the file.
  *
  * `deps.dts.neverBundle` because the declaration pass resolves a type it is
  * handed rather than leaving it to the peer: without it `@playwright/test`'s

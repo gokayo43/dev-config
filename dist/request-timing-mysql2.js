@@ -1,4 +1,4 @@
-import { n as waitOn, t as standingIn } from "./request-timing-wait-BRu2po2h.js";
+import { n as waitOn, t as standingIn } from "./request-timing-wait-kPYrUwSy.js";
 //#region request-timing-mysql2.ts
 function timedStatement(statement) {
 	return standingIn(statement, /* @__PURE__ */ new Map([["execute", (...args) => waitOn("db", () => statement.execute(...args))]]));

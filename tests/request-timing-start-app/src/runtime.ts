@@ -24,6 +24,11 @@ const AppLayer = Layer.mergeAll(DbLive, ContendedLive);
 
 export const runtime = ManagedRuntime.make(AppLayer);
 
+// Built when the module loads, before any request: a runtime built on its
+// first run forks its layer's fibers inside that request's fiber, where they
+// keep its operation (docs/exports/request-timing.md, "Effect programs").
+await runtime.context();
+
 /** Runs `program` for a route or a server function, in the operation of the request it serves. */
 export const run = <A, E>(program: Effect.Effect<A, E, Db | Contended>): Promise<A> =>
   runtime.runPromise(program);

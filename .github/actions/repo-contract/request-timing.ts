@@ -37,31 +37,33 @@ const TIMED_OTHERWISE = "operations-timed-otherwise";
  */
 const TESTS = ["*.test.ts", "*.test.tsx"] as const;
 
-/** The first manifest that ships one of the frameworks, with the name it ships. */
-function servesHttp(all: readonly Manifest[]): { file: string; name: string } | undefined {
+/**
+ * The first manifest that ships one of `names` itself, not through another
+ * package, with the name it ships.
+ */
+function shipping(
+  all: readonly Manifest[],
+  names: readonly string[],
+): { file: string; name: string } | undefined {
   for (const { file, value } of all) {
     for (const field of SHIPPED_FIELDS) {
-      const name = SERVES_HTTP.find((each) => record(value[field])[each] !== undefined);
+      const name = names.find((each) => record(value[field])[each] !== undefined);
       if (name !== undefined) return { file, name };
     }
   }
   return undefined;
 }
 
-/** The first manifest that ships `effect` itself, not through another package. */
-function runsEffect(all: readonly Manifest[]): string | undefined {
-  return all.find(({ value }) =>
-    SHIPPED_FIELDS.some((field) => record(value[field])["effect"] !== undefined),
-  )?.file;
-}
-
-/** What a test file's imports came to: the specifiers among them this rule asks for, or that it would not parse. */
+/**
+ * What a test file's imports came to: which of the kit and its Effect check
+ * it imports, or that it would not parse.
+ */
 type Imports = readonly string[] | "unparsed";
 
 /**
- * Whether a test file imports the kit, asked of Bun's own parser rather than
- * of the file's bytes: a specifier in a comment or a string is no import, and
- * a type-only import is erased and runs nothing. `scanImports` and never
+ * Which of the kit and its Effect check a test file imports, asked of Bun's
+ * own parser rather than of the file's bytes: a specifier in a comment or a
+ * string is no import, and a type-only import is erased and runs nothing. `scanImports` and never
  * `scan`, which evaluates the Bun macros a file imports, running code from the
  * tree under review inside the gate (probed, bun 1.4.4). It reads paths, not
  * bindings, so it cannot tell `requestTimingConforms` from the route-tree
@@ -79,7 +81,10 @@ async function importsOf(root: string, file: string): Promise<Imports> {
   }
 }
 
-/** The test files that import the kit, the ones that import its Effect check, and the ones that would not parse. */
+/**
+ * The test files that import the kit, the ones that import its Effect check,
+ * and the ones that would not parse.
+ */
 async function conformanceTests(
   root: string,
 ): Promise<{ kit: string[]; effect: string[]; unparsed: string[] }> {
@@ -102,10 +107,11 @@ async function conformanceTests(
  * The rule, and its waiver in every state. Owed by a live repo that owns a
  * database and ships one of the frameworks; met by a test importing the kit,
  * and where a manifest ships `effect`, a test importing the kit's Effect
- * check too; waived, both halves at once, by a reason in `operations-timed-otherwise` saying how the operations
- * are timed instead, or that the repo serves nothing a connector covers. The
- * waiver is refused once it waives nothing: on a repo that does not owe the
- * rule, or beside a conformance test that already meets it.
+ * check too; waived, both halves at once, by a reason in
+ * `operations-timed-otherwise` saying how the operations are timed instead,
+ * or that the repo serves nothing a connector covers. The waiver is refused
+ * once it waives nothing: on a repo that does not owe the rule, or beside a
+ * test that imports the kit or its Effect check.
  * @param owned The database witness `ownsDatabase` found, asked only of a live repo.
  */
 export async function checkRequestTiming(
@@ -115,7 +121,7 @@ export async function checkRequestTiming(
   owned: string | undefined,
   timedOtherwise: string,
 ): Promise<Problem[]> {
-  const serving = servesHttp(all);
+  const serving = shipping(all, SERVES_HTTP);
   const waived = timedOtherwise !== "";
 
   if (serving === undefined || owned === undefined) {
@@ -135,12 +141,13 @@ export async function checkRequestTiming(
   const { kit, effect, unparsed } = await conformanceTests(root);
   const [met] = kit;
   if (waived) {
-    return met === undefined
+    const running = met ?? effect[0];
+    return running === undefined
       ? []
       : [
           {
-            file: met,
-            message: `${TIMED_OTHERWISE} says this repo's operations are not timed by request timing — "${timedOtherwise}" — and ${met} runs the conformance kit anyway. Take the input out of the call site, or the test out of the suite, so one answer says how the operations are timed.`,
+            file: running,
+            message: `${TIMED_OTHERWISE} says this repo's operations are not timed by request timing — "${timedOtherwise}" — and ${running} runs ${running === met ? "the conformance kit" : "the kit's Effect check"} anyway. Take the input out of the call site, or the test out of the suite, so one answer says how the operations are timed.`,
           },
         ];
   }
@@ -156,11 +163,17 @@ export async function checkRequestTiming(
       message: `a live repo that serves HTTP and owns a database proves its operations are timed — ${serving.file} ships ${serving.name} and ${owned}. Add a bun test that runs requestTimingConforms from ${KIT} against the booted server (docs/exports/request-timing.md, "Adopting it"), or say in \`${TIMED_OTHERWISE}\` at the call site how the operations are timed some other way, or that the repo serves nothing a connector covers.${unread}`,
     });
   }
-  const effectShipped = runsEffect(all);
+  const effectShipped = shipping(all, ["effect"]);
   if (effectShipped !== undefined && effect.length === 0) {
+    // The waiver is offered only where the kit's test is missing too: beside
+    // it, the waiver is refused.
+    const otherwise =
+      met === undefined
+        ? `, or say in \`${TIMED_OTHERWISE}\` at the call site how the operations are timed some other way`
+        : "";
     problems.push({
-      file: effectShipped,
-      message: `a repo whose operations request timing times, and that runs Effect, proves its Effect counts each wait in its own operation — ${effectShipped} ships effect, and request timing is right inside an Effect program only on effect 4.0.1 or later on a host with node:async_hooks. Add a bun test that runs requestTimingEffectConforms from ${EFFECT_CHECK} with the app's effect (docs/exports/request-timing.md, "Adopting it"), or say in \`${TIMED_OTHERWISE}\` at the call site how the operations are timed some other way.${unread}`,
+      file: effectShipped.file,
+      message: `a repo whose operations request timing times, and that runs Effect, proves its Effect counts each wait in its own operation — ${effectShipped.file} ships effect, and request timing is right inside an Effect program only on effect 4.0.1 or later on a host with node:async_hooks. Add a bun test that runs requestTimingEffectConforms from ${EFFECT_CHECK} with the app's effect (docs/exports/request-timing.md, "Adopting it")${otherwise}.${unread}`,
     });
   }
   return problems;

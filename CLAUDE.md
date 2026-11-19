@@ -158,10 +158,10 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Twenty of them are **exports** it imports and
+  gates, which run over it from CI. Nineteen of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
   `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
-  `dev-server-derive.ts` is the module the first imports. Seven more reach it
+  `dev-server-derive.ts` is the module the first imports. Eight more reach it
   only inside those, and no specifier exports any of them. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
   command decide by — which the build bundles into `dist/count-budget.js`, a
@@ -185,7 +185,10 @@ a change to a rule usually lands here too.
   a chunk beside them too; `request-timing-route.ts` is the mark an entry
   connector leaves on a route handler it wrapped, which the Next.js and tRPC
   connectors' builds share as a chunk and the conformance kit's route-tree
-  check reads, from source. Each export is reachable through
+  check reads, from source; `request-timing-effect-driver.ts` is the driver the
+  kit's Effect check runs its table through, which the build takes into the
+  check and `tests/request-timing-attribution.test.ts` runs generated plans
+  through. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is the protocol between an app and the two floors

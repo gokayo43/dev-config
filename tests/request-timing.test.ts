@@ -7,7 +7,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { Deferred, Effect, Fiber } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, ManagedRuntime, Queue } from "effect";
 import { asyncProperty, property, record, string, webPath, webQueryParameters } from "fast-check";
 
 import { check } from "../property.ts";
@@ -253,6 +253,65 @@ describe("a wait that settles after its record was emitted is counted in no reco
       "begun after the close",
     ]);
     expect(records).toMatchObject([{ db: { waitMs: 0, count: 0 } }]);
+  });
+});
+
+describe("work forked outside every operation is in no record", () => {
+  /**
+   * Two operations, `/a` then `/b`, each handing one job to a worker a layer
+   * forks when it is built, and waiting for it done. The worker makes one
+   * `store` wait per job. The runtime is built before `/a` opens, or on `/a`'s
+   * own first run, as `ManagedRuntime` does when nothing builds it sooner.
+   * Answers each record's `store` count.
+   */
+  const workerWaits = async (built: "before" | "on the first run") => {
+    const { records, timing } = recorded(virtualClock().now);
+    const Jobs = Context.Service<Queue.Queue<Deferred.Deferred<void>>>("Jobs");
+    const runtime = ManagedRuntime.make(
+      Layer.effect(
+        Jobs,
+        Effect.gen(function* () {
+          const jobs = yield* Queue.unbounded<Deferred.Deferred<void>>();
+          yield* Effect.forkScoped(
+            Effect.forever(
+              Effect.flatMap(Queue.take(jobs), (done) =>
+                Effect.andThen(
+                  Effect.promise(() => measure("store", async () => "done")),
+                  Deferred.succeed(done, undefined),
+                ),
+              ),
+            ),
+          );
+          return jobs;
+        }),
+      ),
+    );
+    if (built === "before") await runtime.context();
+    for (const name of ["/a", "/b"]) {
+      const operation = timing.open();
+      await within(operation, () =>
+        runtime.runPromise(
+          Effect.gen(function* () {
+            const done = yield* Deferred.make<void>();
+            yield* Queue.offer(yield* Jobs, done);
+            yield* Deferred.await(done);
+          }),
+        ),
+      );
+      operation.close({ ...ended(), name: OperationName.registered(name) });
+    }
+    await runtime.dispose();
+    return records.map((made) => made.store.count);
+  };
+
+  test("so a layer built before the first request forks its worker into none", async () => {
+    expect(await workerWaits("before")).toEqual([0, 0]);
+  });
+
+  // The case the page tells an app to avoid: the worker is forked inside the
+  // first request's fiber, keeps its context, and counts in its record.
+  test("and one built on the first request forks it into that request's record", async () => {
+    expect(await workerWaits("on the first run")).toEqual([1, 0]);
   });
 });
 

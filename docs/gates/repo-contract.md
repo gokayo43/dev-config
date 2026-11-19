@@ -515,7 +515,8 @@ that will not parse is named in the problem, because what it imports is then
 unknown. What the scan cannot see is which of the kit's exports a test imports
 and whether it calls it: a test importing only `requestTimingRoutesConform`, the
 route-tree check, an import whose binding is never used, or a `test.skip`
-around the call all pass, and review is what catches them.
+around the call all pass, and review is what catches them. The same holds for
+the Effect check below: the scan sees its import, not its call.
 
 **A repo that runs Effect also runs the kit's Effect check.** Where any
 manifest of the workspace names `effect` in `dependencies` or
@@ -529,7 +530,9 @@ Effect program only on effect 4.0.1 or later on a host whose
 `process.getBuiltinModule` finds `node:async_hooks`; elsewhere Effect resumes a
 woken fiber in the context of the fiber that woke it, the record counts the
 wait in the wrong operation, and every other gate stays green. A missing check
-is its own problem, beside the kit's where both are missing.
+is its own problem, beside the kit's where both are missing; it offers the
+waiver below only where the kit's test is missing too, since beside that test
+the waiver is refused.
 
 **When request timing does not time the operations, `operations-timed-otherwise`
 says why.** Two reasons are honest, and the value names which: the operations
@@ -539,9 +542,10 @@ and server actions ([request timing's Next.js section](../exports/request-timing
 lists what its connector leaves alone), and it says what it serves. It is
 `data-jobs-external`'s shape: the reason is the waiver, an empty or whitespace
 value is a repo that owes the test, and it is refused once it waives nothing. That is a repo that does not owe the rule, `dev` or with no
-database or no HTTP, and a repo that has a conformance test beside it, whose two
-answers to how its operations are timed are one too many. It waives the
-conformance test and the Effect check with it, and nothing else. A repo that has not declared its `lifecycle`
+database or no HTTP, and a repo that has a test importing the kit or its Effect
+check beside it, whose two answers to how its operations are timed are one too
+many; the problem names that test. It waives the conformance test and the
+Effect check with it, and nothing else. A repo that has not declared its `lifecycle`
 is graded against neither set of rules, so the input is not graded there either.
 
 ### A scheduled job is three files
@@ -640,7 +644,7 @@ as well, and the two are compared:
 | `live`   | absent    | refused — the same edit, less visible      |
 
 Writing `dev` over `live`, or deleting the field, sheds backups, a rehearsed
-restore, crash reporting, the swept browser suite, the request-timing test and
+restore, crash reporting, the swept browser suite, the request-timing tests and
 the upgrade gate in one edit that reviews as a whitespace change. Deleting the manifest outright is
 refused a line earlier, by the rule that a repo has a `package.json` at all.
 
