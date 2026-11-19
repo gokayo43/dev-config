@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdir, readdir, symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -15,10 +15,6 @@ import { materialise, type Tree } from "./tree.ts";
  * consumer's `exclude` carries `node_modules`, so a declaration reached through
  * `include` instead would be dropped here as it is in a repo.
  */
-
-// A type check or a type-aware lint of a fixture program takes a few seconds
-// with the machine to itself, against bun's 5s default.
-setDefaultTimeout(60_000);
 
 const REPO = dirname(import.meta.dir);
 const SHIPPED = ["package.json", "bun-test.d.ts", "css-custom-properties.d.ts"];

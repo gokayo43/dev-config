@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { constantFrom, integer, nat, property, tuple } from "fast-check";
 
 import type { Route, RouteLog } from "../route-log.ts";
@@ -13,6 +13,7 @@ import {
   type Fuzzed,
   fuzzVerdict,
   INVARIANTS,
+  type Plan,
   requestFor,
   seedFrom,
 } from "../.github/actions/db-gate/fuzz.ts";
@@ -33,13 +34,6 @@ import { containing } from "./matchers.ts";
  * and a socket that never answered — and a fake would be this suite asserting
  * against its own idea of each of them.
  */
-
-// A case that drives the fuzzer spends its budget and then some — the request
-// that was in flight when the budget ran out still has its bound to use. Under
-// a five-second default that is a fourfold margin, which is not one on a box
-// that also serves four stacks and every other repo's CI. The same 30s the two
-// suites that spawn a process tree take, for the same reason.
-setDefaultTimeout(30_000);
 
 const OK: Route = { method: "GET", path: "/ok/:id" };
 const CAREFUL: Route = { method: "POST", path: "/careful/:id" };
@@ -160,26 +154,40 @@ function serving(): App {
   };
 }
 
-/** Long enough for several rounds over the table, short enough that the suite is not a wait. */
-const BUDGET_MS = 900;
+/** Which clock ends a run, which every case names. */
+type Ending = Pick<Plan, "budgetMs" | "boundMs">;
 
-/** Long enough that only a route which never answers reaches it. */
-const BOUND_MS = 250;
+/**
+ * A run that ends on the fuzzer's own count: at its thousandth failure, or at
+ * once with nothing to send. A table with a route that always fails stops
+ * after 1,055 to 2,000 requests here, 0.2s on a quiet core and 11 to 15s at a
+ * 3% CPU quota, where one request to `/careful` also took past 250ms to be
+ * answered (measured 2026-11-19, bun 1.4.4), so a correct run reaches this
+ * budget only below about a 0.5% share of a core. The budget and the bound
+ * together stay inside the suite's 120s, so a fuzzer that never stops fails its
+ * case's assertion rather than the runner's clock. The bound is also that of a
+ * request sent outside a run.
+ */
+const UNTIL_STOPPED: Ending = { budgetMs: 80_000, boundMs: 20_000 };
+
+/**
+ * A run nothing else ends, which is a case about the budget itself or a table
+ * no route of which fails: long enough for a round over the table, short
+ * enough that the suite is not a wait.
+ */
+const FOR_THE_BUDGET: Ending = { budgetMs: 900, boundMs: UNTIL_STOPPED.boundMs };
+
+/** A run with a route that never answers, which reaches its bound with the budget left for a round over the rest. */
+const UNTIL_THE_HANG: Ending = { budgetMs: FOR_THE_BUDGET.budgetMs, boundMs: 250 };
 
 async function fuzzing(
   app: App,
   routes: readonly Route[],
+  ending: Ending,
   seed = 1,
   waived: ReadonlySet<string> = new Set(),
 ): Promise<Fuzzed> {
-  return await fuzz({
-    origin: app.origin,
-    routes,
-    waived,
-    seed,
-    budgetMs: BUDGET_MS,
-    boundMs: BOUND_MS,
-  });
+  return await fuzz({ origin: app.origin, routes, waived, seed, ...ending });
 }
 
 /** What a run said about one route, which is what each case below is about. */
@@ -371,7 +379,7 @@ describe("the command a failure hands back", () => {
 
     for (const [named, attempt] of drawn) {
       const at = app.received().length;
-      await fetch(attempt.url, requestFor(attempt, BOUND_MS));
+      await fetch(attempt.url, requestFor(attempt, UNTIL_STOPPED.boundMs));
       const { status, said } = await shell(curlFor(attempt));
       expect(`${named}: ${status} ${said}`).toBe(`${named}: 0 `);
       const [sent, replayed] = app.received().slice(at);
@@ -383,7 +391,9 @@ describe("the command a failure hands back", () => {
 describe("what the fuzzer refuses", () => {
   test("a handler that falls over on a parameter it did not bound", async () => {
     using app = serving();
-    expect(against(await fuzzing(app, ROUTES), STRICT)).toContainEqual(containing("answered 500"));
+    expect(against(await fuzzing(app, ROUTES, UNTIL_STOPPED), STRICT)).toContainEqual(
+      containing("answered 500"),
+    );
   });
 
   // The case that decides whether this gate is usable at all: junk refused with
@@ -391,14 +401,14 @@ describe("what the fuzzer refuses", () => {
   // route of every app that validates.
   test("but not the same handler written properly, which refuses the same junk", async () => {
     using app = serving();
-    const result = await fuzzing(app, ROUTES);
+    const result = await fuzzing(app, ROUTES, UNTIL_STOPPED);
     expect(against(result, CAREFUL)).toEqual([]);
     expect(against(result, OK)).toEqual([]);
   });
 
   test("a handler that answers with its own stack trace", async () => {
     using app = serving();
-    expect(against(await fuzzing(app, ROUTES), TRACING)).toContainEqual(
+    expect(against(await fuzzing(app, ROUTES, UNTIL_STOPPED), TRACING)).toContainEqual(
       containing("no stack trace in the body"),
     );
   });
@@ -410,19 +420,20 @@ describe("what the fuzzer refuses", () => {
   // did before a frame line was required.
   test("but not a correct refusal that names an error type and a file", async () => {
     using app = serving();
-    expect(against(await fuzzing(app, ROUTES), CAREFUL)).toEqual([]);
+    expect(against(await fuzzing(app, ROUTES, UNTIL_STOPPED), CAREFUL)).toEqual([]);
   });
 
   test("a route that says JSON and sends something else", async () => {
     using app = serving();
-    expect(against(await fuzzing(app, ROUTES), LYING)).toContainEqual(containing("not JSON"));
+    expect(against(await fuzzing(app, ROUTES, UNTIL_STOPPED), LYING)).toContainEqual(
+      containing("not JSON"),
+    );
   });
 
   test("a route that stops answering at all", async () => {
     using app = serving();
-    expect(against(await fuzzing(app, [HANGING, ...ROUTES]), HANGING)).toContainEqual(
-      containing("nothing arrived within"),
-    );
+    const hung = await fuzzing(app, [HANGING, ...ROUTES], UNTIL_THE_HANG);
+    expect(against(hung, HANGING)).toContainEqual(containing("nothing arrived within"));
   });
 
   // Round-robin, and this is what it buys: a route that eats the budget cannot
@@ -430,14 +441,14 @@ describe("what the fuzzer refuses", () => {
   // route, everything below `/hang` here would never be reached.
   test("and a route that eats the budget does not starve the rest", async () => {
     using app = serving();
-    await fuzzing(app, [HANGING, ...ROUTES]);
+    await fuzzing(app, [HANGING, ...ROUTES], UNTIL_THE_HANG);
     const hits = app.hits();
     for (const { path } of ROUTES) expect(hits.get(path) ?? 0).toBeGreaterThan(0);
   });
 
   test("a clean app is a clean run that still records its seed", async () => {
     using app = serving();
-    const result = await fuzzing(app, [OK], 4242);
+    const result = await fuzzing(app, [OK], FOR_THE_BUDGET, 4242);
     expect(result.failures).toEqual([]);
     expect(result.stopped).toBe(false);
     expect(result.requests).toBeGreaterThan(0);
@@ -451,7 +462,7 @@ describe("what the fuzzer refuses", () => {
   // three surfaces called it every failure.
   test("keeps every failure it found and prints the first twenty-five", async () => {
     using app = serving();
-    const result = await fuzzing(app, [STRICT]);
+    const result = await fuzzing(app, [STRICT], UNTIL_STOPPED);
     expect(result.failures.length).toBeGreaterThan(25);
     const { problems } = fuzzVerdict(result);
     expect(problems.filter(({ message }) => message.includes("replay it with:"))).toHaveLength(25);
@@ -466,7 +477,7 @@ describe("what the fuzzer refuses", () => {
   // number is never read as "and no more than these".
   test("and stops once an app has failed enough to have been answered", async () => {
     using app = serving();
-    const result = await fuzzing(app, [STRICT]);
+    const result = await fuzzing(app, [STRICT], UNTIL_STOPPED);
     expect(result.stopped).toBe(true);
     expect(fuzzVerdict(result).problems.map(({ message }) => message)).toContainEqual(
       containing(`stopped at ${result.failures.length} failures`),
@@ -480,7 +491,7 @@ describe("what the fuzzer refuses", () => {
   // floor quietly covering less than it claims.
   test("a route the ramp was told not to reach is not fuzzed either", async () => {
     using app = serving();
-    const result = await fuzzing(app, ROUTES, 1, new Set(["POST /strict/:id"]));
+    const result = await fuzzing(app, ROUTES, UNTIL_STOPPED, 1, new Set(["POST /strict/:id"]));
     expect(app.hits().get(STRICT.path)).toBeUndefined();
     expect(result.routes).toBe(ROUTES.length - 1);
     expect(result.waived).toBe(1);
@@ -492,7 +503,7 @@ describe("what the fuzzer refuses", () => {
   // either.
   test("and a table that is entirely waived is a run with nothing to send", async () => {
     using app = serving();
-    const result = await fuzzing(app, [OK], 1, new Set(["GET /ok/:id"]));
+    const result = await fuzzing(app, [OK], UNTIL_STOPPED, 1, new Set(["GET /ok/:id"]));
     expect(result.requests).toBe(0);
     expect(result.routes).toBe(0);
     expect(fuzzVerdict(result).problems).toEqual([]);
@@ -500,7 +511,7 @@ describe("what the fuzzer refuses", () => {
 
   test("a failure carries the command that sends it again", async () => {
     using app = serving();
-    const result = await fuzzing(app, [STRICT]);
+    const result = await fuzzing(app, [STRICT], UNTIL_STOPPED);
     const [first] = result.failures;
     expect(first?.curl).toContain("-X POST");
     expect(first?.status).toBe(500);
@@ -536,7 +547,7 @@ describe("what the fuzzer must not disturb", () => {
 
     const allowlist = allowlistFrom("", "route-allowlist");
     const first = routeCoverage(before, after, allowlist);
-    const run = await fuzzing(app, table);
+    const run = await fuzzing(app, table, FOR_THE_BUDGET);
     const second = routeCoverage(before, after, allowlist);
 
     expect(run.requests).toBeGreaterThan(0);

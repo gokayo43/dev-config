@@ -330,7 +330,6 @@ describe("a worker killed while taking the lock", () => {
 
       expect((await readdir(ground.path)).toSorted()).toEqual(["counter"]);
     },
-    10_000,
   );
 });
 
@@ -420,4 +419,4 @@ test("no two waiters hold it at once, whatever order their steps run in", async 
       },
     ),
   );
-}, 60_000);
+});

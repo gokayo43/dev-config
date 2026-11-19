@@ -11,7 +11,7 @@
  */
 
 // git hands a command it runs the repository it is acting on. No hook of this
-// repo runs the suite, but `git rebase --exec 'bun test'` does: from a linked
+// repo runs the suite, but `git rebase --exec 'bun run test'` does: from a linked
 // worktree it hands the command `GIT_DIR`, absolute, beside `GIT_EXEC_PATH`,
 // `GIT_PREFIX`, `GIT_SEQUENCE_EDITOR` and `GIT_CHERRY_PICK_HELP`, and no index.
 // A developer's own `pre-push` hook gets the same `GIT_DIR`, and `pre-commit`

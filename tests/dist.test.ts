@@ -1,11 +1,11 @@
 /**
- * The committed `dist/`, held equal to a fresh build. Which four exports are built
+ * The committed `dist/`, held equal to a fresh build. Which exports are built
  * and why is `tsdown.config.ts`; that the result is committed rather than built
  * on install is STACK.md's bargain for a git dependency.
  *
  * A committed artifact is a second copy of the source, so something has to hold
  * the two together. It is a test rather than a CI step so that it runs wherever
- * the suite runs: in CI on the pull request, and in any local `bun test`.
+ * the suite runs: in CI on the pull request, and in any local `bun run test`.
  */
 import { describe, expect, test } from "bun:test";
 import { readdir, stat } from "node:fs/promises";
@@ -53,5 +53,5 @@ describe("the committed dist", () => {
         contents,
       );
     }
-  }, 60_000);
+  });
 });
