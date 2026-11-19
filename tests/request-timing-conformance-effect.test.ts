@@ -1,6 +1,7 @@
 /**
- * The conformance kit's Effect check (invariants 3 and 9), and request timing
- * shipping no Effect at runtime (invariant 10). The check must pass on this
+ * The conformance kit's Effect check (invariants 3 and 9), and dev-config
+ * shipping no Effect at runtime but in the interleaving export, which declares
+ * the optional peer (invariant 10). The check must pass on this
  * repo's Effect, and fail, saying why, on an Effect that resumes a woken fiber
  * on the waker's stack, which is what Effect does when its one lookup of
  * `node:async_hooks` finds nothing. Effect makes that lookup when its module
@@ -93,13 +94,12 @@ async function shipped(): Promise<string[]> {
   return found;
 }
 
-describe("request timing ships no Effect at runtime", () => {
+describe("dev-config ships Effect at runtime in the interleaving export alone", () => {
   // The contract's own reading of an import: Bun's parser, which erases a
   // type-only import as the runtime does. A declaration file runs nothing.
-  test("no shipped request-timing module imports effect except as types", async () => {
+  test("no shipped module but the interleaving export's two imports effect except as types", async () => {
     const modules = (await shipped()).filter(
-      (file) =>
-        /(?:^|\/)request-timing[^/]*\.(?:[cm]?[jt]sx?)$/u.test(file) && !file.endsWith(".d.ts"),
+      (file) => /\.(?:[cm]?[jt]sx?)$/u.test(file) && !file.endsWith(".d.ts"),
     );
     expect(modules).toContain("dist/request-timing-conformance-effect.js");
     const importing: string[] = [];
@@ -112,7 +112,7 @@ describe("request timing ships no Effect at runtime", () => {
         importing.push(file);
       }
     }
-    expect(importing).toEqual([]);
+    expect(importing).toEqual(["interleaving.ts", "interleaving-runtime.ts"]);
   });
 
   test("and package.json installs no effect for an app: a devDependency, and a peer only as optional", async () => {

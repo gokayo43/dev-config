@@ -158,10 +158,11 @@ a change to a rule usually lands here too.
   with no install, and a tool fetched from npm at run time is pinned by a
   version string with no checksum.
 - The `*.ts` at the root are what a consuming repo reaches, as against the
-  gates, which run over it from CI. Twenty of them are **exports** it imports and
+  gates, which run over it from CI, apart from `knip.base.ts`, a base above, and
+  `knip.ts` and `tsdown.config.ts`, this repo's own configs. Twenty of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
   `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
-  `dev-server-derive.ts` is the module the first imports. Eight more reach it
+  `dev-server-derive.ts` is the module the first imports. Nine more reach it
   only inside those, and no specifier exports any of them. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
   command decide by — which the build bundles into `dist/count-budget.js`, a
@@ -188,7 +189,10 @@ a change to a rule usually lands here too.
   check reads, from source; `request-timing-effect-driver.ts` is the driver the
   kit's Effect check runs its table through, which the build takes into the
   check and `tests/request-timing-attribution.test.ts` runs generated plans
-  through. Each export is reachable through
+  through; `interleaving-runtime.ts` is whether the process's `effect` is the
+  runtime `interleaving.ts` was written against, the version its import checks
+  and the facts the first `simulate` checks, each on Effect alone, which
+  `files` ships as source beside it. Each export is reachable through
   `files` and `exports`, and each is here rather than in an action for the same
   reason: it runs inside the repo's own suite or app, on what only that process
   can reach. `route-log.ts` is the protocol between an app and the two floors
@@ -200,8 +204,9 @@ a change to a rule usually lands here too.
   program alike; `request-timing-conformance.ts` is the
   check an adopting app runs against its booted server, and
   `request-timing-conformance-effect.ts` the check of the app's own Effect, which
-  the app hands its `effect` module to, since no request-timing file imports
-  `effect` but as types; the bin
+  the app hands its `effect` module to, since no file here imports `effect` but
+  as types except `interleaving.ts` and `interleaving-runtime.ts`, the
+  interleaving export's; the bin
   `request-timing-report.ts` reads a log of the records; the connectors
   `request-timing-elysia.ts`, `request-timing-tanstack-start.ts`,
   `request-timing-next.ts`, `request-timing-trpc.ts`,
@@ -222,8 +227,8 @@ a change to a rule usually lands here too.
   of them searches with no test changing; `interleaving.ts` runs an Effect 4
   program under a `Scheduler` whose every choice comes from fast-check data, so
   a property generates the order overlapping fibers run in, and imports
-  `effect` at runtime because it needs Effect's own values, which is why
-  `effect` is an optional peer; `narrowing.ts` is
+  `effect` at runtime, as `interleaving-runtime.ts` does, because it needs
+  Effect's own values, which is why `effect` is an optional peer; `narrowing.ts` is
   `only`, `nth`, `must` and `rejectionOf`, which hand back a value the compiler
   could not prove present or throw naming what they found, and import no test
   runner so a Playwright spec under node takes them too. `bun-test.d.ts` types
@@ -370,15 +375,17 @@ a change to a rule usually lands here too.
   bigger number and the only thing that says whether it worked is how many times
   the predicate ran; the default it multiplies is graded as a difference against
   `fc.assert` rather than against the literal 100, which is fast-check's to
-  change. The export's suites split by subject: `interleaving.test.ts` the
+  change. The `interleaving` export's suites split by subject: `interleaving.test.ts` the
   order a run takes and how it ends; `interleaving-races.test.ts` the search of
   the racy fixtures in `interleaving-fixtures.ts` on fresh seeds, sized and
   counted by the rules on the export's page, the page's examples and its
   regression probe on the torn read; and `interleaving-runtime.test.ts` a
-  process per runtime fact the export rests on, its `effect` replaced through a
-  Bun plugin by one with that fact made false, for the first `simulate` to name
-  it, and on a scheduler of its own the interruption Effect 4.1.4 loses, whose
-  step `simulate` never preempts until a release fixes it. The fixtures are a module of their own because
+  process per runtime fact the export rests on, its `effect` or its host's
+  `node:async_hooks` replaced with that fact made false, for the first
+  `simulate` to name it, and on a scheduler of its own the interruption Effect
+  4.1.4 loses, whose op `simulate` never preempts: that case fails once a
+  release stops losing it, which is when the exclusion comes out of
+  `interleaving.ts` (dev-config#210). The fixtures are a module of their own because
   `interleaving-measure.ts`, which re-takes the page's measurement table, runs
   them too. `fuzz.test.ts` drives the fuzzer against a real server on a real
   port, since each of its four invariants is a statement about a response — and the
@@ -396,7 +403,8 @@ a change to a rule usually lands here too.
   and one per wrong adoption the kit names; and
   `request-timing-conformance-effect.test.ts` the kit's Effect check, which a
   process of its own with `node:async_hooks` hidden from Effect must see fail,
-  and that no request-timing file `files` ships imports `effect` at runtime. The connectors' suites run against real servers:
+  and that of everything `files` ships only `interleaving.ts` and
+  `interleaving-runtime.ts`, the interleaving export, import `effect` at runtime. The connectors' suites run against real servers:
   `request-timing-elysia.test.ts` boots the Elysia app
   `request-timing-elysia-fixture.ts` builds over MySQL, Redis and an outside
   service, once with timing off as the differential's oracle;
@@ -446,7 +454,7 @@ bun test        # the gate suites
 bun run build   # rewrites the committed dist/ from the exports tsdown.config.ts builds
 ```
 
-Neither is coverage-floored: `bunfig.toml` declares the threshold and CI's
+None of them is coverage-floored: `bunfig.toml` declares the threshold and CI's
 `--coverage` applies it, so `bun test --coverage` is the run CI makes —
 `docs/gates/test-suite.md`.
 

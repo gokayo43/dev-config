@@ -1,35 +1,24 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createRequire } from "node:module";
 
-import { Context, Deferred, Effect, Exit, Fiber, Hash, Random, Scheduler, Tracer } from "effect";
+import { Context, Effect, type Exit, Fiber, Hash, Random, type Scheduler, Tracer } from "effect";
 import { type Arbitrary, array, constant, nat, oneof, record, uniqueArray } from "fast-check";
 
-// Every name imported from effect above is exported by Effect 3 too, so on
-// Effect 3 the import links and this check is what speaks.
-const manifest: unknown = createRequire(import.meta.url)("effect/package.json");
-const version =
-  typeof manifest === "object" && manifest !== null && "version" in manifest
-    ? String(manifest.version)
-    : "of no version";
-if (!version.startsWith("4.")) {
-  throw new Error(
-    `@gokayo43/dev-config/interleaving runs on effect 4, and this process's effect is ${version}: Effect ${version.split(".")[0]} schedules fibers in a way simulate cannot drive`,
-  );
-}
+import { verifyRuntime } from "./interleaving-runtime.ts";
 
 /**
  * The decisions one run of a program is scheduled by, as plain data: fast-check
  * generates it, prints it in a counterexample and shrinks it like any other
  * value.
  *
- * An op index counts every step the run asks the scheduler about, across all
+ * An op index counts every op the run asks the scheduler about, across all
  * its fibers, from 0. `walk` preempts the running fiber at each op in
  * `preemptAt`, and picks the next task to run by `picks`, an index into the
  * tasks the runtime allows next taken modulo their number, first in first out
  * once they run out. `priority` gives each fiber a priority in the order the
  * run first meets it, always runs the highest, first in first out among
- * equals, and drops a fiber below every other when it yields of its own accord
- * and at each op in `changeAt`.
+ * equals, and drops a fiber below every other when it yields of its own
+ * accord, when it has run `Scheduler.MaxOpsBeforeYield` ops in one slice, and
+ * at each op in `changeAt`.
  */
 export type Interleaving =
   | {
@@ -122,8 +111,8 @@ interface Asked {
   readonly spent: boolean;
   /** The tasks the runtime allows to run next. */
   readonly next: () => readonly Task[];
-  /** The fibers in the middle of a step that this fiber's slice runs inside of. */
-  readonly beneath: readonly AnyFiber[];
+  /** The ops this fiber's slice runs inside of, by the fiber each is of. */
+  readonly beneath: readonly { readonly fiber: AnyFiber }[];
 }
 
 interface Strategy {
@@ -163,10 +152,14 @@ function priority(priorities: readonly number[], changeAt: readonly number[]): S
     // before its first ask, where its fiber is ranked and, when it is
     // outranked, told to yield.
     pick: (next) => {
-      const ranks = next.map(rank);
-      const unknown = ranks.indexOf(undefined);
-      if (unknown >= 0) return unknown;
-      return ranks.indexOf(Math.max(...ranks.map(Number)));
+      let highest = 0;
+      let best = Number.NEGATIVE_INFINITY;
+      for (const [index, task] of next.entries()) {
+        const known = rank(task);
+        if (known === undefined) return index;
+        if (known > best) [highest, best] = [index, known];
+      }
+      return highest;
     },
     preempt: ({ fiber, op, yielded, spent, next, beneath }) => {
       // Without the drop at a yield, a fiber waiting for another by yielding
@@ -177,16 +170,30 @@ function priority(priorities: readonly number[], changeAt: readonly number[]): S
       const mine = of(fiber);
       return (
         next().some((task) => (rank(task) ?? Number.POSITIVE_INFINITY) > mine) ||
-        beneath.some((other) => of(other) > mine)
+        beneath.some((other) => of(other.fiber) > mine)
       );
     },
   };
 }
 
-const strategyOf = (interleaving: Interleaving): Strategy =>
-  interleaving.strategy === "walk"
-    ? walk(interleaving.preemptAt, interleaving.picks)
-    : priority(interleaving.priorities, interleaving.changeAt);
+/**
+ * The strategy `interleaving` schedules a run by, and the seed the run's
+ * randomness draws from: its values, in an order that does not depend on the
+ * order its fields are written in.
+ */
+function scheduleOf(interleaving: Interleaving): { strategy: Strategy; seed: number } {
+  const [strategy, values] =
+    interleaving.strategy === "walk"
+      ? [
+          walk(interleaving.preemptAt, interleaving.picks),
+          [interleaving.strategy, interleaving.preemptAt, interleaving.picks],
+        ]
+      : [
+          priority(interleaving.priorities, interleaving.changeAt),
+          [interleaving.strategy, interleaving.priorities, interleaving.changeAt],
+        ];
+  return { strategy, seed: Hash.string(JSON.stringify(values)) };
+}
 
 /** Preempts only where Effect's own scheduler would, and picks first in first out. */
 const inert: Strategy = { pick: () => 0, preempt: ({ spent }) => spent };
@@ -200,7 +207,7 @@ interface Drained {
 /**
  * The state of one run: its fibers, the tasks its dispatchers hold, and the
  * task running now. It is the run's `Scheduler`, and its `Tracer`, whose
- * context hook sees every step of every fiber, those under
+ * context hook sees every op of every fiber, those under
  * `Scheduler.PreventSchedulerYield` included, which the scheduler is never
  * asked about. A tracer the program provides is watched the same way.
  */
@@ -216,11 +223,13 @@ class Run {
   #entered = false;
   /** The fiber just told to yield, whose continuation is the next task queued. */
   #yielding: AnyFiber | undefined;
-  readonly #beneath: AnyFiber[] = [];
-  /** Which step, of those `#beneath` is in the middle of, each `#beneath` is; and the one running now. */
-  readonly #steps: number[] = [];
-  readonly #step = new AsyncLocalStorage<number>();
-  #stepCount = 0;
+  /** The ops in the middle of being evaluated, innermost last, each by its fiber and an id of its own. */
+  readonly #evaluating: { readonly fiber: AnyFiber; readonly id: number }[] = [];
+  /** The id of the op whose async context is the current one. */
+  readonly #context = new AsyncLocalStorage<number>();
+  #ids = 0;
+  /** How many ops were in the middle of being evaluated when the running task started. */
+  #depth = 0;
 
   readonly scheduler: Scheduler.Scheduler = {
     executionMode: "sync",
@@ -253,10 +262,10 @@ class Run {
   readonly tracer = this.#watch(nativeTracer);
 
   /**
-   * `traced`, its spans and its own context hook kept, with every step it is
-   * the tracer of passing through the run first. A step that provides a
+   * `traced`, its spans and its own context hook kept, with every op it is
+   * the tracer of passing through the run first. An op that provides a
    * tracer of the program's own replaces this one in the fiber's context, and
-   * the fiber's later steps, and every fiber it forks, would pass the run by:
+   * the fiber's later ops, and every fiber it forks, would pass the run by:
    * the watch puts that tracer back watched.
    */
   #watch(traced: Tracer.Tracer): Tracer.Tracer {
@@ -264,18 +273,16 @@ class Run {
       span: (options) => traced.span(options),
       context: (primitive, fiber) => {
         this.#fibers.add(fiber);
-        const step = this.#stepCount++;
-        this.#beneath.push(fiber);
-        this.#steps.push(step);
+        const id = this.#ids++;
+        this.#evaluating.push({ fiber, id });
         try {
-          return this.#step.run(step, () =>
+          return this.#context.run(id, () =>
             traced.context === undefined
               ? primitive["~effect/Effect/evaluate"](fiber)
               : traced.context(primitive, fiber),
           );
         } finally {
-          this.#beneath.pop();
-          this.#steps.pop();
+          this.#evaluating.pop();
           const now = fiber.getRef(Tracer.Tracer);
           if (!this.#watched.has(now))
             fiber.setContext(Context.add(fiber.context, Tracer.Tracer, this.#watch(now)));
@@ -302,25 +309,34 @@ class Run {
       yielded: first && task.resumes === undefined && task.by === fiber,
       spent: fiber.currentOpCount >= fiber.cache.maxOpsBeforeYield,
       next: () => this.#next(),
-      beneath: this.#beneath,
+      beneath: this.#evaluating,
     });
     if (yielding) this.#yielding = fiber;
     return yielding;
   }
 
   /**
-   * Whether `fiber` is taking its first step because another fiber's step
-   * interrupted it before its own first slice ran. Effect 4.1.4 loses that
-   * interruption when the fiber yields here: the fiber's first slice, still
-   * queued, then runs the fiber's program in its place. A fiber Effect forks
-   * keeps the async context of the step that forked it and runs its first
-   * step in it, so here, and only here, a fiber the run has never seen runs
-   * in a context other than the step it runs inside of. A fiber forked to
-   * start at once runs in that step's own.
+   * Whether `fiber` is asked about the first op of an interruption that
+   * another fiber's op made before `fiber`'s first slice ran. Effect 4.1.4
+   * loses that interruption when the fiber yields there: the fiber's first
+   * slice, still queued, then runs the fiber's program in the interruption's
+   * place (dev-config#210).
+   *
+   * A fiber the run has never seen that Effect evaluates from inside another
+   * fiber's op, rather than from a task, runs in that op's async context,
+   * unless it was forked to start later: then it runs in the context Effect
+   * captured at the fork, that of the op that forked it, and only that
+   * interruption evaluates such a fiber there. A task a flush runs from inside
+   * an op starts one level deeper, and its fiber is evaluated from that task.
    */
   #interruptedBeforeStart(fiber: AnyFiber): boolean {
-    const inside = this.#steps.at(-1);
-    return inside !== undefined && !this.#fibers.has(fiber) && this.#step.getStore() !== inside;
+    const inside = this.#evaluating.at(-1);
+    return (
+      inside !== undefined &&
+      this.#evaluating.length > this.#depth &&
+      !this.#fibers.has(fiber) &&
+      this.#context.getStore() !== inside.id
+    );
   }
 
   /**
@@ -339,13 +355,17 @@ class Run {
 
   #runTask(task: Task): void {
     this.#queue.splice(this.#queue.indexOf(task), 1);
-    const outer = this.#current;
-    const entered = this.#entered;
+    const outer = { current: this.#current, entered: this.#entered, depth: this.#depth };
     this.#current = task;
     this.#entered = false;
-    task.run();
-    this.#current = outer;
-    this.#entered = entered;
+    this.#depth = this.#evaluating.length;
+    // A task that throws from inside, out of a fiber's observer, throws into
+    // the op that flushed it, which Effect's run loop catches and goes on from.
+    try {
+      task.run();
+    } finally {
+      ({ current: this.#current, entered: this.#entered, depth: this.#depth } = outer);
+    }
   }
 
   /** Sets the strategy the runtime's questions are answered by, its op indices counted from 0, for `budget` ops. */
@@ -409,9 +429,11 @@ function seeded<A>(seed: number, run: () => A): A {
   );
   const { random } = Math;
   Math.random = () => generator.nextDoubleUnsafe();
-  const answer = run();
-  Math.random = random;
-  return answer;
+  try {
+    return run();
+  } finally {
+    Math.random = random;
+  }
 }
 
 /**
@@ -425,15 +447,18 @@ function execute<A, E>(
   maxOps: number,
   seed: number,
 ): Simulated<A, E> {
-  const { drained, exit, stranded } = seeded(seed, () => {
+  let stranded = 0;
+  const { drained, exit } = seeded(seed, () => {
     const run = new Run();
     run.schedule(strategy, maxOps);
-    const root = Effect.runForkWith(Context.make(Tracer.Tracer, run.tracer))(program, {
-      scheduler: run.scheduler,
-    });
-    const scheduled = run.drain();
-    const ended = root.pollUnsafe();
-    return { drained: scheduled, exit: ended, stranded: run.windDown(maxOps) };
+    try {
+      const root = Effect.runForkWith(Context.make(Tracer.Tracer, run.tracer))(program, {
+        scheduler: run.scheduler,
+      });
+      return { drained: run.drain(), exit: root.pollUnsafe() };
+    } finally {
+      stranded = run.windDown(maxOps);
+    }
   });
   const { ops } = drained;
   const outliving =
@@ -450,193 +475,19 @@ function execute<A, E>(
   return { parked: false, exit, ops };
 }
 
-/** A program run under a scheduler that answers `yields` and records what the runtime asked and queued. */
-function witness(
-  program: Effect.Effect<unknown>,
-  yields: (fiber: AnyFiber, ask: number) => boolean,
-) {
-  const asks: { fiber: AnyFiber; count: number; running: boolean; task: number }[] = [];
-  const queued: { run: () => void; by: AnyFiber | undefined; afterAsk: number }[] = [];
-  const traced = new Set<AnyFiber>();
-  let task = -1;
-  const scheduler: Scheduler.Scheduler = {
-    executionMode: "sync",
-    shouldYield: (fiber) => {
-      asks.push({
-        fiber,
-        count: fiber.currentOpCount,
-        running: Fiber.getCurrent() === fiber,
-        task,
-      });
-      return yields(fiber, asks.length - 1);
-    },
-    makeDispatcher: () => ({
-      scheduleTask: (run) =>
-        void queued.push({ run, by: Fiber.getCurrent(), afterAsk: asks.length - 1 }),
-      flush: () => undefined,
-    }),
-  };
-  const tracer = Tracer.make({
-    span: (options) => nativeTracer.span(options),
-    context: (primitive, fiber) => {
-      traced.add(fiber);
-      return primitive["~effect/Effect/evaluate"](fiber);
-    },
-  });
-  const root = Effect.runForkWith(Context.make(Tracer.Tracer, tracer))(program, { scheduler });
-  for (task = 0; task < queued.length && task < 1_000; task++) queued[task]?.run();
-  return { root, asks, queued, traced };
-}
-
-const note = (log: string[], step: string) => Effect.sync(() => void log.push(step));
-
-/** The orders a fiber `b` takes against `a`'s two steps, one preemption at each op in turn. */
-function ordersAgainst(steps: (log: string[]) => Effect.Effect<void>): Set<string> {
-  const program = Effect.suspend(() => {
-    const log: string[] = [];
-    return Effect.gen(function* () {
-      const a = yield* Effect.forkChild(steps(log));
-      const b = yield* Effect.forkChild(note(log, "b"));
-      yield* Fiber.join(a);
-      yield* Fiber.join(b);
-      return log.join(" ");
-    });
-  });
-  return new Set(
-    Array.from({ length: 64 }, (_, op) => execute(program, walk([op], []), 10_000, 0)).flatMap(
-      (run) => (!run.parked && Exit.isSuccess(run.exit) ? [run.exit.value] : []),
-    ),
-  );
-}
-
-/**
- * The facts about Effect's runtime everything `simulate` finds rests on, each
- * checked by a small program. A release that broke one would leave race
- * properties passing without reaching a race, the page's account of what a
- * search can cut false, the priority strategy ranking the wrong fiber, or a
- * run's fibers alive after it.
- */
-const facts: readonly { readonly fact: string; readonly holds: () => boolean }[] = [
-  {
-    fact: "asks the scheduler between two steps joined by andThen, so a fiber can run between them",
-    holds: () =>
-      ordersAgainst((log) => note(log, "a1").pipe(Effect.andThen(note(log, "a2")))).has("a1 b a2"),
-  },
-  {
-    fact: "runs two steps joined by map without asking the scheduler between them",
-    holds: () =>
-      !ordersAgainst((log) => note(log, "a1").pipe(Effect.map(() => void log.push("a2")))).has(
-        "a1 b a2",
-      ),
-  },
-  {
-    fact: "asks with the fiber whose step comes next, its op count 1 on the first step of a slice, and names the fiber that queues a task as the current one, so a fork's first step is its child's and a yield's first step is the yielder's",
-    holds: () => {
-      let child: AnyFiber | undefined;
-      const { root, asks, queued } = witness(
-        Effect.gen(function* () {
-          const forked = yield* Effect.forkChild(Effect.void);
-          child = forked;
-          yield* Effect.yieldNow;
-          yield* Fiber.join(forked);
-        }),
-        () => false,
-      );
-      const firstOf = (index: number) => asks.find((ask) => ask.task === index);
-      const [fork, yielded] = queued;
-      return (
-        asks.every(({ running }) => running) &&
-        fork?.by === root &&
-        firstOf(0)?.fiber === child &&
-        firstOf(0)?.count === 1 &&
-        yielded?.by === root &&
-        firstOf(1)?.fiber === root &&
-        firstOf(1)?.count === 1
-      );
-    },
-  },
-  {
-    fact: "queues a fiber's continuation from that fiber, before asking anything else, when the scheduler tells it to yield",
-    holds: () => {
-      const { root, asks, queued } = witness(
-        Effect.gen(function* () {
-          yield* Effect.void;
-          yield* Effect.void;
-        }),
-        (_fiber, ask) => ask === 1,
-      );
-      const [continuation] = queued;
-      const resumed = asks.find((ask) => ask.task === 0);
-      return (
-        queued.length === 1 &&
-        continuation?.by === root &&
-        continuation.afterAsk === 1 &&
-        resumed?.fiber === root &&
-        resumed.count > 1
-      );
-    },
-  },
-  {
-    fact: "hands the tracer's context hook every step of every fiber, those under Scheduler.PreventSchedulerYield included",
-    holds: () => {
-      let detached: AnyFiber | undefined;
-      const { traced } = witness(
-        Effect.gen(function* () {
-          const never = yield* Deferred.make<void>();
-          detached = yield* Effect.forkDetach(Deferred.await(never));
-        }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true)),
-        () => false,
-      );
-      return detached !== undefined && traced.has(detached);
-    },
-  },
-  {
-    fact: "runs every slice after the root's first through the scheduler's dispatchers, so a program of forks, yields and deferreds finishes once their tasks have run",
-    holds: () => {
-      const { root } = witness(
-        Effect.gen(function* () {
-          const gate = yield* Deferred.make<void>();
-          const waiter = yield* Effect.forkChild(
-            Deferred.await(gate).pipe(Effect.andThen(Effect.yieldNow)),
-          );
-          const opener = yield* Effect.forkChild(
-            Effect.yieldNow.pipe(Effect.andThen(Deferred.succeed(gate, undefined))),
-          );
-          yield* Effect.yieldNow;
-          yield* Fiber.joinAll([waiter, opener]);
-        }),
-        () => false,
-      );
-      return root.pollUnsafe() !== undefined;
-    },
-  },
-];
-
-let runtimeAnswered = false;
-
-function verifyRuntime(): void {
-  if (runtimeAnswered) return;
-  for (const { fact, holds } of facts) {
-    if (!holds()) {
-      throw new Error(
-        `this process's effect no longer ${fact}, which simulate rests on; it was written against effect 4.1.4`,
-      );
-    }
-  }
-  runtimeAnswered = true;
-}
-
 /**
  * Runs `program` until no fiber can run, synchronously: each task the runtime
  * queues is one the interleaving picks among, and the runtime asks the
- * interleaving at every step of its run loop whether the running fiber yields
- * there. No timer, microtask or clock takes part, so a fiber waiting on
- * anything outside the program reads as parked. For the run's duration
+ * interleaving at every op whether the running fiber yields there, but the
+ * first op of an interruption of a fiber that has not started, where Effect
+ * 4.1.4 loses the interruption (dev-config#210). No timer, microtask or clock
+ * takes part, so a fiber waiting on anything outside the program reads as
+ * parked. For the run's duration
  * `Math.random`, and through it the program's default `Random`, draw from a
  * generator seeded by the interleaving.
  *
- * Before answering, every fiber of the run still unfinished, detached ones
- * included, is interrupted and the run drained, so its finalizers run. Throws
+ * Before answering or throwing, every fiber of the run still unfinished,
+ * detached ones included, is interrupted and the run drained, so its finalizers run. Throws
  * when the run does not finish within `limits.maxOps` ops, and when a run
  * that finished leaves a fiber that does not finish once interrupted.
  */
@@ -646,16 +497,6 @@ export function simulate<A, E>(
   limits: Limits = { maxOps: 100_000 },
 ): Simulated<A, E> {
   verifyRuntime();
-  return execute(
-    program,
-    strategyOf(interleaving),
-    limits.maxOps,
-    Hash.string(
-      JSON.stringify(
-        interleaving.strategy === "walk"
-          ? [interleaving.strategy, interleaving.preemptAt, interleaving.picks]
-          : [interleaving.strategy, interleaving.priorities, interleaving.changeAt],
-      ),
-    ),
-  );
+  const { strategy, seed } = scheduleOf(interleaving);
+  return execute(program, strategy, limits.maxOps, seed);
 }

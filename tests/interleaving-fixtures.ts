@@ -109,7 +109,7 @@ export const booking = (locked: boolean): Effect.Effect<Booked> =>
 /**
  * A read and a write of one counter as two synchronous steps of `Effect.gen`,
  * with nothing between them a test could wrap: only a preemption between the
- * two steps of the run loop reaches it. Answers the count, which two bumps
+ * two ops reaches it. Answers the count, which two bumps
  * leave at 2.
  */
 export const counter = (atomic: boolean): Effect.Effect<number> =>
@@ -198,7 +198,7 @@ export const races: Race[] = [
 
 /**
  * Where a fiber stood: finished once it has an exit, waiting once it has run
- * a step and has none, and not started before its first step, when Effect's
+ * an op and has none, and not started before its first op, when Effect's
  * runtime has its op count at 0.
  */
 export const stood = (

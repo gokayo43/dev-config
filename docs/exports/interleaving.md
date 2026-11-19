@@ -45,46 +45,49 @@ test("two bookings of the last seat sell it once", () => {
   first in first out. Sizing it, and `numRuns`, is below. An interleaving is
   plain data, so fast-check prints it in a counterexample and shrinks it like
   any other value, and a test can write one by hand.
-- Before it answers, `simulate` interrupts every fiber of the run still
-  unfinished, detached ones included, and lets them wind down, so finalizers
+- Before it answers or throws, `simulate` interrupts every fiber of the run
+  still unfinished, detached ones included, and lets them wind down, so finalizers
   run and nothing of the run outlives the call. The one exception is a fiber
   that interruption cannot reach, below.
 - `simulate` throws when the run does not finish within 100 000 ops, and when a
   run that finished leaves a fiber interruption cannot end. A program that needs
-  more ops passes `{ maxOps }` as a third argument, to `simulate` and to
+  more ops passes `{ maxOps }` as the last argument, to `simulate` and to
   `interleavingsOf` alike.
 
 The program is built fresh for each run: state the fibers share is created
 inside the effect, as `makeSeats` does above, never outside it. `effect` is an
 optional peer dependency, 4.1.4 or later below 5, and the repo brings its own
-beside `fast-check`. On any other major version, importing the export throws,
+beside `fast-check`. The host has to give Effect
+`process.getBuiltinModule("node:async_hooks")`, as Bun does and Node does from
+20.16 and 22.3: on a host where Effect cannot capture an async context, the
+first `simulate` throws, naming the runtime fact below that no longer holds. On any other major version, importing the export throws,
 naming the version it found: on Effect 3 it reads
 `@gokayo43/dev-config/interleaving runs on effect 4, and this process's effect is 3.22.0`,
 followed by why.
 
 ## How it works
 
-Effect 4's run loop asks its `Scheduler`, through `shouldYield`, at every step
-whether the running fiber should yield there, and every resumed, forked or
-yielded fiber is a task handed to one of that scheduler's dispatchers.
-`simulate` installs a scheduler whose every answer comes from the
-interleaving: it says at each step whether to preempt, and it picks which
+Effect 4's run loop asks its `Scheduler`, through `shouldYield`, before each
+op whether the running fiber should yield there, where an op is one step of
+that loop, and every resumed, forked or yielded fiber is a task handed to one
+of that scheduler's dispatchers. `simulate` installs a scheduler whose every
+answer comes from the interleaving: it says at each op whether to preempt, and it picks which
 queued task runs next. No timer, no microtask and no clock decides the order,
 so the same program under the same interleaving executes the same order every
 time. Like Effect's own scheduler, it also yields a fiber that has run
 `Scheduler.MaxOpsBeforeYield` ops in one slice, 2 048 unless the program sets
 it, so a fiber that busy-polls for another still lets it run.
 
-An op is one step of that loop. A preemption can fall wherever Effect's runtime
-can switch fibers and nowhere else, except at the one step where Effect 4.1.4
-loses an interruption, which "What a program may contain" describes. That is
-between any two steps of one fiber, two synchronous ones included, and inside an
-`Effect.uninterruptible` region, which stops interruption but not scheduling.
+A preemption can fall wherever Effect's runtime can switch fibers and nowhere
+else, except at the one op where Effect 4.1.4 loses an interruption, which
+"What a program may contain" describes. That is between any two ops of one
+fiber, two of `Effect.sync` included, and inside an `Effect.uninterruptible`
+region, which stops interruption but not scheduling.
 That is the reach fast-check's own `fc.scheduler` lacks: it reorders only at the
 promises a test wraps, and in the prototype this export came from
 (dev-config#140) it found none of the four subtle bugs planted there.
 
-Effect 4 runs more inside one step than Effect 3 did. A step that succeeds
+Effect 4 runs more inside one op than Effect 3 did. A step that succeeds
 hands its value straight to the next continuation, up to 32 at a time, without
 returning to the loop, so the runtime never switches fibers inside such a
 chain, and neither does `simulate`. Two steps joined by `Effect.map` are one
@@ -115,32 +118,35 @@ continuation on its own. Tasks on different dispatchers are unordered, and
 `simulate` picks among the one task each dispatcher would run next, so it never
 runs a task ahead of one Effect guarantees runs first. The forks of one parent
 therefore start in the order they were forked, and a pick reorders them only
-once a preemption at each child's first step has moved its continuation to the
+once a preemption at each child's first op has moved its continuation to the
 child's own dispatcher.
 
-A fiber Effect resumes after a preemption runs the step it was stopped before
+A fiber Effect resumes after a preemption runs the op it was stopped before
 without asking again, so a preemption adds no op to a run.
 
-Everything rests on six things Effect 4.1.4's runtime does: it asks the
+Everything rests on seven things Effect 4.1.4's runtime does: it asks the
 scheduler between two steps joined by `andThen`; it runs two steps joined by
-`map` without asking; it asks with the fiber whose step comes next, at op count
-1 on the first step of a slice, and makes the fiber that queues a task the
-current one, so a fork's first step is its child's and a yield's first step is
-the yielder's; it queues a fiber's continuation from that fiber, before asking
+`map` without asking; it asks with the fiber whose op comes next, at op count 1
+on the first op of a slice, and makes the fiber that queues a task the current
+one, so a fork's first op is its child's and a yield's first op is the
+yielder's; it queues a fiber's continuation from that fiber, before asking
 anything else, when the scheduler tells it to yield; it hands a tracer's
-`context` hook every step of every fiber, those under `PreventSchedulerYield`
-included, which is how the wind-down finds a run's fibers; and it runs every
-slice after the root's first through the scheduler's dispatchers. The first
-`simulate` in a process runs small programs that check each, and throws naming
-the one that failed. So a repo whose Effect stopped doing any of them fails its
-race properties loudly, instead of passing them by finding nothing, ranking the
-wrong fiber, or leaving each run's fibers alive.
+`context` hook every op of every fiber, those under `PreventSchedulerYield`
+included, which is how the wind-down finds a run's fibers; it runs every slice
+after the root's first through the scheduler's dispatchers; and it runs a
+forked fiber's first op in the async context of the op that forked it, which is
+how `simulate` tells the op where Effect loses an interruption apart. The first
+`simulate` in a process runs small programs on Effect alone that check each,
+and throws naming the one that failed. So a repo whose Effect stopped doing any
+of them fails its race properties loudly, instead of passing them by finding
+nothing, ranking the wrong fiber, leaving each run's fibers alive, or parking
+where Effect loses an interruption.
 
 `simulate` provides the run's tracer, which hands spans to Effect's own. A
 tracer the program provides replaces it in the fiber's context, and with it
-would go the hook. So the step that provides it is followed by `simulate`
+would go the hook. So the op that provides it is followed by `simulate`
 putting it back behind a hook of its own: the program's tracer still makes
-every span and still sees every step through its own `context`, and the
+every span and still sees every op through its own `context`, and the
 fibers under it are still wound down.
 
 The arbitrary mixes two strategies, because the prototype needed both to find
@@ -151,17 +157,18 @@ its races:
   number of tasks Effect allows next, so it reaches every one of them.
 - a priority strategy, PCT (Burckhardt et al., ASPLOS 2010), which gives each
   fiber a generated priority, always runs the highest, and drops a fiber below
-  every other when it yields of its own accord and at up to three generated op
-  indices. A queued task does not say which fiber it runs, so the strategy runs
-  every such task first: nothing of the program runs before the runtime asks
-  about the task's fiber at its first step, where it is ranked and, when
-  outranked, told to yield. A fiber yields of its own accord when the first
-  step of a task it queued itself is its own. A fiber started by `Effect.all`
+  every other when it yields of its own accord, when it has run
+  `Scheduler.MaxOpsBeforeYield` ops in one slice, and at up to three generated
+  op indices. A queued task does not say which fiber it runs, so the strategy
+  runs every such task first: nothing of the program runs before the runtime
+  asks about the task's fiber at its first op, where it is ranked and, when
+  outranked, told to yield. A fiber yields of its own accord when the first op
+  of a task it queued itself is its own. A fiber started by `Effect.all`
   or `Effect.forEach` keeps the priority it is given, and a fiber that hands
   work to others keeps its own: releasing a lock to the fibers waiting on it,
   or opening a latch, is not a yield. A fiber the runtime resumes inside
-  another's step, as completing a `Deferred` resumes its waiters, runs there
-  only when it outranks every fiber in the middle of a step beneath it. Up to
+  another's op, as completing a `Deferred` resumes its waiters, runs there only
+  when it outranks the fiber of every op it runs inside of. Up to
   24 priorities are generated, so fibers the run meets after the 24th all get 0.
 
 ## What a program may contain
@@ -183,26 +190,28 @@ scheduler too, so code that sleeps or times out is driven by it here. An adjust
 that runs before a sleep is registered wakes nothing, and the search finds that
 order, in which the sleeper parks.
 
-Effect 4.1.4 loses an interruption in one order. A fiber is interrupted from
-another fiber's step before its own first slice has run, so Effect runs the
-interruption there and then, and the scheduler tells the fiber to yield at the
-interruption's first step. The fiber's first slice, still queued, then runs the
-fiber's own program in the interruption's place, and whoever waits for the
-fiber to end waits forever. Effect's default scheduler does not reach that
-order at any `Scheduler.MaxOpsBeforeYield`, 1 included, so a park there is
-Effect's bug and never the program's. `simulate` therefore never preempts that
-one step, and that is the one exception to its reach: a preemption falls at
-every point where the runtime can switch fibers except the first step of an
-interruption of a fiber the run has not yet seen start. It tells that step
-apart by the async context Effect gives a forked fiber, which keeps the context
-of the step that forked it; a fiber forked to start at once runs in its
-parent's step instead, and its first step can still be preempted. `TestClock`
-used to meet the order: each sleep starts a fiber that warns when the clock is
-never adjusted, an adjust interrupts that fiber, and a program on `TestClock`
-with no race of its own parked in 33 of 20 000 interleavings. This repo's suite
-holds the bug itself on a scheduler of its own, outside `simulate`, and that
-case fails once a release no longer loses the interruption, which is when the
-exception goes.
+Effect 4.1.4 loses an interruption in one order (dev-config#210). A fiber is
+interrupted from another fiber's op before its own first slice has run, so
+Effect runs the interruption there and then, and the scheduler tells the fiber
+to yield at the interruption's first op. The fiber's first slice, still queued,
+then runs the fiber's own program in the interruption's place, and whoever
+waits for the fiber to end waits forever. Effect's default scheduler does not
+reach that order at any `Scheduler.MaxOpsBeforeYield`, 1 included, so a park
+there is Effect's bug and never the program's. `simulate` therefore never
+preempts that one op, and that is the one exception to its reach: a preemption
+falls at every point where the runtime can switch fibers except the first op of
+an interruption of a fiber the run has not yet seen start. It tells that op
+apart by where Effect runs it: inside another fiber's op rather than from a
+task, and in the async context Effect gave the fiber when it was forked, that
+of the op that forked it. A fiber forked to start at once runs in the context
+of the op it starts inside of, and a fork whose first slice a flush runs from
+inside an op runs from a task, so the first op of each can still be preempted.
+Without the exception, `TestClock` meets the order: each sleep starts a fiber
+that warns when the clock is never adjusted, an adjust interrupts that fiber,
+and a program on `TestClock` with no race of its own parks in 33 of 20 000
+interleavings on seed 1. This repo's suite holds the bug itself on a scheduler
+of its own, outside `simulate`. That case fails once a release no longer loses
+the interruption, and the exception then comes out of `simulate`.
 
 For the run's duration `simulate` replaces `Math.random` with Effect's
 generator seeded by the interleaving's values, then puts it back, on a throw
@@ -251,8 +260,11 @@ check(
 );
 ```
 
-The run count goes through [`check`](property.md), like every other property,
-so the nightly multiplies whatever the property states. What the property states
+A property's run count goes through [`check`](property.md), like every other
+property's, so the nightly multiplies whatever the property states. A search
+that needs the counterexample back, as this repo's own search of its fixtures
+does, calls fast-check's own `check`, which answers the run's details rather
+than throwing, and the nightly does not multiply it. What the property states
 is its own `numRuns`, sized from the share of generated interleavings that fail
 against the racy version, `p`: at least `ln(10⁶) / p`, about 13.8 / p, which
 misses the race in fewer than one search in a million. Measure `p` by running
@@ -378,8 +390,8 @@ the latch goes.
 
 Effect 4 has no `Fiber.status`, so the probe reads where a fiber stood from the
 two things its `Fiber` says: `pollUnsafe()` answers its exit once it has
-finished, and `currentOpCount` is 0 until its first step. A forked operation
-that has an exit finished; one that has taken a step and has no exit is
+finished, and `currentOpCount` is 0 until its first op. A forked operation
+that has an exit finished; one that has run an op and has no exit is
 waiting; one at 0 never started, and the probe then proves nothing about the
 race. A parent's forks start on the parent's dispatcher in the next scheduler
 turn, so one `Effect.yieldNow` in the probe runs each gap operation until it
@@ -389,9 +401,9 @@ needs one more `Effect.yieldNow` per yield it takes.
 This repo's torn read is a ledger whose deposit credits the balance and then
 appends the entry, and whose reading reads the balance and then the entries. A
 reading must never see an entry the balance does not pay for. That invariant is
-narrower than judging the run by a serial order, as the section above does: it
+looser than judging the run by a serial order, as the section above does: it
 accepts a reading of the balance credited and the entry not yet appended, which
-no serial order explains. The fixture narrows it on purpose, so that the race
+no serial order explains. The fixture loosens it on purpose, so that the race
 left needs two preemptions, the kind a one-preemption sweep misses. The search finds
 the race, and the counterexample's log is `read balance`, `credit`, `append`,
 `read entries`: the reading was cut between its two reads, and a whole deposit

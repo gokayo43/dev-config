@@ -99,16 +99,82 @@ describe("the order comes from the interleaving and nothing else", () => {
     expect(orders.size).toBeGreaterThan(1);
   });
 
-  // Kills a run that leaves `Math.random` replaced after it, and one that
-  // restores it only when the run answers.
-  test("Math.random is the process's own again once the run ends, and once it throws", () => {
+  /**
+   * A program whose run throws from inside: Effect calls a fiber's observers
+   * after its run loop, outside the loop's own catch, so what one throws
+   * leaves the run. Detached before that, a fiber waits on a deferred nobody
+   * completes, and logs when it is interrupted.
+   */
+  const throwsFromInside = (log: string[]) =>
+    Effect.gen(function* () {
+      const never = yield* Deferred.make<void>();
+      yield* Deferred.await(never).pipe(
+        Effect.onInterrupt(() => note(log, "released")),
+        Effect.forkDetach,
+      );
+      const child = yield* Effect.forkChild(Effect.void);
+      child.addObserver(() => {
+        throw new Error("an observer threw");
+      });
+      yield* Fiber.join(child);
+    });
+
+  // Kills a run that leaves `Math.random` replaced after it. Regression: the
+  // run restored it only when it answered, and a throw from inside the run
+  // left the seeded generator in its place for the rest of the process; the
+  // limit's throw, raised once the run has answered, never reached that.
+  test("Math.random is the process's own again once the run ends, and once it throws from inside", () => {
     const { random } = Math;
     simulate(mesh, unpreempted);
     expect(Math.random).toBe(random);
-    expect(() => simulate(Effect.forever(Effect.void), unpreempted, { maxOps: 100 })).toThrow(
-      "the run did not finish within 100 ops",
-    );
-    expect(Math.random).toBe(random);
+    expect(() => simulate(throwsFromInside([]), unpreempted)).toThrow("an observer threw");
+    const replaced = Math.random !== random;
+    Math.random = random;
+    expect(replaced).toBe(false);
+  });
+
+  // Regression: a throw from inside the run skipped the wind-down, so a
+  // detached fiber outlived the call and its finalizer never ran.
+  test("a run that throws from inside still interrupts its fibers and runs their finalizers", () => {
+    const log: string[] = [];
+    expect(() => simulate(throwsFromInside(log), unpreempted)).toThrow("an observer threw");
+    expect(log).toEqual(["released"]);
+  });
+
+  /**
+   * A fork's observer throws when the root's flush runs it, out of the flush
+   * and into the root's op, which Effect's run loop catches as that op's
+   * defect and goes on from. The root then interrupts a fork that has not
+   * started, where Effect 4.1.4 loses an interruption.
+   */
+  const thrownIntoAnOp = Effect.suspend(() => {
+    let flushing = false;
+    return Effect.gen(function* () {
+      const thrower = yield* Effect.forkChild(Effect.void);
+      thrower.addObserver(() => {
+        if (flushing) throw new Error("an observer threw");
+      });
+      yield* Effect.exit(
+        Effect.sync(() => {
+          flushing = true;
+          Fiber.getCurrent()?.currentDispatcher.flush();
+        }),
+      );
+      flushing = false;
+      yield* Fiber.interrupt(yield* Effect.forkChild(Effect.never));
+      return "done";
+    });
+  });
+
+  // Regression: a task that threw left the run taking the op that flushed it
+  // for the task's own, so the interruption that followed was preempted at its
+  // first op, where Effect loses it, and the run parked.
+  test("a task that throws into the op that flushed it leaves the run's account of that op as it was", () => {
+    const { ops } = simulate(thrownIntoAnOp, unpreempted);
+    for (let op = 0; op < ops; op++)
+      expect(finished(thrownIntoAnOp, { strategy: "walk", preemptAt: [op], picks: [] })).toBe(
+        "done",
+      );
   });
 
   const forkThree = Effect.suspend(() => {
@@ -128,14 +194,14 @@ describe("the order comes from the interleaving and nothing else", () => {
   /**
    * Effect queues a fork's first slice on its parent's dispatcher, which runs
    * its tasks first in first out, so the three start in the order they were
-   * forked. Preempted at its first step, each child goes on to its own
+   * forked. Preempted at its first op, each child goes on to its own
    * dispatcher, and the walk's picks order those. The picks are the shortest
    * that reach each order with every op preempted.
    */
   // Kills a scheduler that ignores the walk's picks and runs the queue first in
   // first out, which reaches one order, not six; and one that picks among the
   // tasks of one dispatcher, which reaches more than one without a preemption.
-  test("the walk's picks reach every order of three fibers once each is preempted at its first step, and no other without", () => {
+  test("the walk's picks reach every order of three fibers once each is preempted at its first op, and no other without", () => {
     const every = Array.from({ length: simulate(forkThree, unpreempted).ops }, (_, op) => op);
     const picks = [
       [],
@@ -221,13 +287,13 @@ describe("the order comes from the interleaving and nothing else", () => {
   });
 
   /**
-   * c completes a deferred w waits on, which Effect resumes w inside c's step,
-   * before the rest of that step, the `map` after it, runs.
+   * c completes a deferred w waits on, which Effect resumes w inside c's op,
+   * before the rest of that op, the `map` after it, runs.
    */
-  // Kills a priority strategy that ranks a fiber resumed inside another's step
+  // Kills a priority strategy that ranks a fiber resumed inside another's op
   // against the queued tasks alone, which lets it run there although the fiber
   // beneath it outranks it.
-  test("a fiber resumed inside another's step runs there only when it outranks it", () => {
+  test("a fiber resumed inside another's op runs there only when it outranks it", () => {
     const resumedInside = Effect.suspend(() => {
       const log: string[] = [];
       return Effect.gen(function* () {
@@ -265,6 +331,49 @@ describe("the order comes from the interleaving and nothing else", () => {
     });
     expect(finished(flushed, unpreempted)).toBe("a1 r a2");
   });
+
+  /**
+   * Forks whose first slices the root's flush runs inside one op of the
+   * root's, which then logs `r`.
+   */
+  const flushedForks = (names: readonly string[]) =>
+    Effect.suspend(() => {
+      const log: string[] = [];
+      return Effect.gen(function* () {
+        const forks = [];
+        for (const name of names) forks.push(yield* Effect.forkChild(note(log, name)));
+        yield* Effect.sync(() => {
+          Fiber.getCurrent()?.currentDispatcher.flush();
+          log.push("r");
+        });
+        yield* Fiber.joinAll(forks);
+        return log.join(" ");
+      });
+    });
+
+  // Regression: the exclusion of the op where Effect loses an interruption
+  // matched every fiber the run had not seen whose first op ran inside another
+  // fiber's op, so a fork whose first slice a flush ran there could never be
+  // preempted at its first op: no interleaving ran the flushing op on before
+  // a, or b before a.
+  test.each([
+    [["a"], ["a r", "r a"]],
+    [
+      ["a", "b"],
+      ["a b r", "b r a"],
+    ],
+  ] as const)(
+    "forks %p whose first slices a flush runs inside an op can each be preempted at their first op",
+    (names, reachable) => {
+      const program = flushedForks(names);
+      const orders = new Set(
+        Array.from({ length: simulate(program, unpreempted).ops }, (_, op) =>
+          finished(program, { strategy: "walk", preemptAt: [op], picks: [] }),
+        ),
+      );
+      for (const order of reachable) expect(orders).toContain(order);
+    },
+  );
 
   // Kills a pick of the last of the highest rather than the first.
   test("fibers of equal priority run first in first out", () => {
@@ -406,12 +515,12 @@ describe("the order comes from the interleaving and nothing else", () => {
   });
 });
 
-describe("a preemption can fall between any two steps of the run loop, and nowhere else", () => {
+describe("a preemption can fall between any two ops, and nowhere else", () => {
   /**
    * Unless the runtime asks the scheduler between two steps, no interleaving
    * can land `b` inside `a`'s run of synchronous steps, whether or not that
    * run is an uninterruptible region. Steps joined by `map` run inside one
-   * step of the loop, and under `Scheduler.PreventSchedulerYield` the runtime
+   * op, and under `Scheduler.PreventSchedulerYield` the runtime
    * asks nothing at all.
    */
   const steps = ["a1", "a2", "a3", "a4"];
@@ -508,7 +617,7 @@ describe("ops", () => {
   // Kills an `ops` shorter or longer than the run the op indices count: the
   // run needs exactly that many, so a limit of one fewer stops it, and a
   // preemption at or past them never happens. A fiber Effect resumes after a
-  // preemption runs the step it was stopped before without asking again, so a
+  // preemption runs the op it was stopped before without asking again, so a
   // preemption below them adds none.
   test("a run asks exactly its ops, a preemption adds none, and one at or past them never happens", () => {
     const program = chain(6);
@@ -626,13 +735,13 @@ describe("how a run ends", () => {
     return yield* Fiber.join(sleeper);
   }).pipe(Effect.provide(TestClock.layer()));
 
-  // Regression: simulate preempted the first step of an interruption of a
-  // fiber that had not started, where Effect 4.1.4 loses the interruption, and
+  // Regression: simulate preempted the first op of an interruption of a fiber
+  // that had not started, where Effect 4.1.4 loses the interruption, and
   // parked this program in 33 of 20 000 interleavings on seed 1. The count is
-  // the page's sizing rule for that share. The fiber forked to start at once kills
-  // an exclusion wider than that step: its first step, inside the forking
-  // step, can still be preempted.
-  test("a program on TestClock with no race of its own never parks, and a fiber forked to start at once can still be preempted at its first step", () => {
+  // the page's sizing rule for that share. The fiber forked to start at once
+  // kills an exclusion wider than that op: its first op, inside the forking
+  // op, can still be preempted.
+  test("a program on TestClock with no race of its own never parks, and a fiber forked to start at once can still be preempted at its first op", () => {
     check(
       property(interleavingsOf(sleptUntilWoken), (interleaving) => {
         expect(finished(sleptUntilWoken, interleaving)).toBe("woke");
@@ -817,7 +926,7 @@ describe("how a run ends", () => {
 
   // Kills a watch that puts the run's tracer in place of the program's, which
   // loses the program's spans and its context hook.
-  test("a tracer the program provides still makes its spans and sees every step", () => {
+  test("a tracer the program provides still makes its spans and sees every op", () => {
     let spans = 0;
     let steps = 0;
     const own = Tracer.make({
