@@ -8,6 +8,7 @@
     "url": "git+https://github.com/gokayo43/dev-config.git"
   },
   "bin": {
+    "capacity-ramp": "./capacity-ramp.ts",
     "dev-server": "./dev-server.ts",
     "request-timing-report": "./request-timing-report.ts"
   },
@@ -18,6 +19,11 @@
     "knip.base.ts",
     "lighthouserc.json",
     "dist",
+    "capacity-ramp.ts",
+    "capacity-ramp-ladder.ts",
+    "capacity-ramp.js",
+    ".github/actions/_lib/k6.sh",
+    ".github/actions/_lib/pinned-tool.sh",
     "dev-server.ts",
     "dev-server-derive.ts",
     "file-lock.ts",

@@ -93,8 +93,8 @@ function named({ table_schema, table_name, column_name }: Column): string {
  *
  * There is no suppression rule beside that check, and the siblings that have
  * one are why it is worth saying so: stack-gate goes quiet about dead entries
- * while a manifest will not parse, and route-coverage while the app reported no
- * route table, because a universe that came up short reports as dead every
+ * while a manifest will not parse, and the fuzzer's route-allowlist while the
+ * app reported no route table, because a universe that came up short reports as dead every
  * waiver written for the part it could not read. This one is a single query —
  * it answered in full, or it threw in the entry point and nothing here ran at
  * all — so there is no half-read catalogue for a dead entry to be an artefact

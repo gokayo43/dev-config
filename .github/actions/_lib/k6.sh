@@ -1,12 +1,10 @@
 # shellcheck shell=bash
-# k6, verified and ready to run, for every ramp in this house. Sourced, not run:
-# it leaves the binary at $K6.
+# k6, verified and ready to run, for the capacity-ramp command. Sourced, not
+# run: it leaves the binary at $K6 and its version at $K6_VERSION.
 #
-# The pin lives beside the fetch rather than at each call site. There are three
-# callers — db-gate's ramp, this repo's own execution of the shipped script, and
-# project-template's ramp against a preview stack — and a version written out
-# three times is a version that drifts twice. A ramp is only comparable with
-# another ramp of the same k6, which is the whole reason those numbers are kept.
+# The one pin of k6 in this house, which the command reads from the package
+# every repo installs. A ramp is only comparable with another ramp of the same
+# k6, which is why each result records the version.
 #
 # renovate: datasource=github-release-attachments depName=grafana/k6
 K6_VERSION=v2.2.0

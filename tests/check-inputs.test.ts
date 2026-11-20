@@ -58,8 +58,6 @@ const MONOREPO: Tree = { "turbo.json": '{ "tasks": {} }\n' };
 const NOTHING_SET = {
   DATABASE: "none",
   UPGRADE_GATE: "false",
-  CAPACITY_PATH: "",
-  CAPACITY_SCRIPT: "",
   DB_GATE_EVIDENCE: "",
   ROUTE_ALLOWLIST: "",
   ROUTE_RETIRE: "",
@@ -128,10 +126,10 @@ describe("what a caller may pass, and what the jobs do with it", () => {
   test("an input aimed at a job that is not running is still refused", async () => {
     const { status, output } = await ran(VALIDATION, MONOREPO, {
       ...NOTHING_SET,
-      CAPACITY_PATH: "/api/things",
+      ROUTE_ALLOWLIST: "DELETE /things/:id -- it deletes what it names",
       MUTATION_FLOOR: "0.7",
     });
-    expect(output).toContain("::error::capacity-path needs database: postgres");
+    expect(output).toContain("::error::route-allowlist needs database: postgres");
     expect(output).toContain("::error::mutation-floor needs mutation-lane: true");
     expect(status).not.toBe(0);
   });
@@ -358,10 +356,10 @@ describe("what a caller may pass, and what the jobs do with it", () => {
     const { status, output } = await ran(VALIDATION, MONOREPO, {
       ...NOTHING_SET,
       DATABASE: "external",
-      CAPACITY_PATH: "/api/things",
+      ROUTE_ALLOWLIST: "DELETE /things/:id -- it deletes what it names",
       UPGRADE_GATE: "true",
     });
-    expect(output).toContain("::error::capacity-path needs database: postgres");
+    expect(output).toContain("::error::route-allowlist needs database: postgres");
     expect(output).toContain("::error::upgrade-gate: true needs database: postgres");
     expect(status).not.toBe(0);
   });

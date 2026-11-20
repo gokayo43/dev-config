@@ -6,12 +6,12 @@ import { plainly, type Problem, type Verdict } from "../_lib/gate.ts";
  * and an app that has already answered its health route. Nothing here is
  * stubbed, and nothing here knows what the probe is asserting.
  *
- * It sits between the boot and the ramp because the two floors either side of
- * it cannot ask this question. Health answering 200 proves the app *starts*
- * against that schema; the ramp's route floor proves every route was *reached*.
- * Neither says a single answer was correct — so a migration that applies, boots
- * and serves every route while quietly reinterpreting what a column means
- * passes both. What the probe asserts is the repo's, because only the repo
+ * It sits after the boot because nothing else in the gate can ask this
+ * question. Health answering 200 proves the app *starts* against that schema;
+ * the fuzzer proves a junk request is refused rather than crashed on. Neither
+ * says a single answer was correct — so a migration that applies, boots and
+ * answers every route while quietly reinterpreting what a column means passes
+ * both. What the probe asserts is the repo's, because only the repo
  * knows what its answers are supposed to be.
  *
  * That makes the contract the smallest one that can carry a claim this gate
@@ -26,12 +26,9 @@ import { plainly, type Problem, type Verdict } from "../_lib/gate.ts";
  * exits 0. Reading the status first would make this gate's answer depend on the
  * one thing about a repo's own program it cannot see, and the failure mode is
  * silence over an app that said out loud what was wrong with it.
- *
- * `capacity-script` hands a repo the same authorship one step later, and for
- * the same reason — the gate owns the running, the repo owns the meaning.
  */
 
-/** The one variable the probe is given, spelled as the boot step and the ramp both spell it. */
+/** The one variable the probe is given, spelled as the boot step spells it. */
 export const APP_URL = "HEALTH_URL";
 
 export interface Probe {
@@ -55,7 +52,7 @@ export interface Probe {
  * boot, so this is far more than any honest probe needs. It is a bound at all
  * for the reason the mutation lane's ten minutes is one — a probe that has
  * wedged is otherwise indistinguishable from a slow one, and it would spend the
- * job's whole fifteen minutes saying so, taking the ramp and every piece of
+ * job's whole fifteen minutes saying so, taking the fuzzer and every piece of
  * evidence after it down with it.
  */
 export const DEFAULT_SECONDS = 120;

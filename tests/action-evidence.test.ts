@@ -22,12 +22,11 @@ import { record } from "../.github/actions/_lib/gate.ts";
  * What the rule covers is the paths an action names **in its own YAML**. That
  * is not the same as the paths it writes, and it misses in both directions:
  *
- * - a path a *sourced script* introduces is invisible to it. db-gate is
- *   selected and does exactly this — `_lib/k6.sh` lands the k6 binary at
- *   `$RUNNER_TEMP/k6` — and the equality below holds only because nothing here
- *   reads `.sh` files. That is the boundary rather than an oversight: a binary
- *   is not evidence, and parsing shell to sort one from the other would be a
- *   second language to be wrong in.
+ * - a path a *sourced script* introduces is invisible to it: the pinned-tool
+ *   loaders in `_lib/` land their binaries in the same directory, and nothing
+ *   here reads `.sh` files. That is the boundary rather than an oversight: a
+ *   binary is not evidence, and parsing shell to sort one from the other would
+ *   be a second language to be wrong in.
  * - a path an action only reads or prints counts as named, so the rule can ask
  *   for the upload of a file no step ever creates. `if-no-files-found: ignore`
  *   is what keeps that harmless.
@@ -80,8 +79,6 @@ interface Action {
   /** The steps that upload, and everything else, split once so each case reads one of them. */
   readonly uploads: unknown[];
   readonly rest: unknown[];
-  /** Every step in the order the action runs them, for the one rule that is about order. */
-  readonly steps: unknown[];
 }
 
 async function actionIn(file: string): Promise<Action> {
@@ -92,7 +89,6 @@ async function actionIn(file: string): Promise<Action> {
     name: file.replace("/action.yml", ""),
     uploads: steps.filter(isUpload),
     rest: steps.filter((step) => !isUpload(step)),
-    steps,
   };
 }
 
@@ -109,7 +105,7 @@ describe("what a published action keeps", () => {
   });
 
   // A gate's annotation names the verdict; what is behind it — what the app
-  // declared, which routes the ramp reached, which test skipped — is in these
+  // declared, what the fuzzer sent, which test skipped — is in these
   // files. Reproducing a failure by re-running it with more printing is the
   // shape of debugging every diagnostic in this repo exists to avoid.
   test.each(publishing)("$name keeps every runner-temp path it names", ({ uploads, rest }) => {
@@ -123,35 +119,5 @@ describe("what a published action keeps", () => {
   // before it failing, and a cancelled run has nothing to say.
   test.each(publishing)("$name uploads even after the step before it failed", ({ uploads }) => {
     for (const step of uploads) expect(record(step)["if"]).toBe("${{ !cancelled() }}");
-  });
-});
-
-/**
- * The other thing that lives in YAML and in no module: the order two steps run
- * in. Only one pair here has an order that decides what a gate measures rather
- * than merely what it can read, and nothing driving either module could catch
- * it — both are pure functions of files somebody else writes.
- */
-describe("what the order of two steps decides", () => {
-  const DB_GATE = actions.find(({ name }) => name === "db-gate");
-
-  /** Where a step sits, found by something in its own body rather than by its name. */
-  function at(names: string): number {
-    const found = (DB_GATE?.steps ?? []).findIndex((step) =>
-      stringsIn(step).some((text) => text.includes(names)),
-    );
-    if (found < 0) throw new Error(`db-gate has no step naming ${names}`);
-    return found;
-  }
-
-  // Route coverage is the difference between two snapshots of the app's own
-  // counters. The fuzzer's traffic is invisible to it only because the second
-  // snapshot is already on disk when the fuzzer starts — a fuzz step ordered
-  // before that capture would have every route credited with this step's
-  // requests, and a route the ramp never touched would clear the floor on a
-  // request that was never a scenario's. docs/gates/fuzz.md argues it; this is
-  // what holds it.
-  test("the fuzzer runs after the ramp has captured the second route log", () => {
-    expect(at("fuzz.main.ts")).toBeGreaterThan(at("route-log-after.json"));
   });
 });

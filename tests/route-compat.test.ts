@@ -286,8 +286,8 @@ describe("the routes the base ref served", () => {
   });
 
   // The floor itself. Nothing else in the database job notices a route that
-  // stopped being registered: the app boots, the ramp runs, and the coverage
-  // floor is happy because what is gone is not in the table it grades.
+  // stopped being registered: the app boots, and the fuzzer is happy because
+  // what is gone is not in the table it reads.
   // The diagnostic carries the way out, filled in for the route it is about. A
   // reader of the red has one edit to make and should be able to copy it: an
   // implementation that names the input without showing the line sends them to
@@ -503,7 +503,7 @@ describe("retiring a route deliberately", () => {
     ]);
   });
 
-  // The same rot the ramp's allowlist is held to: an entry naming a route the
+  // The same rot the fuzzer's allowlist is held to: an entry naming a route the
   // base ref never served waives nothing and is left behind by whoever wrote it.
   test("an entry naming a route the base ref did not serve is refused", async () => {
     const { verdict, at } = await drive({

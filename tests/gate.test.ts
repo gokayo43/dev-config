@@ -183,8 +183,7 @@ describe("what publishing a verdict writes", () => {
   //
   // `""` counts as nowhere, and is the case that actually happens:
   // `INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY"` is the empty string for every
-  // caller outside a workflow, which is what project-template's
-  // preview-capacity.sh is.
+  // caller outside a workflow.
   test.each([
     ["no path at all", undefined],
     ["an empty path", ""],
@@ -220,7 +219,7 @@ describe("what publishing a verdict writes", () => {
   });
 
   // The run this step is about to fail is exactly the run whose measurement is
-  // worth reading: it is what says which way the ramp or the campaign went wrong.
+  // worth reading: it is what says which way the fuzzer or the campaign went wrong.
   test("the table is published for a run the step fails", async () => {
     const file = await summaryFile();
     const { restore } = captureLog();
