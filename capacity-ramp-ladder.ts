@@ -609,7 +609,7 @@ function usersOf(held: number | null): string {
 }
 
 /** The result as a person reads it: the same headings and tables for every run. */
-function markdownOf(result: Result): string {
+export function markdownOf(result: Result): string {
   const { target, bounds, ladder: steps } = result;
   const deciding = result.steps.at(-1);
   return [

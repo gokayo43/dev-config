@@ -7,6 +7,7 @@ import { asyncProperty, constantFrom, integer } from "fast-check";
 
 import {
   k6Home,
+  markdownOf,
   MEASURED,
   NO_MEASUREMENT,
   pinnedK6,
@@ -47,14 +48,20 @@ type Breaking = "errors" | "slow";
 const FAST_MS = 20;
 const P95_BOUND_MS = 500;
 const SLOW_MS = 1_500;
+const SLOW_PATH_MS = 150;
 
 interface Stub extends AsyncDisposable {
   readonly health: string;
   readonly origin: string;
 }
 
-/** A target that answers fast while at most `users` k6 users are connected, and `breaking` past that. */
-async function stub(users: number, breaking: Breaking): Promise<Stub> {
+/**
+ * A target that answers fast while at most `users` k6 users are connected, and
+ * `breaking` past that. `slowPath`, where it is given, always answers in
+ * `SLOW_PATH_MS`, under the p95 bound, so it is the slowest path without
+ * breaking a step.
+ */
+async function stub(users: number, breaking: Breaking, slowPath?: string): Promise<Stub> {
   const k6Sockets = new Set<Socket>();
   const answer = (request: IncomingMessage, response: ServerResponse): void => {
     const { socket } = request;
@@ -72,7 +79,7 @@ async function stub(users: number, breaking: Breaking): Promise<Stub> {
       () => {
         response.end("ok");
       },
-      past ? SLOW_MS : FAST_MS,
+      past ? SLOW_MS : request.url === slowPath ? SLOW_PATH_MS : FAST_MS,
     );
   };
   const server = createServer(answer);
@@ -195,7 +202,7 @@ describe("the ceiling it finds", () => {
   // Where to start looking: every path it was given, slowest first, at the
   // step that decided the run.
   test("reports each path at the deciding step, slowest first", async () => {
-    await using target = await stub(1, "slow");
+    await using target = await stub(4, "errors", "/things");
     const result = await rampOf(
       target.health,
       await scratch(),
@@ -204,15 +211,21 @@ describe("the ceiling it finds", () => {
       "--path",
       "/other",
     );
+    expect(result.held).toBe(4);
     const deciding = result.steps.at(-1);
-    expect(deciding?.users).toBe(2);
-    expect(deciding?.paths.map((path) => `${path.method} ${path.name}`).toSorted()).toEqual([
-      "GET /health",
-      "GET /other",
+    expect(deciding?.users).toBe(4);
+    expect(deciding?.paths.map((path) => `${path.method} ${path.name}`)).toEqual([
       "GET /things",
+      expect.any(String),
+      expect.any(String),
     ]);
-    const p95s = deciding?.paths.map((path) => path.p95Ms) ?? [];
-    expect(p95s).toEqual(p95s.toSorted((a, b) => b - a));
+    expect(deciding?.paths.map((path) => path.name).toSorted((a, b) => a.localeCompare(b))).toEqual(
+      ["/health", "/other", "/things"],
+    );
+    const table = markdownOf(result).split("## Slowest paths at 4 users")[1] ?? "";
+    expect(table.split("\n").find((line) => line.startsWith("| GET "))).toStartWith(
+      "| GET /things |",
+    );
   });
 });
 
