@@ -195,10 +195,13 @@ interrupted from another fiber's op before its own first slice has run, so
 Effect runs the interruption there and then, and the scheduler tells the fiber
 to yield at the interruption's first op. The fiber's first slice, still queued,
 then runs the fiber's own program in the interruption's place, and whoever
-waits for the fiber to end waits forever. Effect's default scheduler does not
-reach that order at any `Scheduler.MaxOpsBeforeYield`, 1 included, so a park
-there is Effect's bug and never the program's. `simulate` therefore never
-preempts that one op, and that is the one exception to its reach: a preemption
+waits for the fiber to end waits forever. Effect's default scheduler reaches
+that order where the forking fiber's `Scheduler.MaxOpsBeforeYield` is 1 and the
+interruption comes from a fiber on a larger budget, as a scope closed from
+another root does, and did not at a budget of 2 in the same program
+(Effect-TS/effect#10800 is the report, made against 4.1.5). A park there is
+Effect's bug and never the program's race. `simulate` therefore never preempts
+that one op, and that is the one exception to its reach: a preemption
 falls at every point where the runtime can switch fibers except the first op of
 an interruption of a fiber the run has not yet seen start. It tells that op
 apart by where Effect runs it: inside another fiber's op rather than from a
