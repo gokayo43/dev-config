@@ -7,6 +7,7 @@
  * choosing what to mutate and running Stryker over it, is another.
  */
 import {
+  byCodeUnit,
   type ConfigObject,
   isList,
   isObject,
@@ -162,6 +163,24 @@ function inTheChange(mutant: Mutant, lines: ReadonlySet<number>): boolean {
   return true;
 }
 
+/**
+ * The order the findings are listed in: by file, then first line, last line,
+ * mutator, replacement and status. Stryker writes a mutant it ran when that
+ * mutant's run finishes, so the report's own order changes between two runs
+ * over one branch. Two mutants equal on all six print the same message, so
+ * how they tie cannot be seen.
+ */
+function byListing(a: Mutant, b: Mutant): number {
+  return (
+    byCodeUnit(a.file, b.file) ||
+    a.from - b.from ||
+    a.to - b.to ||
+    byCodeUnit(a.mutator, b.mutator) ||
+    byCodeUnit(a.replacement, b.replacement) ||
+    byCodeUnit(a.status, b.status)
+  );
+}
+
 function percent(score: number): string {
   return `${(score * 100).toFixed(1)}%`;
 }
@@ -293,7 +312,8 @@ export function verdict(
 
   const surviving = graded
     .filter((each) => each.own && each.worth === "undetected")
-    .map((each) => each.mutant);
+    .map((each) => each.mutant)
+    .toSorted(byListing);
 
   const problems = surviving.map(survivorProblem);
   if (bound !== undefined && counted.score < bound) {

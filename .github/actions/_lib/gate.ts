@@ -284,6 +284,15 @@ export function plural(many: number, noun: string): string {
   return `${many} ${noun}${many === 1 ? "" : "s"}`;
 }
 
+/**
+ * Code unit order, which no runtime's collation data can change, where
+ * `localeCompare` orders by whatever ICU data the runtime was built with.
+ */
+export function byCodeUnit(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
 /** A space-separated action input, as a list. */
 export function list(value: string): string[] {
   return value.split(/\s+/).filter((item) => item !== "");

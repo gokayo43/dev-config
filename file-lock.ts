@@ -64,48 +64,91 @@ export async function bootId(): Promise<string> {
   return (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
 }
 
-/**
- * What `/proc` says about a running process, or nothing when it is not there.
- *
- * Read from after the LAST `)`, because field 2 is the executable name, is not
- * escaped, and may contain both spaces and parentheses. What is wanted after
- * that is field 5, the process group, and field 22, the tick this process
- * started on.
- */
-export async function procStat(
-  pid: number,
-): Promise<{ startTicks: number; leadsItsGroup: boolean } | null> {
-  let raw: string;
-  try {
-    raw = await readFile(`/proc/${pid}/stat`, "utf8");
-  } catch (error) {
-    // No such process is the answer being asked for; any other failure to read
-    // says nothing about whether it is alive.
-    if (hasCode(error, "ENOENT")) return null;
-    throw error;
-  }
-  const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
-  const group = Number(fields[2]);
-  const startTicks = Number(fields[19]);
-  if (!Number.isInteger(group) || !Number.isInteger(startTicks)) {
-    throw new Error(
-      `/proc/${pid}/stat is not the shape this reads — fields 5 and 22 are not numbers`,
-    );
-  }
-  return { startTicks, leadsItsGroup: group === pid };
+/** What `/proc/<pid>/stat` says of a process that is there, reaped or not. */
+export interface ProcStat {
+  /** The kernel's state letter, field 3: `R`, `S`, `T`, `Z` and the rest. */
+  readonly state: string;
+  readonly startTicks: number;
+  /** Its process group, field 5, which is its own pid when it leads one. */
+  readonly group: number;
+  /**
+   * Whether any thread of it still runs. A process that has wholly exited keeps
+   * its entry, in state `Z`, until whatever adopted it reaps it, and it is no
+   * holder and no server from the moment it exited.
+   */
+  readonly alive: boolean;
 }
 
 /**
- * Whether a holder is still the process that wrote it down, or nothing.
+ * The judgement of one `/proc/<pid>/stat` text, apart from reading it.
+ *
+ * Read from after the LAST `)`, because field 2 is the executable name, is not
+ * escaped, and may contain both spaces and parentheses. The fields wanted are
+ * 3, the state, 5, the process group, 20, the number of threads, and 22, the
+ * tick this process started on.
+ *
+ * Dead is state `Z` or `X` with no thread but the leader's own entry counted.
+ * `Z` alone is not that proof: the leader's entry shows `Z` once its main
+ * thread has exited while another thread runs on, and the count is then 2 or
+ * more. The count is 0 while the kernel is releasing the process, since
+ * `do_task_stat` reports 0 once it cannot take the process's signal lock.
+ *
+ * `from` is where the text was read, which a refusal names.
+ */
+export function parseStat(raw: string, from: string): ProcStat {
+  const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
+  const state = String(fields[0]);
+  const group = Number(fields[2]);
+  const threads = Number(fields[17]);
+  const startTicks = Number(fields[19]);
+  if (
+    !/^[A-Za-z]$/.test(state) ||
+    ![group, threads, startTicks].every((field) => Number.isInteger(field))
+  ) {
+    throw new Error(
+      `${from} is not the shape this reads — field 3 is not a state letter, or fields 5, 20 and 22 are not numbers`,
+    );
+  }
+  const exited = (state === "Z" || state === "X") && threads <= 1;
+  return { state, startTicks, group, alive: !exited };
+}
+
+/**
+ * What `/proc` says about a process, or nothing when it is not there. A read
+ * that is refused throws, naming the path, since it says nothing about whether
+ * the process is there.
+ */
+export async function procStat(pid: number): Promise<ProcStat | null> {
+  const path = `/proc/${pid}/stat`;
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    // No such process is the answer being asked for, and so is a process reaped
+    // between the open and the read, which the read reports as ESRCH.
+    if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH")) return null;
+    throw error;
+  }
+  return parseStat(raw, path);
+}
+
+/**
+ * The process a holder wrote down, as `/proc` has it now: alive, dead and not
+ * yet reaped, or nothing when it is not there or the pid names another process.
  *
  * Answers with what `/proc` said rather than a boolean, because the one caller
- * that goes on to signal has a second question to ask of it and no reason to
- * read the same file twice.
+ * that goes on to signal has more to ask of it and no reason to read the same
+ * file twice. Every other question is whether it is alive, which `alive` asks.
  */
-export async function ours(who: Holder, boot: string): Promise<{ leadsItsGroup: boolean } | null> {
+export async function ours(who: Holder, boot: string): Promise<ProcStat | null> {
   if (who.bootId !== boot) return null;
   const stat = await procStat(who.pid);
   return stat !== null && stat.startTicks === who.startTicks ? stat : null;
+}
+
+/** Whether a holder is still the process that wrote it down, and still running. */
+export async function alive(who: Holder, boot: string): Promise<boolean> {
+  return (await ours(who, boot))?.alive === true;
 }
 
 const POLL_MS = 25;
@@ -153,7 +196,7 @@ async function liveHolder(text: string, boot: string): Promise<Holder | undefine
     // Not a holder: nobody this lock names can ever release it.
     return undefined;
   }
-  return isHolder(parsed) && (await ours(parsed, boot)) !== null ? parsed : undefined;
+  return isHolder(parsed) && (await alive(parsed, boot)) ? parsed : undefined;
 }
 
 /** A name beside `path` that no other waiter, in this process or another, will pick. */
@@ -289,7 +332,7 @@ async function sweep(path: string, patienceMs: number, between: Between, me: Me)
       // Not a file this lock wrote, so not one it may remove.
       continue;
     }
-    if (!isHolder(parsed) || (await ours(parsed, me.boot)) !== null) continue;
+    if (!isHolder(parsed) || (await alive(parsed, me.boot))) continue;
     if (name.endsWith(CLAIM)) await takeOver(file, text, patienceMs, between, me);
     else await rm(file, { force: true });
   }

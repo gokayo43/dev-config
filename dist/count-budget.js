@@ -40,9 +40,14 @@ function isRaised(ceiling) {
 function ceilingOf(ceiling) {
 	return isRaised(ceiling) ? ceiling.ceiling : ceiling;
 }
-function byCodePoint(a, b) {
-	if (a === b) return 0;
-	return a < b ? -1 : 1;
+/**
+* Code unit order, as `byCodeUnit` in `.github/actions/_lib/gate.ts` is. A copy
+* rather than an import, because this ships inside `dist/` to the repos the
+* gates run over, and gate code is not theirs to import.
+*/
+function byCodeUnit(a, b) {
+	if (a < b) return -1;
+	return a > b ? 1 : 0;
 }
 const DIGEST = 8;
 function digest(phase, count, accepted) {
@@ -61,7 +66,7 @@ function slots(phases) {
 		phase,
 		count,
 		ceiling
-	])).toSorted(([a, x], [b, y]) => byCodePoint(`${a}\u0000${x}`, `${b}\u0000${y}`));
+	])).toSorted(([a, x], [b, y]) => byCodeUnit(`${a}\u0000${x}`, `${b}\u0000${y}`));
 }
 /**
 * The seal: per count, a digest of the ceiling the command accepted for it. A
@@ -145,7 +150,7 @@ function entryJson(entry) {
 /** A whole file with one test's entry set, its tests in code-point order. */
 function withEntry(file, key, entry) {
 	const others = Object.entries(file).filter(([held]) => held !== key);
-	return Object.fromEntries([...others, [key, entryJson(entry)]].toSorted(([a], [b]) => byCodePoint(a, b)));
+	return Object.fromEntries([...others, [key, entryJson(entry)]].toSorted(([a], [b]) => byCodeUnit(a, b)));
 }
 /** A test's entry as the file holds it, judged against its seal; nothing when the file has none. */
 function entryIn(file, key, where) {
@@ -335,41 +340,71 @@ async function bootId() {
 	return (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
 }
 /**
-* What `/proc` says about a running process, or nothing when it is not there.
+* The judgement of one `/proc/<pid>/stat` text, apart from reading it.
 *
 * Read from after the LAST `)`, because field 2 is the executable name, is not
-* escaped, and may contain both spaces and parentheses. What is wanted after
-* that is field 5, the process group, and field 22, the tick this process
-* started on.
+* escaped, and may contain both spaces and parentheses. The fields wanted are
+* 3, the state, 5, the process group, 20, the number of threads, and 22, the
+* tick this process started on.
+*
+* Dead is state `Z` or `X` with no thread but the leader's own entry counted.
+* `Z` alone is not that proof: the leader's entry shows `Z` once its main
+* thread has exited while another thread runs on, and the count is then 2 or
+* more. The count is 0 while the kernel is releasing the process, since
+* `do_task_stat` reports 0 once it cannot take the process's signal lock.
+*
+* `from` is where the text was read, which a refusal names.
 */
-async function procStat(pid) {
-	let raw;
-	try {
-		raw = await readFile(`/proc/${pid}/stat`, "utf8");
-	} catch (error) {
-		if (hasCode(error, "ENOENT")) return null;
-		throw error;
-	}
+function parseStat(raw, from) {
 	const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
+	const state = String(fields[0]);
 	const group = Number(fields[2]);
+	const threads = Number(fields[17]);
 	const startTicks = Number(fields[19]);
-	if (!Number.isInteger(group) || !Number.isInteger(startTicks)) throw new Error(`/proc/${pid}/stat is not the shape this reads — fields 5 and 22 are not numbers`);
+	if (!/^[A-Za-z]$/.test(state) || ![
+		group,
+		threads,
+		startTicks
+	].every((field) => Number.isInteger(field))) throw new Error(`${from} is not the shape this reads — field 3 is not a state letter, or fields 5, 20 and 22 are not numbers`);
 	return {
+		state,
 		startTicks,
-		leadsItsGroup: group === pid
+		group,
+		alive: !((state === "Z" || state === "X") && threads <= 1)
 	};
 }
 /**
-* Whether a holder is still the process that wrote it down, or nothing.
+* What `/proc` says about a process, or nothing when it is not there. A read
+* that is refused throws, naming the path, since it says nothing about whether
+* the process is there.
+*/
+async function procStat(pid) {
+	const path = `/proc/${pid}/stat`;
+	let raw;
+	try {
+		raw = await readFile(path, "utf8");
+	} catch (error) {
+		if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH")) return null;
+		throw error;
+	}
+	return parseStat(raw, path);
+}
+/**
+* The process a holder wrote down, as `/proc` has it now: alive, dead and not
+* yet reaped, or nothing when it is not there or the pid names another process.
 *
 * Answers with what `/proc` said rather than a boolean, because the one caller
-* that goes on to signal has a second question to ask of it and no reason to
-* read the same file twice.
+* that goes on to signal has more to ask of it and no reason to read the same
+* file twice. Every other question is whether it is alive, which `alive` asks.
 */
 async function ours(who, boot) {
 	if (who.bootId !== boot) return null;
 	const stat = await procStat(who.pid);
 	return stat !== null && stat.startTicks === who.startTicks ? stat : null;
+}
+/** Whether a holder is still the process that wrote it down, and still running. */
+async function alive(who, boot) {
+	return (await ours(who, boot))?.alive === true;
 }
 const POLL_MS = 25;
 /** How a claim's file name ends, which is how the sweep tells one from the files it may remove. */
@@ -396,7 +431,7 @@ async function liveHolder(text, boot) {
 	} catch {
 		return;
 	}
-	return isHolder(parsed) && await ours(parsed, boot) !== null ? parsed : void 0;
+	return isHolder(parsed) && await alive(parsed, boot) ? parsed : void 0;
 }
 /** A name beside `path` that no other waiter, in this process or another, will pick. */
 function own(path) {
@@ -500,7 +535,7 @@ async function sweep(path, patienceMs, between, me) {
 		} catch {
 			continue;
 		}
-		if (!isHolder(parsed) || await ours(parsed, me.boot) !== null) continue;
+		if (!isHolder(parsed) || await alive(parsed, me.boot)) continue;
 		if (name.endsWith(CLAIM)) await takeOver(file, text, patienceMs, between, me);
 		else await rm(file, { force: true });
 	}

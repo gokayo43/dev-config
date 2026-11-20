@@ -24,9 +24,14 @@ import {
   recordStem,
   type Server,
 } from "../dev-server-derive.ts";
+import { bootId, procStat } from "../file-lock.ts";
+import { heard } from "./proc-reading.ts";
 
 /** The CLI under test, reached the way a consuming repo reaches it. */
 const CLI = join(dirname(import.meta.dir), "dev-server.ts");
+
+/** The parent that adopts what a command leaves behind and reaps none of it. */
+const UNREAPING = join(import.meta.dir, "unreaping-parent.ts");
 
 /** Every branch a fixture runs `up` on. A fixture claims all of their blocks before any case starts a server. */
 export const BRANCHES = ["main", "feature", "feat/x", "feat-x"] as const;
@@ -143,6 +148,27 @@ export const EXITS_AT_ONCE = `console.error("boom: the dev script could not star
 process.exit(3);
 `;
 
+/**
+ * A `dev` script that serves and asks SIGTERM to be ignored. `bun run dev`
+ * above it passes SIGTERM on and waits for it, so the whole server outlives
+ * the signal.
+ */
+export const IGNORES_SIGTERM = `${SERVES}process.on("SIGTERM", () => console.log("fixture ignored SIGTERM"));
+`;
+
+/** A `dev` script that serves until `/unbind` is asked for, then runs on binding nothing, as a watcher does. */
+export const LETS_GO_OF_ITS_PORT = `const server = Bun.serve({
+  port: Number(process.env["PORT"]),
+  hostname: process.env["HOST"],
+  fetch: (request) => {
+    if (new URL(request.url).pathname !== "/unbind") return new Response("ok");
+    setTimeout(() => server.stop(true), 0);
+    return new Response("unbinding");
+  },
+});
+setInterval(() => {}, 60_000);
+`;
+
 /** A `dev` script that starts, says so, and never listens. */
 export const NEVER_BINDS = `console.log("started, binding nothing");
 await Bun.sleep(60000);
@@ -167,6 +193,12 @@ export interface Scratch extends AsyncDisposable {
   devServer(cwd: string, ...args: readonly string[]): Promise<Run>;
   /** Two of them at once, started as close together as this can arrange. */
   devServerRace(cwd: string, ...args: readonly string[]): Promise<[Run, Run]>;
+  /**
+   * The same, run under a parent that adopts the server it leaves running and
+   * reaps nothing it adopted until disposed of: a server that dies meanwhile
+   * stays a zombie, dead and still listed in `/proc`.
+   */
+  devServerUnreaped(cwd: string, ...args: readonly string[]): Promise<Run & AsyncDisposable>;
   /** Where a branch's record, log and lock live, derived the way the CLI derives them. */
   paths(branch: Branch): { readonly record: string; readonly log: string; readonly lock: string };
   /** The record for a branch. Refuses to invent one: an absent record is a failing case, not a zero. */
@@ -300,10 +332,12 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
     }
   }
 
+  const environment = { ...process.env, DEV_SERVER_READY_TIMEOUT_MS: String(ready) };
+
   async function invoke(cwd: string, args: readonly string[]): Promise<Run> {
     const proc = Bun.spawn([process.execPath, "run", "dev-server", ...args], {
       cwd,
-      env: { ...process.env, DEV_SERVER_READY_TIMEOUT_MS: String(ready) },
+      env: environment,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -339,6 +373,26 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
       const both = await Promise.all([invoke(cwd, args), invoke(cwd, args)]);
       await remember();
       return both;
+    },
+    async devServerUnreaped(
+      cwd: string,
+      ...args: readonly string[]
+    ): Promise<Run & AsyncDisposable> {
+      const parent = Bun.spawn(
+        [process.execPath, UNREAPING, process.execPath, "run", "dev-server", ...args],
+        { cwd, env: environment, stdin: "pipe", stdout: "pipe", stderr: "inherit" },
+      );
+      const [said = ""] = await heard(parent.stdout, 1);
+      await remember();
+      const run: unknown = JSON.parse(said);
+      if (!isRun(run)) throw new Error(`the unreaping parent said ${said}`);
+      return {
+        ...run,
+        async [Symbol.asyncDispose](): Promise<void> {
+          await parent.stdin.end();
+          await parent.exited;
+        },
+      };
     },
     async record(branch: Branch): Promise<Server> {
       const { record } = paths(branch);
@@ -394,7 +448,7 @@ export async function bystander(): Promise<{ readonly pid: number } & Disposable
   // `setsid` execs in place, but not before it has run: a case that signalled
   // `-pid` in that gap reached nothing, the process lived on, and the case
   // failed on whichever assertion came next.
-  const led = await settles(async () => await leadsItsGroup(proc.pid));
+  const led = await settles(async () => (await procStat(proc.pid))?.group === proc.pid);
   if (!led) throw new Error(`${proc.pid} never became the leader of its own process group`);
   return {
     pid: proc.pid,
@@ -404,28 +458,17 @@ export async function bystander(): Promise<{ readonly pid: number } & Disposable
   };
 }
 
-async function leadsItsGroup(pid: number): Promise<boolean> {
-  try {
-    const raw = await readFile(`/proc/${pid}/stat`, "utf8");
-    return Number(raw.slice(raw.lastIndexOf(")") + 2).split(" ")[2]) === pid;
-  } catch {
-    // Gone already, which is not a group leader either.
-    return false;
-  }
-}
-
 /**
  * What a file has to say about a process for this tool to act on it: which boot,
- * and which tick within it. Read the same way the CLI reads it, because a case
+ * and which tick within it. Read through the CLI's own reader, because a case
  * that planted a different spelling would be grading its own arithmetic.
  */
 export async function holderOf(
   pid: number,
 ): Promise<{ pid: number; bootId: string; startTicks: number }> {
-  const raw = await readFile(`/proc/${real(pid)}/stat`, "utf8");
-  const startTicks = Number(raw.slice(raw.lastIndexOf(")") + 2).split(" ")[19]);
-  const bootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
-  return { pid, bootId, startTicks };
+  const stat = await procStat(real(pid));
+  if (stat === null) throw new Error(`process ${pid} is not there to hold anything`);
+  return { pid, bootId: await bootId(), startTicks: stat.startTicks };
 }
 
 /** Waits for something to exist, and hands it over — for the cases that need it while the command still runs. */
@@ -450,9 +493,31 @@ export async function stays(
   return await unchanged();
 }
 
-/** Whether a process is there at all — the question `status` answers in its own column. */
-export function running(pid: number): boolean {
-  return exists(real(pid));
+function isRun(value: unknown): value is Run {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "code" in value &&
+    typeof value.code === "number" &&
+    "stdout" in value &&
+    typeof value.stdout === "string" &&
+    "stderr" in value &&
+    typeof value.stderr === "string"
+  );
+}
+
+/**
+ * Whether a process is there and still runs — the question `status` answers in
+ * its own column. A process that has exited is not running, whether or not
+ * whatever adopted it has reaped it yet.
+ */
+export async function running(pid: number): Promise<boolean> {
+  return (await procStat(real(pid)))?.alive === true;
+}
+
+/** Whether a process has exited and is still listed, because nobody has reaped it. */
+export async function unreaped(pid: number): Promise<boolean> {
+  return (await procStat(real(pid)))?.alive === false;
 }
 
 /** Whether a signal reaches anything at a pid, or at a whole process group as `-pid`. */
@@ -469,6 +534,11 @@ function exists(target: number): boolean {
 /** Kills a server without telling the CLI, which is what a `pkill` or a reboot does to one. */
 export function killBehindItsBack(pid: number): void {
   slay(pid);
+}
+
+/** Kills a group's leader and nothing else in its group, as an OOM kill or a crash of `bun run` does. */
+export function killLeaderAlone(pid: number): void {
+  process.kill(real(pid), "SIGKILL");
 }
 
 /** Waits for a condition the operating system reaches on its own time — a process dying, a port closing. */

@@ -8,7 +8,9 @@ description: >-
   The suite is the `test` script the repo's package.json declares, run through
   `bun run` with the coverage and reporter flags appended, and bare `bun test`
   where no script is declared. A repo whose tests need a bootstrap puts it in
-  that script, and the gate has to run what the repo runs.
+  that script, and the gate has to run what the repo runs. Where that command
+  is `bun test` itself and names no limit, every run but the nightly gives each
+  test and hook a minute rather than bun's five seconds.
 
   The lane this runs is the one the shared check.yml gives it: a job with no
   service containers, which is what makes it a unit lane rather than a naming
@@ -100,6 +102,19 @@ runs:
         # It is a per-test bound and the job's own timeout is what bounds the
         # suite.
         #
+        # Every other run gives a suite whose command is `bun test` itself, and
+        # names no limit, one minute per test and hook against bun's five
+        # seconds. A test's wall time is its CPU time over its share of a core:
+        # a case needing about 0.1s of CPU took 3.9s at a 3% quota and timed
+        # out at five seconds in a full run at load 40 on 16 cores (dev-config,
+        # 2026-11-19). A minute is the ceiling wmstcs's wrapper and nfp-elysia's
+        # script each chose under that load: a test needing up to 1.8s of CPU
+        # passes at a 3% share, and a hung one costs a minute of the job's
+        # fifteen. bun keeps the last --timeout it is given, so this one would
+        # outrank a limit the script states and is left off it; any other
+        # script is a suite command its repo designed, limit included, and gets
+        # nothing. docs/gates/test-suite.md has the rest.
+        #
         # A spelling this does not know is refused rather than read as "not
         # nightly": the nightly is the run nobody watches, and a typo there is a
         # long budget that silently never happened.
@@ -109,7 +124,12 @@ runs:
             budget=(PROPERTY_RUNS_FACTOR=50 PROPERTY_TIME_LIMIT_MS=120000)
             flags+=(--timeout 600000)
             ;;
-          false) ;;
+          false)
+            case $declared in
+              *--timeout*) ;;
+              "" | "bun test" | "bun test "*) flags+=(--timeout 60000) ;;
+            esac
+            ;;
           *)
             echo "::error::nightly is \"$NIGHTLY\" — it takes true or false, and nothing else can be read as either"
             exit 1

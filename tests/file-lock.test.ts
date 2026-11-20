@@ -8,12 +8,13 @@
 import { describe, expect, test } from "bun:test";
 import { link, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { array, asyncProperty, constantFrom, integer, nat } from "fast-check";
 
-import { bootId, lock, procStat } from "../file-lock.ts";
+import { bootId, lock, parseStat, procStat } from "../file-lock.ts";
 import { check } from "../property.ts";
+import { besideAHiddenProcess, exits, heard, orphaned, reaches } from "./proc-reading.ts";
 
 /** More waiting than any schedule here asks for, since waiting costs no time under one. */
 const PATIENT = 1_000_000_000;
@@ -165,8 +166,7 @@ async function killedAt(path: string, stop: string): Promise<void> {
     stderr: "inherit",
   });
   try {
-    const { value } = await child.stdout.getReader().read();
-    expect(new TextDecoder().decode(value)).toBe("at\n");
+    expect(await heard(child.stdout, 1)).toEqual(["at"]);
   } finally {
     child.kill("SIGKILL");
     await child.exited;
@@ -301,6 +301,117 @@ test("gives up on a live holder after its patience, naming it", async () => {
   expect(String(waiter.failure)).toContain(
     `has been held for 100ms by process ${process.pid}, which is still running`,
   );
+});
+
+describe("a holder's process, by the state the kernel has it in", () => {
+  // Each text is a real process's `/proc/<pid>/stat`, captured on this machine
+  // in that state by `tests/proc-stat-capture.ts`. The wrong implementations:
+  // reading the state field not at all, which calls every zombie alive; and
+  // reading `Z` alone as dead, which calls a process whose main thread has
+  // exited dead while another of its threads runs.
+  test.each([
+    ["running", true],
+    ["sleeping", true],
+    ["stopped", true],
+    ["main-thread-exited", true],
+    ["zombie", false],
+    ["zombie-multithreaded", false],
+    ["zombie-group-leader", false],
+  ] as const)("%s is alive: %p", async (name, expected) => {
+    const path = join(import.meta.dir, "proc-stat", `${name}.stat`);
+
+    expect(parseStat(await readFile(path, "utf8"), path).alive).toBe(expected);
+  });
+
+  test("a dead leader still leads its group, which is what pins the group", async () => {
+    // `dev-server down` kills what is left of a dead server's group only while
+    // its leader's entry names its own pid as its group. Field 1 is the pid the
+    // text is about.
+    const path = join(import.meta.dir, "proc-stat", "zombie-group-leader.stat");
+    const raw = await readFile(path, "utf8");
+
+    expect(parseStat(raw, path).group).toBe(Number(raw.split(" ", 1)[0]));
+  });
+
+  test("refuses a line that is not a stat line, naming where it was read", () => {
+    // The wrong implementation names the pid it failed to parse out of the
+    // line, which is `NaN` in exactly the case the refusal is for.
+    expect(() => parseStat("garbage", "/proc/4242/stat")).toThrow(
+      "/proc/4242/stat is not the shape this reads",
+    );
+  });
+
+  test("a live holder /proc will not show this user is not taken over, and the attempt names what it could not read", async () => {
+    // Where `/proc` is mounted `hidepid=1`, another user's entry is listed and
+    // its read refused. The wrong implementation reads the refusal as no
+    // process, judges the live holder gone and takes its lock.
+    const probe = `const { bootId, lock } = await import(${JSON.stringify(join(dirname(import.meta.dir), "file-lock.ts"))});
+const { mkdtemp, readFile, rm, writeFile } = await import("node:fs/promises");
+const ground = await mkdtemp("${join(tmpdir(), "file-lock-hidden-")}");
+const path = ground + "/lock";
+const holder = JSON.stringify({ pid: Number(process.env.OTHER), bootId: await bootId(), startTicks: Number(process.env.OTHER_TICKS) }) + "\\n";
+await writeFile(path, holder);
+let outcome = "taken";
+try {
+  const held = await lock(path, 0);
+  await held[Symbol.asyncDispose]();
+} catch (error) {
+  outcome = error.message.replaceAll("/proc/" + process.env.OTHER + "/", "/proc/<other>/");
+}
+const kept = (await readFile(path, "utf8").catch(() => "")) === holder;
+await rm(ground, { recursive: true, force: true });
+console.log(kept ? "kept" : "replaced");
+console.log(outcome);`;
+
+    const ended = await besideAHiddenProcess(probe);
+
+    expect({ code: ended.code, stderr: ended.stderr }).toEqual({ code: 0, stderr: "" });
+    const [kept, outcome] = ended.stdout.split("\n");
+    expect(outcome).toContain("/proc/<other>/stat");
+    expect(kept).toBe("kept");
+  });
+
+  test("a holder killed while holding and not yet reaped is gone, and its lock is taken at once", async () => {
+    // A parent that never waits keeps the killed holder a zombie. The wrong
+    // implementation reads any `/proc` entry with the recorded start tick as
+    // the holder alive, so with no patience at all it gives up on the lock.
+    await using ground = await arena();
+    await using holder = await orphaned([process.execPath, CHILD, ground.lockPath, "held"], 1);
+    expect(holder.said).toEqual(["at"]);
+    process.kill(holder.pid, "SIGKILL");
+    await exits(holder.pid);
+
+    const taken = await lock(ground.lockPath, 0);
+    await taken[Symbol.asyncDispose]();
+
+    expect((await readdir(ground.path)).toSorted()).toEqual(["counter"]);
+  });
+
+  test("a stopped holder still holds the lock", async () => {
+    // The wrong implementation reads a state other than running or sleeping as
+    // gone, and takes a lock from a holder somebody paused with SIGSTOP.
+    await using ground = await arena();
+    const holder = Bun.spawn([process.execPath, CHILD, ground.lockPath, "held"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "inherit",
+    });
+    try {
+      expect(await heard(holder.stdout, 1)).toEqual(["at"]);
+      holder.kill("SIGSTOP");
+      await reaches(holder.pid, "T");
+
+      const failed = await lock(ground.lockPath, 100).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(String(failed)).toContain(`by process ${holder.pid}, which is still running`);
+    } finally {
+      holder.kill("SIGKILL");
+      await holder.exited;
+    }
+  });
 });
 
 describe("a worker killed while taking the lock", () => {

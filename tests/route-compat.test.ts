@@ -193,6 +193,22 @@ describe("the snapshot's own shape", () => {
   // Sorted by path and then by method, so that the only thing a regenerated file
   // diffs on is a route that changed. Sorting by method first, or not at all,
   // moves half the file whenever a route is added.
+  test("the file compares paths by code unit", () => {
+    // The wrong implementation collates, as `localeCompare` does, which puts
+    // `/a` before `/B` and orders by whatever ICU data the runtime carries.
+    const listed: unknown = JSON.parse(
+      snapshotOf([
+        { method: "GET", path: "/a" },
+        { method: "GET", path: "/B" },
+      ]),
+    );
+
+    expect(listed).toEqual([
+      { method: "GET", path: "/B" },
+      { method: "GET", path: "/a" },
+    ]);
+  });
+
   test("the file is sorted by path, then by method", () => {
     // `DELETE /zzz` is what tells the two orderings apart: its method sorts
     // first and its path sorts last, so a file sorted by method leads with it.

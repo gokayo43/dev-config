@@ -169,11 +169,15 @@ a change to a rule usually lands here too.
   command decide by — which the build bundles into `dist/count-budget.js`, a
   module of its own so `tests/count-ceilings.test.ts` can search it with
   properties instead of browser runs. `file-lock.ts` is which process a file
-  names, proven from `/proc`, and the one lock both `dev-server up` and the
+  names, proven from `/proc` as alive, dead and not yet reaped, or not there,
+  and the one lock both `dev-server up` and the
   count budget's write command take: the build bundles it into the count
   budget, `files` ships its source for the bin, and `tests/file-lock.test.ts`
   holds each waiter before every step through the `between` seam `lock` takes
-  for that suite's sake. `request-timing-operation.ts` is what request timing's
+  for that suite's sake. Its `parseStat` is the judgement of one stat line apart
+  from reading it, graded over `tests/proc-stat/`, which is real processes' text
+  that `tests/proc-stat-capture.ts` writes: recapture it, never edit it by hand.
+  `request-timing-operation.ts` is what request timing's
   modules share, the operation, its waits, its record and the
   `AsyncLocalStorage` that carries the current operation, which the build makes
   a chunk beside them and `files` ships as source for the summary;
@@ -267,7 +271,10 @@ a change to a rule usually lands here too.
   Its reference page is README's "One dev server per worktree" rather than a
   `docs/exports/` one, and `tests/dev-server.test.ts` drives it against real
   worktrees and real detached processes, spending real time, because a signal
-  reaching a process group is not a thing any injected clock has a part in.
+  reaching a process group is not a thing any injected clock has a part in. A
+  server that died and was not reaped is a real zombie there too: the case runs
+  `up` under `tests/unreaping-parent.ts`, which adopts the server and never
+  reaps it.
 - `db-gate/capacity.js` is the exception: it runs inside k6, not under this
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.
@@ -338,7 +345,11 @@ a change to a rule usually lands here too.
   and `mutation-lane-fixture.ts` is the fixture repository and the run
   all three suites share. `mutation-lane-child.test.ts` drives `child.ts` alone,
   with real signals to real processes, through `mutation-lane-child-driver.ts`,
-  a stand-in for the lane a case can interrupt. `test-suite.test.ts` is the
+  a stand-in for the lane a case can interrupt. `mutation-lane-report.test.ts`
+  drives `report.ts` alone, over generated reports in every order, because a
+  real run writes its mutants only in the order they finished: whatever order
+  the report holds, the findings are listed by file, first line, last line,
+  mutator, replacement and status. `test-suite.test.ts` is the
   same argument one level down: that gate is a shell script rather than a
   module, so the suite extracts the step out of the shipped `action.yml` and
   runs it over fixture suites of its own. It needs passwordless sudo, because
@@ -508,7 +519,8 @@ graded on what mysql2 and drizzle do against a real server; the Redis because a 
 shared by two processes and its Redis can be gone; the chromium because what
 the invariant sweep claims is what a browser reports; the sudo because the
 test-suite gate seals a run in a network namespace and nothing short of taking
-one says whether it holds. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
+one says whether it holds, and because the file lock's and the dev server's
+suites mount a `/proc` that hides other users' processes, which only root can. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
 `TEST_REDIS_URL` has a default, and each is refused when unset: the database
 suites create and **drop** databases on the server they are given and the
 conformance suite **flushes** its Redis, and `localhost` on this box is a host
@@ -522,9 +534,13 @@ suite's own carry the process that created them, and the three the gates build
 for themselves — `upgrade_path_<digest>`, `semantic_fixtures_<digest>` and
 `backfill_<digest>` — carry the checkout they are working on.
 
-This repo runs its own gates on itself in CI, from the working tree, with three
-exemptions named in `ci.yml`: it cannot extend itself by package name, its CI
-cannot pin a commit it is making, and it has no runtime environment.
+This repo runs its own gates on itself in CI, from the working tree, with five
+structural facts named in `ci.yml`. Three are exemptions of the repo contract:
+it cannot extend itself by package name, its CI cannot pin a commit it is
+making, and it has no runtime environment. Two are gates it does not run on
+itself: it has no mutation lane, and its CI runs `bun run test --coverage` in
+place of the test-suite action, so neither the seal nor the checks that refuse
+a skipped test and an assertion-free one hold this repo (dev-config#58).
 
 ## Releasing
 
