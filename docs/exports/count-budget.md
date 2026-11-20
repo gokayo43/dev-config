@@ -319,7 +319,7 @@ it, in check and command alike.
   hands to `connectToServer` reaches its server without the page raising the
   event the origin rule reads.
 - **A route that fetches the real response.** `route.fulfill({ response: await
-route.fetch() })` answers the page with live data, and the page sees a
+  route.fetch() })` answers the page with live data, and the page sees a
   fulfilled response, which is what a stub is. Playwright's own request to the
   origin is not one the page made.
 - **Work on a timer slower than two idle rounds.** A page that mutates the DOM a

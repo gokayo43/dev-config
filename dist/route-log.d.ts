@@ -1,4 +1,3 @@
-//#region route-log.d.ts
 /**
  * The protocol between an app and the two gates the database job holds its
  * route table to — the compatibility floor that asks whether a route it used
@@ -60,4 +59,3 @@ export interface RouteLog {
   readonly routeTable: Route[];
   readonly counts: Served[];
 }
-//#endregion

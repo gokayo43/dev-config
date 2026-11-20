@@ -1,6 +1,6 @@
 import { must } from "./narrowing.js";
-import { n as measure } from "./request-timing-DPoxY8eA.js";
-//#region request-timing-wait.ts
+import { n as measure } from "./request-timing-CRXpA8f5.js";
+// request-timing-wait.ts
 /**
 * What every wait connector is built from: a client the app already made,
 * answered as itself with some of its members standing in for theirs, and the
@@ -39,5 +39,4 @@ function standingIn(client, standIns) {
 		set: (target, key, value) => Reflect.set(target, key, value)
 	});
 }
-//#endregion
 export { waitOn as n, standingIn as t };

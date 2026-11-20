@@ -497,25 +497,30 @@ export interface Video {
 }
 
 /**
- * The start code every VP8 key frame carries, followed by its width and its
- * height as two little-endian 16-bit fields whose low 14 bits are the pixels
- * (RFC 6386, section 9.1). Playwright encodes its recordings as VP8.
+ * The sync code every VP9 key frame carries after its first byte, which for a
+ * profile 0 key frame is `100000` and two flags (VP9 bitstream specification,
+ * section 6.2). Four bits of colour space and range follow it, then the width
+ * and the height less one as two 16-bit fields. Playwright encodes its
+ * recordings as VP9 from yuv420p frames, which is profile 0.
  */
-const KEY_FRAME = [0x9d, 0x01, 0x2a] as const;
+const SYNC_CODE = [0x49, 0x83, 0x42] as const;
 
 /** What a recording holds, read out of its first key frame; a file with none throws. */
 async function videoAt(path: string): Promise<Video> {
   const held = await Bun.file(path).bytes();
   const at = held.findIndex(
-    (_, index) =>
-      index + 7 <= held.length && KEY_FRAME.every((byte, k) => held[index + k] === byte),
+    (byte, index) =>
+      (byte & 0xfc) === 0x80 &&
+      index + 9 <= held.length &&
+      SYNC_CODE.every((code, k) => held[index + 1 + k] === code),
   );
-  if (at === -1) throw new Error(`${path} holds no VP8 key frame, so it is not a recording`);
-  const view = new DataView(held.buffer, held.byteOffset + at + KEY_FRAME.length, 4);
+  if (at === -1) throw new Error(`${path} holds no VP9 key frame, so it is not a recording`);
+  const [first = 0, ...rest] = held.subarray(at + 4, at + 9);
+  const size = rest.reduce((bits, byte) => bits * 256 + byte, first & 0x0f);
   return {
     bytes: held.length,
-    width: view.getUint16(0, true) & 0x3f_ff,
-    height: view.getUint16(2, true) & 0x3f_ff,
+    width: Math.floor(size / 2 ** 20) + 1,
+    height: (Math.floor(size / 2 ** 4) & 0xff_ff) + 1,
   };
 }
 

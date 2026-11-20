@@ -1,6 +1,6 @@
-import { c as current, s as beginWait } from "./request-timing-DPoxY8eA.js";
-import { n as waitOn, t as standingIn } from "./request-timing-wait-kPYrUwSy.js";
-//#region request-timing-bun-sql.ts
+import { c as current, s as beginWait } from "./request-timing-CRXpA8f5.js";
+import { n as waitOn, t as standingIn } from "./request-timing-wait-Cj7WA-Qu.js";
+// request-timing-bun-sql.ts
 /**
 * Calls `ended` once `pending` settles, either way, through `Promise`'s own
 * `then`: a query's would start it running, and its species is `Promise`, so
@@ -172,5 +172,4 @@ function timedSql(client) {
 	} });
 	return standingIn(called, standIns);
 }
-//#endregion
 export { timedSql };

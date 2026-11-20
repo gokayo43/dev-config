@@ -1,4 +1,4 @@
-//#region request-timing-route.ts
+// request-timing-route.ts
 /**
 * The mark an entry connector leaves on a route handler it wrapped, and the
 * one way the conformance kit's route-tree check reads it back. No export
@@ -16,5 +16,4 @@ function marked(handler, mark) {
 	Object.defineProperty(handler, MARK, { value: mark });
 	return handler;
 }
-//#endregion
 export { marked as t };

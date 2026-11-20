@@ -1,4 +1,3 @@
-//#region narrowing.d.ts
 /**
  * Four calls that hand back a value the compiler could not prove present, or
  * throw saying what was expected and what was found. They are what a case
@@ -23,4 +22,3 @@ export declare function must<T>(value: T): NonNullable<T>;
  * rejection a caller did not expect rides along as the `cause`.
  */
 export declare function rejectionOf<Value, Failure>(promise: PromiseLike<Value>, Class: abstract new (...args: never[]) => Failure): Promise<Failure>;
-//#endregion

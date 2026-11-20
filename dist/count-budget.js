@@ -3,7 +3,7 @@ import { link, readFile, readdir, rename, rm, writeFile } from "node:fs/promises
 import { basename, dirname, extname, join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
-//#region count-ceilings.ts
+// count-ceilings.ts
 const COUNTS = [
 	"reactCommits",
 	"mutationRecords",
@@ -307,8 +307,7 @@ function described(change, where) {
 	}
 	return said;
 }
-//#endregion
-//#region file-lock.ts
+// file-lock.ts
 /**
 * Which process a file names, and the lock built on that answer: one holder at
 * a time for a path, across processes on one Linux machine.
@@ -568,8 +567,7 @@ async function lock(path, patienceMs, between = paced) {
 	}
 	return held;
 }
-//#endregion
-//#region count-budget.ts
+// count-budget.ts
 const STILL = 2;
 const ROUNDS = 100;
 /** A round whose idle callback waited this long found the page busy, and counts as one in which the page moved. */
@@ -1011,5 +1009,4 @@ const test = test$1.extend({
 		if (problems.length > 0) throw new Error([`count budget for «${where.key}» (${where.ceilings}), measured ${JSON.stringify(Object.fromEntries(measured))}:`, ...problems.map((problem) => `  ${problem}`)].join("\n"));
 	}
 });
-//#endregion
 export { test };

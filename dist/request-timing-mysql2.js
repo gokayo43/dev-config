@@ -1,5 +1,5 @@
-import { n as waitOn, t as standingIn } from "./request-timing-wait-kPYrUwSy.js";
-//#region request-timing-mysql2.ts
+import { n as waitOn, t as standingIn } from "./request-timing-wait-Cj7WA-Qu.js";
+// request-timing-mysql2.ts
 function timedStatement(statement) {
 	return standingIn(statement, /* @__PURE__ */ new Map([["execute", (...args) => waitOn("db", () => statement.execute(...args))]]));
 }
@@ -37,5 +37,4 @@ function timedPool(pool) {
 		["getConnection", () => waitOn("db", () => pool.getConnection()).then(timedConnection)]
 	]));
 }
-//#endregion
 export { timedPool };

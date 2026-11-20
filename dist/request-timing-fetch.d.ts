@@ -1,4 +1,3 @@
-//#region request-timing-fetch.d.ts
 /**
  * `send` with every call measured as one wait, from the call until the promise
  * it answers settles, which is when the response's headers have arrived or the
@@ -8,4 +7,3 @@
  * replaces: `globalThis.fetch = timedFetch(globalThis.fetch)`.
  */
 export declare function timedFetch(send: typeof fetch): typeof fetch;
-//#endregion

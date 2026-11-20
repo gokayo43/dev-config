@@ -1,5 +1,5 @@
-import { n as waitOn } from "./request-timing-wait-kPYrUwSy.js";
-//#region request-timing-fetch.ts
+import { n as waitOn } from "./request-timing-wait-Cj7WA-Qu.js";
+// request-timing-fetch.ts
 /**
 * Request timing's `fetch` connector: every call, one `out` wait of the
 * operation that made it. `docs/exports/request-timing.md` says what an app
@@ -16,5 +16,4 @@ import { n as waitOn } from "./request-timing-wait-kPYrUwSy.js";
 function timedFetch(send) {
 	return Object.assign((...args) => waitOn("out", () => send(...args)), { preconnect: send.preconnect });
 }
-//#endregion
 export { timedFetch };

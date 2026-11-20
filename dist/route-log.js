@@ -1,4 +1,4 @@
-//#region route-log.ts
+// route-log.ts
 /**
 * The protocol between an app and the two gates the database job holds its
 * route table to — the compatibility floor that asks whether a route it used
@@ -46,5 +46,4 @@ const ENDPOINT = "/__route-log";
 * thing `ANY` and its implementation translates.
 */
 const EVERY_METHOD = "ALL";
-//#endregion
 export { ENDPOINT, EVERY_METHOD };

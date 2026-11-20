@@ -85,7 +85,7 @@ async function script(client: SQL) {
       try {
         return await connection<unknown>`select count(*)::int as n from presets`;
       } finally {
-        connection.release();
+        await connection.release();
       }
     }),
     answeredArray: await outcome(() =>
@@ -201,7 +201,7 @@ describe("the Bun.sql connector", () => {
         const connection = await client.reserve();
         await connection`select 1`;
         await connection.unsafe("select 2");
-        connection.release();
+        await connection.release();
       },
       3,
     ],
@@ -291,7 +291,7 @@ describe("the Bun.sql connector", () => {
               streamed: false,
             });
           });
-          holding.release();
+          await holding.release();
           await Promise.all(lanes);
           expect(
             Object.fromEntries(records.map((made) => [made.operation, made.db.count])),

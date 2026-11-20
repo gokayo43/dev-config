@@ -361,8 +361,8 @@ a change to a rule usually lands here too.
   mutator, replacement and status. `test-suite.test.ts` is the
   same argument one level down: that gate is a shell script rather than a
   module, so the suite extracts the step out of the shipped `action.yml` and
-  runs it over fixture suites of its own. It needs passwordless sudo, because
-  what it is grading is a network namespace. `nightly-issue.test.ts` is that
+  runs it over fixture suites of its own. It needs bubblewrap allowed to create
+  a user namespace, because what it is grading is a network namespace. `nightly-issue.test.ts` is that
   argument once more, over the one step in this repo whose subject is an effect
   that leaves the system: it extracts the filing step out of its workflow and
   runs it with a `gh` of the suite's own on the path — one that logs every call
@@ -528,17 +528,18 @@ ends as the 600s hook's does. The shorter bounds left, in `tests/probe.test.ts`
 and `tests/mutation-lane-child.test.ts`, are those cases' oracles, each killing
 an implementation that hangs.
 
-`bun run test` needs a Postgres, a MySQL, a Redis, a chromium and passwordless
-sudo. The Postgres because the replay gate's property is what two databases end
+`bun run test` needs a Postgres, a MySQL, a Redis, a chromium, bubblewrap and
+passwordless sudo. The Postgres because the replay gate's property is what two databases end
 up holding and the semantic fixtures' is what a real migration does to a real
 row, and the request-timing Bun.sql and Start connectors on what Bun.sql and
 drizzle do against one; the MySQL because the request-timing connectors are
 graded on what mysql2 and drizzle do against a real server; the Redis because a limiter's bucket is
 shared by two processes and its Redis can be gone; the chromium because what
-the invariant sweep claims is what a browser reports; the sudo because the
-test-suite gate seals a run in a network namespace and nothing short of taking
-one says whether it holds, and because the file lock's and the dev server's
-suites mount a `/proc` that hides other users' processes, which only root can. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
+the invariant sweep claims is what a browser reports; bubblewrap, allowed to
+create a user namespace, because the test-suite gate seals a run in a network
+namespace and nothing short of taking one says whether it holds; and the sudo
+because the file lock's and the dev server's suites mount a `/proc` that hides
+other users' processes, which only root can. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
 `TEST_REDIS_URL` has a default, and each is refused when unset: the database
 suites create and **drop** databases on the server they are given and the
 conformance suite **flushes** its Redis, and `localhost` on this box is a host
