@@ -413,9 +413,11 @@ a change to a rule usually lands here too.
   `stop()`. `capacity-ramp.test.ts` runs the shipped script through the
   pinned k6 against a stub that breaks on how many k6 connections it holds, a
   count that is the step's users whatever share of a core the run gets, where
-  requests in flight would depend on how fast k6 got round its loop; the bin's
-  statuses and the files a run does or does not leave are read off a spawned
-  process. `@sinclair/typebox` is a devDependency nothing here imports:
+  requests in flight would depend on how fast k6 got round its loop. No case
+  there asserts a gap between two times k6 measured, since each includes how
+  long this box took to schedule the stub and k6: the file's header says how
+  the cases avoid one. The bin's statuses and the files a run does or does not
+  leave are read off a spawned process. `@sinclair/typebox` is a devDependency nothing here imports:
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
   fixture app's schemas with — is typebox under elysia's re-export.
   Request timing's suites split by what each grades: `request-timing.test.ts`

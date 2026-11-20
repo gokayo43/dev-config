@@ -162,7 +162,9 @@ traffic needs more than a list of GETs: tokens, a request body, a sequence.
 The script exports its default function, which k6 runs once per iteration per
 user, and the command sets the steps. It is given `HEALTH_URL` and
 `CAPACITY_PATH` (each `--path` on a line of its own) in its environment, beside
-the environment the command was started with.
+the environment the command was started with. A relative `--script` is read
+from the directory you run the command in, as in a monorepo's package, and the
+result records it relative to the repository root.
 
 A script whose options set `vus`, `duration`, `iterations`, `stages` or
 `scenarios` is refused by name before any request, with exit 2: two owners of

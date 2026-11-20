@@ -34,8 +34,13 @@ import { materialise, scratch } from "./tree.ts";
  * request from k6, so the command's own health check is not a user.
  *
  * The holds are a second and the steps 1, 2 and 4 users, so a case runs in
- * seconds; the bounds sit far from what the stub answers on either side of its
- * breaking point, since the live services take this box's processors first.
+ * seconds. Every time k6 measures includes however long the box took to
+ * schedule the stub and k6, which on a box whose live services take the
+ * processors first is a hundred milliseconds or more on any request it stalls,
+ * and a p95 over a step this short is one of its few slowest requests. So a
+ * case asserts no gap between two measured times: where its subject is failed
+ * requests, the p95 bound is out of reach, and where it is the p95 bound, the
+ * stub's slow answers sit above it whatever is added to them.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -46,9 +51,12 @@ type Breaking = "errors" | "slow";
 
 /** Fast is well under the p95 bound a case sets, slow is three times over it. */
 const FAST_MS = 20;
-const P95_BOUND_MS = 500;
+const P95_BOUND = "500ms";
 const SLOW_MS = 1_500;
 const SLOW_PATH_MS = 150;
+
+/** k6 gives up on a request at 60 seconds, so no step's p95 is above this. */
+const UNREACHABLE_P95 = "60s";
 
 interface Stub extends AsyncDisposable {
   readonly health: string;
@@ -101,13 +109,9 @@ async function stub(users: number, breaking: Breaking, slowPath?: string): Promi
 
 const SMALL = ["--start-users", "1", "--max-users", "4", "--hold", "1s"];
 
-function planOf(health: string, ...more: string[]) {
-  return planFrom(["--health", health, ...SMALL, "--max-p95", `${P95_BOUND_MS}ms`, ...more]);
-}
-
 async function rampOf(health: string, root: string, ...more: string[]): Promise<Result> {
   const outcome = await ramp(
-    planOf(health, ...more),
+    planFrom(["--health", health, ...SMALL, ...more]),
     {
       k6: PINNED.k6,
       k6Version: PINNED.version,
@@ -171,7 +175,12 @@ describe("the ceiling it finds", () => {
         constantFrom<Breaking>("errors", "slow"),
         async (users, breaking) => {
           await using target = await stub(users, breaking);
-          const result = await rampOf(target.health, await scratch());
+          const result = await rampOf(
+            target.health,
+            await scratch(),
+            "--max-p95",
+            breaking === "slow" ? P95_BOUND : UNREACHABLE_P95,
+          );
           const held = [1, 2, 4].findLast((step) => step <= users) ?? null;
           const broke = [1, 2, 4].find((step) => step > users) ?? null;
           expect(result.held).toBe(held);
@@ -200,12 +209,17 @@ describe("the ceiling it finds", () => {
   });
 
   // Where to start looking: every path it was given, slowest first, at the
-  // step that decided the run.
+  // step that decided the run. Which path k6 measured slowest is the box's to
+  // decide as much as the stub's, so the order is read off the measurements:
+  // the likeliest wrong report, in the order the paths were first requested,
+  // puts the health address above the path the stub always holds back.
   test("reports each path at the deciding step, slowest first", async () => {
     await using target = await stub(4, "errors", "/things");
     const result = await rampOf(
       target.health,
       await scratch(),
+      "--max-p95",
+      UNREACHABLE_P95,
       "--path",
       "/things",
       "--path",
@@ -214,25 +228,40 @@ describe("the ceiling it finds", () => {
     expect(result.held).toBe(4);
     const deciding = result.steps.at(-1);
     expect(deciding?.users).toBe(4);
-    expect(deciding?.paths.map((path) => `${path.method} ${path.name}`)).toEqual([
-      "GET /things",
-      expect.any(String),
-      expect.any(String),
+    const paths = deciding?.paths ?? [];
+    expect(paths.map((path) => path.name).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      "/health",
+      "/other",
+      "/things",
     ]);
-    expect(deciding?.paths.map((path) => path.name).toSorted((a, b) => a.localeCompare(b))).toEqual(
-      ["/health", "/other", "/things"],
+    expect(paths.map((path) => path.p95Ms)).toEqual(
+      paths.map((path) => path.p95Ms).toSorted((a, b) => b - a),
+    );
+    expect(paths.find((path) => path.name === "/things")?.p95Ms).toBeGreaterThanOrEqual(
+      SLOW_PATH_MS,
     );
     const table = markdownOf(result).split("## Slowest paths at 4 users")[1] ?? "";
-    expect(table.split("\n").find((line) => line.startsWith("| GET "))).toStartWith(
-      "| GET /things |",
-    );
+    expect(
+      table
+        .split("\n")
+        .filter((line) => line.startsWith("| GET "))
+        .map((line) => line.split(" | ")[0]),
+    ).toEqual(paths.map((path) => `| GET ${path.name}`));
   });
 });
 
-/** Runs the bin in `root`, as an agent at a terminal does, and answers what it said and left behind. */
-async function command(root: string, args: readonly string[], until?: (stderr: string) => boolean) {
+/**
+ * Runs the bin as an agent at a terminal does, in `root` or in the directory
+ * of it named by `from`, and answers what it said and left behind. `until`
+ * stops it as Ctrl-C would, once its progress says so.
+ */
+async function command(
+  root: string,
+  args: readonly string[],
+  { until, from = "" }: { until?: (stderr: string) => boolean; from?: string } = {},
+) {
   const run = Bun.spawn(["bun", join(ROOT, "capacity-ramp.ts"), ...args], {
-    cwd: root,
+    cwd: join(root, from),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -293,7 +322,7 @@ describe("what the command leaves behind", () => {
   test("two runs of one measurement: the same shape, and the second names the first", async () => {
     await using target = await stub(2, "errors");
     const root = await materialise({});
-    const args = ["--health", target.health, ...SMALL, "--max-p95", `${P95_BOUND_MS}ms`];
+    const args = ["--health", target.health, ...SMALL, "--max-p95", UNREACHABLE_P95];
     const first = await command(root, args);
     expect(first.status).toBe(MEASURED);
     expect(first.stdout).toContain("- Previous run: none for this target");
@@ -364,7 +393,7 @@ describe("what the command leaves behind", () => {
     const { status, stderr, written } = await command(
       root,
       ["--health", target.health, "--start-users", "1", "--max-users", "4", "--hold", "20s"],
-      (said) => said.includes("step 1 of 3"),
+      { until: (said) => said.includes("step 1 of 3") },
     );
     expect(status).toBe(NO_MEASUREMENT);
     expect(stderr).toContain("the run was stopped during the step of 1 users");
@@ -372,22 +401,23 @@ describe("what the command leaves behind", () => {
   });
 
   // One owner of the steps: a script that sets its own would make the ladder
-  // mean nothing, so it is refused by name before a request is sent.
+  // mean nothing, so it is refused by name before a request is sent. Run from
+  // a package's directory, as in a monorepo, the script is the one beside the
+  // agent: a path read from the repository root instead is a script k6 cannot
+  // find, refused for a reason that is not this one.
   test("a script that sets steps of its own is refused by name", async () => {
     await using target = await stub(4, "errors");
     const root = await materialise({
-      "staged.js":
+      "api/staged.js":
         'import http from "k6/http";\nexport const options = { stages: [{ duration: "1s", target: 2 }] };\nexport default function () { http.get(__ENV.HEALTH_URL); }\n',
     });
-    const { status, stderr, written } = await command(root, [
-      "--health",
-      target.health,
-      "--script",
-      "staged.js",
-      ...SMALL,
-    ]);
+    const { status, stderr, written } = await command(
+      root,
+      ["--health", target.health, "--script", "staged.js", ...SMALL],
+      { from: "api" },
+    );
     expect(status).toBe(WRONG_ARGUMENTS);
-    expect(stderr).toContain("--script staged.js sets stages");
+    expect(stderr).toContain("--script api/staged.js sets stages");
     expect(stderr).not.toContain("about to hit");
     expect(written).toEqual([]);
   });

@@ -13,6 +13,8 @@
  * `capacity-ramp-ladder.ts`, which `tests/capacity-ramp.test.ts` drives; this
  * file is the argv, the signals, the output and the status.
  */
+import { relative, resolve } from "node:path";
+
 import {
   k6Home,
   MEASURED,
@@ -47,7 +49,9 @@ if (git.exitCode !== 0) {
 const root = git.stdout.toString().trim();
 
 try {
-  const plan = planFrom(args);
+  const asked = planFrom(args);
+  const plan =
+    asked.script === null ? asked : { ...asked, script: relative(root, resolve(asked.script)) };
   const { k6, version } = await pinnedK6(k6Home(process.env));
   const outcome = await ramp(
     plan,

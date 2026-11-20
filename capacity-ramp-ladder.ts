@@ -49,7 +49,7 @@ export interface Bounds {
 export interface Plan {
   readonly health: string;
   readonly paths: readonly string[];
-  /** The repo's own k6 script, as the caller wrote its path, or nothing for the shipped one. */
+  /** The repo's own k6 script, relative to the repository root, or nothing for the shipped one. */
   readonly script: string | null;
   readonly steps: readonly number[];
   readonly holdMs: number;
@@ -187,12 +187,19 @@ function p95(durations: number[]): number {
   return sorted[Math.ceil(sorted.length * 0.95) - 1] ?? 0;
 }
 
-interface Sample {
+/** One path's requests in one step: the durations, and how many of them failed. */
+interface Tally {
   readonly method: string;
   readonly name: string;
-  readonly ms: number;
-  readonly failed: boolean;
-  readonly status: string;
+  readonly ms: number[];
+  failed: number;
+}
+
+/** What one step's requests come to, before the bounds judge it. */
+interface Tallied {
+  readonly paths: Map<string, Tally>;
+  /** Failed requests by status. */
+  readonly failures: Record<string, number>;
 }
 
 /** One CSV row as its fields: k6 quotes a field holding a comma or a quote, as a URL can. */
@@ -218,69 +225,95 @@ function fieldsOf(row: string): string[] {
   return fields;
 }
 
-/** k6's CSV output as the requests in it. A header missing a column read here is a k6 this was not written for, and throws. */
-async function samplesIn(csvGz: string): Promise<Sample[]> {
-  const text = await new Response(
-    Bun.file(csvGz).stream().pipeThrough(new DecompressionStream("gzip")),
-  ).text();
-  const [header, ...rows] = text.split("\n");
-  const columns = fieldsOf(header ?? "");
-  const at = (name: string): number => {
-    const index = columns.indexOf(name);
-    if (index < 0)
-      throw new Error(`k6's CSV output has no ${name} column: its header is ${header}`);
-    return index;
-  };
-  const read = {
-    metric: at("metric_name"),
-    value: at("metric_value"),
-    expected: at("expected_response"),
-    method: at("method"),
-    name: at("name"),
-    status: at("status"),
-  };
-  return rows
-    .filter((row) => row !== "")
-    .map((row) => {
-      const fields = fieldsOf(row);
-      const cell = (column: keyof typeof read): string => {
-        const found = fields[read[column]];
-        if (found === undefined)
-          throw new Error(`k6's CSV output has a row with no ${column}: ${row}`);
-        return found;
+const DURATION = "http_req_duration";
+
+/**
+ * k6's CSV output as one step's tallies, read a line at a time. The file holds
+ * about a dozen rows per request, every metric k6 records, so a step of a
+ * million requests decompresses to most of a gigabyte: holding it whole is how
+ * a ramp against a fast target runs this process out of memory. What is kept is
+ * one number per request. A header missing a column read here is a k6 this was
+ * not written for, and throws.
+ */
+async function talliedIn(csvGz: string): Promise<Tallied> {
+  const tallied: Tallied = { paths: new Map(), failures: {} };
+  let columns: Record<
+    "metric" | "value" | "expected" | "method" | "name" | "status",
+    number
+  > | null = null;
+
+  const take = (row: string): void => {
+    if (row === "") return;
+    if (columns === null) {
+      const header = fieldsOf(row);
+      const at = (name: string): number => {
+        const index = header.indexOf(name);
+        if (index < 0)
+          throw new Error(`k6's CSV output has no ${name} column: its header is ${row}`);
+        return index;
       };
-      return { cell, metric: cell("metric") };
-    })
-    .filter(({ metric }) => metric === "http_req_duration")
-    .map(({ cell }) => ({
-      method: cell("method"),
-      name: cell("name"),
-      ms: Number(cell("value")),
-      failed: cell("expected") === "false",
-      status: cell("status"),
-    }));
-}
+      columns = {
+        metric: at("metric_name"),
+        value: at("metric_value"),
+        expected: at("expected_response"),
+        method: at("method"),
+        name: at("name"),
+        status: at("status"),
+      };
+      return;
+    }
+    // Most rows are other metrics, passed over without being split.
+    if (!row.includes(DURATION)) return;
+    const read = columns;
+    const fields = fieldsOf(row);
+    const cell = (column: keyof typeof read): string => {
+      const found = fields[read[column]];
+      if (found === undefined)
+        throw new Error(`k6's CSV output has a row with no ${column}: ${row}`);
+      return found;
+    };
+    if (cell("metric") !== DURATION) return;
+    const method = cell("method");
+    const name = cell("name");
+    const key = `${method} ${name}`;
+    const tally = tallied.paths.get(key) ?? { method, name, ms: [], failed: 0 };
+    tallied.paths.set(key, tally);
+    tally.ms.push(Number(cell("value")));
+    if (cell("expected") === "false") {
+      tally.failed++;
+      const status = cell("status");
+      tallied.failures[status] = (tallied.failures[status] ?? 0) + 1;
+    }
+  };
 
-function failedOf(some: readonly Sample[]): number {
-  return some.filter((sample) => sample.failed).length / some.length;
-}
-
-/** What one step's requests come to, judged against the bounds. */
-function stepFrom(users: number, samples: readonly Sample[], bounds: Bounds): StepMeasured {
-  const byPath = new Map<string, { method: string; name: string; samples: Sample[] }>();
-  const failures: Record<string, number> = {};
-  for (const sample of samples) {
-    const path = `${sample.method} ${sample.name}`;
-    const group = byPath.get(path) ?? { method: sample.method, name: sample.name, samples: [] };
-    group.samples.push(sample);
-    byPath.set(path, group);
-    if (sample.failed) failures[sample.status] = (failures[sample.status] ?? 0) + 1;
+  let partial = "";
+  const text = Bun.file(csvGz)
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip"))
+    .pipeThrough(new TextDecoderStream());
+  for await (const chunk of text) {
+    const rows = (partial + chunk).split("\n");
+    partial = rows.pop() ?? "";
+    for (const row of rows) take(row);
   }
-  const failed = failedOf(samples);
-  const p95Ms = p95(samples.map((sample) => sample.ms));
+  take(partial);
+  return tallied;
+}
+
+/** What one step's requests come to, judged against the bounds; `null` when it recorded none. */
+function stepFrom(
+  users: number,
+  { paths, failures }: Tallied,
+  bounds: Bounds,
+): StepMeasured | null {
+  const tallies = [...paths.values()];
+  const all = tallies.flatMap((tally) => tally.ms);
+  if (all.length === 0) return null;
+  const failed = tallies.reduce((sum, tally) => sum + tally.failed, 0) / all.length;
+  const p95Ms = p95(all);
   return {
     users,
-    requests: samples.length,
+    requests: all.length,
     failed,
     p95Ms,
     failures,
@@ -288,13 +321,13 @@ function stepFrom(users: number, samples: readonly Sample[], bounds: Bounds): St
       ...(failed > bounds.failed ? (["failed"] as const) : []),
       ...(p95Ms > bounds.p95Ms ? (["p95"] as const) : []),
     ],
-    paths: [...byPath.values()]
-      .map(({ method, name, samples: some }) => ({
-        method,
-        name,
-        requests: some.length,
-        failed: failedOf(some),
-        p95Ms: p95(some.map((sample) => sample.ms)),
+    paths: tallies
+      .map((tally) => ({
+        method: tally.method,
+        name: tally.name,
+        requests: tally.ms.length,
+        failed: tally.failed / tally.ms.length,
+        p95Ms: p95(tally.ms),
       }))
       .toSorted((a, b) => b.p95Ms - a.p95Ms),
   };
@@ -444,13 +477,11 @@ async function runStep(
       unmeasured: `k6 exited ${code} during the step of ${users} users:\n${tail.join("\n")}`,
     };
   }
-  const samples = await samplesIn(csv);
-  if (samples.length === 0) {
-    return {
+  return (
+    stepFrom(users, await talliedIn(csv), plan.bounds) ?? {
       unmeasured: `k6 recorded no request in the step of ${users} users: the script sent none, or none finished within the step and k6's grace after it`,
-    };
-  }
-  return stepFrom(users, samples, plan.bounds);
+    }
+  );
 }
 
 /** Before the first request: what the run will hit, how hard and for how long at most. */
