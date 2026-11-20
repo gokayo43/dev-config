@@ -1545,9 +1545,10 @@ env:
   TOOL_SHA256: <sha256 of the release archive>
 ```
 
-A tool more than one caller needs is fetched by a shell library under
-`.github/actions/_lib/` instead, and the pin goes there — beside the fetch, so
-it is written once however many callers there are. The one manager reads a shell
+A tool more than one caller needs, or one a command runs outside any workflow,
+is fetched by a shell library under `.github/actions/_lib/` instead, and the pin
+goes there — beside the fetch, so it is written once however many callers there
+are, and where the manager's pattern already moves it. The one manager reads a shell
 assignment as readily as a YAML key:
 
 ```sh

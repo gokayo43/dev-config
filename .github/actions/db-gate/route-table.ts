@@ -1,4 +1,4 @@
-import type { Route, RouteLog, Served } from "../../../route-log.ts";
+import type { Route, RouteLog } from "../../../route-log.ts";
 import { type Allowlist, isList, isObject, kindOf, type Problem } from "../_lib/gate.ts";
 
 /**
@@ -26,23 +26,15 @@ export function routeIn(value: unknown, source: string): Route {
   );
 }
 
-function servedIn(value: unknown, source: string): Served {
-  const { method, path, count } = isObject(value) ? value : {};
-  if (typeof method === "string" && typeof path === "string" && typeof count === "number") {
-    return { method, path, count };
-  }
-  throw new Error(
-    `${source} names ${JSON.stringify(value)}, which is not a {"method","path","count"} row`,
-  );
-}
-
 /**
  * Parsed at the boundary rather than asserted through. This is the app's own
  * output, not a file this action wrote, so a payload that is not the shape read
  * here says so loudly instead of surfacing as a gate that silently reads less
  * than the app serves — and a body that is not JSON at all is framed with what
  * it was, rather than reaching the log as a bare SyntaxError about a column
- * number in a document nobody named.
+ * number in a document nobody named. An empty table is refused here too, for
+ * whichever gate reads it first: an app reporting no route would otherwise
+ * pass every gate that reads the table having been asked nothing.
  */
 export function parseRouteLog(text: string, source: string): RouteLog {
   let parsed: unknown;
@@ -54,17 +46,16 @@ export function parseRouteLog(text: string, source: string): RouteLog {
   if (!isObject(parsed)) {
     throw new Error(`${source} is not a route log: the top level is ${kindOf(parsed)}`);
   }
-  const { routeTable, counts } = parsed;
+  const { routeTable } = parsed;
   if (!isList(routeTable)) {
     throw new Error(`${source} is not a route log: routeTable is ${kindOf(routeTable)}`);
   }
-  if (!isList(counts)) {
-    throw new Error(`${source} is not a route log: counts is ${kindOf(counts)}`);
+  if (routeTable.length === 0) {
+    throw new Error(
+      `${source} reports an empty routeTable — it names every route the app serves, so an app's route-log endpoint answering none is the instrument not seeing the router`,
+    );
   }
-  return {
-    routeTable: routeTable.map((entry) => routeIn(entry, `${source}: routeTable`)),
-    counts: counts.map((entry) => servedIn(entry, `${source}: counts`)),
-  };
+  return { routeTable: routeTable.map((entry) => routeIn(entry, `${source}: routeTable`)) };
 }
 
 /**
@@ -102,34 +93,28 @@ export interface Refusals {
   readonly unknown: (entry: string) => string;
 }
 
-/**
- * What a floor wants of each subject, for the gate that holds one: the
- * compatibility floor wants a route still served, and an entry waiving a route
- * that already is has stopped being true. The fuzzer holds no floor, so it
- * passes none, and its entries are graded on the two refusals alone.
- */
-export interface Floor {
-  readonly satisfied: (route: Route) => boolean;
-  /** The entry names a subject that is already satisfied, so the reason beside it has stopped being true. */
-  readonly refusal: (entry: string) => string;
+/** One entry that names a subject, and the subject it names. */
+interface Waiver {
+  /** The entry as written, its reason stripped. */
+  readonly entry: string;
+  /** The subject's name, by `key`. */
+  readonly name: string;
+  readonly route: Route;
 }
 
 export interface Graded {
-  /** The subjects an entry waives, by name — a count each gate reports its own way. */
-  readonly waived: ReadonlySet<string>;
-  /** The subjects the floor did not find satisfied and no entry waived: what the floor refuses, in its own words. */
-  readonly unmet: string[];
+  /** Each entry that names a subject, in the order written. */
+  readonly waivers: Waiver[];
   readonly problems: Problem[];
 }
 
 /**
- * A reasoned hatch over a set of routes, graded once for both gates.
- *
- * `subjects` is everything this gate can be asked about, keyed by `key`;
- * `floor`, where the gate holds one, is what it wanted of each of them. An
- * entry survives only by naming a subject, and under a floor one that is not
- * satisfied — which is the whole of what an exemption is — and an exemption
- * nobody can see rotting is how a gate quietly stops holding what it names.
+ * A reasoned hatch over a set of routes, graded once for both gates: an entry
+ * survives only by naming a subject, `subjects` being everything this gate can
+ * be asked about, keyed by `key`. A gate with a rule of its own about what an
+ * entry may name — the compatibility floor refuses one retiring a route still
+ * served — applies it to the waivers, and leaves alone an entry
+ * `allowlist.unreasoned` holds, as this does.
  *
  * The allowlist arrives whole rather than as its entries, so that enforcing the
  * reason on each of them is not something a caller can typecheck without.
@@ -140,42 +125,28 @@ export function waivedBy(
   allowlist: Allowlist,
   subjects: ReadonlyMap<string, Route>,
   refusals: Refusals,
-  floor?: Floor,
 ): Graded {
-  // Every entry is one of these: the subject it waives, or what is wrong with
-  // it. A classifier rather than three pushes inside the loop, so the rule about
-  // which of them the reader is told stays in one place below.
-  const read = (entry: string): { readonly waives: string } | { readonly rotten: string } => {
-    const route = routeFrom(entry);
-    if (route === undefined) return { rotten: refusals.malformed(entry) };
-    const name = key(route);
-    const subject = subjects.get(name);
-    if (subject === undefined) return { rotten: refusals.unknown(entry) };
-    if (floor?.satisfied(subject) === true) return { rotten: floor.refusal(entry) };
-    return { waives: name };
-  };
-
-  const waived = new Set<string>();
+  const waivers: Waiver[] = [];
   const problems: Problem[] = [];
   // Deduplicated, because one line written twice is one exemption: the second
   // copy would otherwise earn its own identical diagnostic, which is two
   // findings for one edit. `deadEntries` reads its subjects the same way.
   for (const entry of new Set(allowlist.entries)) {
-    const verdict = read(entry);
-    if ("waives" in verdict) waived.add(verdict.waives);
+    const route = routeFrom(entry);
+    const name = route === undefined ? undefined : key(route);
+    const subject = name === undefined ? undefined : subjects.get(name);
+    if (name !== undefined && subject !== undefined) {
+      waivers.push({ entry, name, route: subject });
+      continue;
+    }
     // An entry already refused for saying nothing about why is asked none of
-    // those questions: its author is going back to that line regardless, and one
-    // mistake earns one diagnostic. stack-gate and the timestamptz gate charge
-    // the hatch the same way. It still waives its subject in the branch above,
-    // so the gate does not report the subject on top of it either.
-    else if (!allowlist.unreasoned.has(entry)) problems.push({ message: verdict.rotten });
+    // these questions: its author is going back to that line regardless, and
+    // one mistake earns one diagnostic. stack-gate and the timestamptz gate
+    // charge the hatch the same way.
+    if (allowlist.unreasoned.has(entry)) continue;
+    problems.push({
+      message: route === undefined ? refusals.malformed(entry) : refusals.unknown(entry),
+    });
   }
-
-  return {
-    waived,
-    unmet: [...subjects]
-      .filter(([name, route]) => floor?.satisfied(route) !== true && !waived.has(name))
-      .map(([name]) => name),
-    problems,
-  };
+  return { waivers, problems };
 }

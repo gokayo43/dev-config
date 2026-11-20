@@ -196,7 +196,9 @@ runs:
         # (actions/runner's ProcessInvoker: SIGINT, 7.5s, SIGTERM, 2.5s,
         # SIGKILL, to the entry process alone), so a foreground suite would run
         # on until the SIGTERM ended this shell. Forwarded, the first signal
-        # ends the suite, or ends bwrap and with it the suite's namespace.
+        # ends bwrap and with it the suite's namespace. Unsealed it reaches the
+        # suite's first process alone: under `bun run test` that is `bun run`,
+        # and the processes the suite started outlive the step.
         "${seal[@]}" "${suite[@]}" &
         running=$!
         trap 'kill -TERM "$running" 2>/dev/null || true' INT TERM

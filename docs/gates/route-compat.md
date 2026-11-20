@@ -20,7 +20,10 @@ ref's app, and reading a route table out of source is the second source of truth
 is the only one that survives a middleware, a plugin, or a mount.
 
 So the repo commits it. `routes.snapshot.json`, at the root of whatever project
-the database job was pointed at, is the app's own route table as of that commit:
+the database job was pointed at, is the app's own route table as of that commit.
+An app whose route-log endpoint reports an empty table is refused when the table
+is read, before this step compares anything, so no step ever suggests
+committing an empty snapshot:
 
 ```json
 [

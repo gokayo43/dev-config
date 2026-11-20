@@ -1,8 +1,10 @@
 # The test suite
 
 The repo's suite, run so that a green suite means something: the run happened,
-no test skipped, no test asserted nothing, nothing in it reached a live host,
-and the coverage floor the repo declares was actually applied to it.
+no test skipped, no test asserted nothing, nothing in it opened a network
+connection past its own loopback, and the coverage floor the repo declares was
+actually applied to it. A daemon the suite reaches over a unix socket, Docker's
+among them, is outside the seal: [What the seal costs](#what-the-seal-costs).
 
 ## Which command is the suite
 
@@ -278,4 +280,5 @@ tree. So the suite runs as a job this step owns and the first signal is
 forwarded to it. Sealed, the forwarded signal ends bwrap, and the suite's
 process namespace goes with it, grandchildren included; a step killed outright
 takes it down through `--die-with-parent`. Unsealed, the signal goes to the
-suite's first process.
+suite's first process alone, so a process that a suite run through its `test`
+script started can outlive the step.

@@ -220,7 +220,7 @@ function pagesFor(embed: string): Map<string, { readonly type: string; readonly 
       // with it rather than asserting the string against itself.
       [ENDPOINT]: {
         type: "application/json",
-        body: JSON.stringify({ routeTable: [{ method: "GET", path: "/clean" }], counts: [] }),
+        body: JSON.stringify({ routeTable: [{ method: "GET", path: "/clean" }] }),
       },
       // A popup with no URL of its own, written into by its opener: its document
       // carries `about:blank`, the URL the page every context starts on carries

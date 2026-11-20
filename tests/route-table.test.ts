@@ -15,27 +15,23 @@ const read = (text: string): RouteLog => parseRouteLog(text, "the route log");
 const CAPTURED = read(await Bun.file(new URL("./route-log.json", import.meta.url)).text());
 
 describe("a route log that will not read", () => {
-  test("the captured payload is read as the endpoint wrote it", () => {
+  // The capture still carries `counts`, which an app sends until it moves its
+  // pin past the release that stopped reading it: a reader that still
+  // required or checked the key would refuse every such app.
+  test("the captured payload is read as the endpoint wrote it, and its counts are not read", () => {
     expect(CAPTURED.routeTable).toContainEqual({ method: "ALL", path: "/api/auth/*" });
-    expect(CAPTURED.counts).toContainEqual({ method: "GET", path: "/health", count: 50 });
-    // The instrument reports neither its own route nor its own traffic.
+    // The instrument does not report its own route.
     expect(CAPTURED.routeTable.some(({ path }) => path === "/__route-log")).toBe(false);
-    expect(CAPTURED.counts.some(({ path }) => path === "/__route-log")).toBe(false);
+    expect(read('{"routeTable":[{"method":"GET","path":"/x"}],"counts":{}}')).toEqual({
+      routeTable: [{ method: "GET", path: "/x" }],
+    });
   });
 
   // Dropping an entry quietly would shrink what the gates read to whatever the
   // app spelled correctly, and they would pass while asking less.
   test.each([
-    ['{"routeTable":[{"path":"/presets"}],"counts":[]}', 'which is not a {"method","path"} pair'],
-    ['{"routeTable":["GET /health"],"counts":[]}', 'which is not a {"method","path"} pair'],
-    [
-      '{"routeTable":[],"counts":[{"method":"GET","path":"/x"}]}',
-      'which is not a {"method","path","count"} row',
-    ],
-    [
-      '{"routeTable":[],"counts":[{"method":"GET","path":"/x","count":"12"}]}',
-      'which is not a {"method","path","count"} row',
-    ],
+    ['{"routeTable":[{"path":"/presets"}]}', 'which is not a {"method","path"} pair'],
+    ['{"routeTable":["GET /health"]}', 'which is not a {"method","path"} pair'],
   ])("an entry that will not read is named rather than dropped (%s)", (text, detail) => {
     expect(() => read(text)).toThrow(detail);
   });
@@ -46,13 +42,19 @@ describe("a route log that will not read", () => {
     ["null", "the top level is null"],
     ["42", "the top level is a number"],
     ["[]", "the top level is an array"],
-    ['{"counts":[]}', "routeTable is absent"],
-    ['{"routeTable":{},"counts":[]}', "routeTable is an object"],
-    ['{"routeTable":[]}', "counts is absent"],
-    ['{"routeTable":[],"counts":{}}', "counts is an object"],
+    ["{}", "routeTable is absent"],
+    ['{"routeTable":{}}', "routeTable is an object"],
   ])("a payload that is not a route log (%s) says so", (text, detail) => {
     expect(() => read(text)).toThrow("is not a route log");
     expect(() => read(text)).toThrow(detail);
+  });
+
+  // Logic 4: the refusal lived in the fuzzer, and route compatibility runs
+  // first, so it never showed; that step advised committing an empty snapshot
+  // instead, or on a live repo retiring every route. Refused where the log is
+  // read, it is the first thing either gate says.
+  test("an empty route table is refused where it is read, before either gate grades it", () => {
+    expect(() => read('{"routeTable":[]}')).toThrow("the route log reports an empty routeTable");
   });
 
   test("a payload that is not JSON at all throws rather than reading as no routes", () => {
