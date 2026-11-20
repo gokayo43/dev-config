@@ -341,6 +341,13 @@ exactly the static ones, because the run's suite passed unmutated and every othe
 no-verdict mutant is a refusal. Counted there rather than left silent, because a
 campaign that graded fewer mutants than it made is the thing a score cannot say.
 
+That list and the step's problems name the undetected mutants in one order: by
+file, then first line, last line, mutator, replacement and status, each text
+compared by code unit. Stryker writes a mutant to its report when that mutant's
+run finishes, so the report's own order changes from run to run; the lane sorts
+the findings, and two runs over one branch list them in the same order. The
+floor's problem, where there is one, comes after them.
+
 `mutation-floor` is what turns that number into a bound, and it is empty by
 default — publish only. It is written as a fraction between 0 and 1, the way
 `bunfig.toml` writes `coverageThreshold`, and anything else is refused rather

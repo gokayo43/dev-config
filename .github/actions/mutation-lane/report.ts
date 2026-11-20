@@ -162,6 +162,30 @@ function inTheChange(mutant: Mutant, lines: ReadonlySet<number>): boolean {
   return true;
 }
 
+/** Code unit order, which no runtime's collation data can change. */
+function order(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
+}
+
+/**
+ * The order the findings are listed in: by file, then first line, last line,
+ * mutator, replacement and status. Stryker writes a mutant it ran when that
+ * mutant's run finishes, so the report's own order changes between two runs
+ * over one branch. Two mutants equal on all six print the same message, so
+ * how they tie cannot be seen.
+ */
+function byListing(a: Mutant, b: Mutant): number {
+  return (
+    order(a.file, b.file) ||
+    a.from - b.from ||
+    a.to - b.to ||
+    order(a.mutator, b.mutator) ||
+    order(a.replacement, b.replacement) ||
+    order(a.status, b.status)
+  );
+}
+
 function percent(score: number): string {
   return `${(score * 100).toFixed(1)}%`;
 }
@@ -293,7 +317,8 @@ export function verdict(
 
   const surviving = graded
     .filter((each) => each.own && each.worth === "undetected")
-    .map((each) => each.mutant);
+    .map((each) => each.mutant)
+    .toSorted(byListing);
 
   const problems = surviving.map(survivorProblem);
   if (bound !== undefined && counted.score < bound) {

@@ -90,16 +90,13 @@ describe("the clocks a mutation run keeps", () => {
     ]);
 
     // Three of the four take the slow branch, and the fourth is the fast one
-    // nothing pins either. Compared as a set: Stryker reports a mutant it ran
-    // when that run finishes, so the order is the order they finished in.
-    expect(messages(verdict).toSorted()).toEqual(
-      [
-        "src/domain/pause.ts: write the case that fails on `false` (ConditionalExpression) at line 2: this branch wrote that line and the suite passes either way",
-        "src/domain/pause.ts: write the case that fails on `true` (ConditionalExpression) at line 2: this branch wrote that line and the suite passes either way",
-        "src/domain/pause.ts: write the case that fails on `waiting >= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
-        "src/domain/pause.ts: write the case that fails on `waiting <= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
-      ].toSorted(),
-    );
+    // nothing pins either.
+    expect(messages(verdict)).toEqual([
+      "src/domain/pause.ts: write the case that fails on `false` (ConditionalExpression) at line 2: this branch wrote that line and the suite passes either way",
+      "src/domain/pause.ts: write the case that fails on `true` (ConditionalExpression) at line 2: this branch wrote that line and the suite passes either way",
+      "src/domain/pause.ts: write the case that fails on `waiting <= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
+      "src/domain/pause.ts: write the case that fails on `waiting >= 0` (EqualityOperator) at line 2: this branch wrote that line and the suite passes either way",
+    ]);
     expect(verdict.table).toEqual(containing("| Caught by timing out | 0 |"));
   });
 

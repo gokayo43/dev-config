@@ -338,7 +338,11 @@ a change to a rule usually lands here too.
   and `mutation-lane-fixture.ts` is the fixture repository and the run
   all three suites share. `mutation-lane-child.test.ts` drives `child.ts` alone,
   with real signals to real processes, through `mutation-lane-child-driver.ts`,
-  a stand-in for the lane a case can interrupt. `test-suite.test.ts` is the
+  a stand-in for the lane a case can interrupt. `mutation-lane-report.test.ts`
+  drives `report.ts` alone, over generated reports in every order, because a
+  real run writes its mutants only in the order they finished: whatever order
+  the report holds, the findings are listed by file, first line, last line,
+  mutator, replacement and status. `test-suite.test.ts` is the
   same argument one level down: that gate is a shell script rather than a
   module, so the suite extracts the step out of the shipped `action.yml` and
   runs it over fixture suites of its own. It needs passwordless sudo, because
