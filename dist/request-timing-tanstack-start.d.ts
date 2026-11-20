@@ -1,6 +1,12 @@
-import { f as Timing } from "./request-timing-CGWxjLxw.js";
+/**
+ * Request timing's TanStack Start connector: a wrapper around the server
+ * entry's request handler, which runs every request the app serves as one
+ * operation, and a function middleware that names the operation of a server
+ * function called over HTTP. `docs/exports/request-timing.md` says how an app
+ * mounts both and what their records hold.
+ */
+import { f as Timing } from "./request-timing-Cs0lSxaS.js";
 import { AnyRouter } from "@tanstack/react-router";
-//#region request-timing-tanstack-start.d.ts
 /** What Start's compiler records of a server function: its id, its variable name and its file. */
 interface ServerFnMeta {
   readonly id: string;
@@ -57,4 +63,4 @@ interface ServerFunctionCall<Next> {
  * operation closes, and the call writes no record.
  */
 export declare function nameServerFunction<Next>(call: ServerFunctionCall<Next>): Next;
-//#endregion
+export {};

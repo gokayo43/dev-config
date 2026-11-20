@@ -1,4 +1,4 @@
-//#region route-log.ts
+// route-log.ts
 /**
 * The protocol between an app and the two floors the database job holds its
 * route table to — the ramp's route coverage, and the compatibility floor that
@@ -57,5 +57,4 @@ const ENDPOINT = "/__route-log";
 * with whichever method reached it.
 */
 const EVERY_METHOD = "ALL";
-//#endregion
 export { ENDPOINT, EVERY_METHOD };

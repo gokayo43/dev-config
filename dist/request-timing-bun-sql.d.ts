@@ -1,5 +1,16 @@
+/**
+ * Request timing's Bun.sql connector: an `SQL` client the app built, every
+ * query it issues, every transaction and savepoint it opens and every
+ * connection it reserves, each wait on the server counted as one `db` wait of
+ * the operation that issued it. `docs/exports/request-timing.md` says what an
+ * app mounts and what a count includes.
+ *
+ * A Bun query is a promise of the driver's own class, with private state its
+ * methods refuse to find behind a Proxy, that runs on its first `then`. So a
+ * query is never wrapped: the driver's own object is answered, with the
+ * members that start it standing in on the object itself.
+ */
 import { SQL } from "bun";
-//#region request-timing-bun-sql.d.ts
 /**
  * `client` with every wait on the server measured, each for the operation
  * current where the app issues it. One `db` wait each:
@@ -20,4 +31,3 @@ import { SQL } from "bun";
  * or an array is a helper, not a query, and is what it was.
  */
 export declare function timedSql<Client extends SQL>(client: Client): Client;
-//#endregion

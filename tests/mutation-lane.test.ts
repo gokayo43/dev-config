@@ -23,6 +23,12 @@ import {
 } from "./mutation-lane-fixture.ts";
 import { history, type Tree, under, without } from "./tree.ts";
 
+/** Sets this process's umask, which every child the lane starts inherits, until disposed. */
+function umask(mask: number): Disposable {
+  const previous = process.umask(mask);
+  return { [Symbol.dispose]: () => void process.umask(previous) };
+}
+
 /** The same file with a branch the suite never reaches, so it starts carrying mutants nothing catches. */
 const PRICING_WITH_A_GAP = `export function total(cents: number, quantity: number): number {
   if (quantity > 10) return cents * quantity - 100;
@@ -123,13 +129,15 @@ test("the rate is a percentage", () => {
 `;
 
 /**
- * A module-level guard, the shape a domain file gives a constant it cannot work
- * without. The mutants that make it hold throw on import, so they break every
- * test before one runs: static, and the one ungraded mutant nothing could have
- * caught.
+ * A module-level guard that ends the process, the shape a script-like domain
+ * file gives a constant it cannot work without. The mutants that make it hold
+ * end the run on import, before any test runs and before bun prints a verdict:
+ * static, and the one ungraded mutant nothing could have caught. A guard that
+ * throws instead is not one: `@hughescr/stryker-bun-runner` reads a test file
+ * that fails to load as a failing suite, and scores that mutant caught.
  */
 const GUARD = `const RATE = 21;
-if (RATE < 0) throw new RangeError("the rate is a percentage");
+if (RATE < 0) process.exit(0);
 `;
 
 /** The branch every case below is graded on: one domain file, changed. */
@@ -203,6 +211,24 @@ describe("the mutation lane", () => {
       ]);
     },
   );
+
+  // `@hughescr/stryker-bun-runner` refuses a temp directory with an ancestor
+  // other users may write to, and a umask of 002, Ubuntu's default for a login
+  // with a group of its own, makes every new directory group-writable.
+  test("a run under a umask that leaves directories group-writable grades the branch", async () => {
+    using _mask = umask(0o002);
+    const verdict = await lane([
+      BEFORE,
+      repo({
+        "src/domain/pricing.ts": PRICING + WITH_FEE,
+        "tests/pricing.test.ts": WEAK_FEE_TEST,
+      }),
+    ]);
+
+    expect(messages(verdict)).toEqual([
+      "src/domain/pricing.ts: write the case that fails on `cents - 50` (ArithmeticOperator) at line 6: this branch wrote that line and the suite passes either way",
+    ]);
+  });
 
   test("a new line a test reaches without pinning is refused as a survivor", async () => {
     const verdict = await lane([
@@ -597,9 +623,9 @@ describe("the mutation lane", () => {
 
   // Read back out of this repo's manifest rather than written out here, because
   // the versions the diagnostic names are a claim about an install: the one the
-  // suite symlinks in, and so the only pair the lane is ever run against. A bump
-  // that leaves the diagnostic behind sends every consuming repo to a version
-  // this lane never ran, and it fails here instead.
+  // suite symlinks in, and so the only pair the lane is ever run against. A
+  // diagnostic that states its own copy of a version sends every consuming repo
+  // to a version this lane never ran once the manifest moves, and fails here.
   test("a repo without the runner installed is told which packages to declare", async () => {
     const pins = manifest.devDependencies;
     const verdict = await lane([BEFORE, CHANGED], { installed: false });
@@ -695,11 +721,10 @@ describe("the mutation lane", () => {
     expect(only).toEqual(containing("`[test] pathIgnorePatterns`"));
     expect(verdict.note).toBe("the suite this run mutated does not pass unmutated");
     // The two halves of what the reader gets. Stryker's own log carries this
-    // line — its dry run called a failing suite a success, which is why the lane
-    // cannot take its word — and the annotation carries the bounded stderr the
-    // runner kept, not everything written after it.
-    expect(verdict.log).toEqual(containing("Initial test run succeeded"));
-    expect(only).not.toEqual(containing("Initial test run succeeded"));
+    // line, where its dry run gave up on the suite, and the annotation carries
+    // the bounded stderr the runner kept, not everything written after it.
+    expect(verdict.log).toEqual(containing("Something went wrong in the initial test run"));
+    expect(only).not.toEqual(containing("Something went wrong in the initial test run"));
     expect(verdict.table).toBeUndefined();
   });
 
@@ -778,13 +803,12 @@ describe("the mutation lane", () => {
     expect(verdict.table).toEqual(containing("| Not graded | 0 |"));
   });
 
-  // The exemption, and the whole of it: a mutant that runs at module load breaks
-  // every test before one runs, so there is no test anyone could write and a
+  // The exemption, and the whole of it: a mutant that runs at module load and
+  // ends the run leaves no test anyone could write, and a
   // `Stryker disable` would count here as a mutant nothing caught — failing the
-  // branch on one would be a red with no exit. Measured on tcs-pricing-engine,
-  // where `src/money.ts` carries seven of them. The run is clean, which is what
+  // branch on one would be a red with no exit. The run is clean, which is what
   // makes "the mutant broke it" the only reading left.
-  test("a mutant that throws on import is outside the ratio and counted in the summary", async () => {
+  test("a mutant that ends the run on import is outside the ratio and counted in the summary", async () => {
     const verdict = await lane([
       repo({
         "src/domain/pricing.ts": GUARD + PRICING,

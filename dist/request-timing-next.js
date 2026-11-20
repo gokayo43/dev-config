@@ -1,7 +1,7 @@
-import { i as OperationName } from "./request-timing-DPoxY8eA.js";
-import { r as timedEntry } from "./request-timing-entry-ChIyPZRq.js";
-import { t as marked } from "./request-timing-route-BhLXYn3w.js";
-//#region request-timing-next.ts
+import { r as timedEntry } from "./request-timing-entry-DUtRZjoK.js";
+import { t as marked } from "./request-timing-route-DobjtQAK.js";
+import { i as OperationName } from "./request-timing-CRXpA8f5.js";
+// request-timing-next.ts
 /**
 * Request timing's Next.js connector: a wrapper an app puts around each
 * handler a `route.ts` exports, which runs every request the handler serves as
@@ -55,5 +55,4 @@ function requestTimingRoute(timing) {
 		});
 	};
 }
-//#endregion
 export { requestTimingRoute };

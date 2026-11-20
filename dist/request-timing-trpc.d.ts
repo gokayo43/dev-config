@@ -1,6 +1,5 @@
-import { f as Timing } from "./request-timing-CGWxjLxw.js";
+import { f as Timing } from "./request-timing-Cs0lSxaS.js";
 import { TRPCError, TRPCProcedureType, TRPCRouterRecord } from "@trpc/server";
-//#region request-timing-trpc.d.ts
 /** What tRPC's middleware is handed, as far as the connector reads it. */
 export interface ProcedureCall<Result> {
   readonly path: string;
@@ -41,4 +40,3 @@ export declare function requestTimingProcedures(timing: Timing, statusOf: (error
     };
   }, handler: (request: R, context: C) => Promise<Response>) => ((request: R, context: C) => Promise<Response>);
 };
-//#endregion

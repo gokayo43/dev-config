@@ -1,5 +1,5 @@
-import { i as OperationName, l as methodOf, r as within, t as inOperation } from "./request-timing-DPoxY8eA.js";
-//#region request-timing-entry.ts
+import { i as OperationName, l as methodOf, r as within, t as inOperation } from "./request-timing-CRXpA8f5.js";
+// request-timing-entry.ts
 /**
 * A router's patterns as names, each registered once, when it is first asked
 * for, and remembered.
@@ -146,5 +146,4 @@ function timedEntry(timing, request, handle, naming, answer) {
 		throw error;
 	});
 }
-//#endregion
 export { registeredNames as n, timedEntry as r, endings as t };

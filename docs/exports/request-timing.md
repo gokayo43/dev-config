@@ -497,7 +497,7 @@ What a connector author has to hold:
   run the handler as it is: no `open`, no `within`, no `close`.
 - **Open, run, finish.** `timing.open()` starts the clock. The handler runs
   under it with `within`. `timing.finish(operation, () => ({
-method, name, status, aborted, streamed }))` is called once the response has
+  method, name, status, aborted, streamed }))` is called once the response has
   finished: the last byte written, or the client gone (`aborted: true`), a
   streamed body included. The name and method are given at the close, so a
   connector that wraps the whole request before the router has matched it

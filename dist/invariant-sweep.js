@@ -1,5 +1,5 @@
 import { expect, test as test$1 } from "@playwright/test";
-//#region invariant-sweep.ts
+// invariant-sweep.ts
 /**
 * The E2E invariant sweep testing.md asks of every visited page, as a Playwright
 * fixture a repo imports instead of `@playwright/test`'s own `test`:
@@ -572,5 +572,4 @@ const test = test$1.extend({
 		expect(violations.map(describe), "pages visited by this test broke an invariant every page holds; fix it, or name the URL in `sweepAllowlist` with the reason it is tolerated").toEqual([]);
 	}
 });
-//#endregion
 export { test };

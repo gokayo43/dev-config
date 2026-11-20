@@ -58,3 +58,38 @@ test("an update that may not merge itself never rides in a group that does", () 
       .map((rule) => String(rule["description"])),
   ).toEqual([]);
 });
+
+const MANIFEST = record(await Bun.file(new URL("../package.json", import.meta.url)).json());
+
+// The format check fails on any formatter release that writes a file another
+// way, until someone runs the formatter on the PR's branch and commits what it
+// wrote, which Renovate never does. So the program `format:check` runs is held
+// in a group of its own that does not merge itself, and the week's group never
+// waits on it. The wrong implementation is that formatter left in "non-major
+// dependencies", or the rule following a formatter the repo no longer runs.
+test("the formatter the format check runs gets a PR of its own that never merges itself", () => {
+  const formatter = String(record(MANIFEST["scripts"])["format:check"]).split(" ")[0];
+  const rules = (isList(PRESET["packageRules"]) ? PRESET["packageRules"] : []).map(record);
+  const holding = rules.filter(
+    (rule) => isList(rule["matchPackageNames"]) && rule["matchPackageNames"].includes(formatter),
+  );
+  expect(holding.map((rule) => [rule["groupName"], rule["automerge"]])).toEqual([
+    [formatter, false],
+  ]);
+  expect(holding[0]?.["matchUpdateTypes"]).toBeUndefined();
+});
+
+// The top-level strategy pins every range to one exact version, which is right
+// for what a repo installs and wrong for what a library promises its host: a
+// peer range rewritten to one version refuses every host on another one the
+// range allowed (gokayo43/dev-config#122). The rule that exempts them has to
+// come after every rule that could set a strategy, since Renovate's last
+// matching rule wins. The wrong implementation is the pin left to reach them.
+test("a peer range and an engines range are never pinned to one version", () => {
+  const rules = (isList(PRESET["packageRules"]) ? PRESET["packageRules"] : []).map(record);
+  const strategies = rules.filter((rule) => rule["rangeStrategy"] !== undefined);
+  const last = strategies.at(-1);
+  expect(PRESET["rangeStrategy"]).toBe("pin");
+  expect(last?.["matchDepTypes"]).toEqual(["engines", "peerDependencies"]);
+  expect(last?.["rangeStrategy"]).toBe("auto");
+});

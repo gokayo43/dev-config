@@ -75,6 +75,9 @@ function denotesModule(sourceCode, expression, module) {
 function settledImportRule(settled) {
   const { module, names } = settled;
 
+  /** The name as this file reached it, which is what the diagnostic quotes. */
+  const from = (/** @type {string} */ name) => `${name} from ${module}`;
+
   return {
     meta: {
       type: "problem",
@@ -98,9 +101,6 @@ function settledImportRule(settled) {
       const refuse = (node, name) => {
         context.report({ node, messageId: "settledImport", data: { name } });
       };
-
-      /** The name as this file reached it, which is what the diagnostic quotes. */
-      const from = (/** @type {string} */ name) => `${name} from ${module}`;
 
       const refused = [...names].map((name) => `\`${name}\``).join(", ");
 
