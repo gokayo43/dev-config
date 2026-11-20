@@ -507,12 +507,12 @@ describe("the mutation lane", () => {
       }),
     ]);
 
-    expect(disabled.note).toBe(plain.note);
-    expect(disabled.note).toBe("mutation score 50.0% over 1 changed domain file");
     expect(messages(disabled)).toEqual([
       containing("write the test for line 6 or drop the `Stryker disable` above it"),
       containing("write the test for line 6 or drop the `Stryker disable` above it"),
     ]);
+    expect(disabled.note).toBe(plain.note);
+    expect(disabled.note).toBe("mutation score 50.0% over 1 changed domain file");
   });
 
   // eslint-plugin-boundaries takes `pattern` as a string or an array of them,
@@ -541,11 +541,11 @@ describe("the mutation lane", () => {
       workspace({ ...both, "apps/web/src/domain/pricing.ts": PRICING + WITH_FEE }),
     ]);
 
-    expect(verdict.note).toBe("mutation score 50.0% over 1 changed domain file");
     expect(messages(verdict)).toEqual([
       containing("apps/web/src/domain/pricing.ts: write the test that reaches line 5"),
       containing("apps/web/src/domain/pricing.ts: write the test that reaches line 6"),
     ]);
+    expect(verdict.note).toBe("mutation score 50.0% over 1 changed domain file");
   });
 
   // The summary is markdown, and a replacement is repo source: every template

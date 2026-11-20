@@ -609,7 +609,7 @@ export async function mutationLane({
 
     if (stryked.status !== 0) {
       return {
-        note: "the mutation run did not finish",
+        note: UNFINISHED,
         log: wrote,
         problems: [
           {
@@ -624,6 +624,9 @@ export async function mutationLane({
     await rm(scratch, { recursive: true, force: true });
   }
 }
+
+/** What the lane says of a Stryker run that exited without a report, whose cause is only in its log. */
+export const UNFINISHED = "the mutation run did not finish";
 
 /** The counts in the last of the lines Stryker's progress reporter writes every ten seconds. */
 const PROGRESS = /(\d+)\/(\d+) tested \((\d+) survived, (\d+) timed out\)/g;
