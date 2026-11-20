@@ -26,12 +26,19 @@ import { materialise, scratch } from "./tree.ts";
  * through the pinned k6 — the only target any case here points it at, on
  * loopback, on a port the system chose.
  *
- * The stub breaks on how many k6 connections are open, not on how many
+ * The stub breaks on how many k6 connections are in use, not on how many
  * requests are in flight: k6 holds one connection per simultaneous user for a
  * whole step, so that count is the step's users exactly whatever share of the
  * processor this box gives the run, where an in-flight count would depend on
- * how fast k6 got round its loop. A connection counts once it has carried a
- * request from k6, so the command's own health check is not a user.
+ * how fast k6 got round its loop. In use means it has carried a request since
+ * the newest k6 connection opened, which is an order and not a time: each step
+ * is a k6 process of its own, which opens its connections as it starts and
+ * sends nothing on the last step's, so a connection of a step that has ended
+ * is never counted in the next. Counting the connections the stub still holds
+ * open instead counted them: on a box that starves the stub's process, the
+ * end of the last step's connections reaches it after the next step's first
+ * requests. Only k6's requests count, so the command's own health check is not
+ * a user.
  *
  * The holds are a second and the steps 1, 2 and 4 users, so a case runs in
  * seconds. Every time k6 measures includes however long the box took to
@@ -40,7 +47,11 @@ import { materialise, scratch } from "./tree.ts";
  * and a p95 over a step this short is one of its few slowest requests. So a
  * case asserts no gap between two measured times: where its subject is failed
  * requests, the p95 bound is out of reach, and where it is the p95 bound, the
- * stub's slow answers sit above it whatever is added to them.
+ * stub's slow answers sit above it whatever is added to them. Only a fast
+ * answer can be pushed across that bound, so the bound sits just under a slow
+ * answer and a second above a fast one: steps of a second at 4% of one core
+ * measured a p95 of up to 200 ms on fast answers, and a bound of 500 ms broke a
+ * step that held once in ten runs of this file there.
  */
 
 const ROOT = join(import.meta.dir, "..");
@@ -49,10 +60,10 @@ const PINNED = await pinnedK6(k6Home(process.env));
 /** What the stub does past its breaking point: refuse, or answer far past the p95 bound. */
 type Breaking = "errors" | "slow";
 
-/** Fast is well under the p95 bound a case sets, slow is three times over it. */
+/** Slow is over the p95 bound a case sets by any margin at all, and fast is far under it. */
 const FAST_MS = 20;
-const P95_BOUND = "500ms";
-const SLOW_MS = 1_500;
+const P95_BOUND = "1s";
+const SLOW_MS = 1_100;
 const SLOW_PATH_MS = 150;
 
 /** k6 gives up on a request at 60 seconds, so no step's p95 is above this. */
@@ -64,20 +75,28 @@ interface Stub extends AsyncDisposable {
 }
 
 /**
- * A target that answers fast while at most `users` k6 users are connected, and
- * `breaking` past that. `slowPath`, where it is given, always answers in
+ * A target that answers fast while at most `users` k6 connections are in use,
+ * and `breaking` past that. `slowPath`, where it is given, always answers in
  * `SLOW_PATH_MS`, under the p95 bound, so it is the slowest path without
  * breaking a step.
  */
 async function stub(users: number, breaking: Breaking, slowPath?: string): Promise<Stub> {
-  const k6Sockets = new Set<Socket>();
+  /** Each k6 connection's latest request, by its place in the order the stub took requests. */
+  const latest = new Map<Socket, number>();
+  let taken = 0;
+  /** The place of the first request on the newest k6 connection. */
+  let newest = 0;
   const answer = (request: IncomingMessage, response: ServerResponse): void => {
     const { socket } = request;
-    if ((request.headers["user-agent"] ?? "").startsWith("Grafana k6") && !k6Sockets.has(socket)) {
-      k6Sockets.add(socket);
-      socket.once("close", () => k6Sockets.delete(socket));
+    const place = ++taken;
+    if ((request.headers["user-agent"] ?? "").startsWith("Grafana k6")) {
+      if (!latest.has(socket)) {
+        newest = place;
+        socket.once("close", () => latest.delete(socket));
+      }
+      latest.set(socket, place);
     }
-    const past = k6Sockets.size > users;
+    const past = [...latest.values()].filter((at) => at >= newest).length > users;
     if (past && breaking === "errors") {
       response.writeHead(503).end("over capacity");
       return;

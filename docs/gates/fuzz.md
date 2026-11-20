@@ -141,11 +141,6 @@ before it sends anything, and fails on:
 The summary says how many routes were waived, so a table covering less than the
 app serves says so.
 
-A CORS plugin's `OPTIONS` handlers are the usual entries. `@elysiajs/cors`
-answers every `OPTIONS` before the request reaches a route, so the route-log
-reports routes for them that no generated request would ever reach a handler
-of; the reason on the entry says so.
-
 ## The seed
 
 One seed per run, printed in the summary and in the table, and every request

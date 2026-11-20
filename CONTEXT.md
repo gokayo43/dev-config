@@ -128,9 +128,10 @@ is a pass.
 **Held step** — the most simultaneous users a capacity ramp's target answered
 inside both bounds, failed requests and the 95th percentile of response time.
 The step after it is the broken step, and the bound it broke is where to start
-looking. A held step is comparable only with another of the same target, paths,
-script, bounds and k6, which is why a result names its predecessor of that
-measurement and no other.
+looking. A held step is compared only with another of the same target, paths,
+script and bounds, which is why a result names its predecessor of that
+measurement and no other, and each records the k6 it ran on, since a held step
+is only comparable with one of the same k6.
 
 **Route table** — the routes an app serves, named by the app itself as its
 router registered them (`/presets/:id`, not `/presets/42`). Only the router
