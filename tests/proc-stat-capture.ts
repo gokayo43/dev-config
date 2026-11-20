@@ -6,14 +6,14 @@
  * commit what it writes: a fixture typed by hand would grade a reading of the
  * kernel nobody took.
  *
- * Each zombie is a child whose parent never waits: `sh` starts it in the
- * background and then execs `sleep`, which reaps nothing.
+ * Each zombie is a child whose parent never waits: `orphaned` in
+ * `proc-reading.ts`.
  */
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { procFields, reaches } from "./proc-reading.ts";
+import { exits, orphaned, reaches } from "./proc-reading.ts";
 
 const HERE = join(import.meta.dir, "proc-stat");
 
@@ -28,6 +28,12 @@ async function once(pid: number, state: string): Promise<string> {
   return await readFile(`/proc/${pid}/stat`, "utf8");
 }
 
+/** The text of a zombie, once every one of its threads has exited. */
+async function dead(pid: number): Promise<string> {
+  await exits(pid);
+  return await readFile(`/proc/${pid}/stat`, "utf8");
+}
+
 function spawned(argv: readonly string[]): Taken {
   const proc = Bun.spawn([...argv], { stdin: "ignore", stdout: "ignore", stderr: "inherit" });
   return {
@@ -35,23 +41,6 @@ function spawned(argv: readonly string[]): Taken {
     async [Symbol.asyncDispose](): Promise<void> {
       proc.kill("SIGKILL");
       await proc.exited;
-    },
-  };
-}
-
-/** `child` started in the background of a parent that then never waits, and the child's pid. */
-async function orphaned(child: string): Promise<Taken> {
-  const parent = Bun.spawn(["sh", "-c", `${child} & echo $!; exec sleep 60`], {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "inherit",
-  });
-  const { value } = await parent.stdout.getReader().read();
-  return {
-    pid: Number(new TextDecoder().decode(value).trim()),
-    async [Symbol.asyncDispose](): Promise<void> {
-      parent.kill("SIGKILL");
-      await parent.exited;
     },
   };
 }
@@ -75,25 +64,26 @@ const captures = {
     return await once(sleeper.pid, "T");
   },
   "zombie.stat": async () => {
-    await using zombie = await orphaned("sleep 0");
-    return await once(zombie.pid, "Z");
+    await using zombie = await orphaned(["sleep", "0"]);
+    return await dead(zombie.pid);
   },
   // `setsid` execs in place here, since the background child of a shell
   // without job control leads no group, so the zombie leads one of its own,
   // which is what a dev server's leader is.
   "zombie-group-leader.stat": async () => {
-    await using zombie = await orphaned("setsid sleep 0");
-    return await once(zombie.pid, "Z");
+    await using zombie = await orphaned(["setsid", "sleep", "0"]);
+    return await dead(zombie.pid);
   },
   // A Bun runs several threads, all of which have exited by the time it is a zombie.
   "zombie-multithreaded.stat": async () => {
-    await using zombie = await orphaned(`${process.execPath} -e ''`);
-    return await once(zombie.pid, "Z");
+    await using zombie = await orphaned([process.execPath, "-e", ""]);
+    return await dead(zombie.pid);
   },
   "main-thread-exited.stat": async () => {
     await using half = spawned([process.execPath, "-e", MAIN_THREAD_EXITS]);
     const raw = await once(half.pid, "Z");
-    if ((procFields(half.pid)?.threads ?? 0) < 2) {
+    // Its threads as the kernel lists them, which is not the stat line being captured.
+    if ((await readdir(`/proc/${half.pid}/task`)).length < 2) {
       throw new Error(`process ${half.pid} has no thread left running, so it is a zombie`);
     }
     return raw;

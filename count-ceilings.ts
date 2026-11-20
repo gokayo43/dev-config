@@ -112,9 +112,14 @@ export function ceilingOf(ceiling: Ceiling): number {
   return isRaised(ceiling) ? ceiling.ceiling : ceiling;
 }
 
-function byCodePoint(a: string, b: string): number {
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
+/**
+ * Code unit order, as `byCodeUnit` in `.github/actions/_lib/gate.ts` is. A copy
+ * rather than an import, because this ships inside `dist/` to the repos the
+ * gates run over, and gate code is not theirs to import.
+ */
+function byCodeUnit(a: string, b: string): number {
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
 }
 
 const DIGEST = 8;
@@ -144,7 +149,7 @@ function slots(phases: Phases): [string, Count, Ceiling][] {
         ceiling,
       ]),
     )
-    .toSorted(([a, x], [b, y]) => byCodePoint(`${a}\u0000${x}`, `${b}\u0000${y}`));
+    .toSorted(([a, x], [b, y]) => byCodeUnit(`${a}\u0000${x}`, `${b}\u0000${y}`));
 }
 
 /**
@@ -256,7 +261,7 @@ export function entryJson(entry: Entry): Json {
 export function withEntry(file: Json, key: string, entry: Entry): Json {
   const others = Object.entries(file).filter(([held]) => held !== key);
   return Object.fromEntries(
-    [...others, [key, entryJson(entry)] as const].toSorted(([a], [b]) => byCodePoint(a, b)),
+    [...others, [key, entryJson(entry)] as const].toSorted(([a], [b]) => byCodeUnit(a, b)),
   );
 }
 

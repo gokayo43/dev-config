@@ -1580,17 +1580,23 @@ typechecks, lints, formats and tests the code that implements them, parses every
 JSON file, validates the preset, checks the Lighthouse budget, and lints the half
 of it that executes.
 
-Three contract facts are exempted in `ci.yml`, each structural: the configs
-inherit from this repo's own bases by relative path because a package cannot
-extend itself by name, CI is that file rather than a call into `check.yml`
-because a commit cannot pin its own SHA, and there is no runtime environment to
-shape.
+Five facts are structural, and `ci.yml` names them. Three are exemptions of the
+repo contract: the configs inherit from this repo's own bases by relative path
+because a package cannot extend itself by name, CI is that file rather than a
+call into `check.yml` because a commit cannot pin its own SHA, and there is no
+runtime environment to shape. Two are gates this repo does not run on itself.
+There is no mutation lane, because this repo is gate scripts with no pure
+domain layer to mutate, and its suite drives that gate against fixture
+repositories instead. And the test-suite action is substituted, because its
+seal's network namespace does not reach the Postgres, MySQL and Redis this
+suite needs on the host's loopback, which drops the seal, the junit report and
+the two checks over it that refuse a skipped test and an assertion-free one:
+this repo is the one repo not held to them (dev-config#58).
 
 The gates are TypeScript under `.github/actions/*/`, and `bun run test` is what
 proves each one refuses a violating tree and passes a clean one — the suites
 build a real git repository per case, because the gates ask git what is tracked
-and what is ignored. Every other repo's gate is only as honest as those two
-lanes, which is why they run first.
+and what is ignored. Every other repo's gate is only as honest as that suite.
 
 The replay suite needs a real Postgres, since what it asserts is what two
 databases end up holding, and so do the request-timing Bun.sql and TanStack
@@ -1656,8 +1662,10 @@ No `--with-deps`: it shells out to `sudo apt-get`, which the CI runner's account
 may not run, and the shared libraries it installs are already on the box.
 
 The test-suite gate's own suite needs passwordless `sudo`, which is what taking a
-network namespace costs — a runner has it, and a machine that does not cannot run
-that suite honestly. It is the one gate here whose subject is not a module, so
+network namespace costs: GitHub-hosted Linux runners have it, a self-hosted one
+has to grant it, and a machine that does not cannot run that suite honestly. The
+file lock's suite uses it too, to mount a `/proc` that hides other users'
+processes. It is the one gate here whose subject is not a module, so
 its cases extract the step out of the shipped `action.yml` and drive it over test
 suites of their own.
 
@@ -1802,10 +1810,11 @@ state `Z` or `X` (`/proc/<pid>/stat` field 3) with no thread still running
 (field 20, the thread count, at most 1): a process whose main thread alone has
 exited shows `Z` as well, and still runs. Until the dead leader is reaped it
 pins its process group, so whatever still runs in that group is provably the
-server's: `down` sends the group SIGKILL, with no grace period since the server
-is already dead, and forgets the record only once nothing in the group runs.
-Once the leader is reaped nothing proves the group is the server's, and
-anything that outlived it is left alone.
+server's: `down`, and `up` before it starts the fresh one, send the group
+SIGKILL, with no grace period since the server is already dead, and forget or
+replace the record only once nothing in the group runs. Once the leader is
+reaped nothing proves the group is the server's, and anything that outlived it
+is left alone.
 
 **The records live in git's common directory** — `$(git rev-parse
 --git-common-dir)/dev-server/`, mode 0700, with each record and log 0600 because
@@ -2108,7 +2117,8 @@ for a private git dependency where the caller passed one — the optional build,
 the suite ran, and — where the repo asks for it — the mutation lane over the
 domain files this branch changed.
 From `format:check` to `knip` the chain is the local `bun run check`, and the
-suite after it is the local `bun test`. The git hooks run none of it on push,
+suite after it is the local `bun run test`, or `bun test` where the repo
+declares no `test` script. The git hooks run none of it on push,
 because the chain runs once, on the state that lands, at landing or in CI. The
 rest is what only CI has.
 
@@ -2342,8 +2352,12 @@ nobody reads.
 nobody would sit through: every property test runs fifty times the inputs it
 asks for, with two minutes as the most any one property may spend, and the route
 fuzzer gets ten minutes instead of twenty seconds. Both jobs get a timeout that
-fits. Nothing else about the run changes, and `nightly: false` — which is every
-caller that says nothing — is byte for byte the run it always was.
+fits, and every suite, a wrapper and a script that states its own limit
+included, gets `--timeout 600000` last on its command line. On every other run,
+`nightly: false` being every caller that says nothing, a suite whose command is
+`bun test` and names no limit gets `--timeout 60000`, and any other suite gets
+no limit from the gate ([test-suite](docs/gates/test-suite.md)). Nothing else
+about the run changes.
 
 It comes in two halves, and the second is a workflow of its own:
 

@@ -519,7 +519,8 @@ graded on what mysql2 and drizzle do against a real server; the Redis because a 
 shared by two processes and its Redis can be gone; the chromium because what
 the invariant sweep claims is what a browser reports; the sudo because the
 test-suite gate seals a run in a network namespace and nothing short of taking
-one says whether it holds. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
+one says whether it holds, and because the file lock's suite mounts a `/proc`
+that hides other users' processes, which only root can. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
 `TEST_REDIS_URL` has a default, and each is refused when unset: the database
 suites create and **drop** databases on the server they are given and the
 conformance suite **flushes** its Redis, and `localhost` on this box is a host
@@ -533,9 +534,13 @@ suite's own carry the process that created them, and the three the gates build
 for themselves — `upgrade_path_<digest>`, `semantic_fixtures_<digest>` and
 `backfill_<digest>` — carry the checkout they are working on.
 
-This repo runs its own gates on itself in CI, from the working tree, with three
-exemptions named in `ci.yml`: it cannot extend itself by package name, its CI
-cannot pin a commit it is making, and it has no runtime environment.
+This repo runs its own gates on itself in CI, from the working tree, with five
+structural facts named in `ci.yml`. Three are exemptions of the repo contract:
+it cannot extend itself by package name, its CI cannot pin a commit it is
+making, and it has no runtime environment. Two are gates it does not run on
+itself: it has no mutation lane, and its CI runs `bun run test --coverage` in
+place of the test-suite action, so neither the seal nor the checks that refuse
+a skipped test and an assertion-free one hold this repo (dev-config#58).
 
 ## Releasing
 

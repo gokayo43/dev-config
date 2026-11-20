@@ -1,6 +1,7 @@
 import {
   type Allowlist,
   baseRevision,
+  byCodeUnit,
   type Event,
   git,
   isList,
@@ -49,21 +50,13 @@ export const SNAPSHOT = "routes.snapshot.json";
 
 const READS_THE_BASE_REF = "a live repo is held to the routes its snapshot carried at the base ref";
 
-/** Code point order, one field at a time. */
-function compare(a: string, b: string): number {
-  if (a < b) return -1;
-  return a > b ? 1 : 0;
-}
-
 /**
- * By path, then by method — and by code point rather than by `localeCompare`,
- * which orders by whatever ICU data the runtime was built with. This decides
- * bytes a repo commits, so a snapshot regenerated on another machine has to come
- * out identical or the file is a diff nobody caused.
+ * By path, then by method, by code unit. This decides bytes a repo commits, so a
+ * snapshot regenerated on another machine has to come out identical or the file
+ * is a diff nobody caused.
  */
 function ordered(a: Route, b: Route): number {
-  const path = compare(a.path, b.path);
-  return path === 0 ? compare(a.method, b.method) : path;
+  return byCodeUnit(a.path, b.path) || byCodeUnit(a.method, b.method);
 }
 
 /**

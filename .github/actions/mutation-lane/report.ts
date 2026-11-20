@@ -7,6 +7,7 @@
  * choosing what to mutate and running Stryker over it, is another.
  */
 import {
+  byCodeUnit,
   type ConfigObject,
   isList,
   isObject,
@@ -162,12 +163,6 @@ function inTheChange(mutant: Mutant, lines: ReadonlySet<number>): boolean {
   return true;
 }
 
-/** Code unit order, which no runtime's collation data can change. */
-function order(a: string, b: string): number {
-  if (a < b) return -1;
-  return a > b ? 1 : 0;
-}
-
 /**
  * The order the findings are listed in: by file, then first line, last line,
  * mutator, replacement and status. Stryker writes a mutant it ran when that
@@ -177,12 +172,12 @@ function order(a: string, b: string): number {
  */
 function byListing(a: Mutant, b: Mutant): number {
   return (
-    order(a.file, b.file) ||
+    byCodeUnit(a.file, b.file) ||
     a.from - b.from ||
     a.to - b.to ||
-    order(a.mutator, b.mutator) ||
-    order(a.replacement, b.replacement) ||
-    order(a.status, b.status)
+    byCodeUnit(a.mutator, b.mutator) ||
+    byCodeUnit(a.replacement, b.replacement) ||
+    byCodeUnit(a.status, b.status)
   );
 }
 

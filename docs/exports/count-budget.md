@@ -211,8 +211,8 @@ into place. A lock whose process is gone, left by a worker that was killed
 while writing, is taken over, and so is one whose process has exited and is
 still listed in `/proc` because nothing has reaped it yet. A stopped holder,
 one paused with SIGSTOP, still holds it. Whoever next takes the lock removes what killed
-workers left beside it: a staging file, and the files under
-`<spec>.counts.json.lock.` that name a process that is gone. A lock held by a
+workers left beside it: a staging file, and the files named
+`<spec>.counts.json.lock.<suffix>` that name a process that is gone. A lock held by a
 live process for 10 seconds fails the test with a message naming the lock and
 the process. The lock proves a holder alive from `/proc`, so the command runs
 on Linux only.

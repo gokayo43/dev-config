@@ -245,13 +245,6 @@ function signalGroup(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
  * any more. The record is removed only once the process is proven gone: it is
  * the only handle anything has on that pid, and dropping it while the server
  * runs is how a port stays held by something nothing can find.
- *
- * A server that has exited, before this or during it, keeps its `/proc` entry
- * until whatever adopted it reaps it, and until then that entry pins its process
- * group: no new group can be given its id. So whatever is still in the group is
- * provably the server's, and is killed before the record goes, with no grace,
- * since the server it belonged to is already dead. Once the server is reaped
- * nothing proves that any more, and what outlived it is left alone.
  */
 async function stop(
   state: string,
@@ -259,41 +252,48 @@ async function stop(
   server: Server,
   boot: string,
 ): Promise<"stopped" | "gone"> {
+  const wasAlive = await end(state, stem, server, boot);
+  await rm(recordPath(state, stem), { force: true });
+  return wasAlive ? "stopped" : "gone";
+}
+
+/**
+ * Ends what of a server still runs, and answers whether the server itself was
+ * alive. A live server is asked to stop first. Whatever of its group is left
+ * after that, or after a server that had already exited, is killed and waited
+ * for: until the leader is reaped its `/proc` entry pins the group, so no new
+ * group can be given its id and whatever is in it is provably the server's. A
+ * dead server's leftovers get no grace, since the server they belonged to is
+ * gone. Once the leader is reaped nothing proves that any more, and what
+ * outlived it is left alone.
+ */
+async function end(state: string, stem: string, server: Server, boot: string): Promise<boolean> {
   const found = await ours(server, boot);
   if (found?.alive === true) {
     // Every server this tool starts is a session leader, because `setsid` made
     // it one. A pid that is alive and ours and yet leads no group is a
     // contradiction rather than a case, and the answer to it is not to signal a
     // group somebody else owns.
-    if (!found.leadsItsGroup) {
+    if (found.group !== server.pid) {
       throw new Error(
         `pid ${server.pid} does not lead its own process group, so it is not a server this tool started — refusing to signal it, and keeping ${recordPath(state, stem)}`,
       );
     }
     signalGroup(server.pid, "SIGTERM");
     await waitUntilGone(server, boot, STOP_TIMEOUT_MS);
-    if (await alive(server, boot)) {
-      signalGroup(server.pid, "SIGKILL");
-      await waitUntilGone(server, boot, KILL_TIMEOUT_MS);
-    }
-    if (await alive(server, boot)) {
-      throw new Error(
-        `process group ${server.pid} is still running after SIGKILL — its record is being kept, because it is the only thing that names it`,
-      );
-    }
   }
-  if ((await ours(server, boot))?.leadsItsGroup === true) await endGroup(server.pid);
-  await rm(recordPath(state, stem), { force: true });
-  return found?.alive === true ? "stopped" : "gone";
+  if ((await ours(server, boot))?.group === server.pid) await endGroup(server.pid);
+  return found?.alive === true;
 }
 
-/** Kills what is left in a dead server's group, and waits until none of it runs. */
+/** Kills what is left in a server's group, its leader included, and waits until none of it runs. */
 async function endGroup(group: number): Promise<void> {
   signalGroup(group, "SIGKILL");
-  for (let waited = 0; ; waited += POLL_MS) {
+  const deadline = Date.now() + KILL_TIMEOUT_MS;
+  for (;;) {
     const left = await runningIn(group);
     if (left.length === 0) return;
-    if (waited >= KILL_TIMEOUT_MS) {
+    if (Date.now() >= deadline) {
       throw new Error(
         `process group ${group} still has ${left.join(", ")} running after SIGKILL — its record is being kept, because it is the only thing that names it`,
       );
@@ -314,9 +314,8 @@ async function runningIn(group: number): Promise<number[]> {
 }
 
 async function waitUntilGone(server: Server, boot: string, budgetMs: number): Promise<void> {
-  for (let waited = 0; waited < budgetMs && (await alive(server, boot)); waited += POLL_MS) {
-    await Bun.sleep(POLL_MS);
-  }
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline && (await alive(server, boot))) await Bun.sleep(POLL_MS);
 }
 
 /**
@@ -448,6 +447,11 @@ async function up(here: Checkout): Promise<void> {
     await awaitReady(here, existing, boot, budgetMs);
     return;
   }
+  // A dead server's group can outlive it, on its port or on none, and a new
+  // record would leave it named by nothing: it ends here as `down` ends it. Its
+  // record stays until the new one replaces it, so a port refused below keeps
+  // its claim.
+  if (existing !== null) await end(here.state, here.stem, existing, boot);
   const packageName = await declaredName(here.worktree);
   const base = basePort(packageName, here);
   const port =

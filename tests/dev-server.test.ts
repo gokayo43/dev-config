@@ -34,8 +34,10 @@ import {
   EPHEMERAL_FLOOR,
   EXITS_AT_ONCE,
   holderOf,
+  IGNORES_SIGTERM,
   killBehindItsBack,
   killLeaderAlone,
+  LETS_GO_OF_ITS_PORT,
   NEVER_BINDS,
   occupy,
   reclaim,
@@ -196,7 +198,7 @@ describe("up", () => {
 
     await scratch.devServer(two, "down");
 
-    expect(running(kept.pid)).toBe(true);
+    expect(await running(kept.pid)).toBe(true);
     expect(await answers(kept.port)).toBe(true);
     expect(await settles(async () => !(await answers(doomed.port)))).toBe(true);
   });
@@ -220,7 +222,7 @@ describe("up", () => {
       expect(refused.code).toBe(1);
       expect(refused.stderr).toContain("/somewhere/else");
     }
-    expect(running(server.pid)).toBe(true);
+    expect(await running(server.pid)).toBe(true);
   });
 
   test("waits while another `up` holds this worktree, and takes a lock nobody holds", async () => {
@@ -245,7 +247,7 @@ describe("up", () => {
     const gone = await bystander();
     const stale = await holderOf(gone.pid);
     killBehindItsBack(gone.pid);
-    expect(await settles(() => !running(stale.pid))).toBe(true);
+    expect(await settles(async () => !(await running(stale.pid)))).toBe(true);
     await scratch.putLock("main", JSON.stringify(stale));
 
     const stolen = await scratch.devServer(scratch.root, "up");
@@ -315,7 +317,7 @@ describe("up", () => {
     expect(await answers(record.port)).toBe(true);
     expect(record.bootId).toBe((await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim());
     expect(record.startTicks).toBeGreaterThan(0);
-    expect(running(record.pid)).toBe(true);
+    expect(await running(record.pid)).toBe(true);
     expect(Date.parse(record.startedAt)).toBeGreaterThan(0);
     // The log holds whatever the dev script printed, and the child was handed
     // the whole environment with both streams pointed here: a stack trace with
@@ -390,7 +392,7 @@ describe("up", () => {
     await scratch.devServer(scratch.root, "up");
     const before = await scratch.record("main");
     killBehindItsBack(before.pid);
-    expect(await settles(() => !running(before.pid))).toBe(true);
+    expect(await settles(async () => !(await running(before.pid)))).toBe(true);
 
     const dead = await scratch.devServer(scratch.root, "status");
     const restarted = await scratch.devServer(scratch.root, "up");
@@ -442,7 +444,7 @@ describe("up", () => {
     // And the child is gone, not merely unrecorded. Reading the log before
     // stopping it — the order this once had — leaves a server running whenever
     // that read fails, with nothing left that names it.
-    expect(await settles(() => !running(started.pid))).toBe(true);
+    expect(await settles(async () => !(await running(started.pid)))).toBe(true);
   });
 
   test("reads the readiness timeout before it starts anything", async () => {
@@ -487,7 +489,7 @@ describe("what a record is allowed to make this tool do", () => {
     expect(listed.stdout).toContain("dead");
     expect(stopped.code).toBe(0);
     expect(stopped.stderr).toContain("already gone");
-    expect(running(innocent.pid)).toBe(true);
+    expect(await running(innocent.pid)).toBe(true);
     expect(await scratch.recordOrNull("main")).toBeNull();
     killBehindItsBack(server.pid);
   });
@@ -511,7 +513,7 @@ describe("what a record is allowed to make this tool do", () => {
     const stopped = await scratch.devServer(scratch.root, "down");
 
     expect(stopped.stderr).toContain("already gone");
-    expect(running(innocent.pid)).toBe(true);
+    expect(await running(innocent.pid)).toBe(true);
     killBehindItsBack(server.pid);
   });
 
@@ -546,7 +548,7 @@ describe("what a record is allowed to make this tool do", () => {
       expect(listed.stdout).toContain("junk");
       expect(listed.stdout).toContain("not the shape");
     }
-    expect(running(process.pid)).toBe(true);
+    expect(await running(process.pid)).toBe(true);
   });
 
   test("does not let one unreadable record take every command down", async () => {
@@ -664,7 +666,23 @@ describe("the other commands", () => {
     expect(stopped.code).toBe(0);
     expect(stopped.stderr).toContain("stopped");
     expect(again.code).toBe(0);
-    expect(await settles(() => !running(server.pid))).toBe(true);
+    expect(await settles(async () => !(await running(server.pid)))).toBe(true);
+    expect(await answers(server.port)).toBe(false);
+    expect(await scratch.recordOrNull("main")).toBeNull();
+  });
+
+  test("down kills a server that outlives SIGTERM, and forgets it only once it is gone", async () => {
+    // The wrong implementation stops at SIGTERM and forgets the record while
+    // the server goes on serving on the port.
+    await using scratch = await scratchRepo(IGNORES_SIGTERM);
+    expect((await scratch.devServer(scratch.root, "up")).code).toBe(0);
+    const server = await scratch.record("main");
+
+    const stopped = await scratch.devServer(scratch.root, "down");
+
+    expect(stopped.code).toBe(0);
+    expect(stopped.stderr).toContain("stopped");
+    expect(await runningIn(server.pid)).toEqual([]);
     expect(await answers(server.port)).toBe(false);
     expect(await scratch.recordOrNull("main")).toBeNull();
   });
@@ -690,10 +708,10 @@ describe("the other commands", () => {
 
     expect(swept.code).toBe(0);
     expect(swept.stderr).toContain(feature);
-    expect(await settles(() => !running(doomed.pid))).toBe(true);
+    expect(await settles(async () => !(await running(doomed.pid)))).toBe(true);
     expect(await scratch.recordOrNull("feature")).toBeNull();
     expect(await Bun.file(doomedLog).exists()).toBe(false);
-    expect(running(kept.pid)).toBe(true);
+    expect(await running(kept.pid)).toBe(true);
     expect(await answers(kept.port)).toBe(true);
     expect(await scratch.recordOrNull("main")).not.toBeNull();
   });
@@ -727,7 +745,7 @@ describe("a server that has died and is not yet reaped", () => {
     expect(stopped.code).toBe(0);
     expect(stopped.stderr).toContain("already gone");
     expect(await scratch.recordOrNull("main")).toBeNull();
-    expect(unreaped(dead.server.pid)).toBe(true);
+    expect(await unreaped(dead.server.pid)).toBe(true);
   });
 
   test("status shows it dead", async () => {
@@ -756,6 +774,49 @@ describe("a server that has died and is not yet reaped", () => {
     expect(await answers(fresh.port)).toBe(true);
   });
 
+  test("up ends what is left in its group serving the port, and starts afresh there", async () => {
+    // Here `bun dev.ts` still serves after `bun run dev` above it was killed.
+    // The wrong implementation reads the dead leader as no server at all, finds
+    // the claimed port held and refuses it as somebody else's.
+    await using scratch = await scratchRepo(SERVES);
+    await using started = await scratch.devServerUnreaped(scratch.root, "up");
+    expect(started.code).toBe(0);
+    const old = await scratch.record("main");
+    killLeaderAlone(old.pid);
+    expect(await settles(() => unreaped(old.pid))).toBe(true);
+    expect(await answers(old.port)).toBe(true);
+
+    const restarted = await scratch.devServer(scratch.root, "up");
+
+    expect(restarted.code).toBe(0);
+    const fresh = await scratch.record("main");
+    expect(fresh.pid).not.toBe(old.pid);
+    expect(fresh.port).toBe(old.port);
+    expect(await runningIn(old.pid)).toEqual([]);
+    expect(await answers(fresh.port)).toBe(true);
+  });
+
+  test("up ends what is left in its group binding nothing before it writes a new record", async () => {
+    // The member here holds no port, as a watcher would. The wrong
+    // implementation writes the new record over the old one, and the member
+    // runs on with nothing naming it.
+    await using scratch = await scratchRepo(LETS_GO_OF_ITS_PORT);
+    await using started = await scratch.devServerUnreaped(scratch.root, "up");
+    expect(started.code).toBe(0);
+    const old = await scratch.record("main");
+    await fetch(`http://127.0.0.1:${old.port}/unbind`);
+    expect(await settles(async () => !(await answers(old.port)))).toBe(true);
+    killLeaderAlone(old.pid);
+    expect(await settles(() => unreaped(old.pid))).toBe(true);
+    expect(await runningIn(old.pid)).not.toEqual([]);
+
+    const restarted = await scratch.devServer(scratch.root, "up");
+
+    expect(restarted.code).toBe(0);
+    expect((await scratch.record("main")).pid).not.toBe(old.pid);
+    expect(await runningIn(old.pid)).toEqual([]);
+  });
+
   test("down kills what is left in its group before it forgets it", async () => {
     // While the dead leader is unreaped it pins its process group, so what
     // runs in it is provably the server's: here `bun dev.ts`, still serving
@@ -768,13 +829,13 @@ describe("a server that has died and is not yet reaped", () => {
     const server = await scratch.record("main");
     killLeaderAlone(server.pid);
     expect(await settles(() => unreaped(server.pid))).toBe(true);
-    expect(runningIn(server.pid)).not.toEqual([]);
+    expect(await runningIn(server.pid)).not.toEqual([]);
     expect(await answers(server.port)).toBe(true);
 
     const stopped = await scratch.devServer(scratch.root, "down");
 
     expect(stopped.code).toBe(0);
-    expect(runningIn(server.pid)).toEqual([]);
+    expect(await runningIn(server.pid)).toEqual([]);
     expect(await answers(server.port)).toBe(false);
     expect(await scratch.recordOrNull("main")).toBeNull();
   });
@@ -858,14 +919,14 @@ describe("the fixture's own guards", () => {
     for (const base of all) expect(base + PORTS_PER_WORKTREE).toBeLessThanOrEqual(EPHEMERAL_FLOOR);
   });
 
-  test("refuses to signal a pid that is not one", () => {
+  test("refuses to signal a pid that is not one", async () => {
     // `killBehindItsBack(record?.pid ?? 0)` sent SIGKILL to the caller's own
     // process group: against an implementation that writes no record, this suite
     // killed `bun test` and reported nothing. A case reads a pid off a record
     // that has to be there, and these refuse the two numbers that are not pids.
     expect(() => killBehindItsBack(0)).toThrow("not a pid");
     expect(() => killBehindItsBack(1)).toThrow("not a pid");
-    expect(() => running(0)).toThrow("not a pid");
+    await expect(running(0)).rejects.toThrow("not a pid");
   });
 });
 

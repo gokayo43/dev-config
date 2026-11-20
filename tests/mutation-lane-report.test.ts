@@ -158,7 +158,10 @@ function changedIn(files: readonly ReportFile[]): Map<string, Set<number>> {
   return new Map(files.map(({ name, wrote }) => [name, new Set(wrote)]));
 }
 
-/** Code unit order, as the gate's page states it. */
+/**
+ * Code unit order, as the gate's page states it. The model's own rather than
+ * the gate's `byCodeUnit`, so a wrong order there cannot pass both.
+ */
 function byCodeUnit(a: string, b: string): number {
   if (a === b) return 0;
   return a < b ? -1 : 1;
@@ -207,13 +210,13 @@ function problemsSeen({ problems }: Verdict): (readonly [string, number, string,
   });
 }
 
-// C1, and C3 beside it. The listing is a function of the set of findings: the
-// same report with its files and each file's mutants in another order gives the
-// same verdict, problems, table and note alike. Kills a listing in the report's
-// order, which Stryker sets by when each mutant finished, and a sort by a key
-// that leaves out a field the output shows, which ties two mutants differing
-// only in that field and lists them in the report's order. The last assertion
-// kills a floor's problem put anywhere but after the findings.
+// The listing is a function of the set of findings: the same report with its
+// files and each file's mutants in another order gives the same verdict,
+// problems, table and note alike. Kills a listing in the report's order, which
+// Stryker sets by when each mutant finished, and a sort by a key that leaves
+// out a field the output shows, which ties two mutants differing only in that
+// field and lists them in the report's order. The last assertion, that the
+// floor's problem comes after every finding, kills one put anywhere else.
 test("the findings are listed in one order whatever order the report holds them in", () => {
   check(
     property(
@@ -231,13 +234,13 @@ test("the findings are listed in one order whatever order the report holds them 
   );
 });
 
-// Shape 1 of the order: by file, first line, last line, mutator, replacement
-// and status, text by code unit. The model sorts the generated mutants by that
-// key, and the step's summary lines and its problems must both follow it. Kills
-// an order that leaves out the last line, which no output shows and so C1
-// cannot see; one that compares the fields in another priority; one that
-// collates text where code units decide (`src/B.ts` before `src/a.ts`); and one
-// that compares lines as text (`10` before `2`).
+// The order the gate's page states: by file, first line, last line, mutator,
+// replacement and status, text by code unit. The model sorts the generated
+// mutants by that key, and the step's summary lines and its problems must both
+// follow it. Kills an order that leaves out the last line, which no output
+// shows and so the property above cannot see; one that compares the fields in
+// another priority; one that collates text where code units decide (`src/B.ts`
+// before `src/a.ts`); and one that compares lines as text (`10` before `2`).
 test("the findings are listed by file, first line, last line, mutator, replacement and status", () => {
   check(
     property(listedReport, tests, (files, run) => {

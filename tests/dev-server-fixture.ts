@@ -24,7 +24,8 @@ import {
   recordStem,
   type Server,
 } from "../dev-server-derive.ts";
-import { exited, procFields } from "./proc-reading.ts";
+import { bootId, procStat } from "../file-lock.ts";
+import { heard } from "./proc-reading.ts";
 
 /** The CLI under test, reached the way a consuming repo reaches it. */
 const CLI = join(dirname(import.meta.dir), "dev-server.ts");
@@ -145,6 +146,27 @@ Bun.serve({ port, hostname: "0.0.0.0", fetch: () => new Response("ok") });
 /** A `dev` script that fails on its first line, which is what a broken config looks like. */
 export const EXITS_AT_ONCE = `console.error("boom: the dev script could not start");
 process.exit(3);
+`;
+
+/**
+ * A `dev` script that serves and asks SIGTERM to be ignored. `bun run dev`
+ * above it passes SIGTERM on and waits for it, so the whole server outlives
+ * the signal.
+ */
+export const IGNORES_SIGTERM = `${SERVES}process.on("SIGTERM", () => console.log("fixture ignored SIGTERM"));
+`;
+
+/** A `dev` script that serves until `/unbind` is asked for, then runs on binding nothing, as a watcher does. */
+export const LETS_GO_OF_ITS_PORT = `const server = Bun.serve({
+  port: Number(process.env["PORT"]),
+  hostname: process.env["HOST"],
+  fetch: (request) => {
+    if (new URL(request.url).pathname !== "/unbind") return new Response("ok");
+    setTimeout(() => server.stop(true), 0);
+    return new Response("unbinding");
+  },
+});
+setInterval(() => {}, 60_000);
 `;
 
 /** A `dev` script that starts, says so, and never listens. */
@@ -360,15 +382,7 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
         [process.execPath, UNREAPING, process.execPath, "run", "dev-server", ...args],
         { cwd, env: environment, stdin: "pipe", stdout: "pipe", stderr: "inherit" },
       );
-      const reader = parent.stdout.getReader();
-      let said = "";
-      while (!said.endsWith("\n")) {
-        const { value, done } = await reader.read();
-        if (done)
-          throw new Error(`the unreaping parent exited having said ${JSON.stringify(said)}`);
-        said += new TextDecoder().decode(value);
-      }
-      reader.releaseLock();
+      const [said = ""] = await heard(parent.stdout, 1);
       await remember();
       const run: unknown = JSON.parse(said);
       if (!isRun(run)) throw new Error(`the unreaping parent said ${said}`);
@@ -434,7 +448,7 @@ export async function bystander(): Promise<{ readonly pid: number } & Disposable
   // `setsid` execs in place, but not before it has run: a case that signalled
   // `-pid` in that gap reached nothing, the process lived on, and the case
   // failed on whichever assertion came next.
-  const led = await settles(async () => await leadsItsGroup(proc.pid));
+  const led = await settles(async () => (await procStat(proc.pid))?.group === proc.pid);
   if (!led) throw new Error(`${proc.pid} never became the leader of its own process group`);
   return {
     pid: proc.pid,
@@ -444,28 +458,17 @@ export async function bystander(): Promise<{ readonly pid: number } & Disposable
   };
 }
 
-async function leadsItsGroup(pid: number): Promise<boolean> {
-  try {
-    const raw = await readFile(`/proc/${pid}/stat`, "utf8");
-    return Number(raw.slice(raw.lastIndexOf(")") + 2).split(" ")[2]) === pid;
-  } catch {
-    // Gone already, which is not a group leader either.
-    return false;
-  }
-}
-
 /**
  * What a file has to say about a process for this tool to act on it: which boot,
- * and which tick within it. Read the same way the CLI reads it, because a case
+ * and which tick within it. Read through the CLI's own reader, because a case
  * that planted a different spelling would be grading its own arithmetic.
  */
 export async function holderOf(
   pid: number,
 ): Promise<{ pid: number; bootId: string; startTicks: number }> {
-  const raw = await readFile(`/proc/${real(pid)}/stat`, "utf8");
-  const startTicks = Number(raw.slice(raw.lastIndexOf(")") + 2).split(" ")[19]);
-  const bootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
-  return { pid, bootId, startTicks };
+  const stat = await procStat(real(pid));
+  if (stat === null) throw new Error(`process ${pid} is not there to hold anything`);
+  return { pid, bootId: await bootId(), startTicks: stat.startTicks };
 }
 
 /** Waits for something to exist, and hands it over — for the cases that need it while the command still runs. */
@@ -508,15 +511,13 @@ function isRun(value: unknown): value is Run {
  * its own column. A process that has exited is not running, whether or not
  * whatever adopted it has reaped it yet.
  */
-export function running(pid: number): boolean {
-  const fields = procFields(real(pid));
-  return fields !== null && !exited(fields);
+export async function running(pid: number): Promise<boolean> {
+  return (await procStat(real(pid)))?.alive === true;
 }
 
 /** Whether a process has exited and is still listed, because nobody has reaped it. */
-export function unreaped(pid: number): boolean {
-  const fields = procFields(real(pid));
-  return fields !== null && exited(fields);
+export async function unreaped(pid: number): Promise<boolean> {
+  return (await procStat(real(pid)))?.alive === false;
 }
 
 /** Whether a signal reaches anything at a pid, or at a whole process group as `-pid`. */

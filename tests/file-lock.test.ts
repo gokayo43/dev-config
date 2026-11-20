@@ -7,14 +7,14 @@
  */
 import { describe, expect, test } from "bun:test";
 import { link, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { tmpdir, userInfo } from "node:os";
+import { dirname, join } from "node:path";
 
 import { array, asyncProperty, constantFrom, integer, nat } from "fast-check";
 
 import { bootId, lock, parseStat, procStat } from "../file-lock.ts";
 import { check } from "../property.ts";
-import { reaches } from "./proc-reading.ts";
+import { exits, heard, orphaned, reaches } from "./proc-reading.ts";
 
 /** More waiting than any schedule here asks for, since waiting costs no time under one. */
 const PATIENT = 1_000_000_000;
@@ -166,8 +166,7 @@ async function killedAt(path: string, stop: string): Promise<void> {
     stderr: "inherit",
   });
   try {
-    const { value } = await child.stdout.getReader().read();
-    expect(new TextDecoder().decode(value)).toBe("at\n");
+    expect(await heard(child.stdout, 1)).toEqual(["at"]);
   } finally {
     child.kill("SIGKILL");
     await child.exited;
@@ -304,20 +303,6 @@ test("gives up on a live holder after its patience, naming it", async () => {
   );
 });
 
-/** Reads a child's stdout until it has said every line in `lines`, and returns what it said. */
-async function heard(out: ReadableStream<Uint8Array>, lines: number): Promise<string[]> {
-  const reader = out.getReader();
-  let said = "";
-  while (said.split("\n").length <= lines) {
-    const { value, done } = await reader.read();
-    if (done)
-      throw new Error(`the child closed its stdout having said only ${JSON.stringify(said)}`);
-    said += new TextDecoder().decode(value);
-  }
-  reader.releaseLock();
-  return said.split("\n").slice(0, lines);
-}
-
 describe("a holder's process, by the state the kernel has it in", () => {
   // Each text is a real process's `/proc/<pid>/stat`, captured on this machine
   // in that state by `tests/proc-stat-capture.ts`. The wrong implementations:
@@ -333,20 +318,66 @@ describe("a holder's process, by the state the kernel has it in", () => {
     ["zombie-multithreaded", false],
     ["zombie-group-leader", false],
   ] as const)("%s is alive: %p", async (name, expected) => {
-    const raw = await readFile(join(import.meta.dir, "proc-stat", `${name}.stat`), "utf8");
+    const path = join(import.meta.dir, "proc-stat", `${name}.stat`);
 
-    expect(parseStat(raw).alive).toBe(expected);
+    expect(parseStat(await readFile(path, "utf8"), path).alive).toBe(expected);
   });
 
   test("a dead leader still leads its group, which is what pins the group", async () => {
     // `dev-server down` kills what is left of a dead server's group only while
-    // its leader's entry says it leads that group.
-    const raw = await readFile(
-      join(import.meta.dir, "proc-stat", "zombie-group-leader.stat"),
-      "utf8",
-    );
+    // its leader's entry names its own pid as its group. Field 1 is the pid the
+    // text is about.
+    const path = join(import.meta.dir, "proc-stat", "zombie-group-leader.stat");
+    const raw = await readFile(path, "utf8");
 
-    expect(parseStat(raw).leadsItsGroup).toBe(true);
+    expect(parseStat(raw, path).group).toBe(Number(raw.split(" ", 1)[0]));
+  });
+
+  test("refuses a line that is not a stat line, naming where it was read", () => {
+    // The wrong implementation names the pid it failed to parse out of the
+    // line, which is `NaN` in exactly the case the refusal is for.
+    expect(() => parseStat("garbage", "/proc/4242/stat")).toThrow(
+      "/proc/4242/stat is not the shape this reads",
+    );
+  });
+
+  test("a process /proc will not show this user is no process of this user's", async () => {
+    // Where `/proc` is mounted `hidepid=1`, another user's entry is listed and
+    // its read refused with EPERM. The wrong implementation throws that, and
+    // `dev-server down` then fails reading every process's group. A pid and
+    // mount namespace gives the case a `/proc` of its own to mount so; root
+    // mounts it, `nobody` runs the other process, and this user reads it.
+    const probe = `const { procStat } = await import(${JSON.stringify(join(dirname(import.meta.dir), "file-lock.ts"))});
+console.log(JSON.stringify(await procStat(Number(process.env["OTHER"]))));`;
+    const me = userInfo();
+    const sealed = Bun.spawn(
+      [
+        "sudo",
+        "-n",
+        "unshare",
+        "--pid",
+        "--mount",
+        "--fork",
+        "--mount-proc",
+        "sh",
+        "-c",
+        'mount -o remount,hidepid=1 /proc || exit 1; setpriv --reuid=65534 --regid=65534 --clear-groups sleep 60 & OTHER=$!; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" OTHER="$OTHER" "$4" -e "$5"',
+        "sh",
+        String(me.uid),
+        String(me.gid),
+        me.homedir,
+        process.execPath,
+        probe,
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+    );
+    const [said, complained, code] = await Promise.all([
+      new Response(sealed.stdout).text(),
+      new Response(sealed.stderr).text(),
+      sealed.exited,
+    ]);
+
+    expect({ code, said, complained }).toEqual({ code: 0, said: "null\n", complained: "" });
   });
 
   test("a holder killed while holding and not yet reaped is gone, and its lock is taken at once", async () => {
@@ -354,29 +385,13 @@ describe("a holder's process, by the state the kernel has it in", () => {
     // implementation reads any `/proc` entry with the recorded start tick as
     // the holder alive, so with no patience at all it gives up on the lock.
     await using ground = await arena();
-    const parent = Bun.spawn(
-      [
-        "sh",
-        "-c",
-        '"$0" "$1" "$2" held & echo $!; exec sleep 60',
-        process.execPath,
-        CHILD,
-        ground.lockPath,
-      ],
-      { stdin: "ignore", stdout: "pipe", stderr: "inherit" },
-    );
-    try {
-      const [pid, at] = await heard(parent.stdout, 2);
-      expect(at).toBe("at");
-      process.kill(Number(pid), "SIGKILL");
-      await reaches(Number(pid), "Z");
+    await using holder = await orphaned([process.execPath, CHILD, ground.lockPath, "held"], 1);
+    expect(holder.said).toEqual(["at"]);
+    process.kill(holder.pid, "SIGKILL");
+    await exits(holder.pid);
 
-      const taken = await lock(ground.lockPath, 0);
-      await taken[Symbol.asyncDispose]();
-    } finally {
-      parent.kill("SIGKILL");
-      await parent.exited;
-    }
+    const taken = await lock(ground.lockPath, 0);
+    await taken[Symbol.asyncDispose]();
 
     expect((await readdir(ground.path)).toSorted()).toEqual(["counter"]);
   });

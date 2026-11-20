@@ -289,12 +289,6 @@ test("unreached", () => {
   };
 }
 
-// The step is what applies a repo's declared floor — the argument is in
-// docs/gates/test-suite.md — so the wrong implementation is the one that runs
-// the suite without --coverage, which the under-covered tree below passes with
-// every test green. Graded through the report the run wrote rather than the
-// console: what makes the first case the coverage floor and not some other
-// failure is that the run's own record says nothing in it failed.
 describe("the budget a nightly gets", () => {
   /** A suite that reports what the run gave it, which is the whole of what the budget is. */
   const BUDGETED: Tree = {
@@ -465,6 +459,12 @@ describe("the limit a test is given", () => {
   });
 });
 
+// The step is what applies a repo's declared floor — the argument is in
+// docs/gates/test-suite.md — so the wrong implementation is the one that runs
+// the suite without --coverage, which the under-covered tree below passes with
+// every test green. Graded through the report the run wrote rather than the
+// console: what makes the first case the coverage floor and not some other
+// failure is that the run's own record says nothing in it failed.
 describe("the coverage floor the repo declares", () => {
   test("a suite under the floor fails, with nothing failing", async () => {
     const { status, report } = await ran(floored(false));

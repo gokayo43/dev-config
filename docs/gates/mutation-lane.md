@@ -282,10 +282,11 @@ The **case limit** is `mutation-case-timeout`, in milliseconds as bun's
 60000 when empty. A case allowed longer than the whole run is allowed nothing
 more, and the cap keeps Stryker's deadline for a mutant inside the 2147483647
 ms Node's timers take, past which a timer fires after 1 ms and every covered
-mutant came back caught by timing out. The flag outranks any `[test] timeout` in the repo's
-`bunfig.toml`, a longer one included, which the runner used to forward to every
-case. Stryker's deadline is built from it, so one case's limit beyond what the
-tests took is the slack a run gets before it is a hang.
+mutant came back caught by timing out. A `[test] timeout` in the repo's
+`bunfig.toml` changes nothing: the runner copies the key into Stryker's
+sandbox, and bun ignores it, as the test-suite gate's page says. Stryker's
+deadline is built from the flag, so one case's limit beyond what the tests took
+is the slack a run gets before it is a hang.
 
 The **run's deadline** is nine minutes from the lane's start, inside the ten
 `check.yml` gives the step. The named tests' unmutated run and Stryker both end
@@ -334,10 +335,10 @@ At the default that is a minute a hang, where Stryker's defaults ended one at
 ## The score, and the floor
 
 The mutation score over the files the branch touched goes to the run summary
-every time, passing or failing, with the undetected mutants on the branch's own
-lines listed under it and a **Not graded** row counting the mutants the run
-produced no verdict for — which, on any run that reaches the summary at all, are
-exactly the static ones, because the run's suite passed unmutated and every other
+whenever at least one mutant counts toward it, passing or failing, with the
+undetected mutants on the branch's own lines listed under it and a **Not
+graded** row counting the mutants the run produced no verdict for — which, on
+any run that reaches the summary at all, are exactly the static ones, because the run's suite passed unmutated and every other
 no-verdict mutant is a refusal. Counted there rather than left silent, because a
 campaign that graded fewer mutants than it made is the thing a score cannot say.
 

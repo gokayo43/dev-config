@@ -66,10 +66,11 @@ export async function bootId(): Promise<string> {
 
 /** What `/proc/<pid>/stat` says of a process that is there, reaped or not. */
 export interface ProcStat {
+  /** The kernel's state letter, field 3: `R`, `S`, `T`, `Z` and the rest. */
+  readonly state: string;
   readonly startTicks: number;
-  /** Its process group, field 5. */
+  /** Its process group, field 5, which is its own pid when it leads one. */
   readonly group: number;
-  readonly leadsItsGroup: boolean;
   /**
    * Whether any thread of it still runs. A process that has wholly exited keeps
    * its entry, in state `Z`, until whatever adopted it reaps it, and it is no
@@ -91,9 +92,10 @@ export interface ProcStat {
  * thread has exited while another thread runs on, and the count is then 2 or
  * more. The count is 0 while the kernel is releasing the process, since
  * `do_task_stat` reports 0 once it cannot take the process's signal lock.
+ *
+ * `from` is where the text was read, which a refusal names.
  */
-export function parseStat(raw: string): ProcStat {
-  const pid = Number(raw.slice(0, raw.indexOf(" ")));
+export function parseStat(raw: string, from: string): ProcStat {
   const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
   const state = String(fields[0]);
   const group = Number(fields[2]);
@@ -101,29 +103,34 @@ export function parseStat(raw: string): ProcStat {
   const startTicks = Number(fields[19]);
   if (
     !/^[A-Za-z]$/.test(state) ||
-    ![pid, group, threads, startTicks].every((field) => Number.isInteger(field))
+    ![group, threads, startTicks].every((field) => Number.isInteger(field))
   ) {
     throw new Error(
-      `/proc/${pid}/stat is not the shape this reads — field 3 is not a state letter, or fields 1, 5, 20 and 22 are not numbers`,
+      `${from} is not the shape this reads — field 3 is not a state letter, or fields 5, 20 and 22 are not numbers`,
     );
   }
   const exited = (state === "Z" || state === "X") && threads <= 1;
-  return { startTicks, group, leadsItsGroup: group === pid, alive: !exited };
+  return { state, startTicks, group, alive: !exited };
 }
 
-/** What `/proc` says about a process, or nothing when it is not there. */
+/** What `/proc` says about a process of this user's, or nothing when there is none at that pid. */
 export async function procStat(pid: number): Promise<ProcStat | null> {
+  const path = `/proc/${pid}/stat`;
   let raw: string;
   try {
-    raw = await readFile(`/proc/${pid}/stat`, "utf8");
+    raw = await readFile(path, "utf8");
   } catch (error) {
     // No such process is the answer being asked for, and so is a process reaped
-    // between the open and the read, which the read reports as ESRCH. Any other
-    // failure to read says nothing about whether it is there.
-    if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH")) return null;
+    // between the open and the read, which the read reports as ESRCH. EPERM is
+    // another user's process where `/proc` is mounted `hidepid=1`, which is no
+    // process of this user's either. Any other failure to read says nothing
+    // about whether it is there.
+    if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH") || hasCode(error, "EPERM")) {
+      return null;
+    }
     throw error;
   }
-  return parseStat(raw);
+  return parseStat(raw, path);
 }
 
 /**
