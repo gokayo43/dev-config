@@ -24,9 +24,13 @@ import {
   recordStem,
   type Server,
 } from "../dev-server-derive.ts";
+import { exited, procFields } from "./proc-reading.ts";
 
 /** The CLI under test, reached the way a consuming repo reaches it. */
 const CLI = join(dirname(import.meta.dir), "dev-server.ts");
+
+/** The parent that adopts what a command leaves behind and reaps none of it. */
+const UNREAPING = join(import.meta.dir, "unreaping-parent.ts");
 
 /** Every branch a fixture runs `up` on. A fixture claims all of their blocks before any case starts a server. */
 export const BRANCHES = ["main", "feature", "feat/x", "feat-x"] as const;
@@ -167,6 +171,12 @@ export interface Scratch extends AsyncDisposable {
   devServer(cwd: string, ...args: readonly string[]): Promise<Run>;
   /** Two of them at once, started as close together as this can arrange. */
   devServerRace(cwd: string, ...args: readonly string[]): Promise<[Run, Run]>;
+  /**
+   * The same, run under a parent that adopts the server it leaves running and
+   * reaps nothing it adopted until disposed of: a server that dies meanwhile
+   * stays a zombie, dead and still listed in `/proc`.
+   */
+  devServerUnreaped(cwd: string, ...args: readonly string[]): Promise<Run & AsyncDisposable>;
   /** Where a branch's record, log and lock live, derived the way the CLI derives them. */
   paths(branch: Branch): { readonly record: string; readonly log: string; readonly lock: string };
   /** The record for a branch. Refuses to invent one: an absent record is a failing case, not a zero. */
@@ -300,10 +310,12 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
     }
   }
 
+  const environment = { ...process.env, DEV_SERVER_READY_TIMEOUT_MS: String(ready) };
+
   async function invoke(cwd: string, args: readonly string[]): Promise<Run> {
     const proc = Bun.spawn([process.execPath, "run", "dev-server", ...args], {
       cwd,
-      env: { ...process.env, DEV_SERVER_READY_TIMEOUT_MS: String(ready) },
+      env: environment,
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
@@ -339,6 +351,34 @@ export async function scratchRepo(dev: string, ready = 20_000): Promise<Scratch>
       const both = await Promise.all([invoke(cwd, args), invoke(cwd, args)]);
       await remember();
       return both;
+    },
+    async devServerUnreaped(
+      cwd: string,
+      ...args: readonly string[]
+    ): Promise<Run & AsyncDisposable> {
+      const parent = Bun.spawn(
+        [process.execPath, UNREAPING, process.execPath, "run", "dev-server", ...args],
+        { cwd, env: environment, stdin: "pipe", stdout: "pipe", stderr: "inherit" },
+      );
+      const reader = parent.stdout.getReader();
+      let said = "";
+      while (!said.endsWith("\n")) {
+        const { value, done } = await reader.read();
+        if (done)
+          throw new Error(`the unreaping parent exited having said ${JSON.stringify(said)}`);
+        said += new TextDecoder().decode(value);
+      }
+      reader.releaseLock();
+      await remember();
+      const run: unknown = JSON.parse(said);
+      if (!isRun(run)) throw new Error(`the unreaping parent said ${said}`);
+      return {
+        ...run,
+        async [Symbol.asyncDispose](): Promise<void> {
+          await parent.stdin.end();
+          await parent.exited;
+        },
+      };
     },
     async record(branch: Branch): Promise<Server> {
       const { record } = paths(branch);
@@ -450,9 +490,33 @@ export async function stays(
   return await unchanged();
 }
 
-/** Whether a process is there at all — the question `status` answers in its own column. */
+function isRun(value: unknown): value is Run {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "code" in value &&
+    typeof value.code === "number" &&
+    "stdout" in value &&
+    typeof value.stdout === "string" &&
+    "stderr" in value &&
+    typeof value.stderr === "string"
+  );
+}
+
+/**
+ * Whether a process is there and still runs — the question `status` answers in
+ * its own column. A process that has exited is not running, whether or not
+ * whatever adopted it has reaped it yet.
+ */
 export function running(pid: number): boolean {
-  return exists(real(pid));
+  const fields = procFields(real(pid));
+  return fields !== null && !exited(fields);
+}
+
+/** Whether a process has exited and is still listed, because nobody has reaped it. */
+export function unreaped(pid: number): boolean {
+  const fields = procFields(real(pid));
+  return fields !== null && exited(fields);
 }
 
 /** Whether a signal reaches anything at a pid, or at a whole process group as `-pid`. */
@@ -469,6 +533,11 @@ function exists(target: number): boolean {
 /** Kills a server without telling the CLI, which is what a `pkill` or a reboot does to one. */
 export function killBehindItsBack(pid: number): void {
   slay(pid);
+}
+
+/** Kills a group's leader and nothing else in its group, as an OOM kill or a crash of `bun run` does. */
+export function killLeaderAlone(pid: number): void {
+  process.kill(real(pid), "SIGKILL");
 }
 
 /** Waits for a condition the operating system reaches on its own time — a process dying, a port closing. */

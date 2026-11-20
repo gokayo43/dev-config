@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
 
 import { GRACE_MS } from "../.github/actions/mutation-lane/child.ts";
 import {
   endedProblem,
   LONGEST_CASE_LIMIT_MS,
 } from "../.github/actions/mutation-lane/mutation-lane.ts";
-import { nth } from "../narrowing.ts";
+import { procStat } from "../file-lock.ts";
 import { containing } from "./matchers.ts";
 import {
   BEFORE,
@@ -56,22 +55,6 @@ test("counts down to nothing", () => {
   expect(countdown(3)).toBe(0);
 });
 `;
-
-/**
- * What `/proc` says a process is doing, as its state letter, or `gone`. A
- * killed process the lane did not start is reaped by whatever adopted it, a
- * subreaper or PID 1, on that process's own time: until then it is a zombie
- * (`Z`), dead, and a signal to its pid still reaches it.
- */
-async function stateOf(pid: number): Promise<string> {
-  try {
-    const raw = await readFile(`/proc/${pid}/stat`, "utf8");
-    return nth(raw.slice(raw.lastIndexOf(")") + 2).split(" "), 0);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return "gone";
-    throw error;
-  }
-}
 
 describe("the clocks a mutation run keeps", () => {
   // Each of the three clocks, left at its default, ends the slow mutant's run
@@ -270,8 +253,10 @@ test("waits on a child of its own", async () => {
     // The deadline counts from the lane's start, so the grace and a second of
     // the lane's own work bound the rest.
     expect(took).toBeLessThan(runDeadline + GRACE_MS + 1_000);
+    // Whatever adopted the grandchild reaps it on its own time, so it may still
+    // be listed, dead.
     const pid = Number(await Bun.file(`${root}/grandchild.pid`).text());
-    expect(await stateOf(pid)).toBeOneOf(["gone", "Z"]);
+    expect((await procStat(pid))?.alive === true).toBe(false);
   });
 
   // What the refusal of a run the deadline ended advises turns on Stryker's own
