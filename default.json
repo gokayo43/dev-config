@@ -74,6 +74,11 @@
       "matchPackageNames": ["oxfmt"],
       "groupName": "oxfmt",
       "automerge": false
+    },
+    {
+      "description": "A library's peer range and its engines range are compatibility claims, not installs. The pin above would rewrite each into one exact version, and a host on any other version the range promised would stop resolving. They keep Renovate's own strategy, which leaves a range alone while the new release is inside it.",
+      "matchDepTypes": ["engines", "peerDependencies"],
+      "rangeStrategy": "auto"
     }
   ],
   "customManagers": [

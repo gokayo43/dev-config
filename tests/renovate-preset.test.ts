@@ -78,3 +78,18 @@ test("the formatter the format check runs gets a PR of its own that never merges
   ]);
   expect(holding[0]?.["matchUpdateTypes"]).toBeUndefined();
 });
+
+// The top-level strategy pins every range to one exact version, which is right
+// for what a repo installs and wrong for what a library promises its host: a
+// peer range rewritten to one version refuses every host on another one the
+// range allowed (gokayo43/dev-config#122). The rule that exempts them has to
+// come after every rule that could set a strategy, since Renovate's last
+// matching rule wins. The wrong implementation is the pin left to reach them.
+test("a peer range and an engines range are never pinned to one version", () => {
+  const rules = (isList(PRESET["packageRules"]) ? PRESET["packageRules"] : []).map(record);
+  const strategies = rules.filter((rule) => rule["rangeStrategy"] !== undefined);
+  const last = strategies.at(-1);
+  expect(PRESET["rangeStrategy"]).toBe("pin");
+  expect(last?.["matchDepTypes"]).toEqual(["engines", "peerDependencies"]);
+  expect(last?.["rangeStrategy"]).toBe("auto");
+});
