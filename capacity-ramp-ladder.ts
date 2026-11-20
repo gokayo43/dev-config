@@ -470,8 +470,11 @@ export async function pinnedK6(
   signal.removeEventListener("abort", stop);
   unlessStopped(signal, "while the pinned k6 was being fetched, before the first step");
   const [k6 = "", version = ""] = out.trim().split("\n");
-  if (code !== 0 || k6 === "")
-    throw new Unmeasured(`fetching the pinned k6 failed:\n${err.trim()}`);
+  if (code !== 0 || k6 === "") {
+    throw new Unmeasured(
+      `fetching the pinned k6 failed, its loader exiting ${code}:\n${err.trim()}`,
+    );
+  }
   return { k6, version };
 }
 
@@ -790,7 +793,7 @@ export function markdownOf(result: Result): string {
     "",
     `- Held: ${usersOf(result.held)}`,
     `- Broke: ${result.broke === null ? "no step broke a bound" : `${result.broke.users} users, on ${boundsNamed(result.broke.bounds)}`}`,
-    `- Previous run: ${result.previous === null ? "none of this measurement, the same target, script, steps, bounds and k6" : `${usersOf(result.previous.held)} held, in ${result.previous.file}`}`,
+    `- Previous run: ${result.previous === null ? "none of this measurement: the same k6, target, paths, script, steps, hold and bounds" : `${usersOf(result.previous.held)} held, in ${result.previous.file}`}`,
     "",
     "## Steps",
     "",
