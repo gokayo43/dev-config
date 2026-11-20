@@ -178,10 +178,14 @@ describe("the ceiling it finds", () => {
         },
       ),
       {
-        numRuns: 6,
+        numRuns: 7,
         endOnFailure: true,
+        // The edges every run covers, whatever the random draws: the first
+        // step breaking, each bound breaking a later step, and none breaking.
         examples: [
           [0, "slow"],
+          [1, "errors"],
+          [2, "slow"],
           [5, "errors"],
         ],
       },
@@ -281,7 +285,7 @@ describe("what the command leaves behind", () => {
     expect(first.status).toBe(MEASURED);
     expect(first.stdout).toContain("- Previous run: none for this target");
     await using other = await stub(4, "errors");
-    const elsewhere = await command(root, ["--health", other.health, ...SMALL]);
+    const elsewhere = await command(root, ["--health", other.health, ...args.slice(2)]);
     expect(elsewhere.stdout).toContain("- Previous run: none for this target");
     const second = await command(root, args);
     expect(second.status).toBe(MEASURED);
@@ -367,6 +371,7 @@ describe("what the command leaves behind", () => {
       target.health,
       "--script",
       "staged.js",
+      ...SMALL,
     ]);
     expect(status).toBe(WRONG_ARGUMENTS);
     expect(stderr).toContain("--script staged.js sets stages");
