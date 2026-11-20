@@ -153,7 +153,8 @@ a change to a rule usually lands here too.
   chooses what to mutate and runs Stryker; beside it `tests.ts` is which tests
   a run loads and whether the named ones pass unmutated, `report.ts` what
   Stryker's report says about a branch, `child.ts` a child the lane runs, the
-  run's deadline that ends it and the interrupts it passes on, and `values.ts` how the lane reads a repo's text
+  run's deadline that ends it and the interrupts it passes on, `node.ts` whether
+  the runner's Node.js is one every package Stryker loads accepts, and `values.ts` how the lane reads a repo's text
   and quotes it back, which the orchestrator, `tests.ts` and `report.ts` do. `duplicate-code` is written here rather than run as jscpd
   for the reason `fuzz.ts` carries its own PRNG: an action runs from a checkout
   with no install, and a tool fetched from npm at run time is pinned by a
@@ -351,8 +352,11 @@ a change to a rule usually lands here too.
   is the same over which tests a run loads when a repo names them, a subject of
   its own, `mutation-lane-clocks.test.ts` over the clocks a run keeps and what a
   timeout means under them, which spends real seconds waiting a slow mutant out,
-  and `mutation-lane-fixture.ts` is the fixture repository and the run
-  all three suites share. `mutation-lane-child.test.ts` drives `child.ts` alone,
+  `mutation-lane-node.test.ts` over the Node.js a run needs, and
+  `mutation-lane-fixture.ts` is the fixture repository and the run
+  the four suites share, whose `messages` carries what Stryker printed into a
+  run that exited without a report, so a case that meets one on a CI machine
+  nobody can log into fails with the cause. `mutation-lane-child.test.ts` drives `child.ts` alone,
   with real signals to real processes, through `mutation-lane-child-driver.ts`,
   a stand-in for the lane a case can interrupt. `mutation-lane-report.test.ts`
   drives `report.ts` alone, over generated reports in every order, because a

@@ -412,6 +412,20 @@ the ignore itself: `treatConfigHintsAsErrors` turns an ignore matching no
 declared dependency into an error, so every repo that does _not_ run the lane
 would fail knip the day its pin moved.
 
+**What a runner needs.** Node.js, beside the Bun that runs the lane: Stryker's
+command starts `#!/usr/bin/env node`, so it runs under the `node` on `PATH`.
+That Node has to be one every package Stryker loads accepts, by the
+`engines.node` each declares, and Stryker's own declaration is not the
+strictest. `@stryker-mutator/core` 10.1.1 declares `>=22.0.0` and parses the
+code with Babel 8, which declares `^22.18.0 || >=24.11.0`; under a Node 22
+before 22.12 Babel's `require()` of its own ES modules fails, and Stryker exits
+1 before it tests a mutant. So the lane reads `engines.node` across the
+installed dependency tree of the two packages and holds the runner's `node` to
+every range before Stryker starts. A runner with no `node` is told to install
+one; a runner whose `node` falls outside a range is told its version and each
+range it misses, with a package that declares it. At the pair this repo pins,
+that means Node 22.18 or later in the 22 line, or 24.11 or later.
+
 **Running it by hand.** Start the lane from its own checkout with every input it
 reads set, and with bun told to leave the checkout's `.env` alone, since bun
 loads it into the process otherwise and every child inherits what it set:

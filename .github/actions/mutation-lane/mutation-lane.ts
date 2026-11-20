@@ -16,7 +16,8 @@ import {
   readConfig,
   type Verdict,
 } from "../_lib/gate.ts";
-import { ran } from "./child.ts";
+import { onPath, ran } from "./child.ts";
+import { nodeProblem } from "./node.ts";
 import { verdict } from "./report.ts";
 import {
   BUNFIG,
@@ -548,6 +549,11 @@ export async function mutationLane({
           },
         ],
       };
+    }
+
+    const node = await nodeProblem(root, [CORE, RUNNER], onPath("node"));
+    if (node !== undefined) {
+      return { note: "the runner's Node.js cannot run the mutation run", problems: [node] };
     }
 
     const config = join(scratch, "stryker.conf.json");
