@@ -6,6 +6,7 @@ import {
   type Input,
   mutationLane,
   RUN_DEADLINE_MS,
+  UNFINISHED,
 } from "../.github/actions/mutation-lane/mutation-lane.ts";
 import { git, history, type Tree } from "./tree.ts";
 
@@ -142,6 +143,14 @@ export async function laneIn(
   };
 }
 
-export function messages({ problems }: Verdict): string[] {
-  return problems.map(({ file, message }) => `${file ?? ""}: ${message}`);
+/**
+ * The problems as the action shows them. A Stryker run that exited without a
+ * report says to fix what it reported above, where the action prints its log
+ * and where a case never looks, so here the log is part of that message: a case
+ * that meets such a run fails with what Stryker printed, which is all that
+ * explains it on a machine nobody can log into.
+ */
+export function messages({ note, log, problems }: Verdict): string[] {
+  const above = note === UNFINISHED ? `\n${log ?? ""}` : "";
+  return problems.map(({ file, message }) => `${file ?? ""}: ${message}${above}`);
 }

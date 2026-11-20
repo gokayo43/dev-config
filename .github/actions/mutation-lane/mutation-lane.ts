@@ -16,7 +16,8 @@ import {
   readConfig,
   type Verdict,
 } from "../_lib/gate.ts";
-import { ran } from "./child.ts";
+import { onPath, ran } from "./child.ts";
+import { machineProblems } from "./machine.ts";
 import { verdict } from "./report.ts";
 import {
   BUNFIG,
@@ -609,12 +610,13 @@ export async function mutationLane({
 
     if (stryked.status !== 0) {
       return {
-        note: "the mutation run did not finish",
+        note: UNFINISHED,
         log: wrote,
         problems: [
           {
             message: `fix what the run reported above: it exited ${stryked.status} without a report, so nothing was graded`,
           },
+          ...(await machineProblems(root, [CORE, RUNNER], onPath("node"), temp)),
         ],
       };
     }
@@ -624,6 +626,9 @@ export async function mutationLane({
     await rm(scratch, { recursive: true, force: true });
   }
 }
+
+/** What the lane says of a Stryker run that exited without a report, whose cause is only in its log. */
+export const UNFINISHED = "the mutation run did not finish";
 
 /** The counts in the last of the lines Stryker's progress reporter writes every ten seconds. */
 const PROGRESS = /(\d+)\/(\d+) tested \((\d+) survived, (\d+) timed out\)/g;

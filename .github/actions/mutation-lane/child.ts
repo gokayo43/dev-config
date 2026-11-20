@@ -150,3 +150,11 @@ function spawned(
     throw error;
   }
 }
+
+/**
+ * The binary `ran` would start for `command`, looked up on the PATH its child
+ * inherits, or `null` where that PATH holds none.
+ */
+export function onPath(command: string): string | null {
+  return Bun.which(command, { PATH: process.env["PATH"] ?? "" });
+}
