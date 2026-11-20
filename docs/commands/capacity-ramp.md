@@ -38,7 +38,9 @@ Where to point it, by the shape of the repo:
 
 - **A template-shaped repo** starts its preview stack (`scripts/preview.sh`,
   with `--restore` for production-sized data) and ramps the address that stack
-  publishes.
+  publishes. A preview stack on a machine that also serves live customers
+  shares that machine's processors and memory with them, so it is a target of
+  the paragraph above.
 - **A repo with a staging copy of its own on the serving machine** ramps that
   copy only with the owner's go and a `--max-users` from it, as above.
 - **A repo with no copy that is safe to ramp**, one whose development servers
@@ -155,7 +157,8 @@ fall from an uncapped run that held 160.
 Every measurement writes `capacity/<UTC stamp>.md` and then
 `capacity/<UTC stamp>.json` at the root of the git repository the command runs
 in, the stamp to the millisecond. Commit both with the change that ran the
-ramp, so the repository holds its own history of what it could take; the next
+ramp, or as a commit of their own where no change did, so the repository holds
+its own history of what it could take; the next
 run's `Previous run` line is read from the JSON, before the run sends its first
 request.
 
