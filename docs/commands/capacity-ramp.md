@@ -11,6 +11,14 @@ slowest, so you know where to start looking. Every repository that installs
 bun run capacity-ramp --health http://127.0.0.1:5190/api/health --path /api/things --path /login
 ```
 
+A repository that does not install the package runs the same file from a
+checkout of dev-config, from inside the repository whose `capacity/` should
+hold the result:
+
+```sh
+bun --no-install <dev-config checkout>/capacity-ramp.ts --health http://127.0.0.1:5190/api/health
+```
+
 It is a command and not a CI step. A number measured on a CI runner beside a
 database and every other job says little about what the app holds, and a ramp
 to the breaking point is load you choose to put on a machine. You run it when a
