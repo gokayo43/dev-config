@@ -758,6 +758,7 @@ describe("a server that has died and is not yet reaped", () => {
     const probe = `const fixture = await import(${JSON.stringify(join(import.meta.dir, "dev-server-fixture.ts"))});
 await using scratch = await fixture.scratchRepo(fixture.SERVES);
 await using started = await scratch.devServerUnreaped(scratch.root, "up");
+if (started.code !== 0) throw new Error("up exited " + started.code + ": " + started.stderr);
 const server = await scratch.record("main");
 fixture.killBehindItsBack(server.pid);
 const dead = await fixture.settles(() => fixture.unreaped(server.pid));

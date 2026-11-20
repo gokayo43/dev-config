@@ -8,6 +8,7 @@ import { readdir } from "node:fs/promises";
 import { userInfo } from "node:os";
 
 import { procStat } from "../file-lock.ts";
+import { must } from "../narrowing.ts";
 
 /** Every process of a group that still runs. */
 export async function runningIn(group: number): Promise<number[]> {
@@ -99,7 +100,9 @@ export interface Ended {
  * whose `/proc` is mounted `hidepid=1`, where another user's entry is listed and
  * its read refused. `nobody` runs a `sleep` there, whose pid and start tick the
  * script finds in `OTHER` and `OTHER_TICKS`. Root mounts it, which is the sudo
- * these cases need, and reads the tick before it drops to this user. The script
+ * these cases need, and reads the tick before it drops to this user. sudo
+ * resets `PATH` to its own, which need not hold `bun`, so the script is handed
+ * this process's: what it starts by name is found as it is outside. The script
  * is the namespace's first process, so everything in it dies when it exits.
  */
 export async function besideAHiddenProcess(script: string): Promise<Ended> {
@@ -115,13 +118,14 @@ export async function besideAHiddenProcess(script: string): Promise<Ended> {
       "--mount-proc",
       "sh",
       "-c",
-      'mount -o remount,hidepid=1 /proc || exit 1; setpriv --reuid=65534 --regid=65534 --clear-groups sleep 60 & OTHER=$!; TICKS=$(cut -d " " -f 22 "/proc/$OTHER/stat"); exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" OTHER="$OTHER" OTHER_TICKS="$TICKS" "$4" -e "$5"',
+      'mount -o remount,hidepid=1 /proc || exit 1; setpriv --reuid=65534 --regid=65534 --clear-groups sleep 60 & OTHER=$!; TICKS=$(cut -d " " -f 22 "/proc/$OTHER/stat"); exec setpriv --reuid="$1" --regid="$2" --init-groups env PATH="$6" HOME="$3" OTHER="$OTHER" OTHER_TICKS="$TICKS" "$4" -e "$5"',
       "sh",
       String(me.uid),
       String(me.gid),
       me.homedir,
       process.execPath,
       script,
+      must(process.env["PATH"]),
     ],
     { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
   );
