@@ -17,7 +17,7 @@ import {
   type Verdict,
 } from "../_lib/gate.ts";
 import { onPath, ran } from "./child.ts";
-import { nodeProblem } from "./node.ts";
+import { machineProblems } from "./machine.ts";
 import { verdict } from "./report.ts";
 import {
   BUNFIG,
@@ -551,11 +551,6 @@ export async function mutationLane({
       };
     }
 
-    const node = await nodeProblem(root, [CORE, RUNNER], onPath("node"));
-    if (node !== undefined) {
-      return { note: "the runner's Node.js cannot run the mutation run", problems: [node] };
-    }
-
     const config = join(scratch, "stryker.conf.json");
     const report = join(scratch, "mutation.json");
     const requested = new Map([...changed.keys()].map((file) => [literal(file), file]));
@@ -578,6 +573,10 @@ export async function mutationLane({
     // would otherwise make this one.
     const temp = join(scratch, "tmp");
     await mkdir(temp, { mode: 0o700 });
+    const machine = await machineProblems(root, [CORE, RUNNER], onPath("node"), temp);
+    if (machine.length > 0) {
+      return { note: "this machine cannot run Stryker", problems: machine };
+    }
     const stryked = await ran([stryker, "run", config], root, deadline, { TMPDIR: temp });
     const wrote = `${stryked.out}\n${stryked.err}`;
 

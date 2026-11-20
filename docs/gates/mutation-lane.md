@@ -412,19 +412,33 @@ the ignore itself: `treatConfigHintsAsErrors` turns an ignore matching no
 declared dependency into an error, so every repo that does _not_ run the lane
 would fail knip the day its pin moved.
 
-**What a runner needs.** Node.js, beside the Bun that runs the lane: Stryker's
-command starts `#!/usr/bin/env node`, so it runs under the `node` on `PATH`.
-That Node has to be one every package Stryker loads accepts, by the
-`engines.node` each declares, and Stryker's own declaration is not the
-strictest. `@stryker-mutator/core` 10.1.1 declares `>=22.0.0` and parses the
-code with Babel 8, which declares `^22.18.0 || >=24.11.0`; under a Node 22
-before 22.12 Babel's `require()` of its own ES modules fails, and Stryker exits
-1 before it tests a mutant. So the lane reads `engines.node` across the
-installed dependency tree of the two packages and holds the runner's `node` to
-every range before Stryker starts. A runner with no `node` is told to install
-one; a runner whose `node` falls outside a range is told its version and each
-range it misses, with a package that declares it. At the pair this repo pins,
-that means Node 22.18 or later in the 22 line, or 24.11 or later.
+**What a runner needs.** Two things beside the Bun that runs the lane, both
+checked before Stryker starts, because a run without either exits 1 with no
+report and only a stack trace to say why. A machine that lacks one is named,
+with what to change on it; the repo can change neither.
+
+- **Node.js that every package Stryker loads accepts.** Stryker's command
+  starts `#!/usr/bin/env node`, so it runs under the `node` on `PATH`, and that
+  Node has to satisfy the `engines.node` of every package in the installed
+  dependency tree of the two the repo declares. Stryker's own declaration is
+  not the strictest: `@stryker-mutator/core` 10.1.1 declares `>=22.0.0` and
+  parses the code with Babel 8, which declares `^22.18.0 || >=24.11.0`, and
+  under a Node 22 before 22.12 Babel's `require()` of its own ES modules fails.
+  At the pair this repo pins that means Node 22.18 or later in the 22 line, or
+  24.11 or later. A runner with no `node` is told to install one; one whose
+  `node` falls outside a range is told its version and each range it misses,
+  with a package that declares it.
+- **A temp dir no other user can tamper with, all the way up.**
+  `@hughescr/stryker-bun-runner` writes a script under its temp dir that every
+  `bun test` of the run executes, and since 1.6.0 it refuses one with any
+  directory above it owned by a user other than the runner's or root, or
+  writable by group or others without the sticky bit. The lane hands it a
+  `0700` directory inside its own scratch directory, under `TMPDIR`, so what
+  decides is the directory `TMPDIR` names and every one above it. `/tmp` passes,
+  being root's with the sticky bit; a runner's own temp directory created under
+  a umask of `002`, mode `0775`, does not. The lane names every such directory
+  with the `chmod` that fixes it: `chmod go-w`, or `chmod +t` for one that has to
+  stay shared.
 
 **Running it by hand.** Start the lane from its own checkout with every input it
 reads set, and with bun told to leave the checkout's `.env` alone, since bun

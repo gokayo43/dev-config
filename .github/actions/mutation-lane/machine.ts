@@ -1,16 +1,21 @@
 /**
- * The Node.js the mutation run needs, asked of the runner before Stryker starts.
+ * What the machine has to give Stryker, asked of it before Stryker starts: a
+ * Node.js every package of the run accepts, and a temp directory no other user
+ * can tamper with. Either one missing ends Stryker with exit 1 and no report,
+ * so the lane names it first, in terms the machine's operator can act on.
  *
  * Stryker's command begins `#!/usr/bin/env node`, so it runs under whatever
- * `node` the runner has on `PATH`, never under the Bun that runs the lane. What
+ * `node` the machine has on `PATH`, never under the Bun that runs the lane. What
  * that Node must be is what the packages the run loads declare in
  * `engines.node`, and Stryker's own declaration is not the strictest of them:
  * `@stryker-mutator/core` 10.1.1 says `>=22.0.0` and loads Babel 8, which says
  * `^22.18.0 || >=24.11.0` and, under a Node 22 older than 22.12, crashes
  * before any mutant is tested with a stack trace about `require()` of an ES
  * module. So the lane reads every declaration in the run's installed
- * dependency tree and holds the runner's Node to all of them.
+ * dependency tree and holds the machine's Node to all of them.
  */
+import { realpath, stat } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 
 import { byCodeUnit, isObject, plural, type Problem } from "../_lib/gate.ts";
@@ -80,11 +85,11 @@ async function versionOf(node: string): Promise<string> {
 }
 
 /**
- * Why the runner's `node` cannot run Stryker for the repo at `root`, or nothing
+ * Why the machine's `node` cannot run Stryker for the repo at `root`, or nothing
  * when it can. `node` is the binary the run would start, as `Bun.which` finds it
  * on `PATH`, and `null` where there is none.
  */
-export async function nodeProblem(
+async function nodeProblem(
   root: string,
   packages: readonly string[],
   node: string | null,
@@ -92,7 +97,7 @@ export async function nodeProblem(
   if (node === null) {
     return {
       message:
-        "install Node.js on this runner: Stryker runs under the `node` on PATH, not under Bun, and there is none",
+        "install Node.js on this machine: Stryker runs under the `node` on PATH, not under Bun, and there is none",
     };
   }
   const version = await versionOf(node);
@@ -101,8 +106,55 @@ export async function nodeProblem(
   );
   if (refused.length === 0) return undefined;
   return {
-    message: `install a Node.js on this runner that every package the mutation run loads accepts: Stryker runs under the \`node\` on PATH, ${node}, which is ${version}, and ${byRange(refused)}`,
+    message: `install a Node.js on this machine that every package the mutation run loads accepts: Stryker runs under the \`node\` on PATH, ${node}, which is ${version}, and ${byRange(refused)}`,
   };
+}
+
+/** A directory's permission bits as `chmod` writes them. */
+function octal(mode: number): string {
+  return (mode & 0o7777).toString(8).padStart(4, "0");
+}
+
+/**
+ * Every directory from `temp` up to the root that another user could rename or
+ * replace an entry of. `@hughescr/stryker-bun-runner` writes a script under its
+ * temp dir that every `bun test` of the run executes, and since 1.6.0 it
+ * refuses, with exit 1 and no report, a temp dir any directory above which is
+ * owned by someone other than this user or root, or writable by group or others
+ * without the sticky bit. Its check stops at the first such directory; this
+ * names them all, so one fix on the machine is the whole fix.
+ */
+async function tempProblems(temp: string): Promise<Problem[]> {
+  const { uid } = userInfo();
+  const problems: Problem[] = [];
+  for (let folder = await realpath(temp); ; folder = dirname(folder)) {
+    const found = await stat(folder);
+    const shared = (found.mode & 0o022) !== 0 && (found.mode & 0o1000) === 0;
+    if (found.uid !== uid && found.uid !== 0) {
+      problems.push({
+        message: `point TMPDIR at a directory only this user (uid ${uid}) and root own, all the way up: the mutation run's temp dir is under ${folder}, which uid ${found.uid} owns and could replace, and Stryker's Bun runner refuses to run a script from below it`,
+      });
+    } else if (shared) {
+      problems.push({
+        message: `take group and other write off ${folder} (\`chmod go-w\`), or give it the sticky bit (\`chmod +t\`): it is mode ${octal(found.mode)}, the mutation run's temp dir is under it, and Stryker's Bun runner refuses to run a script from below a directory another user could replace an entry of`,
+      });
+    }
+    if (folder === dirname(folder)) return problems;
+  }
+}
+
+/**
+ * Why this machine cannot run Stryker for the repo at `root` with `temp` as its
+ * temp dir: none of these is something the repo can change.
+ */
+export async function machineProblems(
+  root: string,
+  packages: readonly string[],
+  node: string | null,
+  temp: string,
+): Promise<Problem[]> {
+  const runtime = await nodeProblem(root, packages, node);
+  return [...(runtime === undefined ? [] : [runtime]), ...(await tempProblems(temp))];
 }
 
 /**
