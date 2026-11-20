@@ -169,11 +169,15 @@ a change to a rule usually lands here too.
   command decide by — which the build bundles into `dist/count-budget.js`, a
   module of its own so `tests/count-ceilings.test.ts` can search it with
   properties instead of browser runs. `file-lock.ts` is which process a file
-  names, proven from `/proc`, and the one lock both `dev-server up` and the
+  names, proven from `/proc` as alive, dead and not yet reaped, or not there,
+  and the one lock both `dev-server up` and the
   count budget's write command take: the build bundles it into the count
   budget, `files` ships its source for the bin, and `tests/file-lock.test.ts`
   holds each waiter before every step through the `between` seam `lock` takes
-  for that suite's sake. `request-timing-operation.ts` is what request timing's
+  for that suite's sake. Its `parseStat` is the judgement of one stat line apart
+  from reading it, graded over `tests/proc-stat/`, which is real processes' text
+  that `tests/proc-stat-capture.ts` writes: recapture it, never edit it by hand.
+  `request-timing-operation.ts` is what request timing's
   modules share, the operation, its waits, its record and the
   `AsyncLocalStorage` that carries the current operation, which the build makes
   a chunk beside them and `files` ships as source for the summary;
@@ -267,7 +271,10 @@ a change to a rule usually lands here too.
   Its reference page is README's "One dev server per worktree" rather than a
   `docs/exports/` one, and `tests/dev-server.test.ts` drives it against real
   worktrees and real detached processes, spending real time, because a signal
-  reaching a process group is not a thing any injected clock has a part in.
+  reaching a process group is not a thing any injected clock has a part in. A
+  server that died and was not reaped is a real zombie there too: the case runs
+  `up` under `tests/unreaping-parent.ts`, which adopts the server and never
+  reaps it.
 - `db-gate/capacity.js` is the exception: it runs inside k6, not under this
   repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
   config cannot carry the reason, so it is here.

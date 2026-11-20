@@ -1780,8 +1780,9 @@ derives again.
 with a lock file beside the record. Two of them racing that sequence both bind:
 measured, five concurrent pairs left four servers running that no record named.
 A lock whose holder is gone is taken rather than waited on — the holder is named
-by pid, boot id and start tick, exactly as a server is — so a run killed
-mid-`up` costs the next one nothing.
+by pid, boot id and start tick, exactly as a server is, and a holder that has
+exited is gone whether or not it has been reaped — so a run killed mid-`up`
+costs the next one nothing.
 
 **A recorded pid is not trusted on its number.** A pid is reused, and a reboot
 recycles every one of them at once, so the record carries the boot id it was
@@ -1791,6 +1792,20 @@ nobody. Since what gets signalled is a process _group_, the pid must also still
 lead its own — which `setsid` guarantees for anything this tool started, and
 nothing else. A record whose pid or port is a number no derivation here could
 have produced is not a record at all.
+
+**A server that has died is stopped, whether or not it has been reaped.** A
+process that has exited keeps its `/proc` entry, as a zombie, until whatever
+adopted it reaps it, which a busy machine does late. Every command reads such a
+server as not running: `status` shows it dead, `up` starts a fresh one, and
+`down` forgets its record, says it was already gone and exits 0. Dead means
+state `Z` or `X` (`/proc/<pid>/stat` field 3) with no thread still running
+(field 20, the thread count, at most 1): a process whose main thread alone has
+exited shows `Z` as well, and still runs. Until the dead leader is reaped it
+pins its process group, so whatever still runs in that group is provably the
+server's: `down` sends the group SIGKILL, with no grace period since the server
+is already dead, and forgets the record only once nothing in the group runs.
+Once the leader is reaped nothing proves the group is the server's, and
+anything that outlived it is left alone.
 
 **The records live in git's common directory** — `$(git rev-parse
 --git-common-dir)/dev-server/`, mode 0700, with each record and log 0600 because

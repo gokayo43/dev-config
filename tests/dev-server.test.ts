@@ -23,6 +23,7 @@ import {
   PORT_FLOOR,
   PORTS_PER_WORKTREE,
   recordStem,
+  type Server,
   worktreeSlug,
 } from "../dev-server-derive.ts";
 import {
@@ -34,6 +35,7 @@ import {
   EXITS_AT_ONCE,
   holderOf,
   killBehindItsBack,
+  killLeaderAlone,
   NEVER_BINDS,
   occupy,
   reclaim,
@@ -44,7 +46,9 @@ import {
   settled,
   settles,
   stays,
+  unreaped,
 } from "./dev-server-fixture.ts";
+import { runningIn } from "./proc-reading.ts";
 
 /** A worktree on a branch, as the two derivations take one. */
 const named = (worktree: string, branch: string) => ({ worktree, branch, detached: false });
@@ -692,6 +696,87 @@ describe("the other commands", () => {
     expect(running(kept.pid)).toBe(true);
     expect(await answers(kept.port)).toBe(true);
     expect(await scratch.recordOrNull("main")).not.toBeNull();
+  });
+});
+
+describe("a server that has died and is not yet reaped", () => {
+  // Whatever adopted a dead server reaps it on its own time, and on a busy box
+  // that is late: until then `/proc` still lists it, as a zombie. The wrong
+  // implementation reads any listed process with the recorded start tick as the
+  // server alive. Each case starts the server under a parent that never reaps,
+  // kills it there, and runs one command against it.
+
+  /** A server started under a parent that never reaps it, and killed whole: a dead leader and nothing else. */
+  async function deadServer(
+    scratch: Awaited<ReturnType<typeof scratchRepo>>,
+  ): Promise<{ readonly server: Server } & AsyncDisposable> {
+    const started = await scratch.devServerUnreaped(scratch.root, "up");
+    expect(started.code).toBe(0);
+    const server = await scratch.record("main");
+    killBehindItsBack(server.pid);
+    expect(await settles(() => unreaped(server.pid))).toBe(true);
+    return { server, [Symbol.asyncDispose]: started[Symbol.asyncDispose] };
+  }
+
+  test("down forgets it and succeeds, as it does a server that was reaped", async () => {
+    await using scratch = await scratchRepo(SERVES);
+    await using dead = await deadServer(scratch);
+
+    const stopped = await scratch.devServer(scratch.root, "down");
+
+    expect(stopped.code).toBe(0);
+    expect(stopped.stderr).toContain("already gone");
+    expect(await scratch.recordOrNull("main")).toBeNull();
+    expect(unreaped(dead.server.pid)).toBe(true);
+  });
+
+  test("status shows it dead", async () => {
+    await using scratch = await scratchRepo(SERVES);
+    await using dead = await deadServer(scratch);
+
+    const listed = await scratch.devServer(scratch.root, "status");
+
+    expect(listed.stdout).toContain(String(dead.server.pid));
+    expect(listed.stdout).toContain("dead");
+    expect(listed.stdout).not.toContain("alive");
+  });
+
+  test("up starts a fresh one on the same port rather than waiting for it", async () => {
+    // The wrong implementation waits out the readiness timeout for a server that
+    // will never answer, then fails to stop it.
+    await using scratch = await scratchRepo(SERVES);
+    await using dead = await deadServer(scratch);
+
+    const restarted = await scratch.devServer(scratch.root, "up");
+
+    expect(restarted.code).toBe(0);
+    const fresh = await scratch.record("main");
+    expect(fresh.pid).not.toBe(dead.server.pid);
+    expect(fresh.port).toBe(dead.server.port);
+    expect(await answers(fresh.port)).toBe(true);
+  });
+
+  test("down kills what is left in its group before it forgets it", async () => {
+    // While the dead leader is unreaped it pins its process group, so what
+    // runs in it is provably the server's: here `bun dev.ts`, still serving
+    // after `bun run dev` above it was killed. The wrong implementation
+    // forgets the record without a signal, and the port stays held by a
+    // process nothing names any more.
+    await using scratch = await scratchRepo(SERVES);
+    await using started = await scratch.devServerUnreaped(scratch.root, "up");
+    expect(started.code).toBe(0);
+    const server = await scratch.record("main");
+    killLeaderAlone(server.pid);
+    expect(await settles(() => unreaped(server.pid))).toBe(true);
+    expect(runningIn(server.pid)).not.toEqual([]);
+    expect(await answers(server.port)).toBe(true);
+
+    const stopped = await scratch.devServer(scratch.root, "down");
+
+    expect(stopped.code).toBe(0);
+    expect(runningIn(server.pid)).toEqual([]);
+    expect(await answers(server.port)).toBe(false);
+    expect(await scratch.recordOrNull("main")).toBeNull();
   });
 });
 

@@ -12,8 +12,9 @@ import { join } from "node:path";
 
 import { array, asyncProperty, constantFrom, integer, nat } from "fast-check";
 
-import { bootId, lock, procStat } from "../file-lock.ts";
+import { bootId, lock, parseStat, procStat } from "../file-lock.ts";
 import { check } from "../property.ts";
+import { reaches } from "./proc-reading.ts";
 
 /** More waiting than any schedule here asks for, since waiting costs no time under one. */
 const PATIENT = 1_000_000_000;
@@ -301,6 +302,110 @@ test("gives up on a live holder after its patience, naming it", async () => {
   expect(String(waiter.failure)).toContain(
     `has been held for 100ms by process ${process.pid}, which is still running`,
   );
+});
+
+/** Reads a child's stdout until it has said every line in `lines`, and returns what it said. */
+async function heard(out: ReadableStream<Uint8Array>, lines: number): Promise<string[]> {
+  const reader = out.getReader();
+  let said = "";
+  while (said.split("\n").length <= lines) {
+    const { value, done } = await reader.read();
+    if (done)
+      throw new Error(`the child closed its stdout having said only ${JSON.stringify(said)}`);
+    said += new TextDecoder().decode(value);
+  }
+  reader.releaseLock();
+  return said.split("\n").slice(0, lines);
+}
+
+describe("a holder's process, by the state the kernel has it in", () => {
+  // Each text is a real process's `/proc/<pid>/stat`, captured on this machine
+  // in that state by `tests/proc-stat-capture.ts`. The wrong implementations:
+  // reading the state field not at all, which calls every zombie alive; and
+  // reading `Z` alone as dead, which calls a process whose main thread has
+  // exited dead while another of its threads runs.
+  test.each([
+    ["running", true],
+    ["sleeping", true],
+    ["stopped", true],
+    ["main-thread-exited", true],
+    ["zombie", false],
+    ["zombie-multithreaded", false],
+    ["zombie-group-leader", false],
+  ] as const)("%s is alive: %p", async (name, expected) => {
+    const raw = await readFile(join(import.meta.dir, "proc-stat", `${name}.stat`), "utf8");
+
+    expect(parseStat(raw).alive).toBe(expected);
+  });
+
+  test("a dead leader still leads its group, which is what pins the group", async () => {
+    // `dev-server down` kills what is left of a dead server's group only while
+    // its leader's entry says it leads that group.
+    const raw = await readFile(
+      join(import.meta.dir, "proc-stat", "zombie-group-leader.stat"),
+      "utf8",
+    );
+
+    expect(parseStat(raw).leadsItsGroup).toBe(true);
+  });
+
+  test("a holder killed while holding and not yet reaped is gone, and its lock is taken at once", async () => {
+    // A parent that never waits keeps the killed holder a zombie. The wrong
+    // implementation reads any `/proc` entry with the recorded start tick as
+    // the holder alive, so with no patience at all it gives up on the lock.
+    await using ground = await arena();
+    const parent = Bun.spawn(
+      [
+        "sh",
+        "-c",
+        '"$0" "$1" "$2" held & echo $!; exec sleep 60',
+        process.execPath,
+        CHILD,
+        ground.lockPath,
+      ],
+      { stdin: "ignore", stdout: "pipe", stderr: "inherit" },
+    );
+    try {
+      const [pid, at] = await heard(parent.stdout, 2);
+      expect(at).toBe("at");
+      process.kill(Number(pid), "SIGKILL");
+      await reaches(Number(pid), "Z");
+
+      const taken = await lock(ground.lockPath, 0);
+      await taken[Symbol.asyncDispose]();
+    } finally {
+      parent.kill("SIGKILL");
+      await parent.exited;
+    }
+
+    expect((await readdir(ground.path)).toSorted()).toEqual(["counter"]);
+  });
+
+  test("a stopped holder still holds the lock", async () => {
+    // The wrong implementation reads a state other than running or sleeping as
+    // gone, and takes a lock from a holder somebody paused with SIGSTOP.
+    await using ground = await arena();
+    const holder = Bun.spawn([process.execPath, CHILD, ground.lockPath, "held"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "inherit",
+    });
+    try {
+      expect(await heard(holder.stdout, 1)).toEqual(["at"]);
+      holder.kill("SIGSTOP");
+      await reaches(holder.pid, "T");
+
+      const failed = await lock(ground.lockPath, 100).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(String(failed)).toContain(`by process ${holder.pid}, which is still running`);
+    } finally {
+      holder.kill("SIGKILL");
+      await holder.exited;
+    }
+  });
 });
 
 describe("a worker killed while taking the lock", () => {
