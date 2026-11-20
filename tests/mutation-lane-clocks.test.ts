@@ -40,7 +40,11 @@ test("nobody waiting is a pause over before a minute is", async () => {
 });
 `;
 
-/** A loop one of whose mutants never ends, and never yields for a clock inside bun to fire. */
+/**
+ * A loop one of whose mutants never ends. Stryker counts how often a mutant
+ * runs and ends that one as a timeout at its hit limit, which the runner
+ * honours since 1.6.0, before any clock fires.
+ */
 const COUNTDOWN = `export function countdown(from: number): number {
   let left = from;
   while (left > 0) left -= 1;
@@ -83,11 +87,11 @@ describe("the clocks a mutation run keeps", () => {
     expect(verdict.table).toEqual(containing("| Caught by timing out | 0 |"));
   });
 
-  // A mutant that hangs is caught by the clock, which the score counts as
+  // A mutant that hangs is caught by timing out, which the score counts as
   // caught and the note says it did: a score that rests on timeouts is one a
   // reader can see resting on them. The case limit given is what Stryker's
-  // deadline is built from, so a hang costs about a second here rather than
-  // the default minute.
+  // deadline is built from, so a hang its hit limit missed would cost about a
+  // second here rather than the default minute.
   test("a mutant that hangs is caught by timing out, and the note says how many were", async () => {
     const verdict = await lane(
       [
@@ -202,24 +206,25 @@ test("never yields", () => {
     expect(verdict.note).toBe("the named tests did not finish unmutated");
   });
 
-  // A mutant that hangs holds a worker for one case limit, so a file of them
+  // A slow mutant holds a worker for up to one case limit, so a file of them
   // can outlast the step; the lane ends the run at its own deadline and says
-  // what to lower, rather than leaving GitHub to kill the step.
+  // what to lower, rather than leaving GitHub to kill the step. The pause's
+  // slow branch outlasts this deadline and loops nowhere a hit limit counts.
   test("a mutation run that outlasts the run's deadline is ended and refused, naming the case limit", async () => {
     const verdict = await lane(
       [
         BEFORE,
         repo({
           ...BEFORE,
-          "src/domain/countdown.ts": COUNTDOWN,
-          "tests/countdown.test.ts": COUNTDOWN_TEST,
+          "src/domain/pause.ts": PAUSE,
+          "tests/pause.test.ts": PAUSE_TEST,
         }),
       ],
-      { runDeadline: 12_000 },
+      { runDeadline: 8_000 },
     );
 
     expect(messages(verdict)).toEqual([
-      containing("the lane ended the mutation run at its deadline of 12000 ms"),
+      containing("the lane ended the mutation run at its deadline of 8000 ms"),
     ]);
     expect(verdict.note).toBe("the mutation run did not finish before the lane's deadline");
   });

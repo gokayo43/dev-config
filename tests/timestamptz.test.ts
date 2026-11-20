@@ -245,7 +245,7 @@ describe("the price of the hatch", () => {
   });
 
   // stack-gate goes quiet about dead entries while a manifest will not parse,
-  // and route-coverage while the app reported no route table: what those two
+  // and the fuzzer's route-allowlist while the app reported no route table: what those two
   // walked came up short, and every waiver written for the missing part would
   // report as dead. Nothing here can come up short — the catalogue is one query,
   // and one that fails throws before the gate is called — so a catalogue with

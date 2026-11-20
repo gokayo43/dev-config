@@ -772,7 +772,7 @@ describe("replay gate", () => {
     expect(refused).toContain("refs/remotes/origin/release is not in this checkout");
   });
 
-  // The tree the later steps of the gate — the boot, the ramp — run against has
+  // The tree the later steps of the gate — the boot, the fuzzer — run against has
   // to be the one the branch committed, whichever way the comparison went.
   test("the working tree is the branch's own again afterwards", async () => {
     const repo = await history(

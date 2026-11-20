@@ -118,10 +118,9 @@ runs:
         # A spelling this does not know is refused rather than read as "not
         # nightly": the nightly is the run nobody watches, and a typo there is a
         # long budget that silently never happened.
-        budget=()
         case $NIGHTLY in
           true)
-            budget=(PROPERTY_RUNS_FACTOR=50 PROPERTY_TIME_LIMIT_MS=120000)
+            export PROPERTY_RUNS_FACTOR=50 PROPERTY_TIME_LIMIT_MS=120000
             flags+=(--timeout 600000)
             ;;
           false)
@@ -169,38 +168,38 @@ runs:
           esac
           echo "::notice::the suite reaches a real network: $reason"
         else
-          if ! sudo --non-interactive true 2>/dev/null; then
-            echo "::error::the suite is run sealed in a network namespace, which needs passwordless sudo on the runner — GitHub-hosted Linux runners have it, a self-hosted one has to grant it, and a suite that genuinely reaches a network says so in the test-network input instead"
+          # The seal, taken as the user this step runs as. bubblewrap makes a
+          # user namespace and in it a network namespace with loopback up, so
+          # the suite keeps this step's uid, directory and environment, and no
+          # root is needed. The process namespace is what ends the suite with
+          # the step: bwrap passes no signal on, and once the namespace's first
+          # process exits the kernel kills the rest. `--die-with-parent` makes
+          # that happen when bwrap or this shell dies. `--proc` comes after the
+          # bind of `/`, which would otherwise cover it with the host's `/proc`,
+          # where the pids the suite holds name other processes.
+          seal=(bwrap --unshare-net --unshare-pid --dev-bind / / --proc /proc --die-with-parent --)
+          if ! command -v bwrap >/dev/null; then
+            echo "::error::the suite is run sealed in a network namespace, which needs bubblewrap on the runner, and there is no bwrap on PATH — install bubblewrap, or a suite that genuinely reaches a network says so in the test-network input instead"
             exit 1
           fi
-          # Root twice over, and neither hop is optional. Creating the namespace
-          # needs it: the unprivileged form is refused on the runner image, where
-          # kernel.apparmor_restrict_unprivileged_userns reads 1 and the uid_map
-          # write is denied. Dropping straight back out of it keeps the suite's
-          # own files out of root's ownership, and PATH is restated across that
-          # hop because sudo takes it from secure_path whatever the environment
-          # says. `lo` exists in a fresh namespace and is created down: a server
-          # a test starts on 127.0.0.1 is not a network call, and the runner's
-          # own ports are on the other loopback whether this is up or not.
-          seal=(sudo --non-interactive --preserve-env unshare --net --
-            bash -c 'ip link set lo up && exec "$@"' sealed
-            sudo --non-interactive --preserve-env --user "$(id -un)" --
-            env "PATH=$PATH")
+          # The seal itself, over a server that binds loopback and calls itself,
+          # so a runner that cannot take it is told before the suite starts.
+          if ! refused=$("${seal[@]}" bun -e 'const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("sealed") }); const said = await (await fetch(server.url)).text(); await server.stop(true); if (said !== "sealed") process.exit(1);' 2>&1); then
+            printf '%s\n' "$refused"
+            echo "::error::the suite is run sealed in a network namespace, and bubblewrap could not take one on this runner (its output is above) — bwrap has to be allowed to create a user namespace, and where AppArmor restricts unprivileged ones (kernel.apparmor_restrict_unprivileged_userns=1) that takes an AppArmor profile letting bwrap do so; a suite that genuinely reaches a network says so in the test-network input instead"
+            exit 1
+          fi
         fi
 
         # As a job this shell owns, rather than in the foreground. The runner
         # cancels a step by signalling the process it started and nothing else
         # (actions/runner's ProcessInvoker: SIGINT, 7.5s, SIGTERM, 2.5s,
-        # SIGKILL, to the entry process alone), so a foreground `bun test` is
-        # left running on a machine about to be reclaimed — and inside a
-        # namespace where nothing else can see it. Forwarding is the whole fix:
-        # sudo passes the signal down, and the tree goes with it.
-        # Through `env` rather than exported, so the budget survives the two
-        # sudo hops the seal takes: `--preserve-env` is a request sudoers may
-        # narrow, and the assignment right here is the same restatement `PATH`
-        # already makes for the same reason. Empty off a nightly, where `env`
-        # with no assignments is the command itself.
-        "${seal[@]}" env "${budget[@]}" "${suite[@]}" &
+        # SIGKILL, to the entry process alone), so a foreground suite would run
+        # on until the SIGTERM ended this shell. Forwarded, the first signal
+        # ends bwrap and with it the suite's namespace. Unsealed it reaches the
+        # suite's first process alone: under `bun run test` that is `bun run`,
+        # and the processes the suite started outlive the step.
+        "${seal[@]}" "${suite[@]}" &
         running=$!
         trap 'kill -TERM "$running" 2>/dev/null || true' INT TERM
         wait "$running"

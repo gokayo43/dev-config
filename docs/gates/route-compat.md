@@ -1,15 +1,15 @@
 # The route compatibility floor
 
-`database: postgres` ends in two floors over the same route table. [The capacity
-ramp](capacity.md)'s asks whether every route the app serves has ever been under
-load. This one asks the other question: **has the app stopped serving something
-it used to?**
+`database: postgres` reads the booted app's route table once and asks two
+questions of it. [The fuzzer](fuzz.md) asks how each route answers a request
+nobody expected. This one asks: **has the app stopped serving something it used
+to?**
 
 A repo whose `lifecycle` is `live` has people on the other end, and they are
 calling the routes it published. Nothing else in the job notices when one of them
 goes: the migrations replay, the app boots, its health route answers, and the
-coverage floor is content because a route that no longer exists is not in the
-table it grades. A deleted handler, a renamed path, a method dropped from a
+fuzzer is content because a route that no longer exists is not in the table it
+reads. A deleted handler, a renamed path, a method dropped from a
 catch-all — every one of them is a green run and a 404 for somebody.
 
 ## The snapshot
@@ -20,7 +20,10 @@ ref's app, and reading a route table out of source is the second source of truth
 is the only one that survives a middleware, a plugin, or a mount.
 
 So the repo commits it. `routes.snapshot.json`, at the root of whatever project
-the database job was pointed at, is the app's own route table as of that commit:
+the database job was pointed at, is the app's own route table as of that commit.
+An app whose route-log endpoint reports an empty table is refused when the table
+is read, before this step compares anything, so no step ever suggests
+committing an empty snapshot:
 
 ```json
 [
@@ -59,7 +62,7 @@ than leaving it to be discovered from the outside.
 against the wrong app, nothing to forget to run, nothing that answers from source
 instead of from the router. A run whose snapshot is missing or stale prints the
 exact content the file must hold above its own annotations, and uploads it as
-`routes.snapshot.json` in the [`db-gate-evidence`](capacity.md#what-is-published)
+`routes.snapshot.json` in the [`db-gate-evidence`](db-gate.md#what-is-published)
 artifact. Adopting the floor, and regenerating the file after a route change, are
 both a copy.
 

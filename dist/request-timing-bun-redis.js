@@ -1,5 +1,5 @@
-import { n as waitOn, t as standingIn } from "./request-timing-wait-kPYrUwSy.js";
-//#region request-timing-bun-redis.ts
+import { n as waitOn, t as standingIn } from "./request-timing-wait-Cj7WA-Qu.js";
+// request-timing-bun-redis.ts
 /**
 * `client` with every command it sends measured, one wait each, `send`
 * included, and `connect` too, which is a wait on the store. `close` waits on
@@ -17,5 +17,4 @@ function timedBunRedis(client) {
 	standIns.set("duplicate", () => waitOn("store", () => client.duplicate()).then(timedBunRedis));
 	return standingIn(client, standIns);
 }
-//#endregion
 export { timedBunRedis };

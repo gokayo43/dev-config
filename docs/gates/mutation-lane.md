@@ -120,14 +120,16 @@ the section after this one is about. Only then does "the mutant is why this
 mutant has no verdict" follow at all — and only then is the report's own `static`
 field a reading of anything:
 
-| `static`           | What an errored mutant means                                                 | What the lane does                                            |
-| ------------------ | ---------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `true`             | it runs at module load, so making it throw breaks every test before one runs | leaves it out of the ratio, counted in the **Not graded** row |
-| `false`, or absent | it is only ever active inside a test, so it cannot be why no test ran        | fails the lane, wherever in the file it sits                  |
+| `static`           | What an errored mutant means                                          | What the lane does                                            |
+| ------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `true`             | it runs at module load, so a run it ended did so before any test ran  | leaves it out of the ratio, counted in the **Not graded** row |
+| `false`, or absent | it is only ever active inside a test, so it cannot be why no test ran | fails the lane, wherever in the file it sits                  |
 
 A static mutant never fails the branch: there is no test anyone could write for
 one, and a `// Stryker disable` on a line the branch wrote counts here as a
-mutant nothing caught — so failing it would be a red with no exit.
+mutant nothing caught — so failing it would be a red with no exit. A static
+mutant that makes its file throw on import never gets here: the runner reads a
+test file that fails to load as a failing suite and scores the mutant caught.
 
 Every other ungraded mutant is a statement about the run rather than about the
 branch, and the score would be published over whatever fraction of the mutants
@@ -229,11 +231,21 @@ the branch as it would walked, so a domain file whose only test sits outside the
 patterns fails until that test is named or written beside it. The note says how
 many test files the patterns named.
 
-**Until that is done, nothing in the report means anything**, and Stryker will
-not say so: its dry run over a suite with a throwing spec in it logs
-`Initial test run succeeded`. What the lane reads instead is the runner's own
-line, logged at default level whenever bun exited non-zero and no test it could
-name accounts for it:
+**Until that is done, nothing in the report means anything**, and Stryker's own
+verdict on its dry run does not say which. What the lane reads instead is the
+runner's own line, logged at default level whenever bun reported a failure and
+no test it could name accounts for it. `@hughescr/stryker-bun-runner` 1.6.0
+writes it in two forms. A spec file that fails to load ends the dry run with an
+error, a non-zero exit and no report:
+
+```
+ERROR BunTestRunner stryker-bun-runner: dry run data-completeness check failed —
+bun's console summary reported 1 failing test(s), but none of them could be
+attributed to an individual test — … Last 500 chars of stderr:
+```
+
+Any other unattributed failure, such as an error thrown between tests, lets the
+run go on to a report and logs a warning:
 
 ```
 WARN BunTestRunner Bun exited with code 1 and its console output reported 1 failed
@@ -252,7 +264,7 @@ That line present, the lane refuses the run and quotes the stderr the runner kep
 tests were chosen: walked, it points at `mutation-tests` and
 `pathIgnorePatterns`; named, at those differences. It is read on **every** exit,
 before the report is opened, for the reason the unresolved-pattern check is: the
-run it belongs to is otherwise green.
+run the warning belongs to is otherwise green.
 
 It matters in both directions. A spec that throws before the unit tests run turns
 every mutant into a `RuntimeError` that the `static` reading above would then
@@ -377,12 +389,11 @@ nobody notices is off is a bound nobody has.
 
 The repo declares `@stryker-mutator/core` and `@hughescr/stryker-bun-runner`
 among its devDependencies — the lane runs the repo's own install, so the
-versions are the ones its lockfile pins. Pin the core to a **9.x**: a bare
-`bun add` resolves 10, which is outside the `^9.0.0` peer range
-`@hughescr/stryker-bun-runner` declares. The lane's own diagnostic, when it
-finds neither installed, names the exact pair it is verified against. Nothing imports
-either of them, so knip reports both as unused and `bun run knip` fails a step
-before the lane ever runs. `knip.base.ts` exports the pair for the repo's own
+versions are the ones its lockfile pins. Declare the pair this repo's own
+devDependencies pin: the lane's own diagnostic, when it finds neither
+installed, names that exact pair, since it is the one the lane is verified
+against. Nothing imports either of them, so knip reports both as unused and
+`bun run knip` fails a step before the lane ever runs. `knip.base.ts` exports the pair for the repo's own
 config to spread:
 
 ```ts
@@ -400,6 +411,40 @@ because whether it runs the lane is not a fleet-wide fact. The base cannot carry
 the ignore itself: `treatConfigHintsAsErrors` turns an ignore matching no
 declared dependency into an error, so every repo that does _not_ run the lane
 would fail knip the day its pin moved.
+
+**What a runner needs.** Two things beside the Bun that runs the lane. A run
+without either exits 1 with no report and only a stack trace to say why, so
+when a run exits without a report the lane names, after the run's log, each one
+the machine lacks and what to change on it; the repo can change neither. Each
+is named as a likely cause of the exit, never a certain one: the lane asks
+none of this before Stryker starts, since whether Stryker runs on a machine is
+answered only by running it there, and a machine that lacks one by these rules
+and runs Stryker anyway is graded as any other.
+
+- **Node.js that every package Stryker loads accepts.** Stryker's command
+  starts `#!/usr/bin/env node`, so it runs under the `node` on `PATH`, and that
+  Node has to satisfy the `engines.node` of every package in the installed
+  dependency tree of the two the repo declares. Stryker's own declaration is
+  not the strictest: `@stryker-mutator/core` 10.1.1 declares `>=22.0.0` and
+  parses the code with Babel 8, which declares `^22.18.0 || >=24.11.0`, and
+  under a Node 22 before 22.12 Babel's `require()` of its own ES modules fails.
+  At the pair this repo pins that means Node 22.18 or later in the 22 line, or
+  24.11 or later. `engines.node` is advisory, and npm installs past a
+  mismatch with a warning. After a run that exited, a runner with no `node`, or
+  one whose `node` does not answer for its version, is told to install one, and
+  one whose `node` falls outside a range is told its version and each range it
+  misses, with a package that declares it.
+- **A temp dir no other user can tamper with, all the way up.**
+  `@hughescr/stryker-bun-runner` writes a script under its temp dir that every
+  `bun test` of the run executes, and since 1.6.0 it refuses one with any
+  directory above it owned by a user other than the runner's or root, or
+  writable by group or others without the sticky bit. The lane hands it a
+  `0700` directory inside its own scratch directory, under `TMPDIR`, so what
+  decides is the directory `TMPDIR` names and every one above it. `/tmp` passes,
+  being root's with the sticky bit; a runner's own temp directory created under
+  a umask of `002`, mode `0775`, does not. The lane names every such directory
+  with the `chmod` that fixes it: `chmod go-w`, or `chmod +t` for one that has to
+  stay shared.
 
 **Running it by hand.** Start the lane from its own checkout with every input it
 reads set, and with bun told to leave the checkout's `.env` alone, since bun
@@ -463,9 +508,11 @@ not export, so without that line the run dies on any repo that has a
   passes on any of its tries under every flag, so a mutant it should kill on
   the first try can pass on a later one. The lane refuses a `retry` in
   `bunfig.toml`, which it can read; the option on a case it cannot see.
-- **A dirty baseline the runner stops announcing.** The check above reads a log
-  line `@hughescr/stryker-bun-runner` writes — verified in 1.3.8 and 1.4.0 — and
-  nothing in the report states the same fact, so a runner that stopped logging it
-  would stop being refused here. What notices is this repo's own suite: its
+- **A dirty baseline the runner stops announcing.** The check above reads the
+  log lines `@hughescr/stryker-bun-runner` writes — the warning seen in runs of
+  1.3.8 and 1.4.0 and still in 1.6.0's source, the error seen in runs of 1.6.0
+  — and nothing in the report states
+  the same fact, so a runner that stopped logging them would stop being refused
+  here. What notices is this repo's own suite: its
   mutation-lane cases drive real Stryker over a fixture with a throwing spec in
   it, so the day that line changes they go red rather than green.

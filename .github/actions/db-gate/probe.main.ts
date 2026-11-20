@@ -10,7 +10,7 @@ await entry(async () => {
       // is the repo's own, run the way the repo would run it.
       root: process.cwd(),
       command: read["probe-command"],
-      // The same URL the boot step polled and the ramp measures, from the same
+      // The same URL the boot step polled and the fuzzer aims at, from the same
       // input. A second way of naming the app would be a second thing to get
       // wrong about which app the probe was talking to.
       url: appUrlFrom(read["health-url"]),

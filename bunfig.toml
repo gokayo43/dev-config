@@ -34,7 +34,7 @@ preload = ["./tests/git-free-environment.ts"]
 # docs/gates/test-suite.md.
 coverageThreshold = { lines = 0.75, functions = 0.75 }
 coverageSkipTestFiles = true
-# Five files and the request-timing fixture apps here are graded by a suite that
+# Six files and the request-timing fixture apps here are graded by a suite that
 # spawns a process rather than by the runner watching them execute, so the
 # coverage they report is not the coverage they have. Each names the suite that
 # carries its duty instead. The scratch trees last are no code of this repo.
@@ -63,6 +63,12 @@ coverageSkipTestFiles = true
 # `tests/fuzz.test.ts` calls `check` for its own properties, which walks the
 # happy path and nothing else, and a floor met that way is a floor measuring
 # somebody else's suite.
+#
+# `capacity-ramp.ts` — the capacity ramp's bin, which is argv, signals, stdout
+# and an exit status around `capacity-ramp-ladder.ts`. What it is about is a
+# status, a signal stopping a run and files a run did or did not leave, which
+# only a spawned process has, so `tests/capacity-ramp.test.ts` runs the bin and
+# reads them back.
 #
 # `request-timing-report.ts` — the request-timing reader's bin, which is stdin,
 # stdout and an exit status around `request-timing-summary.ts`. The status is
@@ -93,6 +99,7 @@ coveragePathIgnorePatterns = [
   "tests/house-limiter.ts",
   "dev-server.ts",
   "property.ts",
+  "capacity-ramp.ts",
   "request-timing-report.ts",
   "tests/request-timing-*-app/**",
   "**/gate-fixtures-*/**",

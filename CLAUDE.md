@@ -88,26 +88,23 @@ a change to a rule usually lands here too.
   in a repo's tsconfig, the one rule that reads the base itself, from the
   action's own checkout; and `repo-contract/lockfile.ts` is what `bun.lock`
   resolved, as against what a manifest declares.
-  Of what `db-gate` holds beside its replay, six need their reason stated:
+  Of what `db-gate` holds beside its replay, five need their reason stated:
   `semantic-fixtures.ts`, since what
   the base ref's replay proves about a _schema_ and what it proves about the
   _rows_ are two subjects and the second is the only gate here that grades data;
   `base-lineage.ts`, the lineage as the base ref carried it and the rollback that
   puts a checkout back onto one, which both of those need and neither is about;
-  `capacity.ts` for the ramp; `route-compat.ts`, the committed
+  `route-compat.ts`, the committed
   `routes.snapshot.json` — which **every** repo running the database job owes,
   since the file is what makes a route table readable at a ref nothing boots,
-  while the _holding_ of the base ref's routes is `live`-only — a second subject
-  over the route table `route-coverage.ts` grades, since "was this route ramped"
-  and "is this route still here" are different questions and only the second
-  reaches outside the run; `route-table.ts`, which is what those two floors
-  share and neither is about: how a route is named, and the three questions a
-  reasoned hatch over a set of routes is asked; and `fuzz.ts`, the third
-  question asked of that same table and the only one about _answers_ rather than
-  about the table — it reads the route log the coverage floor was graded on
-  rather than the app, which is what keeps its own traffic out of that floor
-  whatever order the steps are put in, and it carries a generator and a PRNG of
-  its own because an action runs from a checkout with no install. What more than
+  while the _holding_ of the base ref's routes is `live`-only;
+  `fuzz.ts`, the second question asked of that same table and the only one
+  about _answers_ rather than about the table, which also grades
+  `route-allowlist`, its own hatch, and carries a generator and a PRNG of its
+  own because an action runs from a checkout with no install; and
+  `route-table.ts`, which is what those two share and neither is about: the
+  route log as one step of the action read it off the app, how a route is
+  named, and the questions a reasoned hatch over a set of routes is asked. What more than
   one **action** reads lives in `_lib/`: `gate.ts` — which is where `plainly`
   sits, the environment a child whose output a gate reads is given, now that two
   actions spawn one — `dependency-specs.ts` —
@@ -136,15 +133,18 @@ a change to a rule usually lands here too.
   argument that one might.
   The shell helpers beside them are `pinned-tool.sh` — the verified fetch
   every pinned binary goes through — and, on top of it, `k6.sh` and
-  `shellcheck.sh`, each that fetch plus one pin: the three ramps in this house
-  run one k6, and everything here that reads shell reads it with one shellcheck.
+  `shellcheck.sh`, each that fetch plus one pin: everything here that reads
+  shell reads it with one shellcheck. `k6.sh` is read by no action: it is the
+  k6 the `capacity-ramp` command runs, kept beside the fetch it shares and
+  where Renovate's pinned-binary pattern already moves it, and `files` ships
+  both.
   Actions, rather than scripts run out of the package every repo already
   installs: a step in `node_modules` runs only if the repo's own workflow
   remembers to run it, and it moves whenever the lockfile moves — including on
   a Renovate automerge nobody reads. It costs the release pair under
   "Releasing", and it is why gate code is not importable by the repos it
-  gates: anything they call directly is a package export instead, which is
-  what `route-log.ts` below is.
+  gates: anything they import is a package export instead, which is what
+  `route-log.ts` below is, and anything they run is a command.
   `mutation-lane` is the one gate that runs a tool out of the gated repo's own
   install rather than a binary it pins itself: Stryker resolves its runner
   plugin from the working directory, and declaring the two packages in the
@@ -153,7 +153,10 @@ a change to a rule usually lands here too.
   chooses what to mutate and runs Stryker; beside it `tests.ts` is which tests
   a run loads and whether the named ones pass unmutated, `report.ts` what
   Stryker's report says about a branch, `child.ts` a child the lane runs, the
-  run's deadline that ends it and the interrupts it passes on, and `values.ts` how the lane reads a repo's text
+  run's deadline that ends it and the interrupts it passes on, `machine.ts` what
+  the machine has to give Stryker, a Node.js every package it loads accepts and
+  a temp dir no other user can tamper with, named after a run that exited
+  without a report as what the machine lacks, and `values.ts` how the lane reads a repo's text
   and quotes it back, which the orchestrator, `tests.ts` and `report.ts` do. `duplicate-code` is written here rather than run as jscpd
   for the reason `fuzz.ts` carries its own PRNG: an action runs from a checkout
   with no install, and a tool fetched from npm at run time is pinned by a
@@ -162,8 +165,9 @@ a change to a rule usually lands here too.
   gates, which run over it from CI, apart from `knip.base.ts`, a base above, and
   `knip.ts` and `tsdown.config.ts`, this repo's own configs. Twenty of them are **exports** it imports and
   calls, two `.d.ts` files beside them are exports its `tsconfig.json` names in
-  `types`, `dev-server.ts` and `request-timing-report.ts` are bins it runs, and
-  `dev-server-derive.ts` is the module the first imports. Nine more reach it
+  `types`, `dev-server.ts`, `request-timing-report.ts` and `capacity-ramp.ts`
+  are bins it runs, and `dev-server-derive.ts` and `capacity-ramp-ladder.ts` are
+  the modules the first and the third import. Nine more reach it
   only inside those, and no specifier exports any of them. `count-ceilings.ts` is the count budget's ceiling rule — the
   file's shape, the seal, and the one function both the check and the write
   command decide by — which the build bundles into `dist/count-budget.js`, a
@@ -275,9 +279,16 @@ a change to a rule usually lands here too.
   server that died and was not reaped is a real zombie there too: the case runs
   `up` under `tests/unreaping-parent.ts`, which adopts the server and never
   reaps it.
-- `db-gate/capacity.js` is the exception: it runs inside k6, not under this
-  repo's compiler or linter, which is why `.oxlintrc.json` ignores it. A JSON
-  config cannot carry the reason, so it is here.
+- `capacity-ramp.ts` and `capacity-ramp-ladder.ts` — the capacity ramp,
+  reached as `bun run capacity-ramp` through the `bin` entry, in
+  `request-timing-report.ts`'s shape: the bin is the argv, the signals, the
+  output and the exit status, and the module is the ramp the suite drives, which
+  is why only the bin is waived from the coverage floor. Its page is
+  `docs/commands/capacity-ramp.md`. `capacity-ramp.js` beside them is the
+  script k6 runs when the caller names paths rather than a script: it runs
+  inside k6, not under this repo's compiler or linter, which is why
+  `.oxlintrc.json` ignores it, and `tests/capacity-ramp.test.ts` runs it
+  through the pinned k6 against a stub on loopback.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
   clean one. A gate without one is a claim. `build-cache.test.ts` is the build
   action's, running `build.sh` against a fixture repository whose build records
@@ -342,8 +353,11 @@ a change to a rule usually lands here too.
   is the same over which tests a run loads when a repo names them, a subject of
   its own, `mutation-lane-clocks.test.ts` over the clocks a run keeps and what a
   timeout means under them, which spends real seconds waiting a slow mutant out,
-  and `mutation-lane-fixture.ts` is the fixture repository and the run
-  all three suites share. `mutation-lane-child.test.ts` drives `child.ts` alone,
+  `mutation-lane-machine.test.ts` over what the machine has to give a run, and
+  `mutation-lane-fixture.ts` is the fixture repository and the run
+  the four suites share, whose `messages` carries what Stryker printed into a
+  run that exited without a report, so a case that meets one on a CI machine
+  nobody can log into fails with the cause. `mutation-lane-child.test.ts` drives `child.ts` alone,
   with real signals to real processes, through `mutation-lane-child-driver.ts`,
   a stand-in for the lane a case can interrupt. `mutation-lane-report.test.ts`
   drives `report.ts` alone, over generated reports in every order, because a
@@ -352,8 +366,8 @@ a change to a rule usually lands here too.
   mutator, replacement and status. `test-suite.test.ts` is the
   same argument one level down: that gate is a shell script rather than a
   module, so the suite extracts the step out of the shipped `action.yml` and
-  runs it over fixture suites of its own. It needs passwordless sudo, because
-  what it is grading is a network namespace. `nightly-issue.test.ts` is that
+  runs it over fixture suites of its own. It needs bubblewrap allowed to create
+  a user namespace, because what it is grading is a network namespace. `nightly-issue.test.ts` is that
   argument once more, over the one step in this repo whose subject is an effect
   that leaves the system: it extracts the filing step out of its workflow and
   runs it with a `gh` of the suite's own on the path — one that logs every call
@@ -401,7 +415,16 @@ a change to a rule usually lands here too.
   them too. `fuzz.test.ts` drives the fuzzer against a real server on a real
   port, since each of its four invariants is a statement about a response — and the
   route that never answers is why that fixture disposes without awaiting
-  `stop()`. `@sinclair/typebox` is a devDependency nothing here imports:
+  `stop()`. `capacity-ramp.test.ts` runs the shipped script through the
+  pinned k6 against a stub that breaks on how many k6 connections are in use, a
+  count that is the step's users whatever share of a core the run gets, where
+  requests in flight would depend on how fast k6 got round its loop; the
+  file's header says why in use is an order and not the connections the stub
+  holds. No case there asserts a gap between two times k6 measured, since each
+  includes how long this box took to schedule the stub and k6: the file's
+  header says how the cases avoid one. The bin's statuses and the files a run
+  does or does not leave are read off a spawned process. `@sinclair/typebox` is
+  a devDependency nothing here imports:
   it is elysia's peer, and `t` — which `response-schema.test.ts` builds its
   fixture app's schemas with — is typebox under elysia's re-export.
   Request timing's suites split by what each grades: `request-timing.test.ts`
@@ -456,7 +479,9 @@ a change to a rule usually lands here too.
   sacrificial repository it builds.
 - `docs/gates/*.md` — a reference page per gate but `lint-workflows` and
   `secret-scan`; `docs/exports/*.md` — one per extensionless export, the eleven
-  `request-timing` ones sharing `request-timing.md`. README holds both maps.
+  `request-timing` ones sharing `request-timing.md`; `docs/commands/*.md` — a
+  page per command whose reference is not already README's or an export's,
+  `capacity-ramp.md` today. README holds the three maps.
 
 ## Commands
 
@@ -477,8 +502,8 @@ them and then watches them run nowhere. What carries their duty instead is
 trees with the shipped binary — a block of cases per rule, and a check that the
 base enables exactly the rules the plugin defines.
 
-`tests/house-limiter.ts`, `dev-server.ts`, `property.ts` and
-`request-timing-report.ts` are out for the same reason and carry their duty the same way — a suite that spawns the real thing.
+`tests/house-limiter.ts`, `dev-server.ts`, `property.ts`,
+`request-timing-report.ts` and `capacity-ramp.ts` are out for the same reason and carry their duty the same way — a suite that spawns the real thing.
 `bunfig.toml` names which suite, per file, and says why `dev-server-derive.ts`
 is not with them.
 
@@ -510,23 +535,31 @@ ends as the 600s hook's does. The shorter bounds left, in `tests/probe.test.ts`
 and `tests/mutation-lane-child.test.ts`, are those cases' oracles, each killing
 an implementation that hangs.
 
-`bun run test` needs a Postgres, a MySQL, a Redis, a chromium and passwordless
-sudo. The Postgres because the replay gate's property is what two databases end
+`bun run test` needs a Postgres, a MySQL, a Redis, a chromium, bubblewrap and
+passwordless sudo. The Postgres because the replay gate's property is what two databases end
 up holding and the semantic fixtures' is what a real migration does to a real
 row, and the request-timing Bun.sql and Start connectors on what Bun.sql and
 drizzle do against one; the MySQL because the request-timing connectors are
 graded on what mysql2 and drizzle do against a real server; the Redis because a limiter's bucket is
 shared by two processes and its Redis can be gone; the chromium because what
-the invariant sweep claims is what a browser reports; the sudo because the
-test-suite gate seals a run in a network namespace and nothing short of taking
-one says whether it holds, and because the file lock's and the dev server's
-suites mount a `/proc` that hides other users' processes, which only root can. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
+the invariant sweep claims is what a browser reports; bubblewrap, allowed to
+create a user namespace, because the test-suite gate seals a run in a network
+namespace and nothing short of taking one says whether it holds; and the sudo
+because the file lock's and the dev server's suites mount a `/proc` that hides
+other users' processes, which only root can. None of `TEST_DATABASE_URL`, `TEST_MYSQL_URL` and
 `TEST_REDIS_URL` has a default, and each is refused when unset: the database
 suites create and **drop** databases on the server they are given and the
 conformance suite **flushes** its Redis, and `localhost` on this box is a host
 address one of the stacks or a runner's service container may be
 publishing. `tests/postgres.ts` is the one reader of the first.
 README's "Gating this repo" has the one-liners, including the browser install.
+
+`tests/capacity-ramp.test.ts` also needs k6, which it fetches the way the
+command does: the release archive from k6's GitHub releases, checked against
+the pin in `.github/actions/_lib/k6.sh` and kept in
+`$XDG_CACHE_HOME/dev-config/k6` (else `~/.cache/dev-config/k6`), so a machine
+downloads it once per pin. Every k6 run in that suite is pointed at a stub
+server the case starts on loopback, and nothing else.
 
 Two runs may share one server, which is what two worktrees under review are.
 Every database either end makes is named for what tells the runs apart: the

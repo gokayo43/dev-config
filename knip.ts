@@ -28,11 +28,6 @@ const config: KnipConfig = {
   // knip's Tailwind plugin, which compiles stylesheets this repo does not have.
   ignoreDependencies: [...mutationLaneDependencies, "tailwindcss"],
   tailwind: false,
-  // capacity.js is not this repo's program: it runs inside k6, against modules
-  // built into that runtime and resolvable from no package.json anywhere. The
-  // linter skips it for the same reason, and tests/capacity-script.ts executes
-  // it so that skipping is not the same as never running it.
-  ignore: [".github/actions/db-gate/capacity.js"],
 };
 
 export default config;

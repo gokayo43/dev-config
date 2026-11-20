@@ -1,5 +1,4 @@
-import { f as Timing } from "./request-timing-CGWxjLxw.js";
-//#region request-timing-next.d.ts
+import { f as Timing } from "./request-timing-Cs0lSxaS.js";
 /**
  * The wrapper, for `timing`. An app makes it once and wraps each handler a
  * `route.ts` exports with it, naming the route's pattern as its place under
@@ -19,4 +18,3 @@ import { f as Timing } from "./request-timing-CGWxjLxw.js";
  * that wraps the handler is loaded, which `next build` does for every route.
  */
 export declare function requestTimingRoute(timing: Timing): <R extends Request, C>(pattern: string, handler: (request: R, context: C) => Response | Promise<Response>) => ((request: R, context: C) => Promise<Response>);
-//#endregion
