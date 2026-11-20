@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-//#region request-timing-operation.ts
+// request-timing-operation.ts
 /**
 * What request timing's modules share: the operation, the waits it
 * accumulates, the record it closes into, and the storage that carries the
@@ -186,8 +186,7 @@ const current = new AsyncLocalStorage();
 		});
 	}
 });
-//#endregion
-//#region request-timing.ts
+// request-timing.ts
 /**
 * Request timing: which operation a wait belongs to, carried in
 * `AsyncLocalStorage`, in plain async code and in an Effect program alike.
@@ -239,5 +238,4 @@ function measure(kind, wait) {
 		throw error;
 	});
 }
-//#endregion
 export { RECORD_VERSION as a, current as c, requestTiming as d, OperationName as i, methodOf as l, measure as n, WAIT_KINDS as o, within as r, beginWait as s, inOperation as t, perKind as u };

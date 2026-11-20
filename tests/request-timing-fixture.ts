@@ -133,6 +133,13 @@ export function latch() {
 
 const query = async () => [{ id: 1 }];
 
+const handlePlain = async (measured: number) => {
+  for (let index = 0; index < DB_WAITS; index += 1) {
+    await (index < measured ? measure("db", query) : query());
+  }
+  return Response.json({ id: 1 });
+};
+
 /** Serves `/presets/:id` on a free loopback port, adopting the export as `adoption` says. */
 export function presetServer(adoption: Adoption) {
   const sink = lines();
@@ -144,12 +151,6 @@ export function presetServer(adoption: Adoption) {
       if (adoption === "echoed") sink.write(JSON.stringify({ service: "fixture", ...record }));
     },
   });
-  const handlePlain = async (measured: number) => {
-    for (let index = 0; index < DB_WAITS; index += 1) {
-      await (index < measured ? measure("db", query) : query());
-    }
-    return Response.json({ id: 1 });
-  };
   const handleEffect = Effect.gen(function* () {
     for (let index = 0; index < DB_WAITS; index += 1) {
       yield* Effect.promise(() => measure("db", query));

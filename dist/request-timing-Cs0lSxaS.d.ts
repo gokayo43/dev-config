@@ -1,5 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-//#region request-timing-operation.d.ts
+import "node:async_hooks";
 /**
  * The schema version every record carries under `requestTiming`. The reader
  * knows this version alone, and stops on a record of any other.
@@ -149,8 +148,6 @@ declare class Operation {
    */
   close(ending: Ending): void;
 }
-//#endregion
-//#region request-timing.d.ts
 /**
  * Whether an operation is current. An entry connector asks it before opening
  * one and opens nothing when it answers true, so work a page runs in-process
@@ -173,5 +170,4 @@ declare function within<T>(operation: Operation, handler: () => T): T;
  * called once, and a thenable it answers has its `then` called once.
  */
 declare function measure<T>(kind: WaitKind, wait: () => PromiseLike<T>): Promise<T>;
-//#endregion
 export { Waited as _, Ending as a, Operation as c, Sink as d, Timing as f, WaitKind as g, WAIT_KINDS as h, Clock as i, OperationName as l, TimingRecord as m, measure as n, Fault as o, TimingOptions as p, within as r, Method as s, inOperation as t, RECORD_VERSION as u, methodOf as v, requestTiming as y };

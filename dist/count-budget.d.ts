@@ -1,6 +1,5 @@
 import { InvariantSweep } from "./invariant-sweep.js";
 import { PlaywrightTestArgs, PlaywrightTestOptions, PlaywrightWorkerArgs, PlaywrightWorkerOptions, TestType } from "@playwright/test";
-//#region count-ceilings.d.ts
 /** One value for each of the four counts every phase has. */
 interface Steady<Value> {
   readonly mutationRecords: Value;
@@ -22,8 +21,6 @@ interface PerCount<Value> extends Steady<Value> {
  * each budgeted test carries, by phase.
  */
 type Counts = PerCount<number>;
-//#endregion
-//#region count-budget.d.ts
 export interface Budget {
   /**
    * Waits for the page to go still, runs `action`, waits again, and records
@@ -54,5 +51,4 @@ export interface CountBudget {
  * ```
  */
 export declare const test: TestType<PlaywrightTestArgs & PlaywrightTestOptions & InvariantSweep & CountBudget, PlaywrightWorkerArgs & PlaywrightWorkerOptions>;
-//#endregion
 export type { Counts };

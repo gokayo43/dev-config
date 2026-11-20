@@ -1,6 +1,11 @@
-import { f as Timing } from "./request-timing-CGWxjLxw.js";
+/**
+ * Request timing's Elysia connector: one plugin an app mounts once, ahead of
+ * its routes, which runs every request the app serves as one operation named
+ * by the route Elysia matched. `docs/exports/request-timing.md` says how an app
+ * mounts it and what its records hold.
+ */
+import { f as Timing } from "./request-timing-Cs0lSxaS.js";
 import { AnyElysia } from "elysia";
-//#region request-timing-elysia.d.ts
 /**
  * The plugin, for `timing`: `app.use(requestTimingPlugin(timing))`, mounted
  * before the app's routes, since Elysia applies a hook only to the routes
@@ -20,4 +25,3 @@ import { AnyElysia } from "elysia";
  * request, where the name goes to the app's `fault` and no record is written.
  */
 export declare function requestTimingPlugin(timing: Timing): <App extends AnyElysia>(app: App) => App;
-//#endregion

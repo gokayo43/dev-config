@@ -1,7 +1,7 @@
 import { must } from "./narrowing.js";
-import { c as current, i as OperationName } from "./request-timing-DPoxY8eA.js";
-import { n as registeredNames, r as timedEntry } from "./request-timing-entry-ChIyPZRq.js";
-//#region request-timing-tanstack-start.ts
+import { n as registeredNames, r as timedEntry } from "./request-timing-entry-DUtRZjoK.js";
+import { c as current, i as OperationName } from "./request-timing-CRXpA8f5.js";
+// request-timing-tanstack-start.ts
 /**
 * Every open operation of a server-function request, by the operation. The
 * function middleware reaches it through `AsyncLocalStorage`, so both halves
@@ -103,5 +103,4 @@ function nameServerFunction(call) {
 	if (awaiting?.meta === void 0 && awaiting?.id === call.serverFnMeta.id) awaiting.meta = call.serverFnMeta;
 	return call.next();
 }
-//#endregion
 export { nameServerFunction, timedStartHandler };

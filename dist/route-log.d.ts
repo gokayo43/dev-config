@@ -1,4 +1,3 @@
-//#region route-log.d.ts
 /**
  * The protocol between an app and the two floors the database job holds its
  * route table to — the ramp's route coverage, and the compatibility floor that
@@ -71,4 +70,3 @@ export interface RouteLog {
   readonly routeTable: Route[];
   readonly counts: Served[];
 }
-//#endregion

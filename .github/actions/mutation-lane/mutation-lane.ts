@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import manifest from "../../../package.json" with { type: "json" };
+
 import { branchChange } from "../_lib/change-set.ts";
 import {
   type ConfigObject,
@@ -44,16 +46,13 @@ const CORE = "@stryker-mutator/core";
 const RUNNER = "@hughescr/stryker-bun-runner";
 
 /**
- * The pair as the diagnostic asks for it, versions included: a bare `bun add`
- * resolves `@stryker-mutator/core@10`, which is outside the `^9.0.0` peer range
- * the runner declares — an unsupported pair to send a repo to, whatever it
- * happens to do on the day. These are the versions this repo's own
- * devDependencies pin, which is the install every case in
- * `tests/mutation-lane.test.ts` runs the lane against — the test reads them
- * back out of that manifest, so a bump that leaves this line behind fails there
- * rather than in a consuming repo.
+ * The pair as the diagnostic asks for it, versions included, read from this
+ * repo's own devDependencies in the action's checkout: that install is the one
+ * every case in `tests/mutation-lane.test.ts` runs the lane against, so it is
+ * the one pair the lane is known to run on, and a bare `bun add` may resolve a
+ * pair the runner's peer range does not hold.
  */
-const DECLARE = `${CORE}@9.6.1 and ${RUNNER}@1.3.8`;
+const DECLARE = `${CORE}@${manifest.devDependencies[CORE]} and ${RUNNER}@${manifest.devDependencies[RUNNER]}`;
 
 const READS_THE_BASE_REF =
   "the lane mutates what this branch changed, and the base ref is what changed is measured against";
@@ -230,19 +229,29 @@ function noFolderProblem(globs: readonly string[]): Problem {
 
 /**
  * What the runner logs, at its default level, when the run it was asked to grade
- * did not pass before anything was mutated: bun exited non-zero, and no test it
- * could name accounts for that. Verified present in both 1.3.8 and 1.4.0, and
- * absent from every clean run measured.
+ * did not pass before anything was mutated and no test it could name accounts
+ * for that, in the two forms 1.6.0's source writes. The warning, seen in runs
+ * of 1.3.8 and 1.4.0, follows a run that went on; the error ends the run with a
+ * non-zero exit and no report, and is what a spec file that fails to load
+ * produces in 1.6.0. No fixture here makes 1.6.0 write the warning, which it
+ * still does for a failure its completeness check lets through. Both are absent
+ * from every clean run measured.
  *
  * The capture is the stderr the runner kept, whose 500-character bound is the
- * runner's own and is restated here rather than chosen.
+ * runner's own and is restated here rather than chosen. The error goes on past
+ * it in the runner's own words, so its capture ends where they start.
  */
-const DIRTY_BASELINE =
-  /but no failing test could be identified[\s\S]{0,200}?Last 500 chars of stderr:\n([\s\S]{0,500})/;
+const DIRTY_BASELINE = [
+  /but no failing test could be identified[\s\S]{0,200}?Last 500 chars of stderr:\n([\s\S]{0,500})/,
+  /but none of them could be attributed to an individual test[\s\S]{0,200}?Last 500 chars of stderr:\n([\s\S]{0,500}?)(?:; the inspector WebSocket also closed|\. Completing this dry run)/,
+];
 
 function dirtyBaseline(wrote: string): string | undefined {
-  const found = DIRTY_BASELINE.exec(wrote);
-  return found === null ? undefined : (found[1] ?? "");
+  for (const form of DIRTY_BASELINE) {
+    const found = form.exec(wrote);
+    if (found !== null) return found[1] ?? "";
+  }
+  return undefined;
 }
 
 /**
@@ -558,9 +567,11 @@ export async function mutationLane({
 
     // The runner writes a bunfig and a preload per worker under the temp dir
     // and leaves them when its worker is killed; under the scratch directory
-    // the `finally` below removes them whatever ended the run.
+    // the `finally` below removes them whatever ended the run. It refuses a
+    // temp dir that anyone but its owner can write to, which a umask of 002
+    // would otherwise make this one.
     const temp = join(scratch, "tmp");
-    await mkdir(temp);
+    await mkdir(temp, { mode: 0o700 });
     const stryked = await ran([stryker, "run", config], root, deadline, { TMPDIR: temp });
     const wrote = `${stryked.out}\n${stryked.err}`;
 
