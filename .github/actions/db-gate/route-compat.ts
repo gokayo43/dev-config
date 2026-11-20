@@ -143,7 +143,7 @@ export interface Compatibility {
   readonly root: string;
   /** What the run knows about where it came from, which is all a base ref derives from. */
   readonly event: Event;
-  /** Every route the booted app declared, out of the route log the ramp already fetched. */
+  /** Every route the booted app declared, out of the route log the gate read off it. */
   readonly served: readonly Route[];
   /** `route-retire`, whole: the reason on each entry is enforced by reporting `problems`. */
   readonly retire: Allowlist;
@@ -270,7 +270,7 @@ export async function routeCompat({
   const routes = canonical(served);
   const content = snapshotOf(served);
   // Written whichever way the run goes: on a red run it is the file to copy, and
-  // on a green one it is what this app declared, kept beside the ramp's own
+  // on a green one it is what this app declared, kept beside the gate's other
   // evidence for the run after it.
   await Bun.write(evidence, content);
 
@@ -292,16 +292,23 @@ export async function routeCompat({
     }
 
     const carried = new Map(base.routes.map((route) => [key(route), route]));
-    const hatch = waivedBy(retire, carried, servesAll(served), {
-      malformed: (entry) =>
-        `route-retire entry '${entry}' is not a route — write 'METHOD /path -- why', matching a line of the ${SNAPSHOT} at ${base.at}`,
-      unknown: (entry) =>
-        `route-retire names ${entry}, which ${base.at} did not serve — drop the entry, or fix the method and path to match the route it was written for`,
-      // The reason written beside it says this route is gone deliberately. It is
-      // still being served, so the reason is not true of this branch.
-      satisfied: (entry) =>
-        `route-retire retires ${entry}, which this app still serves — drop the entry and let the floor hold the route`,
-    });
+    const hatch = waivedBy(
+      retire,
+      carried,
+      {
+        malformed: (entry) =>
+          `route-retire entry '${entry}' is not a route — write 'METHOD /path -- why', matching a line of the ${SNAPSHOT} at ${base.at}`,
+        unknown: (entry) =>
+          `route-retire names ${entry}, which ${base.at} did not serve — drop the entry, or fix the method and path to match the route it was written for`,
+      },
+      {
+        satisfied: servesAll(served),
+        // The reason written beside it says this route is gone deliberately. It is
+        // still being served, so the reason is not true of this branch.
+        refusal: (entry) =>
+          `route-retire retires ${entry}, which this app still serves — drop the entry and let the floor hold the route`,
+      },
+    );
 
     const kept = carried.size - hatch.unmet.length - hatch.waived.size;
     return {

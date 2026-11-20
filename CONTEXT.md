@@ -107,10 +107,10 @@ which stops the rule blocking anything at all.
 
 **Floor** — a bound set below what honest work already produces, there to catch
 the absence of the work rather than to be aimed at: the coverage threshold, the
-capacity ramp's route coverage, and the route compatibility floor. A floor says
-a route has been under load once, or that it is still there at all; it says
-nothing about whether that load resembled production, or whether the route still
-answers what it used to.
+route compatibility floor, and the fuzzer's four invariants. A floor says a
+route is still there at all, or that a request nobody expected is refused
+rather than crashed on; it says nothing about whether the route still answers
+what it used to.
 
 **Nightly** — a run of the shared check that nobody is waiting on: the same
 gates over the same tree, with the searches that scale given room to run, and
@@ -125,11 +125,13 @@ that has gone wrong; a budget bounds something that could go on forever and is
 worth more the longer it does. A budget is never a bar to clear — what it stops
 is a pass.
 
-**Trend line and claim** — the two things a capacity ramp can produce, from one
-script and one reader. On a CI runner the app shares a machine with a Postgres,
-a Redis and a neighbour nobody chose, so the number is only comparable with the
-last run's: a trend line. Against the deployed shape it is the claim testing.md
-asks for. `ran-on` names which happened, because nothing downstream can tell.
+**Held step** — the most simultaneous users a capacity ramp's target answered
+inside both bounds, failed requests and the 95th percentile of response time.
+The step after it is the broken step, and the bound it broke is where to start
+looking. A held step is compared only with another of the same target, paths,
+script and bounds, which is why a result names its predecessor of that
+measurement and no other, and each records the k6 it ran on, since a held step
+is only comparable with one of the same k6.
 
 **Route table** — the routes an app serves, named by the app itself as its
 router registered them (`/presets/:id`, not `/presets/42`). Only the router

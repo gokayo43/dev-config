@@ -77,7 +77,7 @@ export function notice(message: string): void {
  * table behind that measurement, and evidence too long to be an annotation.
  *
  * One shape rather than one per action, because three of them arrived at these
- * same fields under three names — a replay's verdict, a ramp's table, a
+ * same fields under three names — a replay's verdict, a fuzzer's table, a
  * mutation lane's score and the output of the run behind it — and their entry
  * points at the same writes in the same order, which is the order `publish`
  * fixes below. A gate that only refuses answers with `Problem[]` and builds
@@ -90,8 +90,8 @@ export function notice(message: string): void {
 export interface Verdict {
   /**
    * One line of log saying what the gate did, whichever way it went. Present
-   * beside problems wherever it says something they do not: "5 of 10 routes
-   * exercised by the ramp" and "mutation score 60% over 2 changed domain files"
+   * beside problems wherever it says something they do not: "40 generated
+   * requests over 10 routes" and "mutation score 60% over 2 changed domain files"
    * are what a reader wants most on the run that failed. Left out where it would
    * only paraphrase them — the two gates that prove a property drop it on a
    * refusal, because a step that failed has already said so in its annotations.
@@ -117,17 +117,15 @@ export interface Verdict {
  * above rather than somewhere below.
  *
  * The table is published even for a run the step is about to fail. The
- * measurement is what says which way the ramp or the campaign went wrong, and a
+ * measurement is what says which way the fuzzer or the campaign went wrong, and a
  * summary that appears only on green runs is missing from every run that needed
  * one.
  *
  * `into` is where the run summary is, passed rather than read from
- * `GITHUB_STEP_SUMMARY` here: the ramp has a caller outside a workflow —
- * `project-template`'s `scripts/preview-capacity.sh`, which measures against the
- * deployed shape — and it renders the same table into a file beside the repo.
- * A gate with no table needs none, and a gate that grows one under an action
- * that does not pass it is the wiring bug this refuses rather than writes
- * nowhere.
+ * `GITHUB_STEP_SUMMARY` here, so the action that runs the gate names it in its
+ * own YAML. A gate with no table needs none, and a gate that grows one under an
+ * action that does not pass it is the wiring bug this refuses rather than
+ * writes nowhere.
  */
 export async function publish(verdict: Verdict, into?: string): Promise<void> {
   const written = given(verdict.log);
@@ -351,7 +349,7 @@ export const KEEP_CLONE = "duplicate-code-allow";
  * quoted SQL identifier, the method and path of a route, and the reason each of
  * them carries.
  *
- * A newline is the only separator, here and in `capacity-path` — every input
+ * A newline is the only separator here — every input
  * whose entries are expected to hold a space. (`list` above splits on
  * whitespace, and serves the inputs written as single words: contract
  * exemptions, fixture paths, the pin gate's extra paths. A path with a space in
@@ -377,14 +375,14 @@ function entriesIn(value: string): string[] {
  * The rule that an entry standing for nothing is refused belongs to every
  * allowlist here, but only the ones whose entries *are* their subjects can be
  * handed those subjects whole: `deadEntries` below serves those. The two
- * aimed at a route table — route-coverage's and route-compat's — stay out
+ * aimed at a route table — the fuzzer's and route-compat's — stay out
  * because their entries are not the thing they compare: they are parsed into a
  * method and a path first, with a diagnostic of their own for a line that is not
  * a route at all, and the comparison is against a normalised key, so
  * `options /*` and `OPTIONS /*` are one route and neither is a member of any set
  * of entry spellings. `db-gate/route-table.ts` is their `deadEntries` — the same
- * three questions asked of a keyed set of routes — and it lives there rather
- * than here because one action holds both floors.
+ * questions asked of a keyed set of routes — and it lives there rather than
+ * here because one action holds both gates.
  */
 export interface Allowlist {
   /** Each entry with its reason stripped: the part a gate compares against. */

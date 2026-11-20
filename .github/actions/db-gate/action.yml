@@ -3,9 +3,9 @@ description: >-
   Replays the migrations onto the empty Postgres the caller declared, twice —
   and, where the caller asks for it, from the base ref's migrations as well,
   with the repo's own legacy rows written into that replay — boots the app
-  against the result, probes it where the repo has one, ramps it, holds its
-  route table to the routes the base ref served, and throws generated junk at
-  every route in it. Every step reads
+  against the result, probes it where the repo has one, holds its route table
+  to the routes the base ref served, and throws generated junk at every route
+  in it. Every step reads
   DATABASE_URL from the environment — the caller declares the service, so it
   owns the URL, and one value means no two steps can disagree about which
   database was migrated — plus REDIS_URL when the app needs one.
@@ -49,7 +49,7 @@ inputs:
   probe-command:
     description: >-
       A command of the repo's own, run against the booted app after it answers
-      its health route and before the ramp. Runs as shell code, with the app's
+      its health route. Runs as shell code, with the app's
       URL in HEALTH_URL. Its stdout is the verdict: every line it writes there
       is one problem, whatever it exits with, since the gate running it cannot
       know what it was asserting.
@@ -59,22 +59,13 @@ inputs:
       How many seconds probe-command gets before it is killed. Empty takes the
       bound probe.ts declares, which is where the number and the argument for it
       live — a bound is what stops a probe that has wedged from spending the
-      job's whole budget and taking the ramp's evidence with it. Set it with
+      job's whole budget and taking the later steps' evidence with it. Set it with
       probe-command or not at all.
-    default: ""
-  capacity-script:
-    description: A k6 script of the repo's own. Empty runs the ramp shipped with this action.
-    default: ""
-  capacity-path:
-    description: >-
-      Paths to ramp alongside the health route, e.g. /api/things — one per
-      line, since an app serves more than one route and the floor below asks
-      for all of them.
     default: ""
   db-gate-evidence:
     description: >-
-      The artifact name for everything this gate leaves behind — the k6
-      summary, both route-log snapshots, the route table the committed snapshot
+      The artifact name for everything this gate leaves behind — the route-log
+      snapshot, the route table the committed snapshot
       must hold, the three data dumps the backfill check compares, every request
       the fuzzer refused an answer to, and the app's own output, whichever of
       them the run got as far as writing. A matrix that
@@ -85,12 +76,11 @@ inputs:
     default: ""
   route-allowlist:
     description: >-
-      Routes the ramp is not expected to reach, as `METHOD /path -- why`
-      entries matching the app's own route table, one per line. The reason is
-      part of the entry, the price a lint directive pays. Read twice: the route
-      floor grades the entries, and the fuzzer skips what they name — a route
-      that is destructive, credentialed or reaches off this box is not one to
-      send generated requests at either.
+      Routes the fuzzer sends no generated request to, as `METHOD /path --
+      why` entries matching the app's own route table, one per line — a route
+      that is destructive, credentialed or reaches off this box. The reason is
+      part of the entry, the price a lint directive pays, and an entry naming a
+      route the app does not serve is refused.
     default: ""
   route-retire:
     description: >-
@@ -124,34 +114,29 @@ inputs:
 # One action rather than several, and not because everything here is about the
 # database — "Replay the migrations", "Every instant carries its zone" and "A
 # backfill that can be run twice" are, while "Boot against that database",
-# "Capacity ramp", "Every route the ramp reaches", "Every route the base ref
-# served" and "Generated requests at every route" are about the app the schema
-# has to be able to run. The directory is named for what `database: postgres`
-# buys.
+# "Read the route table", "Every route the base ref served" and "Generated
+# requests at every route" are about the app the schema has to be able to run.
+# The directory is named for what `database: postgres` buys.
 #
 # What holds them together is the migrated database itself: every step below is
 # rooted in the replay, and the app steps are ordered among themselves — nothing
 # can read a column type before the migrations ran, boot before there is a
-# schema, probe or ramp before the app answers, read a route table before the
-# app has declared one, or fuzz a route before the floor over it has been
-# measured — that last one being an order the fuzzer would otherwise falsify
-# rather than merely need. The two database steps beside the replay are free of
-# each other and of the rest —
-# reading a column type says nothing about rows, and the backfill check works in
-# a database of its own — which makes this a partial order rather than a chain,
-# and one composite's step list is the strongest form that ordering takes: split
-# across actions it becomes prose in two descriptions and an order a caller can
-# get wrong.
+# schema, or probe, read a route table or fuzz a route before the app answers.
+# The two database steps beside the replay are free of each other and of the
+# rest — reading a column type says nothing about rows, and the backfill check
+# works in a database of its own — which makes this a partial order rather than
+# a chain, and one composite's step list is the strongest form that ordering
+# takes: split across actions it becomes prose in two descriptions and an order
+# a caller can get wrong.
 #
-# "Publish what the ramp measured and what it read" is what settles it. The k6
-# summary and both route-log snapshots come from "Capacity ramp", the route table
-# a repo has to commit from "Every route the base ref served", the three data
-# dumps from the backfill check, the fuzzer's own report from the step after
-# them, the app's own output from "Boot against that
-# database", and db-gate-evidence above says why they leave as one artifact — so
-# one job's evidence is one upload, and an upload belongs to whatever runs the
-# whole job. Which is to say the boundary cannot be drawn between the database
-# and the app either.
+# "Publish what the gate read" is what settles it. The route-log snapshot comes
+# from "Read the route table", the route table a repo has to commit from "Every
+# route the base ref served", the three data dumps from the backfill check, the
+# fuzzer's own report from the step after them, the app's own output from "Boot
+# against that database", and db-gate-evidence above says why they leave as one
+# artifact — so one job's evidence is one upload, and an upload belongs to
+# whatever runs the whole job. Which is to say the boundary cannot be drawn
+# between the database and the app either.
 runs:
   using: composite
   steps:
@@ -220,9 +205,9 @@ runs:
         HEALTH_URL: ${{ inputs.health-url }}
         SITE_URL: http://localhost
         BETTER_AUTH_SECRET: ci-not-a-secret-ci-not-a-secret-ci
-        # The app serves a counter endpoint naming every route it has and how
-        # many requests each has taken. Set only here: it is an instrument for
-        # the coverage floor, not a surface, and no deployment sets it.
+        # The app serves an endpoint naming every route it has. Set only here:
+        # it is an instrument for the gates over the route table, not a
+        # surface, and no deployment sets it.
         ROUTE_LOG: "true"
       run: |
         set -euo pipefail
@@ -249,14 +234,14 @@ runs:
           sleep 2
         done
 
-    # Between the boot and the ramp, which is the only place it can ask what it
-    # asks. Health answering 200 says the app starts against this schema; the
-    # route floor below says every route was reached. Neither says an answer was
-    # correct, and a migration that quietly reinterprets a column passes both —
-    # so the repo gets one command here to assert what only it knows.
+    # After the boot, which is the only place it can ask what it asks. Health
+    # answering 200 says the app starts against this schema, and says nothing
+    # about whether an answer was correct: a migration that quietly
+    # reinterprets a column passes it — so the repo gets one command here to
+    # assert what only it knows.
     #
-    # Its stdout is the protocol, the way capacity-script's summary is: the gate
-    # owns the running and the repo owns the meaning.
+    # Its stdout is the protocol: the gate owns the running and the repo owns
+    # the meaning.
     #
     # Either input selects it, so that a caller who set only the bound is told
     # so rather than ignored — the condition the backfill check is written with,
@@ -273,90 +258,39 @@ runs:
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/probe.main.ts"
 
-    # A number, not a latency threshold. See docs/gates/capacity.md: on a shared
-    # runner a latency bound measures the runner, and a gate that fails on that
-    # is one people turn off. The step fails when k6 died or breached the one
-    # bound that is not the runner's — its failure rate — and when it produced
-    # no measurement to record.
-    - name: Capacity ramp
+    # One read of the app's route table, which both steps after it grade: the
+    # compatibility floor and the fuzzer read this file rather than the app, so
+    # the two cannot be handed different tables.
+    - name: Read the route table
       shell: bash
       env:
         HEALTH_URL: ${{ inputs.health-url }}
-        CAPACITY_PATH: ${{ inputs.capacity-path }}
-        CAPACITY_SCRIPT: ${{ inputs.capacity-script }}
       run: |
         set -euo pipefail
-        # shellcheck source=/dev/null
-        . "$GITHUB_ACTION_PATH/../_lib/k6.sh"
-        script="${CAPACITY_SCRIPT:-$GITHUB_ACTION_PATH/capacity.js}"
-        # The route floor is the difference between these two reads of the app's
-        # counters, so the health poll that got the app this far sits inside the
-        # first and cannot be mistaken for a route the ramp exercised.
-        #
         # The one place the protocol's endpoint is written out rather than
         # imported: this is bash, and nothing here can read route-log.ts. Every
         # other copy — the gate's, and both apps' — comes from ENDPOINT there.
         route_log="$(echo "$HEALTH_URL" | sed -E 's#^(https?://[^/]+).*#\1#')/__route-log"
-        # Bounded for the reason the health poll above is: an app wedged under
-        # the ramp accepts the connection and never answers, which is otherwise
-        # indistinguishable from a slow read and costs the job's whole timeout
-        # to say so. The ceiling is generous — this is a small JSON body from a
-        # local process — so only a hang can reach it.
-        # Landed by rename, because the shell opens the redirect before curl
-        # runs: writing straight to the destination leaves an empty file behind
-        # when the fetch fails. The step stops either way, so no gate reads it —
-        # but the evidence artifact would carry 0 bytes that look like a
-        # snapshot somebody took. Either the destination is absent or it is a
-        # whole answer.
-        #
-        # The rename's own status is the function's: a fetch that worked and a
-        # file that could not be moved onto its name is not a snapshot taken,
-        # and mv has already said why on stderr.
-        snapshot() {
-          if ! curl -sSf --connect-timeout 5 --max-time 30 "$route_log" > "$1.part"; then
-            rm -f "$1.part"
-            echo "::error::$route_log did not answer — an app under the capacity ramp serves the route-log endpoint when ROUTE_LOG is set"
-            return 1
-          fi
-          mv "$1.part" "$1"
-        }
-        snapshot "$RUNNER_TEMP/route-log-before.json"
-        "$K6" run --quiet \
-          --summary-trend-stats='avg,min,med,p(95),p(99),max' \
-          --summary-export "$RUNNER_TEMP/capacity.json" "$script"
-        # An app that died under the ramp fails the snapshot below AND breaches
-        # the failure bound, and the bound is the diagnostic that says what
-        # happened — so the snapshot's failure is held until the measurement has
-        # been read and published, and the step then fails carrying both.
-        status=0
-        snapshot "$RUNNER_TEMP/route-log-after.json" || status=1
-        # Always a runner here: this action only ever runs inside a workflow. A
-        # ramp against the deployed shape is a different caller of the same
-        # reader, and the caption it publishes says which of the two happened.
-        INPUT_SUMMARY_FILE="$RUNNER_TEMP/capacity.json" INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
-          INPUT_RAN_ON=ci-runner bun "$GITHUB_ACTION_PATH/capacity.main.ts" || status=1
-        exit "$status"
+        # Bounded for the reason the health poll above is: an app that accepts
+        # the connection and never answers is otherwise indistinguishable from
+        # a slow read and costs the job's whole timeout to say so. Landed by
+        # rename, because the shell opens the redirect before curl runs:
+        # writing straight to the destination leaves an empty file behind when
+        # the fetch fails, which the evidence artifact would carry as a
+        # snapshot nobody took.
+        snapshot="$RUNNER_TEMP/route-log.json"
+        if ! curl -sSf --connect-timeout 5 --max-time 30 "$route_log" > "$snapshot.part"; then
+          rm -f "$snapshot.part"
+          echo "::error::$route_log did not answer — an app under the database job serves the route-log endpoint when ROUTE_LOG is set"
+          exit 1
+        fi
+        mv "$snapshot.part" "$snapshot"
 
-    # The floor, not a realism claim: a route no request reached has never been
-    # under load at all, which is the same thing the coverage threshold catches
-    # about a module no test imports.
-    - name: Every route the ramp reaches
-      shell: bash
-      env:
-        INPUT_ROUTE_LOG_BEFORE: ${{ runner.temp }}/route-log-before.json
-        INPUT_ROUTE_LOG_AFTER: ${{ runner.temp }}/route-log-after.json
-        INPUT_ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
-      run: |
-        set -euo pipefail
-        bun "$GITHUB_ACTION_PATH/route-coverage.main.ts"
-
-    # The second floor over the same route table, and the only one here that
-    # outlives its run: coverage asks whether the ramp reached a route, this asks
-    # whether the repo has stopped serving one people already call. It reads the
-    # snapshot the ramp step fetched rather than the app, since that is the
-    # answer the floor above was graded on, and it writes the content the
-    # repo's own routes.snapshot.json must hold — which is why there is no
-    # regeneration script anywhere: the gate is the generator.
+    # The floor over the route table, and the one gate here that outlives its
+    # run: it asks whether the repo has stopped serving a route people already
+    # call. It writes the content the repo's own routes.snapshot.json must hold
+    # — which is why there is no regeneration script anywhere: the gate is the
+    # generator.
     #
     # Here rather than beside the replay because a route table is the app's to
     # declare and only a booted app has declared one.
@@ -364,7 +298,7 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        INPUT_ROUTE_LOG_BEFORE: ${{ runner.temp }}/route-log-before.json
+        INPUT_ROUTE_LOG: ${{ runner.temp }}/route-log.json
         INPUT_ROUTE_RETIRE: ${{ inputs.route-retire }}
         INPUT_SNAPSHOT_EVIDENCE: ${{ runner.temp }}/routes.snapshot.json
         # The event's own two facts, read from the `github` context here rather
@@ -377,38 +311,34 @@ runs:
         set -euo pipefail
         bun "$GITHUB_ACTION_PATH/route-compat.main.ts"
 
-    # Last of the three questions asked of the route table, and the one that has
-    # to come after the ramp has taken its second route-log snapshot: coverage
-    # is the difference between two snapshots, so a step ordered before that
-    # capture would put this step's traffic inside it and a route the ramp never
-    # touched would clear the floor on a request that was never a scenario's.
-    # Where the floor itself reads them is not the constraint — it reads files.
-    # tests/action-evidence.test.ts holds this order; docs/gates/fuzz.md argues it.
+    # The second question asked of the route table, and the only one about
+    # answers. It grades route-allowlist itself, which is the hatch over the
+    # routes it sends nothing to.
     - name: Generated requests at every route
       shell: bash
       env:
         INPUT_HEALTH_URL: ${{ inputs.health-url }}
-        INPUT_ROUTE_LOG: ${{ runner.temp }}/route-log-after.json
+        INPUT_ROUTE_LOG: ${{ runner.temp }}/route-log.json
         INPUT_ROUTE_ALLOWLIST: ${{ inputs.route-allowlist }}
         INPUT_FUZZ_SEED: ${{ inputs.fuzz-seed }}
         INPUT_NIGHTLY: ${{ inputs.nightly }}
         INPUT_REPORT_FILE: ${{ runner.temp }}/fuzz.json
       run: |
         set -euo pipefail
-        # The run summary is named here rather than in `env:` above for the
-        # reason the ramp names it there: it is a path the runner exports into
-        # the step's environment, and no expression context carries it.
+        # The run summary is named here rather than in `env:` above: it is a
+        # path the runner exports into the step's environment, and no
+        # expression context carries it.
         INPUT_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bun "$GITHUB_ACTION_PATH/fuzz.main.ts"
 
     # Everything the steps above wrote into the runner's workspace, which the
-    # next run's checkout cleans away. A step that failed on the way to a number is exactly when its
-    # partial evidence is worth having — the summary of a ramp that died, the
-    # two snapshots behind a floor's verdict, the output of an app that never
-    # answered — and a cancelled run has nothing to say. Reproducing any of
+    # next run's checkout cleans away. A step that failed is exactly when its
+    # partial evidence is worth having — the route table behind a floor's
+    # verdict, the fuzzer's report, the output of an app that never answered —
+    # and a cancelled run has nothing to say. Reproducing any of
     # them by re-running with more printing is the shape of debugging every
     # diagnostic here exists to avoid, so the files leave the run whatever
     # happened to it.
-    - name: Publish what the ramp measured and what it read
+    - name: Publish what the gate read
       if: ${{ !cancelled() }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
@@ -419,7 +349,7 @@ runs:
         # collide on any second name written out here.
         name: ${{ inputs['db-gate-evidence'] || 'db-gate-evidence' }}
         # server.log is copied while the app still holds it open, which is not a
-        # race to fix: the ramp needs the process alive, so there is no moment
+        # race to fix: the fuzzer needs the process alive, so there is no moment
         # where the file is finished and the run is not. Read its tail as
         # possibly torn, and anything the app buffered and had not flushed as
         # simply absent. The boot step's own annotation, not this file, is what
@@ -428,9 +358,7 @@ runs:
           ${{ runner.temp }}/backfill-seeded.rows
           ${{ runner.temp }}/backfill-first.rows
           ${{ runner.temp }}/backfill-second.rows
-          ${{ runner.temp }}/capacity.json
-          ${{ runner.temp }}/route-log-before.json
-          ${{ runner.temp }}/route-log-after.json
+          ${{ runner.temp }}/route-log.json
           ${{ runner.temp }}/routes.snapshot.json
           ${{ runner.temp }}/fuzz.json
           ${{ runner.temp }}/server.log

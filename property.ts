@@ -45,7 +45,7 @@ import type { IAsyncProperty, IProperty, IRawProperty, Parameters, RunDetails } 
  * Exported as its name rather than read as a literal wherever it is written,
  * because the variable is a protocol between this module and whoever sets it —
  * `test-suite`'s action.yml is the one place it is spelled out rather than
- * imported, for the reason the ramp's route-log endpoint is: that end is bash.
+ * imported, for the reason db-gate's route-log endpoint is: that end is bash.
  */
 export const RUNS_FACTOR = "PROPERTY_RUNS_FACTOR";
 

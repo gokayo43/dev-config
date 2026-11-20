@@ -163,15 +163,6 @@ jobs:
           TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}
           TEST_MYSQL_URL: mysql://root:mysql@127.0.0.1:${{ job.services.mysql.ports['3306'] }}/mysql
 
-      # The k6 ramp this repo ships is the one file its own linter cannot read,
-      # so it gets executed instead: both branches, against a stub server.
-      - name: Execute the capacity ramp
-        run: |
-          set -euo pipefail
-          # shellcheck source=/dev/null
-          . .github/actions/_lib/k6.sh
-          bun tests/capacity-script.ts
-
       # Every JSON file nothing else here reads. What is skipped is a file some
       # other tool already parses, in a dialect `JSON.parse` refuses: oxlint's
       # schema declares `allowComments` and `allowTrailingCommas`, oxfmt reads

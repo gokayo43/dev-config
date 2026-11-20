@@ -6,8 +6,8 @@
 # by the first word of the comment, so no line here may open with its name —
 # one that does is read as a directive and refused as unparseable.
 #
-# The pin lives beside the fetch rather than at each call site, for the reason
-# k6.sh gives: two callers — the shell-scripts gate over a repo's tracked
+# The pin lives beside the fetch rather than at each call site. There are two
+# callers — the shell-scripts gate over a repo's tracked
 # scripts, and this repo's own pass over the scripts inlined in its composite
 # actions — and a version written out twice is a version that drifts. Why it is
 # pinned at all is docs/gates/shell-scripts.md, under "Which shellcheck".
