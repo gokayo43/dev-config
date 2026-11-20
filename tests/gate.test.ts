@@ -158,11 +158,11 @@ describe("what publishing a verdict writes", () => {
   test("the table goes to the run summary rather than to the log", async () => {
     const file = await summaryFile();
     const { lines, restore } = captureLog();
-    await publish({ ...nothing, table: "### Capacity\n" }, file);
+    await publish({ ...nothing, table: "### Fuzz\n" }, file);
     restore();
 
     expect(lines).toEqual([]);
-    expect(await Bun.file(file).text()).toBe("### Capacity\n");
+    expect(await Bun.file(file).text()).toBe("### Fuzz\n");
   });
 
   // Two gates of one job publish into the same file, and a run summary that
@@ -170,11 +170,11 @@ describe("what publishing a verdict writes", () => {
   test("a second table joins the first rather than replacing it", async () => {
     const file = await summaryFile();
     const { restore } = captureLog();
-    await publish({ ...nothing, table: "### Capacity\n" }, file);
+    await publish({ ...nothing, table: "### Fuzz\n" }, file);
     await publish({ ...nothing, table: "### Mutation lane\n" }, file);
     restore();
 
-    expect(await Bun.file(file).text()).toBe("### Capacity\n### Mutation lane\n");
+    expect(await Bun.file(file).text()).toBe("### Fuzz\n### Mutation lane\n");
   });
 
   // The wiring bug the optional argument makes possible: a gate that grows a
@@ -193,7 +193,7 @@ describe("what publishing a verdict writes", () => {
     // finishes before the assertion resolves reports an unhandled rejection
     // instead of the case that was asked.
     const failure = await publish(
-      { ...nothing, table: "### Capacity\n", problems: [{ message: "the ramp failed" }] },
+      { ...nothing, table: "### Fuzz\n", problems: [{ message: "the fuzzer failed" }] },
       into,
     ).catch((error: unknown) => error);
     restore();
@@ -203,7 +203,7 @@ describe("what publishing a verdict writes", () => {
     // The half that matters more than the throw: the gate's own findings still
     // reached the log and still failed the step. Thrown first, they were the
     // annotations a run lost to a stack trace about a file path.
-    expect(lines).toEqual(["::error::the ramp failed"]);
+    expect(lines).toEqual(["::error::the fuzzer failed"]);
     expect(process.exitCode).toBe(1);
   });
 
@@ -224,12 +224,12 @@ describe("what publishing a verdict writes", () => {
     const file = await summaryFile();
     const { restore } = captureLog();
     await publish(
-      { ...nothing, table: "### Capacity\n", problems: [{ message: "half the ramp failed" }] },
+      { ...nothing, table: "### Fuzz\n", problems: [{ message: "half the requests failed" }] },
       file,
     );
     restore();
 
-    expect(await Bun.file(file).text()).toBe("### Capacity\n");
+    expect(await Bun.file(file).text()).toBe("### Fuzz\n");
     expect(process.exitCode).toBe(1);
   });
 });

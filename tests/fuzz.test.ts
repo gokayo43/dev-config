@@ -531,11 +531,10 @@ describe("what the fuzzer refuses", () => {
 });
 
 /**
- * The hatch the fuzzer owns. Each of the three refusals below was held by the
- * ramp's route-coverage step, which ran before the fuzzer and read the same
- * input: with that step gone, a run without them passes an app that reported
- * no route, and keeps an exemption that names nothing or says nothing about
- * why. Each case fails a fuzzer that only skips what the allowlist names.
+ * The hatch the fuzzer owns, graded by the fuzzer because nothing else in the
+ * job reads it. The likeliest wrong fuzzer only skips what the allowlist
+ * names: it passes an app that reported no route, and keeps an exemption that
+ * names nothing or says nothing about why. Each case below fails it.
  */
 describe("what the fuzzer refuses before it sends anything", () => {
   const refusals = (routes: readonly Route[], allowlist: string): string[] => {
