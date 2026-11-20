@@ -1661,13 +1661,13 @@ bunx playwright install chromium-headless-shell
 No `--with-deps`: it shells out to `sudo apt-get`, which the CI runner's account
 may not run, and the shared libraries it installs are already on the box.
 
-The test-suite gate's own suite needs passwordless `sudo`, which is what taking a
-network namespace costs: GitHub-hosted Linux runners have it, a self-hosted one
-has to grant it, and a machine that does not cannot run that suite honestly. The
-file lock's and the dev server's suites use it too, to mount a `/proc` that
-hides other users' processes. It is the one gate here whose subject is not a module, so
-its cases extract the step out of the shipped `action.yml` and drive it over test
-suites of their own.
+The test-suite gate's own suite needs bubblewrap, allowed to create a user
+namespace, because what it grades is the network namespace the gate seals a run
+in, and a machine without it fails that suite with the gate's own message. The
+file lock's and the dev server's suites need passwordless `sudo`, to mount a
+`/proc` that hides other users' processes. The test-suite gate is the one gate
+here whose subject is not a module, so its cases extract the step out of the
+shipped `action.yml` and drive it over test suites of their own.
 
 The linting is the `lint-workflows` action — actionlint, pinned by version and
 archive checksum exactly like gitleaks, with shellcheck over every `run:` block.
