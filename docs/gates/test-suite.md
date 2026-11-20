@@ -14,11 +14,12 @@ on dead-port sentinels its wrapper replaces. A gate running `bun test` regardles
 was grading a command that repo has never asked anyone to run, and there is
 nothing a repo could have written to say so.
 
-The flags this step adds — `--coverage` and the two `--reporter` flags — are
-**appended** to the script rather than substituted for it: `bun run` passes its
-trailing arguments to the script, so they reach the `bun test` the script ends
-in. That is what a wrapper owes in exchange for being the suite: it has to end
-in a `bun test` its own trailing arguments reach, forwarding `"$@"` where it
+The flags this step adds — `--coverage`, the two `--reporter` flags and, where
+[the limit a test is given](#the-limit-a-test-is-given) applies, `--timeout` —
+are **appended** to the script rather than substituted for it: `bun run` passes
+its trailing arguments to the script, so they reach the `bun test` the script
+ends in. That is what a wrapper owes in exchange for being the suite: it has to
+end in a `bun test` its own trailing arguments reach, forwarding `"$@"` where it
 builds an argv of its own. A script that keeps them to itself writes no report,
 and the step says exactly that rather than letting the two checks below report
 a missing file as the fault they were looking for.
@@ -122,12 +123,59 @@ sealed run and an open one would grade each half against the whole floor and
 fail both — a lane split that costs the coverage gate is not a lane split worth
 having.
 
+## The limit a test is given
+
+On every run but the nightly, the step appends `--timeout 60000` when the
+suite's command is `bun test` itself and names no limit: the repo declares no
+`test` script, or its script begins with `bun test` and does not contain
+`--timeout`. Each test and each hook then has a minute, where bun's own default
+is five seconds.
+
+Five seconds is too short for a correct test on a busy runner. A test's wall
+time is its CPU time over the share of a core it gets: a case needing about 0.1
+seconds of CPU took 3.9 seconds at a 3% quota, and timed out at five seconds in
+a full run at a load of 40 on 16 cores (measured in this repo's own suite,
+2026-11-19). A minute is the ceiling `wmstcs`'s wrapper and `nfp-elysia`'s
+script each chose for their own suites under that load. A test needing up to 1.8
+seconds of CPU still passes at a 3% share, and a hung test costs one minute of
+the job's fifteen.
+
+There is no input for the number. A repo that wants another limit states it in
+one of three places:
+
+- `--timeout` in its `test` script. The step then appends none, because bun
+  keeps the last `--timeout` it is given and the step's would win.
+- `setDefaultTimeout` in a test file, which bun ranks above the flag for that
+  file.
+- a limit on a single test, which bun ranks above both.
+
+A `timeout` key in `bunfig.toml` is not a fourth place: bun 1.4.0 and 1.4.4
+ignore it.
+
+Any other `test` script is a suite command its repo designed, and the step
+appends no limit to it: a wrapper such as `bun scripts/run-tests.ts`, and a
+script that reaches `bun test` behind an environment assignment or another
+command, such as `BOOTSTRAP=1 bun test`. That suite runs on the limit its own
+command states, or on bun's five seconds where it states none.
+
+One state is accepted rather than bounded. bun charges the whole limit to every
+test whose `beforeEach` hangs, so a hook hung before every test of a large file
+costs a minute per test, and about a dozen such tests run the job out of its
+fifteen minutes. A hung `beforeAll` costs the minute once. When the job runs
+out, it ends cancelled with no junit report, and the step's log names each test
+that had timed out by then: a `(fail)` line with the test's name and about
+60000ms, followed by `^ a beforeEach/afterEach hook timed out for this test.`
+The job's limit is `check.yml`'s, which dev-config#175 holds, and this step puts
+no bound of its own around the suite.
+
 ## The budget a nightly gets
 
 `nightly: true` hands the run two variables and one flag, and every property
 test in the repo reads them through
 [the property budget](../exports/property.md): `PROPERTY_RUNS_FACTOR=50`,
-`PROPERTY_TIME_LIMIT_MS=120000`, and `--timeout 600000` on `bun test`.
+`PROPERTY_TIME_LIMIT_MS=120000`, and `--timeout 600000` on `bun test`. The flag
+goes on every shape of suite, a wrapper and a script that states its own limit
+included, and last on the line, so it is the limit bun keeps.
 
 The factor is what makes the nightly a different search from the one a developer
 waits for; the time limit is what makes the factor safe, since fifty times one

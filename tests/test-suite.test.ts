@@ -84,7 +84,7 @@ async function ran(tree: Tree, network = "", bun = "", nightly = "false"): Promi
 
 /**
  * A suite that calls a live host. Its case names its limit for the reason
- * `SLOW`'s does: a call bun's 5s cut short fails the suite as a sealed one
+ * `SLOW`'s does: a call cut short by a limit fails the suite as a sealed one
  * would, and an unsealed step would pass for sealed.
  */
 const REACHES: Tree = {
@@ -146,9 +146,9 @@ async function settles(marker: string, wanted: (count: number) => boolean): Prom
 
 /**
  * A suite that outlives the step unless something takes it down with it. Its
- * case names a limit past its sleep, because the step gives it bun's 5s, and a
- * suite that timed itself out would leave the case below passing on a step
- * that forwards nothing.
+ * case names a limit past its sleep rather than taking the one the step gives,
+ * because a suite that timed itself out would leave the case below passing on
+ * a step that forwards nothing.
  */
 const SLOW: Tree = {
   "slow.test.ts": `import { expect, test } from "bun:test";
@@ -334,6 +334,134 @@ test("reads its budget", () => {
     const { status, output } = await ran(CLEAN, "", "", "yes");
     expect(status).not.toBe(0);
     expect(output).toContain("it takes true or false");
+  });
+});
+
+/**
+ * How long a test outlasts bun's own five seconds by, in ms: what a correct
+ * test takes on a runner host whose share of a core is 3%. A sleep stands in
+ * for the starved CPU, because what the step decides is the wall time a test
+ * may take, whatever it was spent on.
+ */
+const PAST_BUNS_DEFAULT = 5_500;
+
+/** A limit a repo states for itself, in ms, and what a test that outlasts it sleeps. */
+const STATED = 300;
+const PAST_STATED = 2 * STATED;
+
+/** A suite whose command is `bun test` itself, with its one case. */
+function plain(name: string, prelude: string, body: string, limit = ""): Tree {
+  return {
+    [`${name}.test.ts`]: `import { beforeAll, expect, setDefaultTimeout, test } from "bun:test";
+
+${prelude}
+
+test("${name}", async () => {
+  ${body}
+  expect(1).toBe(1);
+}${limit});
+`,
+  };
+}
+
+/**
+ * A suite that prints every --timeout on the command line of the `bun test`
+ * that ran it, which is what the step gave it once its script had been run.
+ */
+const LIMITS: Tree = {
+  "limits.test.ts": `import { expect, test } from "bun:test";
+
+test("reads its limits", async () => {
+  const argv = (await Bun.file("/proc/self/cmdline").text()).split("\\0");
+  const timeouts = argv.flatMap((arg, at) => (arg === "--timeout" ? [argv[at + 1]] : []));
+  console.log(\`timeouts=\${JSON.stringify(timeouts)}\`);
+  expect(1).toBe(1);
+});
+`,
+};
+
+/** A manifest whose `test` script is `bun test` stating its own limit. */
+const STATING = JSON.stringify({
+  name: "states",
+  scripts: { test: `bun test --timeout ${STATED}` },
+});
+
+/**
+ * `LIMITS` behind a suite command its repo designed, which hands the
+ * arguments the step gave it to the `bun test` it ends in, as the gate requires.
+ */
+const WRAPPED: Tree = {
+  ...LIMITS,
+  "package.json": JSON.stringify({ name: "wrapped", scripts: { test: "bun wrapper.ts" } }),
+  "wrapper.ts": `const suite = Bun.spawn([process.execPath, "test", ...process.argv.slice(2)], {
+  stdio: ["inherit", "inherit", "inherit"],
+});
+process.exit(await suite.exited);
+`,
+};
+
+describe("the limit a test is given", () => {
+  // Both shapes whose command is `bun test` itself, no script and a script of
+  // exactly that, one per fixture, side by side so the suite waits out bun's
+  // five seconds once. A step that appended nothing fails both at five.
+  test("a test and a hook that outlast bun's five seconds pass", async () => {
+    const [hook, slow] = await Promise.all([
+      ran(plain("hook", `beforeAll(() => Bun.sleep(${PAST_BUNS_DEFAULT}));`, "")),
+      ran({
+        ...plain("slow", "", `await Bun.sleep(${PAST_BUNS_DEFAULT});`),
+        "package.json": JSON.stringify({ name: "plain", scripts: { test: "bun test" } }),
+      }),
+    ]);
+    expect(hook).toMatchObject({ status: 0 });
+    expect(slow).toMatchObject({ status: 0 });
+  });
+
+  // One row per place a repo can state its own limit. bun keeps the last
+  // --timeout it is given, so a step appending its minute to every script
+  // passes the first row; the other two are bun's precedence over the flag,
+  // which is what the gate's page tells a repo to rely on.
+  test.each([
+    [
+      "its test script",
+      {
+        ...plain("stated", "", `await Bun.sleep(${PAST_STATED});`),
+        "package.json": STATING,
+      },
+    ],
+    [
+      "a file's setDefaultTimeout",
+      plain("stated", `setDefaultTimeout(${STATED});`, `await Bun.sleep(${PAST_STATED});`),
+    ],
+    ["the test itself", plain("stated", "", `await Bun.sleep(${PAST_STATED});`, `, ${STATED}`)],
+  ])("a limit stated in %s is the one its test fails at", async (_place, tree) => {
+    const { status, output } = await ran(tree);
+    expect(output).toContain(`timed out after ${STATED}ms`);
+    expect(status).not.toBe(0);
+  });
+
+  // A designed suite command is left alone off the nightly, and the nightly's
+  // ten minutes reach every shape, last on the line so that bun keeps them over
+  // a limit the script states. A step that judged the shape on the nightly too
+  // would drop them from the last two rows.
+  test.each([
+    ["off the nightly, a script that is not bun test is given none", WRAPPED, "false", []],
+    ["on the nightly, no test script is given ten minutes", LIMITS, "true", ["600000"]],
+    [
+      "on the nightly, a script stating its own limit is given ten minutes after it",
+      { ...LIMITS, "package.json": STATING },
+      "true",
+      [`${STATED}`, "600000"],
+    ],
+    [
+      "on the nightly, a script that is not bun test is given ten minutes",
+      WRAPPED,
+      "true",
+      ["600000"],
+    ],
+  ])("%s", async (_shape, tree, nightly, timeouts) => {
+    const { status, output } = await ran(tree, "", "", nightly);
+    expect(output).toContain(`timeouts=${JSON.stringify(timeouts)}`);
+    expect(status).toBe(0);
   });
 });
 
