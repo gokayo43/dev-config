@@ -60,24 +60,61 @@ own ports are on the other loopback either way: a service container published on
 `localhost` is not reachable from inside the namespace, which is the same
 statement as "this lane has no database".
 
-Two facts about how the seal is taken, both load-bearing if the step is ever
-edited:
+The seal is bubblewrap, run as the user the step already runs as:
 
-- **It goes through `sudo`.** The unprivileged form (`unshare --map-root-user`)
-  is refused on the runner image, where AppArmor's
-  `kernel.apparmor_restrict_unprivileged_userns` reads `1` and the `uid_map`
-  write is denied. GitHub-hosted Linux runners have passwordless `sudo`; a
-  self-hosted one has to grant it, and the step says so rather than running
-  unsealed.
-- **The suite drops straight back to the invoking user.** Nothing it writes —
-  coverage, snapshots, the junit report — lands root-owned in a workspace the
-  steps after it still have to write to. `PATH` is restated across that hop
-  because `sudo` takes it from `secure_path` whatever the environment says, and
-  the Bun the runner installed is not on it. `TMPDIR` does not survive either,
-  with or without `--preserve-env`: `sudo` drops it unconditionally. On a
-  GitHub-hosted runner nothing sets one, so the suite gets `/tmp` as it always
-  would; a self-hosted runner that points `TMPDIR` somewhere deliberate — a
-  larger disk, a tmpfs — will not see it inside the seal.
+```sh
+bwrap --unshare-net --unshare-pid --dev-bind / / --proc /proc --die-with-parent -- <the suite>
+```
+
+It needs no root at any point. bubblewrap makes a user namespace and inside it
+the network namespace, so the suite keeps the step's uid, working directory and
+whole environment (`PATH`, `TMPDIR`, the runner's variables and the repo's own),
+and every file it writes is the step user's. Three things in that line are
+load-bearing if the step is ever edited:
+
+- **`--unshare-pid` and `--die-with-parent` together are what end the suite with
+  the step.** bwrap passes no signal on to the command it runs, and a suite that
+  runs through a `test` script has `bun run` between the step and `bun test`, so
+  without its own process namespace the suite outlives a cancelled step. With
+  one, the kernel kills every process in it once its first process exits, and
+  `--die-with-parent` makes that happen when bwrap or the step's shell dies,
+  whichever signal killed it.
+- **`--proc /proc` comes after the bind of `/`.** The bind is recursive and
+  applied in order, so the other way round the host's `/proc` covers the new
+  one, and the pid the suite is handed for its own child names some other
+  process of the machine.
+- **The `/` bind is a `--dev-bind`.** A plain `--bind` mounts `/dev` with its
+  devices unusable, and writing to `/dev/null` fails.
+
+### What a runner needs
+
+bubblewrap installed, and allowed to create a user namespace. Where AppArmor
+restricts unprivileged user namespaces
+(`kernel.apparmor_restrict_unprivileged_userns` reads `1`), that takes an
+AppArmor profile that lets `bwrap` create one. No sudoers line is needed.
+
+The step tries the seal before the suite starts, with the exact `bwrap` line
+above around a server that binds `127.0.0.1` and calls itself. A runner with no
+`bwrap` on `PATH` is told to install it; a runner whose `bwrap` cannot take the
+namespace gets bwrap's own output and what to allow. Either way the job fails
+there, and a suite that genuinely reaches a network says so in `test-network`
+instead.
+
+### What the suite sees inside
+
+- Loopback alone, with `127.0.0.1` and `::1`.
+- Its own `/proc`: the suite's processes alone, numbered from 1, where 1 is
+  bubblewrap and the suite's command is 2.
+- Its own uid, with every other uid shown as `nobody` (65534) and every other
+  group as `nogroup`: a file root owns reads as owned by `nobody`. Access is
+  still decided by the real ids, so the suite can read and write what the
+  step's user can.
+- No way to gain privileges: bubblewrap sets `no_new_privs`, so `sudo` and every
+  setuid program fail inside.
+- No process outlives the suite's command: when it exits, whatever it left
+  running is killed with the namespace.
+- On a cancel, the suite is killed outright rather than sent SIGTERM, so a
+  handler that cleans up on SIGTERM does not run.
 
 ## What the seal costs
 
@@ -185,11 +222,6 @@ long property is a timeout rather than a longer search — and the job's own
 `timeout-minutes`, which `check.yml` raises under the same input, is what bounds
 the suite.
 
-They go to the suite through `env` rather than exported, so the assignment
-survives the two `sudo` hops the seal takes: `--preserve-env` is a request
-sudoers may narrow, and this is the restatement `PATH` already makes beside it
-for the same reason.
-
 ## The coverage floor
 
 The step passes `--coverage`, and that flag is what makes a repo's
@@ -239,10 +271,11 @@ exactly when the per-test detail is worth having.
 
 ## Cancellation
 
-The runner cancels a job by signalling the process it started — SIGINT, then
-SIGTERM 7.5 seconds later, then SIGKILL 2.5 seconds after that — and by
-signalling nothing else in the tree. A suite left in the foreground therefore
-outlives the shell that started it: still running, inside a namespace nothing
-on the box can see into, on a machine the runner is about to reclaim. So the
-suite runs as a job this step owns and the signal is forwarded to it; `sudo`
-passes it down, and the tree goes with it.
+The runner cancels a job, and ends a step that runs out of its time, by
+signalling the process it started — SIGINT, then SIGTERM 7.5 seconds later,
+then SIGKILL 2.5 seconds after that — and by signalling nothing else in the
+tree. So the suite runs as a job this step owns and the first signal is
+forwarded to it. Sealed, the forwarded signal ends bwrap, and the suite's
+process namespace goes with it, grandchildren included; a step killed outright
+takes it down through `--die-with-parent`. Unsealed, the signal goes to the
+suite's first process.

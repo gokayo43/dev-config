@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { stat } from "node:fs/promises";
+import { chmod, readdir, readlink, realpath, symlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { record } from "../.github/actions/_lib/gate.ts";
 import { BUNS } from "./buns.ts";
-import { materialise, SPAWNED_CASE_MS, type Tree } from "./tree.ts";
+import { materialise, scratch, SPAWNED_CASE_MS, type Tree } from "./tree.ts";
 
 /**
  * The gate is a shell script in a composite action, so the suite runs that
@@ -31,37 +31,25 @@ const STEP = await (async (): Promise<string> => {
 interface Run {
   readonly status: number;
   readonly output: string;
-  /**
-   * Who owns the report the run wrote. The suite is taken into a namespace as
-   * root and handed straight back to the invoking user, and that second hop is
-   * one line: without it every file the run touches — coverage, snapshots, this
-   * report — lands root-owned in a workspace the steps after it still have to
-   * write to, and the suite is green either way.
-   */
-  readonly reportUid: number | undefined;
   /** The junit the run wrote, or nothing when it never got that far. */
   readonly report: string | undefined;
+  /** The fixture the step ran in, which is also its `RUNNER_TEMP`. */
+  readonly root: string;
 }
 
-/** What the run left at that path, or nothing when it never got that far. */
-async function ownerOf(path: string): Promise<number | undefined> {
-  try {
-    return (await stat(path)).uid;
-  } catch {
-    return undefined;
-  }
-}
+const PATH = process.env["PATH"] ?? "";
+
+/** How both of the step's refusals to seal begin. */
+const CANNOT_SEAL = "::error::the suite is run sealed in a network namespace";
 
 /**
  * The step against a suite of its own, with the runner's temp directory pointed
  * at the fixture — the junit report the step reads is per-run, and two cases
- * sharing one would grade each other's.
+ * sharing one would grade each other's. The step calls `bun` and `bwrap` by
+ * name, so which ones it gets is a fact about `path`.
  */
-async function ran(tree: Tree, network = "", bun = "", nightly = "false"): Promise<Run> {
+async function stepped(tree: Tree, network: string, path: string, nightly: string): Promise<Run> {
   const root = await materialise(tree);
-  // The step calls `bun` by name, so which one it gets is a fact about PATH —
-  // which is how a case runs the shipped shell under a bun other than this one.
-  const path = bun === "" ? process.env["PATH"] : `${dirname(bun)}:${process.env["PATH"] ?? ""}`;
   const proc = Bun.spawn(["bash", "-c", STEP], {
     cwd: root,
     env: { ...process.env, PATH: path, RUNNER_TEMP: root, TEST_NETWORK: network, NIGHTLY: nightly },
@@ -77,15 +65,29 @@ async function ran(tree: Tree, network = "", bun = "", nightly = "false"): Promi
   return {
     status,
     output: out + err,
-    reportUid: await ownerOf(join(root, "junit.xml")),
     report: (await report.exists()) ? await report.text() : undefined,
+    root,
   };
 }
 
 /**
+ * The step on a machine that can seal a run, which every case but the two
+ * about the refusal needs. A refusal throws with the step's own words: most
+ * cases here grade a run that fails, and would pass over one that never
+ * started.
+ */
+async function ran(tree: Tree, network = "", path = PATH, nightly = "false"): Promise<Run> {
+  const run = await stepped(tree, network, path, nightly);
+  if (run.output.includes(CANNOT_SEAL)) {
+    throw new Error(`this machine cannot seal a run, which this suite needs:\n${run.output}`);
+  }
+  return run;
+}
+
+/**
  * A suite that calls a live host. Its case names its limit for the reason
- * `SLOW`'s does: a call cut short by a limit fails the suite as a sealed one
- * would, and an unsealed step would pass for sealed.
+ * `GRANDCHILD`'s does: a call cut short by a limit fails the suite as a sealed
+ * one would, and an unsealed step would pass for sealed.
  */
 const REACHES: Tree = {
   "reaches.test.ts": `import { expect, test } from "bun:test";
@@ -116,47 +118,86 @@ test("calls itself", async () => {
 };
 
 /**
- * How many processes are still running this fixture's suite. The junit path is
- * in `bun test`'s own argv and is unique to the fixture, so it names this run's
- * tree and no other suite's — including the one asking the question.
+ * The command line of every process whose working directory is `root`, which
+ * is every process of a suite the step started there, at whatever depth, and
+ * the step itself. A process that exits while it is being read, and another
+ * user's, whose directory is not ours to read, are not this suite's.
  */
-async function running(marker: string): Promise<number> {
-  const found = Bun.spawn(["pgrep", "-f", marker], { stdout: "pipe", stderr: "ignore" });
-  const listed = await new Response(found.stdout).text();
-  await found.exited;
-  return listed.split("\n").filter((line) => line.trim() !== "").length;
+async function processesIn(root: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const name of await readdir("/proc")) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      if ((await readlink(`/proc/${name}/cwd`)) !== root) continue;
+      found.push((await Bun.file(`/proc/${name}/cmdline`).text()).replaceAll("\0", " ").trim());
+    } catch (error) {
+      const code = error instanceof Error && "code" in error ? error.code : undefined;
+      if (code === "ENOENT" || code === "ESRCH" || code === "EACCES") continue;
+      throw error;
+    }
+  }
+  return found;
 }
 
 /**
- * Polls until the count settles where the case needs it, or gives up and
- * returns what it last saw so the assertion reads the real number.
+ * Polls until the list settles where the case needs it, or gives up and
+ * returns what it last saw so the assertion reads the real list.
  *
- * Real time on purpose: what is being measured is a signal crossing three
+ * Real time on purpose: what is being measured is a signal crossing several
  * processes, which no clock this suite could inject has any part in.
  */
-async function settles(marker: string, wanted: (count: number) => boolean): Promise<number> {
-  let count = await running(marker);
-  for (let attempt = 0; attempt < 100 && !wanted(count); attempt += 1) {
-    // oxlint-disable-next-line anti-slop/no-real-timers -- the subject is a real SIGTERM reaching a real process tree; there is no virtual clock a signal is delivered on
+async function settles(root: string, wanted: (seen: string[]) => boolean): Promise<string[]> {
+  let seen = await processesIn(root);
+  for (let attempt = 0; attempt < 100 && !wanted(seen); attempt += 1) {
+    // oxlint-disable-next-line anti-slop/no-real-timers -- the subject is a real signal reaching a real process tree; there is no virtual clock a signal is delivered on
     await Bun.sleep(50);
-    count = await running(marker);
+    seen = await processesIn(root);
   }
-  return count;
+  return seen;
 }
 
 /**
- * A suite that outlives the step unless something takes it down with it. Its
- * case names a limit past its sleep rather than taking the one the step gives,
- * because a suite that timed itself out would leave the case below passing on
- * a step that forwards nothing.
+ * A suite run through its `test` script that leaves a grandchild running,
+ * which is the tree a signal to the step does not reach on its own: bwrap
+ * passes none on, and `bun run` sits between the step and `bun test`. Its case
+ * names a limit past its sleep rather than taking the one the step gives,
+ * because a suite that timed itself out would leave the cases below passing on
+ * a step that ends nothing.
  */
-const SLOW: Tree = {
-  "slow.test.ts": `import { expect, test } from "bun:test";
+const GRANDCHILD: Tree = {
+  "package.json": JSON.stringify({ name: "spawns", scripts: { test: "bun test" } }),
+  "spawns.test.ts": `import { expect, test } from "bun:test";
 
-test("takes its time", async () => {
+test("leaves a grandchild running", async () => {
+  Bun.spawn(["bash", "-c", "sleep 300; true"]);
   await Bun.sleep(30000);
   expect(1).toBe(1);
 }, ${SPAWNED_CASE_MS});
+`,
+};
+
+/** A suite that says who ran it, where, and with what environment. */
+const WHERE: Tree = {
+  "where.test.ts": `import { expect, test } from "bun:test";
+
+test("says where it ran", () => {
+  const where = { uid: process.getuid(), cwd: process.cwd(), path: process.env.PATH, marker: process.env.RUNNER_TEMP };
+  console.log(\`where=\${JSON.stringify(where)}\`);
+  expect(1).toBe(1);
+});
+`,
+};
+
+/** A suite that looks its own child up in `/proc` by the pid it was handed. */
+const OWN_PROC: Tree = {
+  "proc.test.ts": `import { expect, test } from "bun:test";
+
+test("finds its child", async () => {
+  const child = Bun.spawn(["sleep", "5"]);
+  const line = await Bun.file(\`/proc/\${child.pid}/cmdline\`).text();
+  child.kill();
+  expect(line.replaceAll("\\0", " ").trim()).toBe("sleep 5");
+});
 `,
 };
 
@@ -198,13 +239,40 @@ describe("the sealed lane", () => {
   });
 
   test("a suite that reaches nothing passes sealed", async () => {
-    const { status, reportUid } = await ran(CLEAN);
+    expect(await ran(CLEAN)).toMatchObject({ status: 0 });
+  });
+
+  // The seal changes the network and nothing else the suite can be told
+  // apart by. A seal taken as root would write the suite's files root-owned
+  // into a workspace the steps after it still write to, and one that reset the
+  // environment would drop the runner's variables, its PATH, and with it the
+  // runner's bun, which the step finds there. RUNNER_TEMP is the marker: the
+  // runner sets it and nothing in the seal does.
+  test("a sealed suite runs as the step's user, where the step is, with its environment", async () => {
+    const { status, output, root } = await ran(WHERE);
     expect(status).toBe(0);
-    // And comes back out as the user who started it. The hop that does this is
-    // one line of the step, and dropping it leaves a run that still passes.
-    const self = process.getuid?.();
-    expect(self).toBeNumber();
-    expect(reportUid).toBe(self);
+    const said = /^where=(.*)$/m.exec(output)?.[1];
+    expect(said).toBeString();
+    expect(JSON.parse(said ?? "")).toEqual({
+      uid: process.getuid?.(),
+      cwd: await realpath(root),
+      path: PATH,
+      marker: root,
+    });
+  });
+
+  // The suite's pids are its process namespace's, so its `/proc` has to be that
+  // namespace's too: under the host's, the pid a suite is handed for its own
+  // child names some other process of the machine, or none.
+  test("a pid the sealed suite is handed names that process in its /proc", async () => {
+    expect(await ran(OWN_PROC)).toMatchObject({ status: 0 });
+  });
+
+  // Nothing here may need more of the runner than the user it already is: a
+  // grant that lets one job's command run as root is one every job on that
+  // runner can use for anything (dev-config#168).
+  test("no command of the step runs as anyone else", async () => {
+    expect(await Bun.file(ACTION).text()).not.toMatch(/\b(sudo|su|doas|pkexec|runuser|setpriv)\b/);
   });
 
   test("a reason made of whitespace is no reason, and the seal holds", async () => {
@@ -231,14 +299,17 @@ describe("the sealed lane", () => {
       expect(status).not.toBe(0);
     },
   );
-  // The runner cancels a step by signalling the process it started and nothing
-  // else, so what the step does with that signal decides whether the suite goes
-  // with it. Left in the foreground, `bun test` outlives the shell that started
-  // it — inside a namespace nothing can see into, on a machine about to be
-  // reclaimed.
-  test("a cancelled step takes the suite down with it", async () => {
-    const root = await materialise(SLOW);
-    const marker = join(root, "junit.xml");
+  // The runner ends a step by signalling the process it started and nothing
+  // else: SIGINT, then SIGTERM, then SIGKILL, whether the run was cancelled or
+  // ran out of its time. So each signal, sent alone, has to take the suite's
+  // whole tree with it, grandchild included, wherever in the sequence the
+  // step dies.
+  test.each([
+    ["SIGINT, which begins both a cancel and a run out of its time", "SIGINT"],
+    ["SIGTERM", "SIGTERM"],
+    ["SIGKILL", "SIGKILL"],
+  ] as const)("a step ended by %s leaves nothing of its suite running", async (_how, signal) => {
+    const root = await realpath(await materialise(GRANDCHILD));
     const proc = Bun.spawn(["bash", "-c", STEP], {
       cwd: root,
       env: { ...process.env, RUNNER_TEMP: root, TEST_NETWORK: "", NIGHTLY: "false" },
@@ -246,10 +317,65 @@ describe("the sealed lane", () => {
       stderr: "ignore",
     });
 
-    expect(await settles(marker, (count) => count > 0)).toBeGreaterThan(0);
-    proc.kill("SIGTERM");
+    expect(await settles(root, (seen) => seen.includes("sleep 300"))).toContain("sleep 300");
+    proc.kill(signal);
     await proc.exited;
-    expect(await settles(marker, (count) => count === 0)).toBe(0);
+    expect(await settles(root, (seen) => seen.length === 0)).toEqual([]);
+  });
+});
+
+/**
+ * A runner whose PATH holds no bwrap: every directory on this one that holds
+ * one, stood in for by a directory of links to all it holds but that.
+ */
+async function withoutBwrap(): Promise<string> {
+  const entries: string[] = [];
+  for (const entry of PATH.split(":")) {
+    if (!(await Bun.file(join(entry, "bwrap")).exists())) {
+      entries.push(entry);
+      continue;
+    }
+    const shadow = await scratch();
+    for (const name of await readdir(entry)) {
+      if (name !== "bwrap") await symlink(join(entry, name), join(shadow, name));
+    }
+    entries.push(shadow);
+  }
+  return entries.join(":");
+}
+
+/**
+ * A bwrap the kernel refuses a user namespace, as it answers: a copy of
+ * bubblewrap 0.9.0 outside the AppArmor profile that lets `/usr/bin/bwrap`
+ * create one, on Ubuntu 24.04 with kernel.apparmor_restrict_unprivileged_userns
+ * at 1, said exactly this and exited 1 (tcs-hetzner, 2026-11-20).
+ */
+async function refusedBwrap(): Promise<string> {
+  const dir = await scratch();
+  await Bun.write(
+    join(dir, "bwrap"),
+    "#!/bin/sh\necho 'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted' >&2\nexit 1\n",
+  );
+  await chmod(join(dir, "bwrap"), 0o755);
+  return `${dir}:${PATH}`;
+}
+
+// What the runner lacks is named before the suite starts, rather than read
+// off a suite that failed for a reason it never wrote.
+describe("a runner that cannot seal", () => {
+  test("with no bubblewrap is told to install it, and the suite never runs", async () => {
+    const { status, output, report } = await stepped(CLEAN, "", await withoutBwrap(), "false");
+    expect(output).toContain(`${CANNOT_SEAL}, which needs bubblewrap on the runner`);
+    expect(report).toBeUndefined();
+    expect(status).not.toBe(0);
+  });
+
+  test("whose bubblewrap is refused a namespace says so in bwrap's words, and the suite never runs", async () => {
+    const { status, output, report } = await stepped(CLEAN, "", await refusedBwrap(), "false");
+    expect(output).toContain("bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted");
+    expect(output).toContain("bwrap has to be allowed to create a user namespace");
+    expect(report).toBeUndefined();
+    expect(status).not.toBe(0);
   });
 });
 
@@ -302,13 +428,10 @@ test("reads its budget", () => {
 `,
   };
 
-  // The variables have to cross the two sudo hops the seal takes, and
-  // `--preserve-env` is a request sudoers may narrow: the whole reason they are
-  // written into the `env` beside the restated PATH rather than exported. A run
-  // where they were dropped is a nightly that searched exactly as far as an
-  // ordinary run and said it had searched fifty times further.
+  // A run where they were dropped is a nightly that searched exactly as far as
+  // an ordinary run and said it had searched fifty times further.
   test("reaches the suite through the seal", async () => {
-    const { status, output } = await ran(BUDGETED, "", "", "true");
+    const { status, output } = await ran(BUDGETED, "", PATH, "true");
     expect(status).toBe(0);
     expect(output).toContain("factor=50");
     expect(output).toContain("limit=120000");
@@ -325,7 +448,7 @@ test("reads its budget", () => {
   // A spelling nobody defined would otherwise read as "not nightly", and the
   // long search would quietly never have happened.
   test("a spelling that is neither true nor false is refused", async () => {
-    const { status, output } = await ran(CLEAN, "", "", "yes");
+    const { status, output } = await ran(CLEAN, "", PATH, "yes");
     expect(status).not.toBe(0);
     expect(output).toContain("it takes true or false");
   });
@@ -453,7 +576,7 @@ describe("the limit a test is given", () => {
       ["600000"],
     ],
   ])("%s", async (_shape, tree, nightly, timeouts) => {
-    const { status, output } = await ran(tree, "", "", nightly);
+    const { status, output } = await ran(tree, "", PATH, nightly);
     expect(output).toContain(`timeouts=${JSON.stringify(timeouts)}`);
     expect(status).toBe(0);
   });
@@ -573,7 +696,7 @@ describe("the suite the repo declares", () => {
   // namespace apiece. The declared-script path is graded above under this
   // process's own bun, and nothing about it was ever version-dependent.
   test.each(BUNS)("under %s a tree with no manifest still runs bun test itself", async (bun) => {
-    expect(await ran(CLEAN, "", bun)).toMatchObject({ status: 0 });
+    expect(await ran(CLEAN, "", `${dirname(bun)}:${PATH}`)).toMatchObject({ status: 0 });
   });
 });
 
