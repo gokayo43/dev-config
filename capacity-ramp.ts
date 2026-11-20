@@ -13,16 +13,14 @@
  * `capacity-ramp-ladder.ts`, which `tests/capacity-ramp.test.ts` drives; this
  * file is the argv, the signals, the output and the status.
  */
-import { relative, resolve } from "node:path";
-
 import {
-  k6Home,
   MEASURED,
   NO_MEASUREMENT,
   pinnedK6,
   planFrom,
   ramp,
   recorded,
+  Unmeasured,
   USAGE,
   WRONG_ARGUMENTS,
   WrongArguments,
@@ -31,7 +29,7 @@ import {
 const args = Bun.argv.slice(2);
 if (args.includes("--help")) {
   console.log(USAGE);
-  process.exit(MEASURED);
+  process.exit(0);
 }
 
 const stopped = new AbortController();
@@ -49,11 +47,9 @@ if (git.exitCode !== 0) {
 const root = git.stdout.toString().trim();
 
 try {
-  const asked = planFrom(args);
-  const plan =
-    asked.script === null ? asked : { ...asked, script: relative(root, resolve(asked.script)) };
-  const { k6, version } = await pinnedK6(k6Home(process.env));
-  const outcome = await ramp(
+  const plan = planFrom(args, process.cwd());
+  const { k6, version } = await pinnedK6(process.env, stopped.signal);
+  const result = await ramp(
     plan,
     {
       k6,
@@ -65,16 +61,18 @@ try {
     },
     root,
   );
-  if ("unmeasured" in outcome) {
-    console.error(`capacity-ramp: no measurement, so no result was written. ${outcome.unmeasured}`);
-    process.exit(NO_MEASUREMENT);
-  }
-  const { json, md } = await recorded(root, outcome.result);
+  const { json, md } = await recorded(root, result);
   console.log((await Bun.file(md).text()).trimEnd());
   console.log(`\nWritten: ${json}\n         ${md}`);
   process.exit(MEASURED);
 } catch (error) {
-  if (!(error instanceof WrongArguments)) throw error;
-  console.error(`capacity-ramp: ${error.message}\n\n${USAGE}`);
-  process.exit(WRONG_ARGUMENTS);
+  if (error instanceof WrongArguments) {
+    console.error(`capacity-ramp: ${error.message}\n\n${USAGE}`);
+    process.exit(WRONG_ARGUMENTS);
+  }
+  if (error instanceof Unmeasured) {
+    console.error(`capacity-ramp: no measurement, so no result was written. ${error.message}`);
+    process.exit(NO_MEASUREMENT);
+  }
+  throw error;
 }

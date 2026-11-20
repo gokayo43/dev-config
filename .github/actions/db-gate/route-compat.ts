@@ -292,34 +292,38 @@ export async function routeCompat({
     }
 
     const carried = new Map(base.routes.map((route) => [key(route), route]));
-    const hatch = waivedBy(
-      retire,
-      carried,
-      {
-        malformed: (entry) =>
-          `route-retire entry '${entry}' is not a route — write 'METHOD /path -- why', matching a line of the ${SNAPSHOT} at ${base.at}`,
-        unknown: (entry) =>
-          `route-retire names ${entry}, which ${base.at} did not serve — drop the entry, or fix the method and path to match the route it was written for`,
-      },
-      {
-        satisfied: servesAll(served),
-        // The reason written beside it says this route is gone deliberately. It is
-        // still being served, so the reason is not true of this branch.
-        refusal: (entry) =>
-          `route-retire retires ${entry}, which this app still serves — drop the entry and let the floor hold the route`,
-      },
+    const hatch = waivedBy(retire, carried, {
+      malformed: (entry) =>
+        `route-retire entry '${entry}' is not a route — write 'METHOD /path -- why', matching a line of the ${SNAPSHOT} at ${base.at}`,
+      unknown: (entry) =>
+        `route-retire names ${entry}, which ${base.at} did not serve — drop the entry, or fix the method and path to match the route it was written for`,
+    });
+    const serves = servesAll(served);
+    const retired = new Set(
+      hatch.waivers.filter(({ route }) => !serves(route)).map(({ name }) => name),
+    );
+    const unmet = [...carried]
+      .filter(([name, route]) => !serves(route) && !retired.has(name))
+      .map(([name]) => name);
+    // The reason written beside an entry says its route is gone deliberately.
+    // Still served, the reason is not true of this branch.
+    const stale = hatch.waivers.filter(
+      ({ entry, route }) => serves(route) && !retire.unreasoned.has(entry),
     );
 
-    const kept = carried.size - hatch.unmet.length - hatch.waived.size;
+    const kept = carried.size - unmet.length - retired.size;
     return {
-      note: `${serving}; of the ${carried.size} at ${base.at}, ${kept} still served and ${hatch.waived.size} retired`,
+      note: `${serving}; of the ${carried.size} at ${base.at}, ${kept} still served and ${retired.size} retired`,
       problems: [
         ...retire.problems,
-        ...hatch.unmet.map((name) => ({
+        ...unmet.map((name) => ({
           // The way out is the whole diagnostic: a reader of the red needs the
           // line to add, filled in for their route, not the name of an input to
           // go and look up.
           message: `${name} was served at ${base.at} and this app no longer serves it — a repo carrying people does not stop answering a route they already call. Serve it again, or, if it is gone on purpose, retire it by adding this line to route-retire: '${name} -- why it went, and where its callers went'`,
+        })),
+        ...stale.map(({ entry }) => ({
+          message: `route-retire retires ${entry}, which this app still serves — drop the entry and let the floor hold the route`,
         })),
         ...hatch.problems,
       ],

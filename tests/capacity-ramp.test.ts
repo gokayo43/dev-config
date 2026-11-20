@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { asyncProperty, constantFrom, integer } from "fast-check";
 
 import {
-  k6Home,
   markdownOf,
   MEASURED,
+  type Measurement,
   NO_MEASUREMENT,
   pinnedK6,
   planFrom,
@@ -55,7 +55,7 @@ import { materialise, scratch } from "./tree.ts";
  */
 
 const ROOT = join(import.meta.dir, "..");
-const PINNED = await pinnedK6(k6Home(process.env));
+const PINNED = await pinnedK6(process.env, new AbortController().signal);
 
 /** What the stub does past its breaking point: refuse, or answer far past the p95 bound. */
 type Breaking = "errors" | "slow";
@@ -66,7 +66,10 @@ const P95_BOUND = "1s";
 const SLOW_MS = 1_100;
 const SLOW_PATH_MS = 150;
 
-/** k6 gives up on a request at 60 seconds, so no step's p95 is above this. */
+/**
+ * The shipped script gives a request 30 seconds to answer and the command
+ * counts a request k6 cut off as lasting 35, so no step's p95 is above this.
+ */
 const UNREACHABLE_P95 = "60s";
 
 interface Stub extends AsyncDisposable {
@@ -78,15 +81,20 @@ interface Stub extends AsyncDisposable {
  * A target that answers fast while at most `users` k6 connections are in use,
  * and `breaking` past that. `slowPath`, where it is given, always answers in
  * `SLOW_PATH_MS`, under the p95 bound, so it is the slowest path without
- * breaking a step.
+ * breaking a step; `hangPath` never answers at all.
  */
-async function stub(users: number, breaking: Breaking, slowPath?: string): Promise<Stub> {
+async function stub(
+  users: number,
+  breaking: Breaking,
+  { slowPath, hangPath }: { slowPath?: string; hangPath?: string } = {},
+): Promise<Stub> {
   /** Each k6 connection's latest request, by its place in the order the stub took requests. */
   const latest = new Map<Socket, number>();
   let taken = 0;
   /** The place of the first request on the newest k6 connection. */
   let newest = 0;
   const answer = (request: IncomingMessage, response: ServerResponse): void => {
+    if (request.url === hangPath) return;
     const { socket } = request;
     const place = ++taken;
     if ((request.headers["user-agent"] ?? "").startsWith("Grafana k6")) {
@@ -128,33 +136,48 @@ async function stub(users: number, breaking: Breaking, slowPath?: string): Promi
 
 const SMALL = ["--start-users", "1", "--max-users", "4", "--hold", "1s"];
 
-async function rampOf(health: string, root: string, ...more: string[]): Promise<Result> {
-  const outcome = await ramp(
-    planFrom(["--health", health, ...SMALL, ...more]),
+/** A run of the ladder in `root`, with what it said on the way: `more` comes after `SMALL`, so it can narrow the ladder. */
+async function rampLogged(
+  health: string,
+  root: string,
+  ...more: string[]
+): Promise<{ result: Result; said: string[] }> {
+  const said: string[] = [];
+  const result = await ramp(
+    planFrom(["--health", health, ...SMALL, ...more], root),
     {
       k6: PINNED.k6,
       k6Version: PINNED.version,
-      log: () => {},
+      log: (line) => {
+        said.push(line);
+      },
       signal: new AbortController().signal,
     },
     root,
   );
-  if ("unmeasured" in outcome) throw new Error(`no measurement: ${outcome.unmeasured}`);
-  return outcome.result;
+  return { result, said };
+}
+
+async function rampOf(health: string, root: string, ...more: string[]): Promise<Result> {
+  return (await rampLogged(health, root, ...more)).result;
 }
 
 describe("what the command reads off its command line", () => {
   test("doubles from the first step and ends on the maximum itself", () => {
-    expect(planFrom(["--health", "http://127.0.0.1:1/h"]).steps).toEqual([
+    expect(planFrom(["--health", "http://127.0.0.1:1/h"], ROOT).steps).toEqual([
       10, 20, 40, 80, 160, 320,
     ]);
-    expect(planFrom(["--health", "http://127.0.0.1:1/h", "--max-users", "100"]).steps).toEqual([
-      10, 20, 40, 80, 100,
-    ]);
+    expect(
+      planFrom(["--health", "http://127.0.0.1:1/h", "--max-users", "100"], ROOT).steps,
+    ).toEqual([10, 20, 40, 80, 100]);
+    expect(
+      planFrom(["--health", "http://127.0.0.1:1/h", "--start-users", "5", "--max-users", "5"], ROOT)
+        .steps,
+    ).toEqual([5]);
   });
 
   test("the defaults are the page's: 30s a step, 1% failed, a p95 of a second", () => {
-    expect(planFrom(["--health", "http://127.0.0.1:1/h"])).toMatchObject({
+    expect(planFrom(["--health", "http://127.0.0.1:1/h"], ROOT)).toMatchObject({
       holdMs: 30_000,
       bounds: { failed: 0.01, p95Ms: 1000 },
       paths: [],
@@ -173,11 +196,14 @@ describe("what the command reads off its command line", () => {
     ],
     [["--health", "http://x/h", "--max-users", "0"], "a whole number of users"],
     [["--health", "http://x/h", "--hold", "30"], "write a duration"],
+    // Logic 3: k6 refuses a step under a second, which used to surface as no
+    // measurement once the health check had passed.
+    [["--health", "http://x/h", "--hold", "500ms"], "k6 holds a step for 1s at the least"],
     [["--health", "http://x/h", "--max-failed", "0.01"], "write a percentage"],
     [["--health", "http://x/h", "--users", "5"], "Unknown option"],
   ])("refuses %j", (args, said) => {
-    expect(() => planFrom(args)).toThrow(WrongArguments);
-    expect(() => planFrom(args)).toThrow(said);
+    expect(() => planFrom(args, ROOT)).toThrow(WrongArguments);
+    expect(() => planFrom(args, ROOT)).toThrow(said);
   });
 });
 
@@ -233,7 +259,7 @@ describe("the ceiling it finds", () => {
   // the likeliest wrong report, in the order the paths were first requested,
   // puts the health address above the path the stub always holds back.
   test("reports each path at the deciding step, slowest first", async () => {
-    await using target = await stub(4, "errors", "/things");
+    await using target = await stub(4, "errors", { slowPath: "/things" });
     const result = await rampOf(
       target.health,
       await scratch(),
@@ -266,6 +292,63 @@ describe("the ceiling it finds", () => {
         .filter((line) => line.startsWith("| GET "))
         .map((line) => line.split(" | ")[0]),
     ).toEqual(paths.map((path) => `| GET ${path.name}`));
+  });
+});
+
+describe("a request that never answers", () => {
+  // Logic 1: k6 records nothing of a request still running when it ends a
+  // step, so a path that never answered vanished from the result and its step
+  // read as held. The likeliest wrong ramps are that one and one that lets k6
+  // cut the request off with the step; either leaves the path out of the
+  // deciding step's rows and the step held. The path is `//hang` so that the
+  // address announced is checked against the one hit (logic 8), and the run's
+  // length against the bound announced (logic 6).
+  test("is a failed request in its path's row, and breaks the step", async () => {
+    await using target = await stub(4, "errors", { hangPath: "//hang" });
+    const begun = performance.now();
+    const { result, said } = await rampLogged(
+      target.health,
+      await scratch(),
+      "--max-users",
+      "1",
+      "--max-p95",
+      UNREACHABLE_P95,
+      "--path",
+      "//hang",
+    );
+    const tookS = (performance.now() - begun) / 1000;
+    expect(result.held).toBeNull();
+    expect(result.broke).toEqual({ users: 1, bounds: ["failed"] });
+    expect(result.steps[0].paths.find((path) => path.name === "//hang")?.failed).toBe(1);
+    expect(result.steps[0].failures["0"]).toBeGreaterThan(0);
+    const announced = said.join("\n");
+    expect(announced).toContain(`about to hit ${target.health}, ${target.origin}//hang`);
+    expect(tookS).toBeLessThan(Number(/up to (\d+)s of load/u.exec(announced)?.[1]));
+  });
+
+  // Logic 1, second half: a repo's script whose requests carry k6's own
+  // 60-second timeout outlives the step's grace, and every request it sent is
+  // cut off. That was "no measurement", the held steps thrown away; it is the
+  // ceiling, and a step broken on failed requests.
+  test("cut off with the step, every request of a script is a broken step, not no measurement", async () => {
+    await using target = await stub(4, "errors", { hangPath: "/never" });
+    const root = await materialise({
+      "never.js":
+        'import http from "k6/http";\nexport default function () { http.get(__ENV.HEALTH_URL.replace(/\\/health$/, "/never")); }\n',
+    });
+    const result = await rampOf(
+      target.health,
+      root,
+      "--max-users",
+      "1",
+      "--max-p95",
+      UNREACHABLE_P95,
+      "--script",
+      "never.js",
+    );
+    expect(result.held).toBeNull();
+    expect(result.broke).toEqual({ users: 1, bounds: ["failed"] });
+    expect(result.steps[0]).toMatchObject({ requests: 1, failed: 1, cutOff: 1 });
   });
 });
 
@@ -344,10 +427,10 @@ describe("what the command leaves behind", () => {
     const args = ["--health", target.health, ...SMALL, "--max-p95", UNREACHABLE_P95];
     const first = await command(root, args);
     expect(first.status).toBe(MEASURED);
-    expect(first.stdout).toContain("- Previous run: none for this target");
+    expect(first.stdout).toContain("- Previous run: none of this measurement");
     await using other = await stub(4, "errors");
     const elsewhere = await command(root, ["--health", other.health, ...args.slice(2)]);
-    expect(elsewhere.stdout).toContain("- Previous run: none for this target");
+    expect(elsewhere.stdout).toContain("- Previous run: none of this measurement");
     const second = await command(root, args);
     expect(second.status).toBe(MEASURED);
 
@@ -439,6 +522,54 @@ describe("what the command leaves behind", () => {
     expect(stderr).toContain("--script api/staged.js sets stages");
     expect(stderr).not.toContain("about to hit");
     expect(written).toEqual([]);
+  });
+
+  // Coherence 1 and failure 2: a held step is compared only with one of the
+  // same measurement, and nothing in `capacity/` that cannot be read as one
+  // stops the run. Each decoy is later than the run it must name and differs
+  // from it in one field, so a lookup leaving that field out of the identity
+  // names the decoy; the file that does not parse, the marked file of an older
+  // shape and the file cut short each threw once the whole ramp had run.
+  test("the previous run is the latest of the same measurement, and nothing else there stops the run", async () => {
+    await using target = await stub(4, "errors");
+    const same: Measurement = {
+      k6: PINNED.version,
+      health: target.health,
+      paths: [],
+      script: null,
+      steps: [1],
+      holdMs: 1000,
+      bounds: { failed: 0.01, p95Ms: 60_000 },
+    };
+    const resultOf = (held: number, measurement: Measurement): string =>
+      JSON.stringify({ tool: "capacity-ramp", startedAt: "", measurement, held });
+    const decoys = [
+      { ...same, k6: "v0.0.1" },
+      { ...same, health: `${target.origin}/other` },
+      { ...same, paths: ["/things"] },
+      { ...same, script: "ramp.js" },
+      { ...same, steps: [1, 2] },
+      { ...same, holdMs: 2000 },
+      { ...same, bounds: { failed: 0.02, p95Ms: 60_000 } },
+    ];
+    const root = await materialise({
+      [`${RESULTS}/20260101T000000.000Z.json`]: resultOf(1, same),
+      ...Object.fromEntries(
+        decoys.map((decoy, at) => [`${RESULTS}/20260102T00000${at}.000Z.json`, resultOf(7, decoy)]),
+      ),
+      [`${RESULTS}/20260201T000000.000Z.json`]: "// another tool's\n{}\n",
+      [`${RESULTS}/20260202T000000.000Z.json`]: JSON.stringify({ tool: "capacity-ramp", held: 10 }),
+      [`${RESULTS}/20260203T000000.000Z.json`]: '{"tool":"capacity-ramp","measurement":',
+    });
+    const result = await rampOf(
+      target.health,
+      root,
+      "--max-users",
+      "1",
+      "--max-p95",
+      UNREACHABLE_P95,
+    );
+    expect(result.previous).toEqual({ file: `${RESULTS}/20260101T000000.000Z.json`, held: 1 });
   });
 
   test("arguments it cannot read exit 2 with the usage", async () => {

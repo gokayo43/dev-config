@@ -2,9 +2,11 @@
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
   "extends": ["./oxlint.base.json", "./design-system.base.json"],
   "env": { "node": true, "es2024": true },
-  // `dist/**` is what `bun run build` writes from the four exports a node runner
-  // imports; linting a build is linting its inputs twice, and every rule that
-  // reads types reads none there.
+  // `dist/**` is what `bun run build` writes from the exports `tsdown.config.ts`
+  // lists; linting a build is linting its inputs twice, and every rule that
+  // reads types reads none there. `capacity-ramp.js` is the script k6 runs,
+  // and runs inside k6, whose `k6/*` modules and `__ENV` global nothing in
+  // this repo resolves.
   "ignorePatterns": ["node_modules/**", ".claude/**", "dist/**", "capacity-ramp.js"],
   "rules": {
     // One of the base's own rules, off here and nowhere else. Every gate in

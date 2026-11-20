@@ -22,7 +22,13 @@ as against a gate, which runs over that repo from CI. The distinction is not
 packaging: a gate reads a tree from outside and can be pinned to a commit, and
 an export is for the facts only visible from inside a running repo — its own
 route table, its own limiter, its own browser. Gate code is deliberately not
-importable, so anything a repo calls is an export.
+importable, so anything a repo imports from this package is an export.
+
+**Command** — a module in this package that a consuming repo runs rather than
+imports: installing the package puts it in `node_modules/.bin`, and
+`bun run <command>` reaches it with no script of the repo's own. Distinct from
+a gate, since nothing in CI runs it, and from an export, since nothing imports
+it.
 
 **Conformance suite** — an export that registers tests rather than answering
 with problems, because what it grades is a sequence rather than a value. It
@@ -128,10 +134,9 @@ is a pass.
 **Held step** — the most simultaneous users a capacity ramp's target answered
 inside both bounds, failed requests and the 95th percentile of response time.
 The step after it is the broken step, and the bound it broke is where to start
-looking. A held step is compared only with another of the same target, paths,
-script and bounds, which is why a result names its predecessor of that
-measurement and no other, and each records the k6 it ran on, since a held step
-is only comparable with one of the same k6.
+looking. A held step is compared only with another of the same measurement: the
+same k6, target, paths, script, steps, hold and bounds. A result records that
+measurement and names its predecessor of it and no other.
 
 **Route table** — the routes an app serves, named by the app itself as its
 router registered them (`/presets/:id`, not `/presets/42`). Only the router

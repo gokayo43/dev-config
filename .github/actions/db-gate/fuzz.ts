@@ -606,43 +606,35 @@ async function attempt(sending: Attempt, boundMs: number): Promise<Failure | und
   return broke === undefined ? undefined : failed(broke, text, answered.status);
 }
 
-/** What `allowlisted` makes of route-allowlist over the app's own table. */
-export interface Allowlisted {
-  readonly waived: ReadonlySet<string>;
-  /** Refusals of the input, and of a table with nothing in it, which the verdict reports before the run's own. */
-  readonly problems: Problem[];
-}
+/**
+ * What `allowlisted` makes of route-allowlist over the app's own table: the
+ * routes it waives, or what is wrong with it, and never both, so the run cannot
+ * be handed the waivers of an allowlist that was refused.
+ */
+export type Allowlisted =
+  | { readonly waived: ReadonlySet<string> }
+  | { readonly refused: readonly Problem[] };
 
 /**
  * `route-allowlist` graded against the routes the app reported. An entry is a
  * route this step sends no generated request to, and it says why — a route
  * that is destructive, credentialed or reaches something outside this box — so
  * an entry without a reason, one that is not a route, and one naming a route
- * the app does not serve are each refused. An empty table is refused too: an
- * app reporting no route would otherwise pass every gate that reads the table
- * having been asked nothing.
+ * the app does not serve are each refused. A refused allowlist sends nothing:
+ * an entry that names no route keeps no route out of the run, and the route it
+ * was written for is the one that must not be sent generated requests.
  */
 export function allowlisted(routes: readonly Route[], allowlist: Allowlist): Allowlisted {
-  const table = new Map(routes.map((route) => [key(route), route]));
-  if (table.size === 0) {
-    return {
-      waived: new Set(),
-      problems: [
-        ...allowlist.problems,
-        {
-          message:
-            "the app's route-log endpoint reported an empty routeTable — it names every route the app serves, or nothing can be fuzzed or held to the routes the base ref served",
-        },
-      ],
-    };
-  }
-  const hatch = waivedBy(allowlist, table, {
+  const hatch = waivedBy(allowlist, new Map(routes.map((route) => [key(route), route])), {
     malformed: (entry) =>
       `route-allowlist entry '${entry}' is not a route — write 'METHOD /path -- why', matching a line of the app's own route table`,
     unknown: (entry) =>
       `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
   });
-  return { waived: hatch.waived, problems: [...allowlist.problems, ...hatch.problems] };
+  const refused = [...allowlist.problems, ...hatch.problems];
+  return refused.length > 0
+    ? { refused }
+    : { waived: new Set(hatch.waivers.map(({ name }) => name)) };
 }
 
 /**
@@ -679,8 +671,7 @@ export async function fuzz({
   });
 
   // Nothing to send, which is a repo that has waived every route it serves and
-  // said why against each, or an app that reported no route at all, which
-  // `allowlisted` has already refused.
+  // said why against each.
   if (fuzzing.length === 0) return answer(0, [], false);
 
   const deadline = Date.now() + budgetMs;
@@ -724,7 +715,7 @@ function statedIn(failure: Failure): string {
  * with when the app changes, and a red run's is the only thing that reproduces
  * it.
  */
-export function fuzzVerdict(fuzzed: Fuzzed, refused: readonly Problem[]): Verdict {
+export function fuzzVerdict(fuzzed: Fuzzed): Verdict {
   const printed = fuzzed.failures.slice(0, MOST_PRINTED);
   const table = [
     "### Fuzz",
@@ -742,12 +733,9 @@ export function fuzzVerdict(fuzzed: Fuzzed, refused: readonly Problem[]): Verdic
     "",
   ].join("\n");
 
-  const problems: Problem[] = [
-    ...refused,
-    ...printed.map((failure) => ({
-      message: `${failure.method} ${failure.path} ${failure.broke} — replay it with: ${failure.curl}`,
-    })),
-  ];
+  const problems: Problem[] = printed.map((failure) => ({
+    message: `${failure.method} ${failure.path} ${failure.broke} — replay it with: ${failure.curl}`,
+  }));
   if (fuzzed.failures.length > printed.length) {
     problems.push({
       message: `${fuzzed.failures.length} requests broke an invariant and the first ${printed.length} are above — the rest are in the fuzz report this step uploads, and fixing these first is usually fixing all of them`,
