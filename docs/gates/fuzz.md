@@ -19,9 +19,8 @@ about authorisation. What it grades is that a hostile input is _refused_ rather
 than crashed on — a floor in the sense the coverage threshold is one. An app that passes has not been shown to be safe; an app that fails has
 a handler nobody bounded.
 
-The boot is unsealed: the app the fuzzer talks to
-is the one the database job started, on the same port, with the same
-environment. Nothing here changes that.
+The app the fuzzer talks to is the one the database job started, on the same
+port, with the same environment. Nothing here changes that.
 
 ## The four invariants
 
@@ -130,13 +129,19 @@ destructive, it needs a credential, it reaches something off this box — and is
 part of the entry, the price a lint directive pays. The step grades the input
 before it sends anything, and fails on:
 
-- an entry with no reason, which still waives its route, so one mistake earns
-  one diagnostic;
+- an entry with no reason, which earns that one diagnostic and no other;
 - an entry that is not a route, such as `/health -- no method`;
 - an entry naming a route the app does not serve, since an exemption nobody can
-  see rotting is how a gate quietly stops holding what it names;
-- a route table with nothing in it, since an app that names no route would
-  otherwise pass every gate that reads the table having been asked nothing.
+  see rotting is how a gate quietly stops holding what it names.
+
+On any of these it sends no request at all. A mistyped entry keeps no route out,
+and the route it was written for is the one that must not be sent generated
+requests.
+
+A route table with nothing in it is refused where the table is read, before
+either this step or [route compatibility](route-compat.md) grades it, since an
+app that names no route would otherwise pass every gate that reads the table
+having been asked nothing.
 
 The summary says how many routes were waived, so a table covering less than the
 app serves says so.

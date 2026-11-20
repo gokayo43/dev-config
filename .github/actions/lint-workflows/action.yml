@@ -32,7 +32,7 @@ runs:
         set -euo pipefail
         # shellcheck source=/dev/null
         . "$GITHUB_ACTION_PATH/../_lib/pinned-tool.sh"
-        pinned_tool \
+        pinned_tool "$RUNNER_TEMP" \
           "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz" \
           "$ACTIONLINT_SHA256" actionlint
         "$RUNNER_TEMP/actionlint" -color

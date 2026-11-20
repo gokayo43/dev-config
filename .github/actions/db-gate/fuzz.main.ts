@@ -21,6 +21,16 @@ await entry(async () => {
     log.routeTable,
     allowlistFrom(read["route-allowlist"], "route-allowlist"),
   );
+  if ("refused" in allowlist) {
+    await publish(
+      {
+        note: "fuzz: no request was sent, since route-allowlist is refused below and the route an entry was written for would have been fuzzed",
+        problems: [...allowlist.refused],
+      },
+      read["step-summary"],
+    );
+    return;
+  }
 
   const fuzzed = await fuzz({
     // The app as the boot step named it, less whatever path the health route
@@ -42,5 +52,5 @@ await entry(async () => {
   // is the first few.
   await Bun.write(read["report-file"], `${JSON.stringify(fuzzed, undefined, 2)}\n`);
 
-  await publish(fuzzVerdict(fuzzed, allowlist.problems), read["step-summary"]);
+  await publish(fuzzVerdict(fuzzed), read["step-summary"]);
 });

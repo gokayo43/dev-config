@@ -3,7 +3,7 @@
  * route table to — the compatibility floor that asks whether a route it used
  * to serve is still there, and the fuzzer that sends every route generated
  * requests. Declared once and imported by both ends: the two strings as well
- * as the three shapes.
+ * as the two shapes.
  *
  * Exporting the strings costs an app one identifier from a devDependency in
  * whatever bundle its instrument lands in, and that cost is accepted: `"ALL"`
@@ -12,22 +12,17 @@
  * reproduce correctly from memory. It was reproduced by hand in three places
  * before this line existed.
  *
- * An app that sets `ROUTE_LOG` serves `GET /__route-log`, which answers both
- * lists in a single fetch:
+ * An app that sets `ROUTE_LOG` serves `GET /__route-log`, which answers its
+ * route table:
  *
  * ```json
- * {
- *   "routeTable": [{ "method": "GET", "path": "/health" }],
- *   "counts": [{ "method": "GET", "path": "/health", "count": 12 }]
- * }
+ * { "routeTable": [{ "method": "GET", "path": "/health" }] }
  * ```
  *
- * `routeTable` is every route the app serves, and what both gates read.
- * `counts` is how many requests each of them has taken since the process
- * started; the gate checks its shape when it reads the log and no gate grades
- * it.
+ * `routeTable` is every route the app serves, and what both gates read. A key
+ * beside it is not read.
  *
- * Both lists name a route **as its router registered it**, `/presets/42` as
+ * The table names a route **as its router registered it**, `/presets/42` as
  * `/presets/:id`, which is what keeps the gate out of the path-matching
  * business. That is not a convenience: where routes overlap — a literal
  * `/presets/new` beside `/presets/:id` — only the router knows which one
@@ -36,7 +31,7 @@
 
 /**
  * Where an app serves the report. Any app under `ROUTE_LOG` answers here, and
- * leaves this path out of both lists it reports: an instrument is not one of
+ * leaves this path out of the table it reports: an instrument is not one of
  * the routes the gates are about.
  */
 export const ENDPOINT = "/__route-log";
@@ -54,13 +49,7 @@ export interface Route {
   readonly path: string;
 }
 
-/** One route the app has taken requests on, and how many it has taken. */
-export interface Served extends Route {
-  readonly count: number;
-}
-
 /** One fetch of the endpoint. */
 export interface RouteLog {
   readonly routeTable: Route[];
-  readonly counts: Served[];
 }

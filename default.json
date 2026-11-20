@@ -84,7 +84,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Released binaries pinned by tag and archive SHA-256, which no built-in manager reads: in a run: block, or in the shared shell library that fetches a tool more than one caller needs. The renovate: comment above the pair names the dependency, so one manager covers every tool pinned this way — a YAML key or a shell assignment.",
+      "description": "Released binaries pinned by tag and archive SHA-256, which no built-in manager reads: in a run: block, or in the shared shell library that fetches a tool more than one caller needs or a command runs outside any workflow. The renovate: comment above the pair names the dependency, so one manager covers every tool pinned this way — a YAML key or a shell assignment.",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/",
         "/^\\.github/actions/[^/]+/action\\.ya?ml$/",

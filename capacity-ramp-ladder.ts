@@ -9,7 +9,7 @@
  */
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 export const MEASURED = 0;
@@ -27,18 +27,36 @@ const DEFAULTS = {
   "max-p95": "1s",
 };
 
+/**
+ * How long a request the shipped script sends has to answer before k6 records
+ * it as getting no answer, which is k6's own default grace at the end of a step.
+ */
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * How long k6 lets a step's last iterations run past its hold before it cuts
+ * them off. Five seconds over the shipped script's request timeout, so k6 has
+ * recorded every request that script sent, answered or not, before it cuts
+ * anything off.
+ */
+const GRACE_MS = REQUEST_TIMEOUT_MS + 5_000;
+
 export const USAGE = `capacity-ramp --health <url> [--path </path>]... [--script <k6 script>]
               [--start-users ${DEFAULTS["start-users"]}] [--max-users ${DEFAULTS["max-users"]}] [--hold ${DEFAULTS.hold}]
               [--max-failed ${DEFAULTS["max-failed"]}] [--max-p95 ${DEFAULTS["max-p95"]}]
 
 Doubles the simultaneous users from --start-users to --max-users, holds each
-step for --hold, and stops at the first step whose failed requests exceed
---max-failed or whose 95th percentile of response time exceeds --max-p95.
+step for --hold (1s or more), and stops at the first step whose failed requests
+exceed --max-failed or whose 95th percentile of response time exceeds --max-p95.
 Writes capacity/<UTC stamp>.json and .md at the root of this repository.
 Never point it at a live deployment or at a server on live data:
 docs/commands/capacity-ramp.md in @gokayo43/dev-config says why.`;
 
+/** The command line cannot be read as a run: exit 2, with the usage. */
 export class WrongArguments extends Error {}
+
+/** The run ends without a measurement: exit 1, and no result is written. */
+export class Unmeasured extends Error {}
 
 export interface Bounds {
   /** The share of requests that may fail, 0 to 1. */
@@ -49,9 +67,9 @@ export interface Bounds {
 export interface Plan {
   readonly health: string;
   readonly paths: readonly string[];
-  /** The repo's own k6 script, relative to the repository root, or nothing for the shipped one. */
+  /** The repo's own k6 script as an absolute path, or nothing for the shipped one. */
   readonly script: string | null;
-  readonly steps: readonly number[];
+  readonly steps: readonly [number, ...number[]];
   readonly holdMs: number;
   readonly bounds: Bounds;
 }
@@ -65,43 +83,44 @@ function wholeNumber(flag: string, value: string): number {
   return Number(value);
 }
 
-const UNIT_MS = { ms: 1, s: 1000, m: 60_000 } as const;
-
 function durationMs(flag: string, value: string): number {
   const match = /^(\d+)(ms|s|m)$/u.exec(value);
-  const amount = Number(match?.[1] ?? 0);
-  const unit = match?.[2];
-  if (unit !== "ms" && unit !== "s" && unit !== "m") {
-    throw new WrongArguments(`--${flag} is "${value}" — write a duration such as 500ms, 30s or 2m`);
+  if (match === null) {
+    throw new WrongArguments(
+      `--${flag} is "${value}" — write a duration in ms, s or m, such as 30s`,
+    );
   }
-  const ms = amount * UNIT_MS[unit];
-  if (ms === 0)
+  const ms = Number(match[1]) * (match[2] === "m" ? 60_000 : match[2] === "s" ? 1000 : 1);
+  if (ms === 0) {
     throw new WrongArguments(`--${flag} is "${value}" — it has to be longer than nothing`);
+  }
   return ms;
 }
 
 function share(flag: string, value: string): number {
   const match = /^(\d+(?:\.\d+)?)%$/u.exec(value);
-  const written = Number(match?.[1] ?? Number.NaN);
-  if (match === null || written >= 100) {
+  if (match === null || Number(match[1]) >= 100) {
     throw new WrongArguments(`--${flag} is "${value}" — write a percentage below 100, such as 1%`);
   }
-  return written / 100;
+  return Number(match[1]) / 100;
 }
 
 /** Each step twice the one before it, from the first to the last, the last being the maximum itself. */
-function ladder(start: number, max: number): number[] {
+function ladder(start: number, max: number): [number, ...number[]] {
   if (start > max) {
     throw new WrongArguments(`--start-users ${start} is above --max-users ${max}`);
   }
-  const steps: number[] = [];
-  for (let users = start; users < max; users *= 2) steps.push(users);
-  steps.push(max);
+  const steps: [number, ...number[]] = [start];
+  for (let users = start * 2; users < max; users *= 2) steps.push(users);
+  if (max > start) steps.push(max);
   return steps;
 }
 
-/** The command line as the run it asks for; anything it cannot be read as throws `WrongArguments`. */
-export function planFrom(args: readonly string[]): Plan {
+/**
+ * The command line as the run it asks for, with a relative `--script` read
+ * from `cwd`; anything it cannot be read as throws `WrongArguments`.
+ */
+export function planFrom(args: readonly string[], cwd: string): Plan {
   let values;
   try {
     ({ values } = parseArgs({
@@ -139,20 +158,54 @@ export function planFrom(args: readonly string[]): Plan {
       `--path "${unrooted}" does not start with / — a path is added to the health address's origin`,
     );
   }
+  const holdMs = durationMs("hold", values.hold);
+  if (holdMs < 1000) {
+    throw new WrongArguments(`--hold is "${values.hold}" — k6 holds a step for 1s at the least`);
+  }
 
   return {
     health,
     paths,
-    script: values.script ?? null,
+    script: values.script === undefined ? null : resolve(cwd, values.script),
     steps: ladder(
       wholeNumber("start-users", values["start-users"]),
       wholeNumber("max-users", values["max-users"]),
     ),
-    holdMs: durationMs("hold", values.hold),
+    holdMs,
     bounds: {
       failed: share("max-failed", values["max-failed"]),
       p95Ms: durationMs("max-p95", values["max-p95"]),
     },
+  };
+}
+
+/**
+ * What makes two runs' held steps comparable: the same k6, aimed at the same
+ * target the same way, up the same ladder, judged by the same bounds. Stored
+ * in every result and compared whole, so what a result records and what the
+ * next run compares it on are one value.
+ */
+export interface Measurement {
+  readonly k6: string;
+  readonly health: string;
+  /** Sorted: the same paths named in another order are the same measurement. */
+  readonly paths: readonly string[];
+  /** The repo's own script relative to the repository root, or nothing for the shipped one. */
+  readonly script: string | null;
+  readonly steps: readonly number[];
+  readonly holdMs: number;
+  readonly bounds: Bounds;
+}
+
+function measurementOf(plan: Plan, k6Version: string, root: string): Measurement {
+  return {
+    k6: k6Version,
+    health: plan.health,
+    paths: plan.paths.toSorted(),
+    script: plan.script === null ? null : relative(root, plan.script),
+    steps: plan.steps,
+    holdMs: plan.holdMs,
+    bounds: plan.bounds,
   };
 }
 
@@ -169,12 +222,20 @@ export type Bound = "failed" | "p95";
 
 export interface StepMeasured {
   readonly users: number;
+  /** Every request the step sent, the ones cut off included. */
   readonly requests: number;
   /** The share of requests that failed, 0 to 1. */
   readonly failed: number;
   readonly p95Ms: number;
   /** Failed requests by status; `0` is a request that got no answer at all. */
   readonly failures: Readonly<Record<string, number>>;
+  /**
+   * Iterations of the script still running when k6 cut the step off, each
+   * counted as one failed request that lasted the grace, the least it can have
+   * taken. No path's row carries them, since k6 records nothing of a request it
+   * cuts off.
+   */
+  readonly cutOff: number;
   /** The bounds this step broke, empty for a step held. */
   readonly broke: readonly Bound[];
   /** Slowest first. */
@@ -195,128 +256,116 @@ interface Tally {
   failed: number;
 }
 
-/** What one step's requests come to, before the bounds judge it. */
+/** What one step's output comes to, before the bounds judge it. */
 interface Tallied {
   readonly paths: Map<string, Tally>;
   /** Failed requests by status. */
   readonly failures: Record<string, number>;
+  /** Iterations the step started, as the counter `stepScript` adds counts them. */
+  started: number;
+  /** Iterations k6 counted as ended, which leaves out the ones it cut off. */
+  ended: number;
 }
 
-/** One CSV row as its fields: k6 quotes a field holding a comma or a quote, as a URL can. */
-function fieldsOf(row: string): string[] {
-  const fields: string[] = [];
-  let field = "";
-  let quoted = false;
-  for (let at = 0; at < row.length; at++) {
-    const char = row.charAt(at);
-    if (quoted && char === '"' && row.charAt(at + 1) === '"') {
-      field += '"';
-      at++;
-    } else if (char === '"') {
-      quoted = !quoted;
-    } else if (char === "," && !quoted) {
-      fields.push(field);
-      field = "";
-    } else {
-      field += char;
-    }
+/** The counter `stepScript` adds to at the start of every iteration. */
+const STARTED = "capacity_ramp_started";
+
+/** A JSON object's fields, or nothing where the value is not an object. */
+function fieldsOf(value: unknown): ReadonlyMap<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? new Map(Object.entries(value))
+    : undefined;
+}
+
+/** One point of k6's JSON output: its value and its tags. A line of another shape is a k6 this was not written for, and throws. */
+function pointIn(line: string): { readonly value: number; readonly tag: (name: string) => string } {
+  const data = fieldsOf(fieldsOf(JSON.parse(line))?.get("data"));
+  const value = data?.get("value");
+  const tags = fieldsOf(data?.get("tags"));
+  if (typeof value !== "number" || tags === undefined) {
+    throw new Error(`k6 wrote a point this does not read: ${line}`);
   }
-  fields.push(field);
-  return fields;
+  return {
+    value,
+    tag: (name) => {
+      const found = tags.get(name);
+      if (typeof found !== "string")
+        throw new Error(`k6 wrote a point with no ${name} tag: ${line}`);
+      return found;
+    },
+  };
 }
 
-const DURATION = "http_req_duration";
+/** How each point this reads begins, which every other line of k6's output does not. */
+const POINT = (metric: string): string => `{"metric":"${metric}","type":"Point"`;
 
 /**
- * k6's CSV output as one step's tallies, read a line at a time. The file holds
- * about a dozen rows per request, every metric k6 records, so a step of a
+ * k6's JSON output as one step's tallies, read a line at a time. The file holds
+ * about a dozen lines per request, every metric k6 records, so a step of a
  * million requests decompresses to most of a gigabyte: holding it whole is how
  * a ramp against a fast target runs this process out of memory. What is kept is
- * one number per request. A header missing a column read here is a k6 this was
- * not written for, and throws.
+ * one number per request.
  */
-async function talliedIn(csvGz: string): Promise<Tallied> {
-  const tallied: Tallied = { paths: new Map(), failures: {} };
-  let columns: Record<
-    "metric" | "value" | "expected" | "method" | "name" | "status",
-    number
-  > | null = null;
-
-  const take = (row: string): void => {
-    if (row === "") return;
-    if (columns === null) {
-      const header = fieldsOf(row);
-      const at = (name: string): number => {
-        const index = header.indexOf(name);
-        if (index < 0)
-          throw new Error(`k6's CSV output has no ${name} column: its header is ${row}`);
-        return index;
-      };
-      columns = {
-        metric: at("metric_name"),
-        value: at("metric_value"),
-        expected: at("expected_response"),
-        method: at("method"),
-        name: at("name"),
-        status: at("status"),
-      };
-      return;
-    }
-    // Most rows are other metrics, passed over without being split.
-    if (!row.includes(DURATION)) return;
-    const read = columns;
-    const fields = fieldsOf(row);
-    const cell = (column: keyof typeof read): string => {
-      const found = fields[read[column]];
-      if (found === undefined)
-        throw new Error(`k6's CSV output has a row with no ${column}: ${row}`);
-      return found;
-    };
-    if (cell("metric") !== DURATION) return;
-    const method = cell("method");
-    const name = cell("name");
-    const key = `${method} ${name}`;
-    const tally = tallied.paths.get(key) ?? { method, name, ms: [], failed: 0 };
-    tallied.paths.set(key, tally);
-    tally.ms.push(Number(cell("value")));
-    if (cell("expected") === "false") {
-      tally.failed++;
-      const status = cell("status");
-      tallied.failures[status] = (tallied.failures[status] ?? 0) + 1;
+async function talliedIn(jsonGz: string): Promise<Tallied> {
+  const tallied: Tallied = { paths: new Map(), failures: {}, started: 0, ended: 0 };
+  const take = (line: string): void => {
+    if (line.startsWith(POINT("http_req_duration"))) {
+      const { value, tag } = pointIn(line);
+      const method = tag("method");
+      const name = tag("name");
+      const key = `${method} ${name}`;
+      const tally = tallied.paths.get(key) ?? { method, name, ms: [], failed: 0 };
+      tallied.paths.set(key, tally);
+      tally.ms.push(value);
+      if (tag("expected_response") === "false") {
+        tally.failed++;
+        const status = tag("status");
+        tallied.failures[status] = (tallied.failures[status] ?? 0) + 1;
+      }
+    } else if (line.startsWith(POINT(STARTED))) {
+      tallied.started += pointIn(line).value;
+    } else if (line.startsWith(POINT("iterations"))) {
+      tallied.ended += pointIn(line).value;
     }
   };
 
   let partial = "";
-  const text = Bun.file(csvGz)
+  const text = Bun.file(jsonGz)
     .stream()
     .pipeThrough(new DecompressionStream("gzip"))
     .pipeThrough(new TextDecoderStream());
   for await (const chunk of text) {
-    const rows = (partial + chunk).split("\n");
-    partial = rows.pop() ?? "";
-    for (const row of rows) take(row);
+    const lines = (partial + chunk).split("\n");
+    partial = lines.pop() ?? "";
+    for (const line of lines) take(line);
   }
   take(partial);
   return tallied;
 }
 
-/** What one step's requests come to, judged against the bounds; `null` when it recorded none. */
+/** What one step's requests come to, judged against the bounds; `null` when it sent none. */
 function stepFrom(
   users: number,
-  { paths, failures }: Tallied,
+  { paths, failures, started, ended }: Tallied,
   bounds: Bounds,
 ): StepMeasured | null {
   const tallies = [...paths.values()];
-  const all = tallies.flatMap((tally) => tally.ms);
-  if (all.length === 0) return null;
-  const failed = tallies.reduce((sum, tally) => sum + tally.failed, 0) / all.length;
-  const p95Ms = p95(all);
+  const cutOff = started - ended;
+  const durations = [
+    ...tallies.flatMap((tally) => tally.ms),
+    ...Array<number>(cutOff).fill(GRACE_MS),
+  ];
+  if (durations.length === 0) return null;
+  const failed =
+    (tallies.reduce((sum, tally) => sum + tally.failed, 0) + cutOff) / durations.length;
+  const p95Ms = p95(durations);
   return {
     users,
-    requests: all.length,
+    requests: durations.length,
     failed,
     p95Ms,
     failures,
+    cutOff,
     broke: [
       ...(failed > bounds.failed ? (["failed"] as const) : []),
       ...(p95Ms > bounds.p95Ms ? (["p95"] as const) : []),
@@ -342,23 +391,15 @@ export interface Previous {
 export interface Result {
   readonly tool: typeof TOOL;
   readonly startedAt: string;
-  readonly k6: string;
-  readonly target: {
-    readonly health: string;
-    readonly paths: readonly string[];
-    readonly script: string | null;
-  };
-  readonly ladder: { readonly steps: readonly number[]; readonly holdMs: number };
-  readonly bounds: Bounds;
+  readonly measurement: Measurement;
   /** The last step held, or nothing when the first step broke. */
   readonly held: number | null;
   /** The step that broke, or nothing when every step held. */
   readonly broke: { readonly users: number; readonly bounds: readonly Bound[] } | null;
-  readonly steps: readonly StepMeasured[];
+  /** Every step run, the last of them the one that decided the run. */
+  readonly steps: readonly [StepMeasured, ...StepMeasured[]];
   readonly previous: Previous | null;
 }
-
-export type Outcome = { readonly result: Result } | { readonly unmeasured: string };
 
 export interface Machine {
   /** The pinned k6 binary. */
@@ -370,28 +411,70 @@ export interface Machine {
   readonly signal: AbortSignal;
 }
 
-const K6_LOADER = join(import.meta.dir, ".github/actions/_lib/k6.sh");
-
-/** Where the pinned k6 is kept between runs: the user's own cache, which nobody else can write a binary into. */
-export function k6Home(env: Record<string, string | undefined>): string {
-  const cache = env["XDG_CACHE_HOME"] ?? join(env["HOME"] ?? "", ".cache");
-  return join(cache, "dev-config", "k6");
+/** The run was stopped, which ends it without a measurement however far it got. */
+function unlessStopped(signal: AbortSignal, when: string): void {
+  if (signal.aborted) throw new Unmeasured(`the run was stopped ${when}`);
 }
 
-/** The pinned k6, fetched and verified by the one loader every ramp here uses, or reused where it already sits under that pin. */
-export async function pinnedK6(home: string): Promise<{ k6: string; version: string }> {
+const K6_LOADER = join(import.meta.dir, ".github/actions/_lib/k6.sh");
+
+/**
+ * Where the pinned k6 is kept between runs: the user's own cache, which nobody
+ * else can write a binary into. A relative `XDG_CACHE_HOME` is passed over, as
+ * the XDG Base Directory specification says; with no absolute directory at all
+ * there is no cache, and the run is refused rather than keeping k6 under
+ * whatever directory it runs in, where a checkout could carry a binary and the
+ * receipt that makes it trusted.
+ */
+function k6HomeIn(env: Readonly<Record<string, string | undefined>>): string {
+  const xdg = env["XDG_CACHE_HOME"] ?? "";
+  const home = env["HOME"] ?? "";
+  if (isAbsolute(xdg)) return join(xdg, "dev-config", "k6");
+  if (isAbsolute(home)) return join(home, ".cache", "dev-config", "k6");
+  throw new Unmeasured(
+    "neither XDG_CACHE_HOME nor HOME names an absolute directory, so there is no cache to keep the pinned k6 in",
+  );
+}
+
+/**
+ * The pinned k6, fetched and verified by the one loader every ramp here uses,
+ * or reused where it already sits under that pin. `env` is the environment the
+ * loader runs in and the cache is read from.
+ */
+export async function pinnedK6(
+  env: Readonly<Record<string, string | undefined>>,
+  signal: AbortSignal,
+): Promise<{ k6: string; version: string }> {
+  const home = k6HomeIn(env);
   await mkdir(home, { recursive: true });
   const loader = Bun.spawn(
-    ["bash", "-c", `. "$1" >&2 && printf '%s\\n%s\\n' "$K6" "$K6_VERSION"`, "k6", K6_LOADER],
-    { env: { ...process.env, RUNNER_TEMP: home }, stdout: "pipe", stderr: "pipe" },
+    [
+      "bash",
+      "-c",
+      `. "$1" "$2" >&2 && printf '%s\\n%s\\n' "$K6" "$K6_VERSION"`,
+      "k6",
+      K6_LOADER,
+      home,
+    ],
+    { env: { ...env }, stdout: "pipe", stderr: "pipe" },
   );
+  const stop = (): void => {
+    loader.kill();
+  };
+  signal.addEventListener("abort", stop);
   const [out, err, code] = await Promise.all([
     new Response(loader.stdout).text(),
     new Response(loader.stderr).text(),
     loader.exited,
   ]);
+  signal.removeEventListener("abort", stop);
+  unlessStopped(signal, "while the pinned k6 was being fetched, before the first step");
   const [k6 = "", version = ""] = out.trim().split("\n");
-  if (code !== 0 || k6 === "") throw new Error(`fetching the pinned k6 failed:\n${err}`);
+  if (code !== 0 || k6 === "") {
+    throw new Unmeasured(
+      `fetching the pinned k6 failed, its loader exiting ${code}:\n${err.trim()}`,
+    );
+  }
   return { k6, version };
 }
 
@@ -399,23 +482,54 @@ export async function pinnedK6(home: string): Promise<{ k6: string; version: str
 const STEP_OPTIONS = ["vus", "duration", "iterations", "stages", "scenarios"];
 
 /** The options a repo's script sets that only the ladder may set, by name, as `k6 inspect` reads them. */
-async function stepOptionsIn(k6: string, script: string, cwd: string): Promise<string[]> {
+async function stepOptionsIn(
+  k6: string,
+  script: string,
+  named: string,
+  cwd: string,
+): Promise<string[]> {
   const inspect = Bun.spawn([k6, "inspect", script], { cwd, stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([
     new Response(inspect.stdout).text(),
     new Response(inspect.stderr).text(),
     inspect.exited,
   ]);
-  if (code !== 0) throw new WrongArguments(`k6 cannot read --script ${script}:\n${err.trim()}`);
-  const parsed: unknown = JSON.parse(out);
-  if (typeof parsed !== "object" || parsed === null) {
+  if (code !== 0) throw new WrongArguments(`k6 cannot read --script ${named}:\n${err.trim()}`);
+  const options = fieldsOf(JSON.parse(out));
+  if (options === undefined) {
     throw new Error(`k6 inspect answered something other than an object of options: ${out}`);
   }
-  const options = new Map<string, unknown>(Object.entries(parsed));
   return STEP_OPTIONS.filter((option) => (options.get(option) ?? null) !== null);
 }
 
 const SHIPPED_SCRIPT = join(import.meta.dir, "capacity-ramp.js");
+
+/**
+ * The module k6 runs for one step: the script, whichever it is, under a
+ * scenario of the step's users, hold and grace, with a counter added at the
+ * start of each iteration. The counter is how a step knows what k6 cut off,
+ * since an iteration cut off is never counted among those that ended.
+ */
+function stepScript(script: string, users: number, holdMs: number): string {
+  const scenario = {
+    executor: "constant-vus",
+    vus: users,
+    duration: `${holdMs}ms`,
+    gracefulStop: `${GRACE_MS}ms`,
+  };
+  return [
+    'import { Counter } from "k6/metrics";',
+    `import * as script from ${JSON.stringify(script)};`,
+    `export * from ${JSON.stringify(script)};`,
+    `const started = new Counter("${STARTED}");`,
+    `export const options = { ...script.options, scenarios: { step: ${JSON.stringify(scenario)} } };`,
+    "export default function (data) {",
+    "  started.add(1);",
+    "  return script.default(data);",
+    "}",
+    "",
+  ].join("\n");
+}
 
 /** The last lines k6 wrote to stderr, kept as they arrive: a failing target makes it warn once per request. */
 async function tailOf(stream: ReadableStream<Uint8Array>, keep: number): Promise<string[]> {
@@ -437,8 +551,10 @@ async function runStep(
   machine: Machine,
   cwd: string,
   scratch: string,
-): Promise<StepMeasured | { readonly unmeasured: string }> {
-  const csv = join(scratch, `${users}.csv.gz`);
+): Promise<StepMeasured> {
+  const script = join(scratch, `${users}.js`);
+  await writeFile(script, stepScript(plan.script ?? SHIPPED_SCRIPT, users, plan.holdMs));
+  const output = join(scratch, `${users}.json.gz`);
   const k6 = Bun.spawn(
     [
       machine.k6,
@@ -448,14 +564,17 @@ async function runStep(
       "--no-thresholds",
       "--summary-mode=disabled",
       "--system-tags=method,name,status,expected_response",
-      `--out=csv=${csv}`,
-      `--vus=${users}`,
-      `--duration=${plan.holdMs}ms`,
-      plan.script ?? SHIPPED_SCRIPT,
+      `--out=json=${output}`,
+      script,
     ],
     {
       cwd,
-      env: { ...process.env, HEALTH_URL: plan.health, CAPACITY_PATH: plan.paths.join("\n") },
+      env: {
+        ...process.env,
+        HEALTH_URL: plan.health,
+        CAPACITY_PATH: plan.paths.join("\n"),
+        CAPACITY_TIMEOUT: `${REQUEST_TIMEOUT_MS}ms`,
+      },
       stdout: "ignore",
       stderr: "pipe",
     },
@@ -467,67 +586,79 @@ async function runStep(
   const [tail, code] = await Promise.all([tailOf(k6.stderr, 20), k6.exited]);
   machine.signal.removeEventListener("abort", stop);
 
-  if (machine.signal.aborted) {
-    return {
-      unmeasured: `the run was stopped during the step of ${users} users, before it finished`,
-    };
-  }
+  unlessStopped(machine.signal, `during the step of ${users} users, before it finished`);
   if (code !== 0) {
-    return {
-      unmeasured: `k6 exited ${code} during the step of ${users} users:\n${tail.join("\n")}`,
-    };
+    throw new Unmeasured(
+      `k6 exited ${code} during the step of ${users} users:\n${tail.join("\n")}`,
+    );
   }
-  return (
-    stepFrom(users, await talliedIn(csv), plan.bounds) ?? {
-      unmeasured: `k6 recorded no request in the step of ${users} users: the script sent none, or none finished within the step and k6's grace after it`,
-    }
-  );
+  const step = stepFrom(users, await talliedIn(output), plan.bounds);
+  if (step === null) {
+    throw new Unmeasured(
+      `k6 recorded no request in the step of ${users} users: the script sent none`,
+    );
+  }
+  return step;
 }
 
 /** Before the first request: what the run will hit, how hard and for how long at most. */
-function announced(plan: Plan): string {
+function announced(plan: Plan, root: string): string {
+  // The shipped script's own join, so the address printed is the address hit.
+  const origin = new URL(plan.health).origin;
   const what =
     plan.script === null
-      ? [plan.health, ...plan.paths.map((path) => new URL(path, plan.health).href)].join(", ")
-      : `${plan.script}, with HEALTH_URL=${plan.health}${plan.paths.length === 0 ? "" : ` and CAPACITY_PATH=${plan.paths.join(" ")}`}`;
-  const seconds = (plan.steps.length * plan.holdMs) / 1000;
+      ? [plan.health, ...plan.paths.map((path) => `${origin}${path}`)].join(", ")
+      : `${relative(root, plan.script)}, with HEALTH_URL=${plan.health}${plan.paths.length === 0 ? "" : ` and CAPACITY_PATH=${plan.paths.join(" ")}`}`;
+  const longest = (plan.steps.length * (plan.holdMs + GRACE_MS)) / 1000;
   return [
     `capacity-ramp: about to hit ${what}`,
-    `  ${plan.steps.join(", ")} simultaneous users, each step held ${plan.holdMs / 1000}s: up to ${seconds}s of load, stopping at the first step past ${percent(plan.bounds.failed)} failed requests or a p95 of ${plan.bounds.p95Ms} ms`,
+    `  ${plan.steps.join(", ")} simultaneous users, each step held ${plan.holdMs / 1000}s and given up to ${GRACE_MS / 1000}s more for the requests still running: up to ${longest}s of load, stopping at the first step past ${percent(plan.bounds.failed)} failed requests or a p95 of ${plan.bounds.p95Ms} ms`,
   ].join("\n");
 }
 
-async function answers(health: string, signal: AbortSignal): Promise<string | undefined> {
-  try {
-    const response = await fetch(health, {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
-    });
-    await response.arrayBuffer();
-    return response.ok ? undefined : `${health} answered ${response.status}`;
-  } catch (error) {
-    return `${health} did not answer: ${error instanceof Error ? error.message : String(error)}`;
-  }
+async function healthCheck(health: string, signal: AbortSignal): Promise<void> {
+  const unanswered = await fetch(health, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
+  })
+    .then(async (response) => {
+      await response.arrayBuffer();
+      return response.ok ? undefined : `answered ${response.status}`;
+    })
+    .catch(
+      (error: unknown) =>
+        `did not answer: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  unlessStopped(signal, "during the health check, before the first step");
+  if (unanswered !== undefined) throw new Unmeasured(`${health} ${unanswered}`);
 }
 
 /** The directory every result is written into, at the repository's root. */
 export const RESULTS = "capacity";
 
-function sameMeasurement(a: Result, plan: Plan): boolean {
-  return (
-    a.target.health === plan.health &&
-    a.target.script === plan.script &&
-    a.target.paths.toSorted().join("\n") === plan.paths.toSorted().join("\n") &&
-    a.bounds.failed === plan.bounds.failed &&
-    a.bounds.p95Ms === plan.bounds.p95Ms
-  );
+/**
+ * A result file's held step where it is a result of this measurement, and
+ * nothing where it is anything else: another tool's file, one that does not
+ * parse, one cut short, or a result of another measurement or of an older
+ * shape.
+ */
+function heldIn(text: string, measurement: Measurement): { held: number | null } | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  const fields = fieldsOf(parsed);
+  const held = fields?.get("held");
+  const ours =
+    fields?.get("tool") === TOOL && Bun.deepEquals(fields.get("measurement"), measurement, true);
+  const readable =
+    held === null || (typeof held === "number" && Number.isInteger(held) && held > 0);
+  return ours && readable ? { held } : undefined;
 }
 
-/**
- * The latest earlier result of the same measurement: the same target, paths,
- * script and bounds. A JSON file there without this tool's mark is another
- * tool's and is passed over; one with the mark that does not parse throws.
- */
-async function previousOf(root: string, plan: Plan): Promise<Previous | null> {
+/** The latest earlier result of the same measurement, read before the run puts any load on the target. */
+async function previousOf(root: string, measurement: Measurement): Promise<Previous | null> {
   const directory = join(root, RESULTS);
   const names = await readdir(directory).catch((error: unknown) => {
     if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
@@ -539,74 +670,73 @@ async function previousOf(root: string, plan: Plan): Promise<Previous | null> {
       .toSorted()
       .map(async (name) => {
         const file = join(directory, name);
-        const parsed: unknown = JSON.parse(await Bun.file(file).text());
-        return { file: relative(root, file), parsed };
+        return {
+          file: relative(root, file),
+          read: heldIn(await Bun.file(file).text(), measurement),
+        };
       }),
   );
-  const ours = results.filter(
-    (read): read is { file: string; parsed: Result } =>
-      typeof read.parsed === "object" &&
-      read.parsed !== null &&
-      "tool" in read.parsed &&
-      read.parsed.tool === TOOL,
-  );
-  const match = ours.findLast(({ parsed }) => sameMeasurement(parsed, plan));
-  return match === undefined ? null : { file: match.file, held: match.parsed.held };
+  const match = results.findLast(({ read }) => read !== undefined);
+  return match?.read === undefined ? null : { file: match.file, held: match.read.held };
 }
 
-/** `2026-11-20T18:37:02.062Z` as `20261120T183702Z`, which sorts as it reads. */
+/** `2026-11-20T18:37:02.062Z` as `20261120T183702.062Z`, which sorts as it reads. */
 function stampOf(iso: string): string {
-  return `${iso.slice(0, 19).replaceAll(/[-:]/gu, "")}Z`;
+  return iso.replaceAll(/[-:]/gu, "");
 }
 
 /**
  * The ramp, from the health check to the result. What it hits, the caller
- * named: nothing here reads a workflow or a config file.
+ * named: nothing here reads a workflow or a config file. A run that ends
+ * without a measurement throws `Unmeasured`, and a script that sets steps of
+ * its own throws `WrongArguments`.
  */
-export async function ramp(plan: Plan, machine: Machine, root: string): Promise<Outcome> {
+export async function ramp(plan: Plan, machine: Machine, root: string): Promise<Result> {
   if (plan.script !== null) {
-    const owned = await stepOptionsIn(machine.k6, plan.script, root);
+    const named = relative(root, plan.script);
+    const owned = await stepOptionsIn(machine.k6, plan.script, named, root);
+    unlessStopped(machine.signal, "while the script was read, before the first step");
     if (owned.length > 0) {
       throw new WrongArguments(
-        `--script ${plan.script} sets ${owned.join(", ")}, and the steps are this command's: remove ${owned.length === 1 ? "it" : "them"} from the script's options`,
+        `--script ${named} sets ${owned.join(", ")}, and the steps are this command's: remove ${owned.length === 1 ? "it" : "them"} from the script's options`,
       );
     }
   }
-  machine.log(announced(plan));
+  const measurement = measurementOf(plan, machine.k6Version, root);
+  const previous = await previousOf(root, measurement);
+  machine.log(announced(plan, root));
   const startedAt = new Date().toISOString();
-  const unanswered = await answers(plan.health, machine.signal);
-  if (unanswered !== undefined) return { unmeasured: unanswered };
+  await healthCheck(plan.health, machine.signal);
 
   const scratch = await mkdtemp(join(tmpdir(), "capacity-ramp-"));
   try {
-    const steps: StepMeasured[] = [];
-    for (const users of plan.steps) {
-      if (machine.signal.aborted) {
-        return { unmeasured: `the run was stopped before the step of ${users} users` };
-      }
+    const measured = async (users: number, at: number): Promise<StepMeasured> => {
+      unlessStopped(machine.signal, `before the step of ${users} users`);
       machine.log(
-        `  step ${steps.length + 1} of ${plan.steps.length}: ${users} users for ${plan.holdMs / 1000}s`,
+        `  step ${at} of ${plan.steps.length}: ${users} users for ${plan.holdMs / 1000}s`,
       );
       const step = await runStep(plan, users, machine, root, scratch);
-      if ("unmeasured" in step) return step;
-      steps.push(step);
       machine.log(`    ${verdictOf(step)}`);
-      if (step.broke.length > 0) break;
+      return step;
+    };
+    const [first, ...more] = plan.steps;
+    let last = await measured(first, 1);
+    let held: number | null = null;
+    const steps: [StepMeasured, ...StepMeasured[]] = [last];
+    for (const users of more) {
+      if (last.broke.length > 0) break;
+      held = last.users;
+      last = await measured(users, steps.length + 1);
+      steps.push(last);
     }
-    const broken = steps.find((step) => step.broke.length > 0);
     return {
-      result: {
-        tool: TOOL,
-        startedAt,
-        k6: machine.k6Version,
-        target: { health: plan.health, paths: plan.paths, script: plan.script },
-        ladder: { steps: plan.steps, holdMs: plan.holdMs },
-        bounds: plan.bounds,
-        held: steps.findLast((step) => step.broke.length === 0)?.users ?? null,
-        broke: broken === undefined ? null : { users: broken.users, bounds: broken.broke },
-        steps,
-        previous: await previousOf(root, plan),
-      },
+      tool: TOOL,
+      startedAt,
+      measurement,
+      held: last.broke.length === 0 ? last.users : held,
+      broke: last.broke.length === 0 ? null : { users: last.users, bounds: last.broke },
+      steps,
+      previous,
     };
   } finally {
     await rm(scratch, { recursive: true, force: true });
@@ -618,9 +748,12 @@ function percent(fraction: number): string {
 }
 
 function failuresOf(step: StepMeasured): string {
-  const listed = Object.entries(step.failures)
-    .toSorted(([, a], [, b]) => b - a)
-    .map(([status, count]) => `${status === "0" ? "no answer" : status} ×${count}`);
+  const listed = [
+    ...Object.entries(step.failures)
+      .toSorted(([, a], [, b]) => b - a)
+      .map(([status, count]) => `${status === "0" ? "no answer" : status} ×${count}`),
+    ...(step.cutOff === 0 ? [] : [`cut off ×${step.cutOff}`]),
+  ];
   return listed.length === 0
     ? percent(step.failed)
     : `${percent(step.failed)} (${listed.join(", ")})`;
@@ -628,11 +761,15 @@ function failuresOf(step: StepMeasured): string {
 
 const BOUND_NAMES = { failed: "failed requests", p95: "p95" } satisfies Record<Bound, string>;
 
+function boundsNamed(bounds: readonly Bound[]): string {
+  return bounds.map((bound) => BOUND_NAMES[bound]).join(" and ");
+}
+
 function verdictOf(step: StepMeasured): string {
   const measured = `${step.requests} requests, ${failuresOf(step)} failed, p95 ${step.p95Ms.toFixed(1)} ms`;
   return step.broke.length === 0
     ? `held: ${measured}`
-    : `broke on ${step.broke.map((bound) => BOUND_NAMES[bound]).join(" and ")}: ${measured}`;
+    : `broke on ${boundsNamed(step.broke)}: ${measured}`;
 }
 
 function usersOf(held: number | null): string {
@@ -641,21 +778,22 @@ function usersOf(held: number | null): string {
 
 /** The result as a person reads it: the same headings and tables for every run. */
 export function markdownOf(result: Result): string {
-  const { target, bounds, ladder: steps } = result;
-  const deciding = result.steps.at(-1);
+  const { measurement } = result;
+  const [first, ...rest] = result.steps;
+  const deciding = rest.at(-1) ?? first;
   return [
     `# Capacity ramp, ${stampOf(result.startedAt)}`,
     "",
-    `- Target: ${target.health}${target.paths.length === 0 ? "" : `, paths ${target.paths.join(", ")}`}`,
-    `- Script: ${target.script ?? "the one capacity-ramp ships"}`,
-    `- Steps: ${steps.steps.join(", ")} simultaneous users, each held ${steps.holdMs / 1000}s, k6 ${result.k6}`,
-    `- Bounds: a step breaks past ${percent(bounds.failed)} failed requests or a p95 of ${bounds.p95Ms} ms`,
+    `- Target: ${measurement.health}${measurement.paths.length === 0 ? "" : `, paths ${measurement.paths.join(", ")}`}`,
+    `- Script: ${measurement.script ?? "the one capacity-ramp ships"}`,
+    `- Steps: ${measurement.steps.join(", ")} simultaneous users, each held ${measurement.holdMs / 1000}s, k6 ${measurement.k6}`,
+    `- Bounds: a step breaks past ${percent(measurement.bounds.failed)} failed requests or a p95 of ${measurement.bounds.p95Ms} ms`,
     "",
     "## Verdict",
     "",
     `- Held: ${usersOf(result.held)}`,
-    `- Broke: ${result.broke === null ? "no step broke a bound" : `${result.broke.users} users, on ${result.broke.bounds.map((bound) => BOUND_NAMES[bound]).join(" and ")}`}`,
-    `- Previous run: ${result.previous === null ? "none for this target, these paths and these bounds" : `${usersOf(result.previous.held)} held, in ${result.previous.file}`}`,
+    `- Broke: ${result.broke === null ? "no step broke a bound" : `${result.broke.users} users, on ${boundsNamed(result.broke.bounds)}`}`,
+    `- Previous run: ${result.previous === null ? "none of this measurement: the same k6, target, paths, script, steps, hold and bounds" : `${usersOf(result.previous.held)} held, in ${result.previous.file}`}`,
     "",
     "## Steps",
     "",
@@ -663,14 +801,14 @@ export function markdownOf(result: Result): string {
     "| --- | --- | --- | --- | --- |",
     ...result.steps.map(
       (step) =>
-        `| ${step.users} | ${step.requests} | ${failuresOf(step)} | ${step.p95Ms.toFixed(1)} ms | ${step.broke.length === 0 ? "held" : `broke: ${step.broke.map((bound) => BOUND_NAMES[bound]).join(", ")}`} |`,
+        `| ${step.users} | ${step.requests} | ${failuresOf(step)} | ${step.p95Ms.toFixed(1)} ms | ${step.broke.length === 0 ? "held" : `broke: ${boundsNamed(step.broke)}`} |`,
     ),
     "",
-    `## Slowest paths at ${deciding?.users ?? 0} users`,
+    `## Slowest paths at ${deciding.users} users`,
     "",
     "| Path | Requests | Failed | p95 |",
     "| --- | --- | --- | --- |",
-    ...(deciding?.paths ?? []).map(
+    ...deciding.paths.map(
       (path) =>
         `| ${path.method} ${path.name} | ${path.requests} | ${percent(path.failed)} | ${path.p95Ms.toFixed(1)} ms |`,
     ),
@@ -678,7 +816,11 @@ export function markdownOf(result: Result): string {
   ].join("\n");
 }
 
-/** Writes both files, refusing to overwrite one, and answers their paths. */
+/**
+ * Writes both files, refusing to overwrite one, and answers their paths. The
+ * JSON is written last, since it is the half the next run's `Previous run`
+ * reads: a run that dies between the two leaves a page and no record.
+ */
 export async function recorded(
   root: string,
   result: Result,
@@ -688,7 +830,7 @@ export async function recorded(
   const base = join(directory, stampOf(result.startedAt));
   const json = `${base}.json`;
   const md = `${base}.md`;
-  await writeFile(json, `${JSON.stringify(result, undefined, 2)}\n`, { flag: "wx" });
   await writeFile(md, markdownOf(result), { flag: "wx" });
+  await writeFile(json, `${JSON.stringify(result, undefined, 2)}\n`, { flag: "wx" });
   return { json, md };
 }

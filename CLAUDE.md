@@ -143,8 +143,8 @@ a change to a rule usually lands here too.
   remembers to run it, and it moves whenever the lockfile moves — including on
   a Renovate automerge nobody reads. It costs the release pair under
   "Releasing", and it is why gate code is not importable by the repos it
-  gates: anything they call directly is a package export instead, which is
-  what `route-log.ts` below is.
+  gates: anything they import is a package export instead, which is what
+  `route-log.ts` below is, and anything they run is a command.
   `mutation-lane` is the one gate that runs a tool out of the gated repo's own
   install rather than a binary it pins itself: Stryker resolves its runner
   plugin from the working directory, and declaring the two packages in the
@@ -287,8 +287,7 @@ a change to a rule usually lands here too.
   script k6 runs when the caller names paths rather than a script: it runs
   inside k6, not under this repo's compiler or linter, which is why
   `.oxlintrc.json` ignores it, and `tests/capacity-ramp.test.ts` runs it
-  through the pinned k6 against a stub on loopback. A JSON config cannot carry
-  that reason, so it is here.
+  through the pinned k6 against a stub on loopback.
 - `tests/` — a fixture suite per gate, driving it against a violating tree and a
   clean one. A gate without one is a claim. `build-cache.test.ts` is the build
   action's, running `build.sh` against a fixture repository whose build records
@@ -502,8 +501,8 @@ them and then watches them run nowhere. What carries their duty instead is
 trees with the shipped binary — a block of cases per rule, and a check that the
 base enables exactly the rules the plugin defines.
 
-`tests/house-limiter.ts`, `dev-server.ts`, `property.ts` and
-`request-timing-report.ts` are out for the same reason and carry their duty the same way — a suite that spawns the real thing.
+`tests/house-limiter.ts`, `dev-server.ts`, `property.ts`,
+`request-timing-report.ts` and `capacity-ramp.ts` are out for the same reason and carry their duty the same way — a suite that spawns the real thing.
 `bunfig.toml` names which suite, per file, and says why `dev-server-derive.ts`
 is not with them.
 

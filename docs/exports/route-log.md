@@ -4,24 +4,20 @@
 gates the database job holds its route table to — [the compatibility
 floor](../gates/route-compat.md) that asks whether a route it used to serve is
 still there, and [the fuzzer](../gates/fuzz.md) that sends every route
-generated requests. Two strings and three shapes,
+generated requests. Two strings and two shapes,
 exported so that neither end of the contract reproduces them from memory.
 
-An app that sets `ROUTE_LOG` serves `GET /__route-log`, answering both lists in
-one fetch:
+An app that sets `ROUTE_LOG` serves `GET /__route-log`, answering its route
+table:
 
 ```json
-{
-  "routeTable": [{ "method": "GET", "path": "/health" }],
-  "counts": [{ "method": "GET", "path": "/health", "count": 12 }]
-}
+{ "routeTable": [{ "method": "GET", "path": "/health" }] }
 ```
 
-`routeTable` is every route the app serves, and what both gates read. `counts`
-is how many requests each has taken since the process started: the gate checks
-its shape when it reads the log, and no gate grades it.
+`routeTable` is every route the app serves, and what both gates read. An empty
+table is refused when it is read, and any other key beside it is not read.
 
-Both lists name a route _as its router registered it_: `/presets/42` as
+The table names a route _as its router registered it_: `/presets/42` as
 `/presets/:id`. Where routes overlap — a literal `/presets/new` beside
 `/presets/:id` — only the router knows which one answered, and a gate that
 guessed would hold the app to a route it does not serve.
