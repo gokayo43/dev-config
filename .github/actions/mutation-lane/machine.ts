@@ -1,8 +1,13 @@
 /**
- * What the machine has to give Stryker, asked of it before Stryker starts: a
- * Node.js every package of the run accepts, and a temp directory no other user
- * can tamper with. Either one missing ends Stryker with exit 1 and no report,
- * so the lane names it first, in terms the machine's operator can act on.
+ * What the machine has to give Stryker: a Node.js every package of the run
+ * accepts, and a temp directory no other user can tamper with. Either one
+ * missing ends Stryker with exit 1, no report and a stack trace its operator
+ * cannot act on, so when a run ends that way the lane names, beside the log,
+ * what this machine lacks. It names a likely cause and never a certain one, and
+ * never before Stryker has run: whether Stryker runs on a machine is answered
+ * only by running it there, `engines.node` is advisory, the temp dir rule is the
+ * runner's own and a later release can relax it, and a run on a machine named
+ * here can still have failed for a reason of the repo's own.
  *
  * Stryker's command begins `#!/usr/bin/env node`, so it runs under whatever
  * `node` the machine has on `PATH`, never under the Bun that runs the lane. What
@@ -76,12 +81,11 @@ async function declared(root: string, packages: readonly string[]): Promise<Decl
   return declarations;
 }
 
-/** The version a `node` binary reports, as `v22.0.0`. */
-async function versionOf(node: string): Promise<string> {
+/** What a `node` binary answers when asked its version: `v22.0.0` and 0 from one that runs. */
+async function versionOf(node: string): Promise<{ version: string; status: number }> {
   const asked = Bun.spawn([node, "--version"], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
   const [out, status] = await Promise.all([new Response(asked.stdout).text(), asked.exited]);
-  if (status !== 0) throw new Error(`\`${node} --version\` exited ${status}`);
-  return out.trim();
+  return { version: out.trim(), status };
 }
 
 /**
@@ -100,7 +104,12 @@ async function nodeProblem(
         "install Node.js on this machine: Stryker runs under the `node` on PATH, not under Bun, and there is none",
     };
   }
-  const version = await versionOf(node);
+  const { version, status } = await versionOf(node);
+  if (status !== 0) {
+    return {
+      message: `install a Node.js on this machine that runs: Stryker runs under the \`node\` on PATH, ${node}, and asked its version it exited ${status}`,
+    };
+  }
   const refused = (await declared(root, packages)).filter(
     ({ node: range }) => !Bun.semver.satisfies(version, range),
   );
@@ -144,8 +153,9 @@ async function tempProblems(temp: string): Promise<Problem[]> {
 }
 
 /**
- * Why this machine cannot run Stryker for the repo at `root` with `temp` as its
- * temp dir: none of these is something the repo can change.
+ * What this machine lacks of what Stryker needs for the repo at `root` with
+ * `temp` as its temp dir, each named as a likely cause of a run's exit: none of
+ * these is something the repo can change.
  */
 export async function machineProblems(
   root: string,
@@ -154,7 +164,11 @@ export async function machineProblems(
   temp: string,
 ): Promise<Problem[]> {
   const runtime = await nodeProblem(root, packages, node);
-  return [...(runtime === undefined ? [] : [runtime]), ...(await tempProblems(temp))];
+  return [...(runtime === undefined ? [] : [runtime]), ...(await tempProblems(temp))].map(
+    ({ message }) => ({
+      message: `${message}. This is what this machine lacks, and a likely cause of the run's exit, not a certain one`,
+    }),
+  );
 }
 
 /**

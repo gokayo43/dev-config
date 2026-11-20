@@ -412,10 +412,14 @@ the ignore itself: `treatConfigHintsAsErrors` turns an ignore matching no
 declared dependency into an error, so every repo that does _not_ run the lane
 would fail knip the day its pin moved.
 
-**What a runner needs.** Two things beside the Bun that runs the lane, both
-checked before Stryker starts, because a run without either exits 1 with no
-report and only a stack trace to say why. A machine that lacks one is named,
-with what to change on it; the repo can change neither.
+**What a runner needs.** Two things beside the Bun that runs the lane. A run
+without either exits 1 with no report and only a stack trace to say why, so
+when a run exits without a report the lane names, after the run's log, each one
+the machine lacks and what to change on it; the repo can change neither. Each
+is named as a likely cause of the exit, never a certain one: the lane asks
+none of this before Stryker starts, since whether Stryker runs on a machine is
+answered only by running it there, and a machine that lacks one by these rules
+and runs Stryker anyway is graded as any other.
 
 - **Node.js that every package Stryker loads accepts.** Stryker's command
   starts `#!/usr/bin/env node`, so it runs under the `node` on `PATH`, and that
@@ -425,9 +429,11 @@ with what to change on it; the repo can change neither.
   parses the code with Babel 8, which declares `^22.18.0 || >=24.11.0`, and
   under a Node 22 before 22.12 Babel's `require()` of its own ES modules fails.
   At the pair this repo pins that means Node 22.18 or later in the 22 line, or
-  24.11 or later. A runner with no `node` is told to install one; one whose
-  `node` falls outside a range is told its version and each range it misses,
-  with a package that declares it.
+  24.11 or later. `engines.node` is advisory, and npm installs past a
+  mismatch with a warning. After a run that exited, a runner with no `node`, or
+  one whose `node` does not answer for its version, is told to install one, and
+  one whose `node` falls outside a range is told its version and each range it
+  misses, with a package that declares it.
 - **A temp dir no other user can tamper with, all the way up.**
   `@hughescr/stryker-bun-runner` writes a script under its temp dir that every
   `bun test` of the run executes, and since 1.6.0 it refuses one with any

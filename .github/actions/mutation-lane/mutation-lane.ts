@@ -573,10 +573,6 @@ export async function mutationLane({
     // would otherwise make this one.
     const temp = join(scratch, "tmp");
     await mkdir(temp, { mode: 0o700 });
-    const machine = await machineProblems(root, [CORE, RUNNER], onPath("node"), temp);
-    if (machine.length > 0) {
-      return { note: "this machine cannot run Stryker", problems: machine };
-    }
     const stryked = await ran([stryker, "run", config], root, deadline, { TMPDIR: temp });
     const wrote = `${stryked.out}\n${stryked.err}`;
 
@@ -620,6 +616,7 @@ export async function mutationLane({
           {
             message: `fix what the run reported above: it exited ${stryked.status} without a report, so nothing was graded`,
           },
+          ...(await machineProblems(root, [CORE, RUNNER], onPath("node"), temp)),
         ],
       };
     }

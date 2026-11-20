@@ -155,7 +155,8 @@ a change to a rule usually lands here too.
   Stryker's report says about a branch, `child.ts` a child the lane runs, the
   run's deadline that ends it and the interrupts it passes on, `machine.ts` what
   the machine has to give Stryker, a Node.js every package it loads accepts and
-  a temp dir no other user can tamper with, and `values.ts` how the lane reads a repo's text
+  a temp dir no other user can tamper with, named after a run that exited
+  without a report as what the machine lacks, and `values.ts` how the lane reads a repo's text
   and quotes it back, which the orchestrator, `tests.ts` and `report.ts` do. `duplicate-code` is written here rather than run as jscpd
   for the reason `fuzz.ts` carries its own PRNG: an action runs from a checkout
   with no install, and a tool fetched from npm at run time is pinned by a
