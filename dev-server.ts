@@ -43,7 +43,7 @@ import {
   recordStem,
   type Server,
 } from "./dev-server-derive.ts";
-import { alive, bootId, lock, ours, procStat } from "./file-lock.ts";
+import { alive, bootId, lock, ours, procStat, type ProcStat } from "./file-lock.ts";
 
 /** The only interface a server here is asked to bind, and the one `up` proves it kept to. */
 const LOOPBACK = "127.0.0.1";
@@ -302,12 +302,26 @@ async function endGroup(group: number): Promise<void> {
   }
 }
 
-/** The processes of a group that still run. Linux keeps no list of a group's members, so this reads every process's. */
+/**
+ * The processes of a group that still run. Linux keeps no list of a group's
+ * members, so this reads every process's.
+ *
+ * Where `/proc` is mounted `hidepid=1`, every other user's process is listed
+ * and its read refused with EPERM, the one code the kernel refuses a listed
+ * entry with (`proc_pid_permission`). Every member of a server's group runs as
+ * this user, so a process this user may not read is no member, and is skipped.
+ */
 async function runningIn(group: number): Promise<number[]> {
   const found: number[] = [];
   for (const name of await readdir("/proc")) {
     if (!/^\d+$/.test(name)) continue;
-    const stat = await procStat(Number(name));
+    let stat: ProcStat | null;
+    try {
+      stat = await procStat(Number(name));
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "EPERM") continue;
+      throw error;
+    }
     if (stat?.alive === true && stat.group === group) found.push(Number(name));
   }
   return found;

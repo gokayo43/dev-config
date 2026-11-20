@@ -113,7 +113,11 @@ export function parseStat(raw: string, from: string): ProcStat {
   return { state, startTicks, group, alive: !exited };
 }
 
-/** What `/proc` says about a process of this user's, or nothing when there is none at that pid. */
+/**
+ * What `/proc` says about a process, or nothing when it is not there. A read
+ * that is refused throws, naming the path, since it says nothing about whether
+ * the process is there.
+ */
 export async function procStat(pid: number): Promise<ProcStat | null> {
   const path = `/proc/${pid}/stat`;
   let raw: string;
@@ -121,13 +125,8 @@ export async function procStat(pid: number): Promise<ProcStat | null> {
     raw = await readFile(path, "utf8");
   } catch (error) {
     // No such process is the answer being asked for, and so is a process reaped
-    // between the open and the read, which the read reports as ESRCH. EPERM is
-    // another user's process where `/proc` is mounted `hidepid=1`, which is no
-    // process of this user's either. Any other failure to read says nothing
-    // about whether it is there.
-    if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH") || hasCode(error, "EPERM")) {
-      return null;
-    }
+    // between the open and the read, which the read reports as ESRCH.
+    if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH")) return null;
     throw error;
   }
   return parseStat(raw, path);

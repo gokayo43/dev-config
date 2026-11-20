@@ -1664,8 +1664,8 @@ may not run, and the shared libraries it installs are already on the box.
 The test-suite gate's own suite needs passwordless `sudo`, which is what taking a
 network namespace costs: GitHub-hosted Linux runners have it, a self-hosted one
 has to grant it, and a machine that does not cannot run that suite honestly. The
-file lock's suite uses it too, to mount a `/proc` that hides other users'
-processes. It is the one gate here whose subject is not a module, so
+file lock's and the dev server's suites use it too, to mount a `/proc` that
+hides other users' processes. It is the one gate here whose subject is not a module, so
 its cases extract the step out of the shipped `action.yml` and drive it over test
 suites of their own.
 

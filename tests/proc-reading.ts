@@ -5,6 +5,7 @@
  * in `proc-stat/`.
  */
 import { readdir } from "node:fs/promises";
+import { userInfo } from "node:os";
 
 import { procStat } from "../file-lock.ts";
 
@@ -84,4 +85,50 @@ export async function orphaned(argv: readonly string[], lines = 0): Promise<Orph
       await parent.exited;
     },
   };
+}
+
+/** How a script run by `besideAHiddenProcess` ended. */
+export interface Ended {
+  readonly code: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
+/**
+ * Runs `script` with bun, as this user, in a pid and mount namespace of its own
+ * whose `/proc` is mounted `hidepid=1`, where another user's entry is listed and
+ * its read refused. `nobody` runs a `sleep` there, whose pid and start tick the
+ * script finds in `OTHER` and `OTHER_TICKS`. Root mounts it, which is the sudo
+ * these cases need, and reads the tick before it drops to this user. The script
+ * is the namespace's first process, so everything in it dies when it exits.
+ */
+export async function besideAHiddenProcess(script: string): Promise<Ended> {
+  const me = userInfo();
+  const sealed = Bun.spawn(
+    [
+      "sudo",
+      "-n",
+      "unshare",
+      "--pid",
+      "--mount",
+      "--fork",
+      "--mount-proc",
+      "sh",
+      "-c",
+      'mount -o remount,hidepid=1 /proc || exit 1; setpriv --reuid=65534 --regid=65534 --clear-groups sleep 60 & OTHER=$!; TICKS=$(cut -d " " -f 22 "/proc/$OTHER/stat"); exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" OTHER="$OTHER" OTHER_TICKS="$TICKS" "$4" -e "$5"',
+      "sh",
+      String(me.uid),
+      String(me.gid),
+      me.homedir,
+      process.execPath,
+      script,
+    ],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+  );
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(sealed.stdout).text(),
+    new Response(sealed.stderr).text(),
+    sealed.exited,
+  ]);
+  return { code, stdout, stderr };
 }

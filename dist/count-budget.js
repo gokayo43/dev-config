@@ -373,14 +373,18 @@ function parseStat(raw, from) {
 		alive: !((state === "Z" || state === "X") && threads <= 1)
 	};
 }
-/** What `/proc` says about a process of this user's, or nothing when there is none at that pid. */
+/**
+* What `/proc` says about a process, or nothing when it is not there. A read
+* that is refused throws, naming the path, since it says nothing about whether
+* the process is there.
+*/
 async function procStat(pid) {
 	const path = `/proc/${pid}/stat`;
 	let raw;
 	try {
 		raw = await readFile(path, "utf8");
 	} catch (error) {
-		if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH") || hasCode(error, "EPERM")) return null;
+		if (hasCode(error, "ENOENT") || hasCode(error, "ESRCH")) return null;
 		throw error;
 	}
 	return parseStat(raw, path);

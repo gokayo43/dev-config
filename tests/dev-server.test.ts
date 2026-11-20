@@ -50,7 +50,7 @@ import {
   stays,
   unreaped,
 } from "./dev-server-fixture.ts";
-import { runningIn } from "./proc-reading.ts";
+import { besideAHiddenProcess, runningIn } from "./proc-reading.ts";
 
 /** A worktree on a branch, as the two derivations take one. */
 const named = (worktree: string, branch: string) => ({ worktree, branch, detached: false });
@@ -746,6 +746,33 @@ describe("a server that has died and is not yet reaped", () => {
     expect(stopped.stderr).toContain("already gone");
     expect(await scratch.recordOrNull("main")).toBeNull();
     expect(await unreaped(dead.server.pid)).toBe(true);
+  });
+
+  test("down forgets it and succeeds where /proc hides other users' processes", async () => {
+    // `down` reads every process to find what is left of the dead server's
+    // group, and where `/proc` is mounted `hidepid=1` another user's entry is
+    // listed and its read refused. The wrong implementation fails on that
+    // refusal and keeps the record of a server that is gone. The whole case
+    // runs in the namespace, since a server started outside it is not listed
+    // by the `/proc` it mounts.
+    const probe = `const fixture = await import(${JSON.stringify(join(import.meta.dir, "dev-server-fixture.ts"))});
+await using scratch = await fixture.scratchRepo(fixture.SERVES);
+await using started = await scratch.devServerUnreaped(scratch.root, "up");
+const server = await scratch.record("main");
+fixture.killBehindItsBack(server.pid);
+const dead = await fixture.settles(() => fixture.unreaped(server.pid));
+const stopped = await scratch.devServer(scratch.root, "down");
+const forgotten = (await scratch.recordOrNull("main")) === null;
+console.log(JSON.stringify({ up: started.code, dead, down: stopped.code, forgotten }));
+console.log(stopped.stderr);`;
+
+    const ended = await besideAHiddenProcess(probe);
+
+    expect({ code: ended.code, stderr: ended.stderr }).toEqual({ code: 0, stderr: "" });
+    const [first = "", ...said] = ended.stdout.split("\n");
+    const outcome: unknown = JSON.parse(first);
+    expect(outcome).toEqual({ up: 0, dead: true, down: 0, forgotten: true });
+    expect(said.join("\n")).toContain("already gone");
   });
 
   test("status shows it dead", async () => {

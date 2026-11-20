@@ -7,14 +7,14 @@
  */
 import { describe, expect, test } from "bun:test";
 import { link, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { array, asyncProperty, constantFrom, integer, nat } from "fast-check";
 
 import { bootId, lock, parseStat, procStat } from "../file-lock.ts";
 import { check } from "../property.ts";
-import { exits, heard, orphaned, reaches } from "./proc-reading.ts";
+import { besideAHiddenProcess, exits, heard, orphaned, reaches } from "./proc-reading.ts";
 
 /** More waiting than any schedule here asks for, since waiting costs no time under one. */
 const PATIENT = 1_000_000_000;
@@ -341,43 +341,34 @@ describe("a holder's process, by the state the kernel has it in", () => {
     );
   });
 
-  test("a process /proc will not show this user is no process of this user's", async () => {
+  test("a live holder /proc will not show this user is not taken over, and the attempt names what it could not read", async () => {
     // Where `/proc` is mounted `hidepid=1`, another user's entry is listed and
-    // its read refused with EPERM. The wrong implementation throws that, and
-    // `dev-server down` then fails reading every process's group. A pid and
-    // mount namespace gives the case a `/proc` of its own to mount so; root
-    // mounts it, `nobody` runs the other process, and this user reads it.
-    const probe = `const { procStat } = await import(${JSON.stringify(join(dirname(import.meta.dir), "file-lock.ts"))});
-console.log(JSON.stringify(await procStat(Number(process.env["OTHER"]))));`;
-    const me = userInfo();
-    const sealed = Bun.spawn(
-      [
-        "sudo",
-        "-n",
-        "unshare",
-        "--pid",
-        "--mount",
-        "--fork",
-        "--mount-proc",
-        "sh",
-        "-c",
-        'mount -o remount,hidepid=1 /proc || exit 1; setpriv --reuid=65534 --regid=65534 --clear-groups sleep 60 & OTHER=$!; exec setpriv --reuid="$1" --regid="$2" --init-groups env HOME="$3" OTHER="$OTHER" "$4" -e "$5"',
-        "sh",
-        String(me.uid),
-        String(me.gid),
-        me.homedir,
-        process.execPath,
-        probe,
-      ],
-      { stdin: "ignore", stdout: "pipe", stderr: "pipe" },
-    );
-    const [said, complained, code] = await Promise.all([
-      new Response(sealed.stdout).text(),
-      new Response(sealed.stderr).text(),
-      sealed.exited,
-    ]);
+    // its read refused. The wrong implementation reads the refusal as no
+    // process, judges the live holder gone and takes its lock.
+    const probe = `const { bootId, lock } = await import(${JSON.stringify(join(dirname(import.meta.dir), "file-lock.ts"))});
+const { mkdtemp, readFile, rm, writeFile } = await import("node:fs/promises");
+const ground = await mkdtemp("${join(tmpdir(), "file-lock-hidden-")}");
+const path = ground + "/lock";
+const holder = JSON.stringify({ pid: Number(process.env.OTHER), bootId: await bootId(), startTicks: Number(process.env.OTHER_TICKS) }) + "\\n";
+await writeFile(path, holder);
+let outcome = "taken";
+try {
+  const held = await lock(path, 0);
+  await held[Symbol.asyncDispose]();
+} catch (error) {
+  outcome = error.message.replaceAll("/proc/" + process.env.OTHER + "/", "/proc/<other>/");
+}
+const kept = (await readFile(path, "utf8").catch(() => "")) === holder;
+await rm(ground, { recursive: true, force: true });
+console.log(kept ? "kept" : "replaced");
+console.log(outcome);`;
 
-    expect({ code, said, complained }).toEqual({ code: 0, said: "null\n", complained: "" });
+    const ended = await besideAHiddenProcess(probe);
+
+    expect({ code: ended.code, stderr: ended.stderr }).toEqual({ code: 0, stderr: "" });
+    const [kept, outcome] = ended.stdout.split("\n");
+    expect(outcome).toContain("/proc/<other>/stat");
+    expect(kept).toBe("kept");
   });
 
   test("a holder killed while holding and not yet reaped is gone, and its lock is taken at once", async () => {
