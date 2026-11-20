@@ -58,3 +58,23 @@ test("an update that may not merge itself never rides in a group that does", () 
       .map((rule) => String(rule["description"])),
   ).toEqual([]);
 });
+
+const MANIFEST = record(await Bun.file(new URL("../package.json", import.meta.url)).json());
+
+// The format check fails on any formatter release that writes a file another
+// way, until someone runs the formatter on the PR's branch and commits what it
+// wrote, which Renovate never does. So the program `format:check` runs is held
+// in a group of its own that does not merge itself, and the week's group never
+// waits on it. The wrong implementation is that formatter left in "non-major
+// dependencies", or the rule following a formatter the repo no longer runs.
+test("the formatter the format check runs gets a PR of its own that never merges itself", () => {
+  const formatter = String(record(MANIFEST["scripts"])["format:check"]).split(" ")[0];
+  const rules = (isList(PRESET["packageRules"]) ? PRESET["packageRules"] : []).map(record);
+  const holding = rules.filter(
+    (rule) => isList(rule["matchPackageNames"]) && rule["matchPackageNames"].includes(formatter),
+  );
+  expect(holding.map((rule) => [rule["groupName"], rule["automerge"]])).toEqual([
+    [formatter, false],
+  ]);
+  expect(holding[0]?.["matchUpdateTypes"]).toBeUndefined();
+});

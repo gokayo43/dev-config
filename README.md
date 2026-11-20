@@ -1453,7 +1453,15 @@ release-age window, opens a vulnerability fix at once
 ([Version policy](#version-policy) has both), groups patch, minor, pin and
 digest updates into one PR per week that merges itself once its checks are
 green, opens majors as plain PRs to read, keeps lockfile maintenance on, and
-pins GitHub Action digests.
+pins GitHub Action digests. Renovate pushes to an open PR only inside that
+weekly window (`updateNotScheduled: false`). Left at its default, it rebases an
+open PR whenever the base branch moves, and every push runs the PR's CI again.
+
+An `oxfmt` update gets an "oxfmt" PR of its own that never merges itself. A
+formatter release can change how it writes a file, and the format check then
+fails until someone runs `oxfmt` on the PR's branch and commits the result,
+which Renovate never does; left in the week's group, it would stop the group
+merging itself every time.
 
 Three families move as a unit rather than as packages. Every `expo*`,
 `@expo/*` and `react-native*` pin belongs to one Expo SDK release, and a partial
