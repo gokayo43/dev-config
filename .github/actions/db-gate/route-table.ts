@@ -1,20 +1,20 @@
-import type { Route } from "../../../route-log.ts";
-import { type Allowlist, isObject, type Problem } from "../_lib/gate.ts";
+import type { Route, RouteLog } from "../../../route-log.ts";
+import { type Allowlist, isList, isObject, kindOf, type Problem } from "../_lib/gate.ts";
 
 /**
- * What both floors over a route table need and neither is about: how a route is
- * named, and how a reasoned hatch aimed at one is graded.
+ * What both readers of a route table need and neither is about: the route log
+ * as read off the app, how a route is named, and how a reasoned hatch aimed at
+ * one is graded.
  *
- * `route-coverage.ts` asks whether the ramp reached a route and `route-compat.ts`
- * asks whether the repo still serves one. Different questions, one shape of
- * answer — an entry that is not a route, an entry naming a route the gate has
- * never heard of, an entry waiving something that needs no waiving — and one
- * grammar for the line a repo writes, or a repo that got `route-allowlist` right
- * would still be spelling `route-retire` wrong.
+ * `route-compat.ts` asks whether the repo still serves a route and `fuzz.ts`
+ * asks how it answers one nobody expected. Different questions, one shape of
+ * hatch — an entry that is not a route, an entry naming a route the gate has
+ * never heard of — and one grammar for the line a repo writes, or a repo that
+ * got `route-allowlist` right would still be spelling `route-retire` wrong.
  *
- * Here rather than in either floor because it belongs to neither, and here
- * rather than in `_lib/` because one action holds both: `_lib` is for what a
- * second *action* reads.
+ * Here rather than in either because it belongs to neither, and here rather
+ * than in `_lib/` because one action holds both: `_lib` is for what a second
+ * *action* reads.
  */
 
 /** A `{"method","path"}` pair out of a document this action did not write. */
@@ -24,6 +24,38 @@ export function routeIn(value: unknown, source: string): Route {
   throw new Error(
     `${source} names ${JSON.stringify(value)}, which is not a {"method","path"} pair`,
   );
+}
+
+/**
+ * Parsed at the boundary rather than asserted through. This is the app's own
+ * output, not a file this action wrote, so a payload that is not the shape read
+ * here says so loudly instead of surfacing as a gate that silently reads less
+ * than the app serves — and a body that is not JSON at all is framed with what
+ * it was, rather than reaching the log as a bare SyntaxError about a column
+ * number in a document nobody named. An empty table is refused here too, for
+ * whichever gate reads it first: an app reporting no route would otherwise
+ * pass every gate that reads the table having been asked nothing.
+ */
+export function parseRouteLog(text: string, source: string): RouteLog {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${source} is not JSON: ${String(error)}`, { cause: error });
+  }
+  if (!isObject(parsed)) {
+    throw new Error(`${source} is not a route log: the top level is ${kindOf(parsed)}`);
+  }
+  const { routeTable } = parsed;
+  if (!isList(routeTable)) {
+    throw new Error(`${source} is not a route log: routeTable is ${kindOf(routeTable)}`);
+  }
+  if (routeTable.length === 0) {
+    throw new Error(
+      `${source} reports an empty routeTable — it names every route the app serves, so an app's route-log endpoint answering none is the instrument not seeing the router`,
+    );
+  }
+  return { routeTable: routeTable.map((entry) => routeIn(entry, `${source}: routeTable`)) };
 }
 
 /**
@@ -38,7 +70,7 @@ export function key({ method, path }: Route): string {
 
 /**
  * An entry as the route it names, or nothing when it is not one. Not exported:
- * the only thing that reads a line is the grading below, and a floor reaching
+ * the only thing that reads a line is the grading below, and a gate reaching
  * past that to parse an entry itself is the second reading this file exists to
  * stop having.
  */
@@ -50,55 +82,39 @@ function routeFrom(entry: string): Route | undefined {
 }
 
 /**
- * The routes an allowlist names, by `key`, for a reader of the hatch rather
- * than a grader of it.
- *
- * An entry that is not a route is passed over in silence here, which is the
- * opposite of what `waivedBy` does and is right for the same reason: the floor
- * that owns the input is already refusing that entry by name, and a second
- * diagnostic about one mistake is two findings for one edit. What reads this is
- * the fuzzer, which asks only "was this route waived" — a question a malformed
- * line answers with no.
- */
-export function routesIn(allowlist: Allowlist): ReadonlySet<string> {
-  return new Set(
-    allowlist.entries
-      .map((entry) => routeFrom(entry))
-      .filter((route) => route !== undefined)
-      .map((route) => key(route)),
-  );
-}
-
-/**
- * The three ways an entry earns a diagnostic, phrased by the floor that owns
- * the hatch: what "not a route", "not one of mine" and "waives nothing" mean is
- * the caller's, and which of the three a reader is told is not.
+ * The two ways any entry earns a diagnostic, phrased by the gate that owns the
+ * hatch: what "not a route" and "not one of mine" mean is the caller's, and
+ * which of the two a reader is told is not.
  */
 export interface Refusals {
   /** The line is not a `METHOD /path` at all. */
   readonly malformed: (entry: string) => string;
-  /** It parses, and names nothing this floor grades. */
+  /** It parses, and names nothing this gate grades. */
   readonly unknown: (entry: string) => string;
-  /** It names a subject that is already satisfied, so the reason beside it has stopped being true. */
-  readonly satisfied: (entry: string) => string;
+}
+
+/** One entry that names a subject, and the subject it names. */
+interface Waiver {
+  /** The entry as written, its reason stripped. */
+  readonly entry: string;
+  /** The subject's name, by `key`. */
+  readonly name: string;
+  readonly route: Route;
 }
 
 export interface Graded {
-  /** The subjects an entry waives, by name — a count each floor reports its own way. */
-  readonly waived: ReadonlySet<string>;
-  /** The subjects nothing satisfied and no entry waived: what the floor refuses, in its own words. */
-  readonly unmet: string[];
+  /** Each entry that names a subject, in the order written. */
+  readonly waivers: Waiver[];
   readonly problems: Problem[];
 }
 
 /**
- * A reasoned hatch over a set of routes, graded once for both floors.
- *
- * `subjects` is everything this floor can be asked about, keyed by `key`;
- * `satisfied` is what it wanted of each of them. An entry survives only by
- * naming a subject that is not satisfied — which is the whole of what an
- * exemption is — and an exemption nobody can see rotting is how a gate quietly
- * stops holding what it names.
+ * A reasoned hatch over a set of routes, graded once for both gates: an entry
+ * survives only by naming a subject, `subjects` being everything this gate can
+ * be asked about, keyed by `key`. A gate with a rule of its own about what an
+ * entry may name — the compatibility floor refuses one retiring a route still
+ * served — applies it to the waivers, and leaves alone an entry
+ * `allowlist.unreasoned` holds, as this does.
  *
  * The allowlist arrives whole rather than as its entries, so that enforcing the
  * reason on each of them is not something a caller can typecheck without.
@@ -108,43 +124,29 @@ export interface Graded {
 export function waivedBy(
   allowlist: Allowlist,
   subjects: ReadonlyMap<string, Route>,
-  satisfied: (route: Route) => boolean,
   refusals: Refusals,
 ): Graded {
-  // Every entry is one of these: the subject it waives, or what is wrong with
-  // it. A classifier rather than three pushes inside the loop, so the rule about
-  // which of them the reader is told stays in one place below.
-  const read = (entry: string): { readonly waives: string } | { readonly rotten: string } => {
-    const route = routeFrom(entry);
-    if (route === undefined) return { rotten: refusals.malformed(entry) };
-    const name = key(route);
-    const subject = subjects.get(name);
-    if (subject === undefined) return { rotten: refusals.unknown(entry) };
-    if (satisfied(subject)) return { rotten: refusals.satisfied(entry) };
-    return { waives: name };
-  };
-
-  const waived = new Set<string>();
+  const waivers: Waiver[] = [];
   const problems: Problem[] = [];
   // Deduplicated, because one line written twice is one exemption: the second
   // copy would otherwise earn its own identical diagnostic, which is two
   // findings for one edit. `deadEntries` reads its subjects the same way.
   for (const entry of new Set(allowlist.entries)) {
-    const verdict = read(entry);
-    if ("waives" in verdict) waived.add(verdict.waives);
+    const route = routeFrom(entry);
+    const name = route === undefined ? undefined : key(route);
+    const subject = name === undefined ? undefined : subjects.get(name);
+    if (name !== undefined && subject !== undefined) {
+      waivers.push({ entry, name, route: subject });
+      continue;
+    }
     // An entry already refused for saying nothing about why is asked none of
-    // those questions: its author is going back to that line regardless, and one
-    // mistake earns one diagnostic. stack-gate and the timestamptz gate charge
-    // the hatch the same way. It still waives its subject in the branch above,
-    // so the floor does not report the subject on top of it either.
-    else if (!allowlist.unreasoned.has(entry)) problems.push({ message: verdict.rotten });
+    // these questions: its author is going back to that line regardless, and
+    // one mistake earns one diagnostic. stack-gate and the timestamptz gate
+    // charge the hatch the same way.
+    if (allowlist.unreasoned.has(entry)) continue;
+    problems.push({
+      message: route === undefined ? refusals.malformed(entry) : refusals.unknown(entry),
+    });
   }
-
-  return {
-    waived,
-    unmet: [...subjects]
-      .filter(([name, route]) => !satisfied(route) && !waived.has(name))
-      .map(([name]) => name),
-    problems,
-  };
+  return { waivers, problems };
 }

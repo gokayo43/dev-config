@@ -1,7 +1,7 @@
 import { must } from "./narrowing.js";
-import { i as OperationName } from "./request-timing-DPoxY8eA.js";
-import { n as registeredNames, r as timedEntry } from "./request-timing-entry-ChIyPZRq.js";
-//#region request-timing-elysia.ts
+import { n as registeredNames, r as timedEntry } from "./request-timing-entry-DUtRZjoK.js";
+import { i as OperationName } from "./request-timing-CRXpA8f5.js";
+// request-timing-elysia.ts
 /**
 * A body Elysia streams is one it sends chunked with no length: every
 * generator, `ReadableStream` and `sse()` a handler answers, and every response
@@ -69,5 +69,4 @@ function requestTimingPlugin(timing) {
 		return app;
 	};
 }
-//#endregion
 export { requestTimingPlugin };

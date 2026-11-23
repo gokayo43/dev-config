@@ -2,10 +2,12 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
     "Dependency policy shared by gokayo43's Bun projects.",
-    "minimumReleaseAge follows the slowest consumer's bunfig.toml, because a PR holding a version that repo's own window refuses fails its install. It moves to 3 days once every consumer's bunfig.toml holds releases for 3 days or less."
+    "minimumReleaseAge follows the slowest consumer's bunfig.toml, because a PR holding a version that repo's own window refuses fails its install. It moves to 3 days once every consumer's bunfig.toml holds releases for 3 days or less.",
+    "updateNotScheduled is false so Renovate pushes to an open PR only inside the schedule. Left at its default, it rebases an open PR whenever the base branch moves, and every push runs the PR's CI again."
   ],
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "schedule": ["* 0-6 * * 1"],
+  "updateNotScheduled": false,
   "timezone": "Europe/Amsterdam",
   "minimumReleaseAge": "7 days",
   "vulnerabilityAlerts": { "enabled": true },
@@ -66,12 +68,23 @@
       "description": "@oxlint/plugins publishes one version per oxlint release and describes that release's AST. The anti-slop rules are typed against it, so the two move together or this repo's typecheck grades the plugin against an AST oxlint is not handing it. oxlint-tsgolint moves with them because each oxlint declares the tsgolint range it runs, bun installs a pair outside it without a word, and the repo contract refuses that pair in bun.lock.",
       "matchPackageNames": ["oxlint", "@oxlint/plugins", "oxlint-tsgolint"],
       "groupName": "oxlint"
+    },
+    {
+      "description": "An oxfmt release can change how it writes a file, and the repo's format check then fails until someone runs the formatter and commits what it wrote, which Renovate never does. oxfmt gets a PR of its own that waits for that commit, so the week's group still merges itself.",
+      "matchPackageNames": ["oxfmt"],
+      "groupName": "oxfmt",
+      "automerge": false
+    },
+    {
+      "description": "A library's peer range and its engines range are compatibility claims, not installs. The pin above would rewrite each into one exact version, and a host on any other version the range promised would stop resolving. They keep Renovate's own strategy, which leaves a range alone while the new release is inside it.",
+      "matchDepTypes": ["engines", "peerDependencies"],
+      "rangeStrategy": "auto"
     }
   ],
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Released binaries pinned by tag and archive SHA-256, which no built-in manager reads: in a run: block, or in the shared shell library that fetches a tool more than one caller needs. The renovate: comment above the pair names the dependency, so one manager covers every tool pinned this way — a YAML key or a shell assignment.",
+      "description": "Released binaries pinned by tag and archive SHA-256, which no built-in manager reads: in a run: block, or in the shared shell library that fetches a tool more than one caller needs or a command runs outside any workflow. The renovate: comment above the pair names the dependency, so one manager covers every tool pinned this way — a YAML key or a shell assignment.",
       "managerFilePatterns": [
         "/^\\.github/workflows/[^/]+\\.ya?ml$/",
         "/^\\.github/actions/[^/]+/action\\.ya?ml$/",

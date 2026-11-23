@@ -1,6 +1,6 @@
 import { nth } from "./narrowing.js";
-import { d as requestTiming, i as OperationName, n as measure, r as within, u as perKind } from "./request-timing-DPoxY8eA.js";
-//#region request-timing-effect-driver.ts
+import { d as requestTiming, i as OperationName, n as measure, r as within, u as perKind } from "./request-timing-CRXpA8f5.js";
+// request-timing-effect-driver.ts
 /** The modules of `effect` the driver runs on, every one of which Effect 4 has and Effect 3 lacks at least one of. */
 const MODULES = [
 	"Context",
@@ -160,8 +160,7 @@ async function runPlan(effect, plan, entry) {
 	}
 	return records;
 }
-//#endregion
-//#region request-timing-conformance-effect.ts
+// request-timing-conformance-effect.ts
 /** Waits that pass through each of Effect's shared resources the driver has, run by the check under both entries. */
 const TABLE = [
 	...[["locked", "a shared semaphore"], ["pooled", "a shared pool"]].map(([held, through]) => ({
@@ -332,5 +331,4 @@ async function requestTimingEffectConforms(effect) {
 	}
 	if (wrong.length > 0) throw new Error(`Effect resumed a fiber in another request's context, so a wait was counted in the wrong record or in none; ${NEEDS}.\n${wrong.join("\n")}`);
 }
-//#endregion
 export { requestTimingEffectConforms };

@@ -1,5 +1,5 @@
 import { inspect } from "node:util";
-//#region narrowing.ts
+// narrowing.ts
 /**
 * Four calls that hand back a value the compiler could not prove present, or
 * throw saying what was expected and what was found. They are what a case
@@ -50,5 +50,4 @@ async function rejectionOf(promise, Class) {
 	}
 	throw new Error(`rejectionOf: expected a rejection with ${Class.name}, found a resolution with ${shown(value)}`);
 }
-//#endregion
 export { must, nth, only, rejectionOf };

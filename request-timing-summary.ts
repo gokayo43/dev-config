@@ -66,6 +66,11 @@ const numberIn = (fields: ReadonlyMap<string, unknown>, key: string) => {
   return typeof found === "number" && Number.isFinite(found) && found >= 0 ? found : undefined;
 };
 
+const refused = (why: string) =>
+  new UnreadableRecord(
+    `a version ${RECORD_VERSION} record whose operation is not a name a router registered: ${why}`,
+  );
+
 /**
  * The record a log line holds, or nothing for a line that is not one: not JSON,
  * not an object, or an object without `requestTiming`. Throws `UnreadableRecord`
@@ -116,10 +121,6 @@ export function parseRecord(line: string): TimingRecord | undefined {
   };
   // Not `text`: an operation is refused with `patternProblem`'s reason, the
   // one rule the core names operations by.
-  const refused = (why: string) =>
-    new UnreadableRecord(
-      `a version ${RECORD_VERSION} record whose operation is not a name a router registered: ${why}`,
-    );
   const operation = fields.get("operation");
   if (typeof operation !== "string") throw refused("it is not a string");
   const problem = patternProblem(operation);

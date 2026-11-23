@@ -1,5 +1,11 @@
+/**
+ * Request timing's mysql2 connector: a pool created by `mysql2/promise`, every
+ * connection taken from it and every statement prepared on one, each call that
+ * waits on the server counted as one `db` wait of the operation that made it.
+ * `docs/exports/request-timing.md` says what an app mounts and what a count
+ * includes.
+ */
 import { Pool } from "mysql2/promise";
-//#region request-timing-mysql2.d.ts
 /**
  * `pool` with every wait on the server measured: `query` and `execute` on the
  * pool, one wait each with the checkout they make inside, and `getConnection`,
@@ -9,4 +15,3 @@ import { Pool } from "mysql2/promise";
  * transaction boundaries.
  */
 export declare function timedPool<P extends Pool>(pool: P): P;
-//#endregion

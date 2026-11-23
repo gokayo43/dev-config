@@ -2,15 +2,12 @@
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
   "extends": ["./oxlint.base.json", "./design-system.base.json"],
   "env": { "node": true, "es2024": true },
-  // `dist/**` is what `bun run build` writes from the four exports a node runner
-  // imports; linting a build is linting its inputs twice, and every rule that
-  // reads types reads none there.
-  "ignorePatterns": [
-    "node_modules/**",
-    ".claude/**",
-    "dist/**",
-    ".github/actions/db-gate/capacity.js"
-  ],
+  // `dist/**` is what `bun run build` writes from the exports `tsdown.config.ts`
+  // lists; linting a build is linting its inputs twice, and every rule that
+  // reads types reads none there. `capacity-ramp.js` is the script k6 runs,
+  // and runs inside k6, whose `k6/*` modules and `__ENV` global nothing in
+  // this repo resolves.
+  "ignorePatterns": ["node_modules/**", ".claude/**", "dist/**", "capacity-ramp.js"],
   "rules": {
     // One of the base's own rules, off here and nowhere else. Every gate in
     // this repo reads a file it does not own — another repo's package.json,
@@ -25,6 +22,8 @@
     {
       "files": [
         "dev-server.ts",
+        "capacity-ramp.ts",
+        "capacity-ramp-ladder.ts",
         "property.ts",
         "invariant-sweep.ts",
         "count-budget.ts",
@@ -38,7 +37,10 @@
         // it reads one variable for its value — the readiness timeout its own
         // suite shortens — and hands the environment it was started with to the
         // dev server it spawns. There is no `env.ts` above a bin for either to
-        // come from.
+        // come from. `capacity-ramp.ts` is a CLI the same way: it reads the
+        // home and cache directories for where the pinned k6 is kept, and
+        // hands them to its module, which forwards the environment to k6 as
+        // below.
         //
         // `property.ts` is a module a consuming repo imports, so the `env.ts`
         // the rule points at is that repo's and cannot be reached from here:

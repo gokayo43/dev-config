@@ -1,8 +1,8 @@
-import { r as within, t as inOperation } from "./request-timing-DPoxY8eA.js";
-import { n as registeredNames, t as endings } from "./request-timing-entry-ChIyPZRq.js";
-import { t as marked } from "./request-timing-route-BhLXYn3w.js";
+import { n as registeredNames, t as endings } from "./request-timing-entry-DUtRZjoK.js";
+import { t as marked } from "./request-timing-route-DobjtQAK.js";
+import { r as within, t as inOperation } from "./request-timing-CRXpA8f5.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-//#region request-timing-trpc.ts
+// request-timing-trpc.ts
 /**
 * Request timing's tRPC connector: one middleware an app puts on its base
 * procedure, which runs every procedure call that arrives over HTTP as one
@@ -139,5 +139,4 @@ function requestTimingProcedures(timing, statusOf) {
 		envelope
 	};
 }
-//#endregion
 export { requestTimingProcedures };

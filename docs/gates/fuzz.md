@@ -2,27 +2,25 @@
 
 The last step of `database: postgres`: generated junk at every route the booted
 app serves, with four invariants held over what comes back. Zero lines in the
-consuming repo — the route table the app already declares for the ramp is the
-whole of what it needs.
+consuming repo — the route table the app already declares for the database job
+is the whole of what it needs.
 
 ## What it is for
 
-An app gets three kinds of request in CI, and they are all requests somebody
-meant. The boot gate polls the health route; the repo's own probe asserts what
-the repo knows; the ramp sends the scenario's request over and over. So a
+An app gets two kinds of request in CI besides these, and they are both
+requests somebody meant. The boot gate polls the health route; the repo's own
+probe asserts what the repo knows. So a
 handler that assumes its path parameter parses, or that returns its own
 exception to the caller, passes every gate here and falls over on the first
 crawler that walks past.
 
 **It is not a security scanner.** It sends no credentials and asserts nothing
 about authorisation. What it grades is that a hostile input is _refused_ rather
-than crashed on — a floor in the sense [the route coverage floor](capacity.md)
-is one. An app that passes has not been shown to be safe; an app that fails has
+than crashed on — a floor in the sense the coverage threshold is one. An app that passes has not been shown to be safe; an app that fails has
 a handler nobody bounded.
 
-The boot is unsealed, exactly as the ramp leaves it: the app the fuzzer talks to
-is the one the database job started, on the same port, with the same
-environment. Nothing here changes that.
+The app the fuzzer talks to is the one the database job started, on the same
+port, with the same environment. Nothing here changes that.
 
 ## The four invariants
 
@@ -125,14 +123,28 @@ answer. dev-config#114 is where that is tracked.
 
 ## What it does not send
 
-**The routes `route-allowlist` names.** The ramp's exemption is this step's
-exemption, read from the same input rather than from a second one nobody would
-keep in step: the reason a repo wrote there is about the route — it is
-destructive, it needs a credential, it reaches something off this box — and
-every one of those is a reason not to send generated `DELETE`s at it either. The
-entries are graded by [the coverage floor](capacity.md), which has already run;
-this reads them. The summary says how many routes were waived, so a table
-covering less than the app serves says so.
+**The routes `route-allowlist` names**, each as a `METHOD /path -- why` entry
+matching the app's own route table. The reason is about the route — it is
+destructive, it needs a credential, it reaches something off this box — and is
+part of the entry, the price a lint directive pays. The step grades the input
+before it sends anything, and fails on:
+
+- an entry with no reason, which earns that one diagnostic and no other;
+- an entry that is not a route, such as `/health -- no method`;
+- an entry naming a route the app does not serve, since an exemption nobody can
+  see rotting is how a gate quietly stops holding what it names.
+
+On any of these it sends no request at all. A mistyped entry keeps no route out,
+and the route it was written for is the one that must not be sent generated
+requests.
+
+A route table with nothing in it is refused where the table is read, before
+either this step or [route compatibility](route-compat.md) grades it, since an
+app that names no route would otherwise pass every gate that reads the table
+having been asked nothing.
+
+The summary says how many routes were waived, so a table covering less than the
+app serves says so.
 
 ## The seed
 
@@ -165,8 +177,8 @@ Twenty seconds on every run, ten minutes under `nightly`, as wall clock rather
 than a request count: a count is a different amount of work on every app and on
 every runner, and what this step must not do is decide how long a job takes.
 
-**There is no knob**, for the reason [the ramp has none](capacity.md): an app the
-database job can boot is an app that answers, and a repo cannot be in the
+**There is no knob**: an app the database job can boot is an app that answers,
+and a repo cannot be in the
 position of having this available and switched off. The two numbers are in
 `db-gate/fuzz.ts`.
 
@@ -184,29 +196,13 @@ Round-robin over the routes rather than route by route, so a budget that runs
 out has still asked every route the same number of questions — a slow route
 would otherwise spend the whole budget and every route below it in the table
 would never be fuzzed at all. Sequential rather than concurrent: this is not a
-load generator, the ramp before it is the step that measures what the app holds,
-and requests in flight together would make "the app stopped answering"
-ambiguous about which request did it.
+load generator — the [`capacity-ramp`](../commands/capacity-ramp.md) command
+measures what an app holds — and requests in flight together would make "the
+app stopped answering" ambiguous about which request did it.
 
-## Why it runs last
-
-**After the ramp has taken its second route-log snapshot.** That is the whole of
-the constraint, and it is about the capture rather than about
-[the floor](capacity.md) that later reads it: coverage is the difference between
-two snapshots on disk, so once the second exists nothing sent here can reach it,
-whenever the floor gets round to reading them.
-
-What a fuzz step ordered _before_ that capture would change is which traffic the
-second snapshot carried: every route would be credited with this step's
-requests, and a route the ramp never touched would clear the floor on a request
-that was never a scenario's. The step order in `db-gate/action.yml` is the whole
-of that guarantee, and `tests/action-evidence.test.ts` is what holds it — a
-suite driving the module cannot, since both readings of the floor are pure
-functions of two files nothing here writes.
-
-It also reads the route table out of that same snapshot rather than fetching the
-app's endpoint again: one read, so the routes fuzzed cannot be a different set
-from the routes held to the floor.
+It reads the route table out of the one snapshot the job took after the boot
+rather than fetching the app's endpoint again, so the routes fuzzed cannot be a
+different set from the routes [the compatibility floor](route-compat.md) held.
 
 ## What is published
 

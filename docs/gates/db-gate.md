@@ -72,14 +72,15 @@ with:
 ## The repo's own probe
 
 `probe-command` is one command of the repo's own, run against the booted app
-after it has answered its health route and before the ramp. A real process, a
-real HTTP client, a real migrated database, no layer stubbed.
+after it has answered its health route. A real process, a real HTTP client, a
+real migrated database, no layer stubbed.
 
-It exists because the two floors either side of it cannot ask this question.
-Health answering 200 proves the app **starts** against that schema. The route
-floor proves every route was **reached**. Neither says a single answer was
-_correct_ — so a migration that applies, boots, and serves every route while
-quietly reinterpreting what a column means passes both of them. The upgrade
+It exists because nothing else in the job can ask this question. Health
+answering 200 proves the app **starts** against that schema, and [the
+fuzzer](fuzz.md) proves a request nobody expected is refused rather than
+crashed on. Neither says a single answer was _correct_ — so a migration that
+applies, boots, and answers every route while quietly reinterpreting what a
+column means passes both of them. The upgrade
 gate's semantic fixtures ask that of the data
 ([upgrade-path.md](upgrade-path.md)); this asks it of the app's answers, which
 is the only place some of it is visible at all.
@@ -102,9 +103,6 @@ the status first would make the gate's answer depend on the one thing about a
 repo's own program it cannot see, and the failure mode is silence over an app
 that said out loud what was wrong with it.
 
-`capacity-script` hands a repo the same authorship one step later, and for the
-same reason: the gate owns the running, the repo owns the meaning.
-
 ```yaml
 with:
   probe-command: bun run scripts/probe.ts
@@ -112,7 +110,7 @@ with:
 
 The command runs as shell — a pipe or an `&&` means what it says — in the
 project the caller declared, with the app's URL in `HEALTH_URL`, the same name
-the boot step and the ramp use for it. Its environment is the job's, less the two
+the boot step uses for it. Its environment is the job's, less the two
 ways of asking for colour and the terminal type they are read off: stdout is the
 protocol here, and a problem arriving wrapped in escape codes is a problem
 nobody can match to a route.
@@ -129,8 +127,8 @@ it ran too long. The probe
 runs against an app that is already up, so it is making requests rather than
 waiting for a boot; the bound is there because a probe that has wedged is
 otherwise indistinguishable from a slow one, and would spend the job's whole
-budget saying so, taking the ramp and every piece of evidence after it down with
-it. A probe killed by the bound is refused naming it: whatever it would have
+budget saying so, taking the fuzzer and every piece of evidence after it down
+with it. A probe killed by the bound is refused naming it: whatever it would have
 written after that is lost, so nothing it was asserting was graded.
 
 **The bound takes everything the probe started.** The command runs under
@@ -165,10 +163,13 @@ wrote that nothing would have read.
 - **Whether the probe is right.** A probe that exits 0 without asserting
   anything passes every build, exactly as a test that asserts nothing does.
 
-Once it has booted, the job ramps it, publishes what that measured, and holds
-its route table to the routes the base ref served. Those are steps of this gate
-rather than gates of their own, and they have pages: [capacity.md](capacity.md)
-and [route-compat.md](route-compat.md).
+Once it has booted, the job reads its route table once, holds that table to
+the routes the base ref served, and sends every route in it generated requests.
+Those are steps of this gate rather than gates of their own, and they have
+pages: [route-compat.md](route-compat.md) and [fuzz.md](fuzz.md). The job does
+not load the app: how much it takes is measured with the
+[`capacity-ramp`](../commands/capacity-ramp.md) command, against a target
+somebody chose, rather than on a CI runner.
 
 Booting is the half that migrations succeeding does not prove. Health answers
 200 only after the process has started against that schema and a query has
@@ -253,3 +254,23 @@ gets trusted for things it never checked.
   objects, which `pg_dump --data-only` writes as `lo_*` calls rather than as
   rows. A value's own newlines and blank lines are _not_ on this list: a row is
   compared as a whole statement, which is what makes that true.
+
+## What is published
+
+Everything the steps wrote into the runner is uploaded as the
+`db-gate-evidence` artifact, so a run's evidence survives past the runner that
+produced it:
+
+| File                   | What it answers                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `backfill-*.rows`      | the three dumps [the backfill check](#backfills) compared                                                            |
+| `route-log.json`       | the app's route-log endpoint as read once after the boot: every route the app declared it serves                     |
+| `routes.snapshot.json` | the route table the repo's own committed snapshot must hold, so adopting or regenerating it is a copy                |
+| `fuzz.json`            | every request [the fuzzer](fuzz.md) refused an answer to, with the seed that sends the run again                     |
+| `server.log`           | what the app said while all of that happened — copied while the process still holds it open, so the tail may be torn |
+
+The upload runs whatever the steps before it did, so a floor that failed and an
+app that never answered its health poll leave the same evidence behind. The
+boot step still prints `server.log` into its own output when it gives up,
+because a failure you can read without downloading anything is one fewer round
+trip.

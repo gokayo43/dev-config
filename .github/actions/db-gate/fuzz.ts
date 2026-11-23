@@ -1,18 +1,16 @@
 import { EVERY_METHOD, type Route } from "../../../route-log.ts";
-import type { Problem, Verdict } from "../_lib/gate.ts";
-import { key } from "./route-table.ts";
+import type { Allowlist, Problem, Verdict } from "../_lib/gate.ts";
+import { key, waivedBy } from "./route-table.ts";
 
 /**
  * Generated junk at every route the booted app serves, and four invariants held
  * over what comes back.
  *
- * It is the third question this action asks of the same route table, and the
- * only one about *answers*. Route coverage asks whether the ramp reached a
- * route; the compatibility floor asks whether the repo still serves one; the
- * ramp itself sends the one request the scenario was written with, over and
- * over. None of them sends a request nobody expected — so an app whose every
- * handler assumes its path parameter parses passes all three and 500s on the
- * first crawler that walks past.
+ * It is the second question this action asks of the route table, and the one
+ * about *answers*: the compatibility floor asks whether the repo still serves a
+ * route, and sends it nothing. An app whose every handler assumes its path
+ * parameter parses passes that floor and 500s on the first crawler that walks
+ * past.
  *
  * What it is not is a security scanner. It sends no credentials and asserts
  * nothing about authorisation: what it grades is that a hostile input is
@@ -20,15 +18,8 @@ import { key } from "./route-table.ts";
  * threshold is one — an app that passes has not been shown to be safe, and an
  * app that fails has a handler nobody bounded.
  *
- * ## Where it runs, and why it is last
- *
- * **After the ramp has taken its second route-log snapshot.** Coverage is the
- * difference between two snapshots, so once the second is on disk nothing sent
- * here can reach it — but a fuzz step ordered before that capture would put
- * this step's traffic inside it, and a route the ramp never touched would clear
- * the floor on a request that was never a scenario's. The step order in
- * `action.yml` is the whole of that guarantee and `tests/action-evidence.test.ts`
- * holds it; the floor reading the snapshots later changes nothing either way.
+ * It also owns `route-allowlist`, the hatch over which routes it sends nothing
+ * to, and grades that hatch itself: `allowlisted` below.
  *
  * ## Determinism
  *
@@ -54,13 +45,13 @@ import { key } from "./route-table.ts";
  * request count: a request count is a different amount of work on every app and
  * on every runner, and what this step must not do is decide how long a job
  * takes. Twenty seconds is the largest number that disappears into a job that
- * has already replayed a schema and ramped an app; ten minutes is what the
+ * has already replayed a schema and booted an app; ten minutes is what the
  * nightly has, and is the difference between brushing each route and searching
  * it.
  *
- * There is no input for either, the way there is none for the ramp: an app the
- * database job can boot is an app that answers, and a repo cannot be in the
- * position of having this available and switched off.
+ * There is no input for either: an app the database job can boot is an app
+ * that answers, and a repo cannot be in the position of having this available
+ * and switched off.
  */
 const SHORT_BUDGET_MS = 20_000;
 const LONG_BUDGET_MS = 600_000;
@@ -470,7 +461,7 @@ interface Failure {
 export interface Fuzzed {
   readonly seed: number;
   readonly budgetMs: number;
-  /** How many routes were fuzzed, which is the table less whatever the ramp waived. */
+  /** How many routes were fuzzed, which is the table less whatever route-allowlist waived. */
   readonly routes: number;
   readonly waived: number;
   readonly requests: number;
@@ -485,14 +476,7 @@ export interface Plan {
   /** Scheme, host and port of the booted app: every request is this plus a route. */
   readonly origin: string;
   readonly routes: readonly Route[];
-  /**
-   * The routes the ramp was told not to reach, by `key`. A repo writes them in
-   * `route-allowlist` and says why in the same line, and a route that is
-   * destructive, credentialed or reaches something outside this box is not one
-   * to send generated `DELETE`s at either — so the ramp's exemption is this
-   * step's exemption, read from the same input rather than from a second one
-   * nobody would keep in step.
-   */
+  /** The routes `route-allowlist` waives, by `key`, as `allowlisted` read them. */
   readonly waived: ReadonlySet<string>;
   readonly seed: number;
   readonly budgetMs: number;
@@ -623,6 +607,37 @@ async function attempt(sending: Attempt, boundMs: number): Promise<Failure | und
 }
 
 /**
+ * What `allowlisted` makes of route-allowlist over the app's own table: the
+ * routes it waives, or what is wrong with it, and never both, so the run cannot
+ * be handed the waivers of an allowlist that was refused.
+ */
+export type Allowlisted =
+  | { readonly waived: ReadonlySet<string> }
+  | { readonly refused: readonly Problem[] };
+
+/**
+ * `route-allowlist` graded against the routes the app reported. An entry is a
+ * route this step sends no generated request to, and it says why — a route
+ * that is destructive, credentialed or reaches something outside this box — so
+ * an entry without a reason, one that is not a route, and one naming a route
+ * the app does not serve are each refused. A refused allowlist sends nothing:
+ * an entry that names no route keeps no route out of the run, and the route it
+ * was written for is the one that must not be sent generated requests.
+ */
+export function allowlisted(routes: readonly Route[], allowlist: Allowlist): Allowlisted {
+  const hatch = waivedBy(allowlist, new Map(routes.map((route) => [key(route), route])), {
+    malformed: (entry) =>
+      `route-allowlist entry '${entry}' is not a route — write 'METHOD /path -- why', matching a line of the app's own route table`,
+    unknown: (entry) =>
+      `route-allowlist names ${entry}, which this app does not serve — drop the entry, or fix the method and path to match the route it was written for`,
+  });
+  const refused = [...allowlist.problems, ...hatch.problems];
+  return refused.length > 0
+    ? { refused }
+    : { waived: new Set(hatch.waivers.map(({ name }) => name)) };
+}
+
+/**
  * The run: round-robin over the routes, one request at a time, until the budget
  * is spent.
  *
@@ -631,10 +646,10 @@ async function attempt(sending: Attempt, boundMs: number): Promise<Failure | und
  * spends the whole budget and every route after it in the table is never fuzzed
  * at all, which is a floor that silently covers the first half of an app.
  *
- * Sequential rather than concurrent, because this is not a load generator: the
- * ramp before it is the step that measures what the app holds, and requests in
- * flight together would make "the app stopped answering" ambiguous about which
- * request did it.
+ * Sequential rather than concurrent, because this is not a load generator —
+ * dev-config's `capacity-ramp` command measures what an app holds — and
+ * requests in flight together would make "the app stopped answering" ambiguous
+ * about which request did it.
  */
 export async function fuzz({
   origin,
@@ -656,9 +671,7 @@ export async function fuzz({
   });
 
   // Nothing to send, which is a repo that has waived every route it serves and
-  // said why against each — the coverage floor has already read those same
-  // reasons. An empty table is that floor's failure one step earlier and never
-  // reaches here.
+  // said why against each.
   if (fuzzing.length === 0) return answer(0, [], false);
 
   const deadline = Date.now() + budgetMs;
